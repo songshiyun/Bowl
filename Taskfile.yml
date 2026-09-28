@@ -1,0 +1,42 @@
+version: '3'
+
+vars:
+  PROTO_DIR: proto
+  GEN_DIR: gen
+
+tasks:
+  default:
+    desc: "List all available tasks"
+    cmds:
+      - task --list
+
+  buf:generate:
+    desc: "Generate code from Protocol Buffers using Buf"
+    cmds:
+      - buf generate {{.CLI_ARGS}}
+
+  buf:lint:
+    desc: "Lint Protocol Buffers definitions"
+    cmds:
+      - buf lint {{.CLI_ARGS}}
+
+  buf:format:
+    desc: "Format Protocol Buffers definitions"
+    cmds:
+      - buf format -w {{.CLI_ARGS}}
+
+  buf:update:
+    desc: "Update buf dependencies"
+    cmds:
+      - buf dep update {{.CLI_ARGS}}
+
+  tidy:
+    desc: "Run go mod tidy across all modules in workspace"
+    cmds:
+      - go work sync || true
+      - go mod tidy {{.CLI_ARGS}}
+
+  test:
+    desc: "Run tests"
+    cmds:
+      - go test -v ./... {{.CLI_ARGS}}
