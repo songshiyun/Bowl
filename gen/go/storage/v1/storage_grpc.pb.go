@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             (unknown)
-// source: stronger/v1/stronger.proto
+// source: storage/v1/storage.proto
 
-package strongerv1
+package storagev1
 
 import (
 	context "context"
@@ -19,113 +19,113 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StrongerService_Lookup_FullMethodName = "/stronger.v1.StrongerService/Lookup"
+	StorageService_Lookup_FullMethodName = "/storage.v1.StorageService/Lookup"
 )
 
-// StrongerServiceClient is the client API for StrongerService service.
+// StorageServiceClient is the client API for StorageService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// StrongerService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
-type StrongerServiceClient interface {
+// StorageService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
+type StorageServiceClient interface {
 	// Lookup 执行单级目录项查找。
 	// 根据父目录 Inode 与目标子项名称获取对应的 Inode 元数据及内核缓存时效。
 	// 若目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 }
 
-type strongerServiceClient struct {
+type storageServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewStrongerServiceClient(cc grpc.ClientConnInterface) StrongerServiceClient {
-	return &strongerServiceClient{cc}
+func NewStorageServiceClient(cc grpc.ClientConnInterface) StorageServiceClient {
+	return &storageServiceClient{cc}
 }
 
-func (c *strongerServiceClient) Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error) {
+func (c *storageServiceClient) Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupResponse)
-	err := c.cc.Invoke(ctx, StrongerService_Lookup_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, StorageService_Lookup_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// StrongerServiceServer is the server API for StrongerService service.
-// All implementations must embed UnimplementedStrongerServiceServer
+// StorageServiceServer is the server API for StorageService service.
+// All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
 //
-// StrongerService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
-type StrongerServiceServer interface {
+// StorageService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
+type StorageServiceServer interface {
 	// Lookup 执行单级目录项查找。
 	// 根据父目录 Inode 与目标子项名称获取对应的 Inode 元数据及内核缓存时效。
 	// 若目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
-	mustEmbedUnimplementedStrongerServiceServer()
+	mustEmbedUnimplementedStorageServiceServer()
 }
 
-// UnimplementedStrongerServiceServer must be embedded to have
+// UnimplementedStorageServiceServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedStrongerServiceServer struct{}
+type UnimplementedStorageServiceServer struct{}
 
-func (UnimplementedStrongerServiceServer) Lookup(context.Context, *LookupRequest) (*LookupResponse, error) {
+func (UnimplementedStorageServiceServer) Lookup(context.Context, *LookupRequest) (*LookupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Lookup not implemented")
 }
-func (UnimplementedStrongerServiceServer) mustEmbedUnimplementedStrongerServiceServer() {}
-func (UnimplementedStrongerServiceServer) testEmbeddedByValue()                         {}
+func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
+func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
 
-// UnsafeStrongerServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to StrongerServiceServer will
+// UnsafeStorageServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to StorageServiceServer will
 // result in compilation errors.
-type UnsafeStrongerServiceServer interface {
-	mustEmbedUnimplementedStrongerServiceServer()
+type UnsafeStorageServiceServer interface {
+	mustEmbedUnimplementedStorageServiceServer()
 }
 
-func RegisterStrongerServiceServer(s grpc.ServiceRegistrar, srv StrongerServiceServer) {
-	// If the following call panics, it indicates UnimplementedStrongerServiceServer was
+func RegisterStorageServiceServer(s grpc.ServiceRegistrar, srv StorageServiceServer) {
+	// If the following call panics, it indicates UnimplementedStorageServiceServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&StrongerService_ServiceDesc, srv)
+	s.RegisterService(&StorageService_ServiceDesc, srv)
 }
 
-func _StrongerService_Lookup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _StorageService_Lookup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LookupRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StrongerServiceServer).Lookup(ctx, in)
+		return srv.(StorageServiceServer).Lookup(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StrongerService_Lookup_FullMethodName,
+		FullMethod: StorageService_Lookup_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StrongerServiceServer).Lookup(ctx, req.(*LookupRequest))
+		return srv.(StorageServiceServer).Lookup(ctx, req.(*LookupRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// StrongerService_ServiceDesc is the grpc.ServiceDesc for StrongerService service.
+// StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var StrongerService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "stronger.v1.StrongerService",
-	HandlerType: (*StrongerServiceServer)(nil),
+var StorageService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "storage.v1.StorageService",
+	HandlerType: (*StorageServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "Lookup",
-			Handler:    _StrongerService_Lookup_Handler,
+			Handler:    _StorageService_Lookup_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "stronger/v1/stronger.proto",
+	Metadata: "storage/v1/storage.proto",
 }

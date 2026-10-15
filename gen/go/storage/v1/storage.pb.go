@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        (unknown)
-// source: stronger/v1/stronger.proto
+// source: storage/v1/storage.proto
 
-package strongerv1
+package storagev1
 
 import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
@@ -37,7 +37,7 @@ type LookupRequest struct {
 
 func (x *LookupRequest) Reset() {
 	*x = LookupRequest{}
-	mi := &file_stronger_v1_stronger_proto_msgTypes[0]
+	mi := &file_storage_v1_storage_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -49,7 +49,7 @@ func (x *LookupRequest) String() string {
 func (*LookupRequest) ProtoMessage() {}
 
 func (x *LookupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stronger_v1_stronger_proto_msgTypes[0]
+	mi := &file_storage_v1_storage_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -62,7 +62,7 @@ func (x *LookupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LookupRequest.ProtoReflect.Descriptor instead.
 func (*LookupRequest) Descriptor() ([]byte, []int) {
-	return file_stronger_v1_stronger_proto_rawDescGZIP(), []int{0}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *LookupRequest) GetParentIno() uint64 {
@@ -94,7 +94,7 @@ type LookupResponse struct {
 
 func (x *LookupResponse) Reset() {
 	*x = LookupResponse{}
-	mi := &file_stronger_v1_stronger_proto_msgTypes[1]
+	mi := &file_storage_v1_storage_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -106,7 +106,7 @@ func (x *LookupResponse) String() string {
 func (*LookupResponse) ProtoMessage() {}
 
 func (x *LookupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stronger_v1_stronger_proto_msgTypes[1]
+	mi := &file_storage_v1_storage_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -119,7 +119,7 @@ func (x *LookupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LookupResponse.ProtoReflect.Descriptor instead.
 func (*LookupResponse) Descriptor() ([]byte, []int) {
-	return file_stronger_v1_stronger_proto_rawDescGZIP(), []int{1}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *LookupResponse) GetInode() *Inode {
@@ -158,7 +158,7 @@ type Inode struct {
 
 func (x *Inode) Reset() {
 	*x = Inode{}
-	mi := &file_stronger_v1_stronger_proto_msgTypes[2]
+	mi := &file_storage_v1_storage_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -170,7 +170,7 @@ func (x *Inode) String() string {
 func (*Inode) ProtoMessage() {}
 
 func (x *Inode) ProtoReflect() protoreflect.Message {
-	mi := &file_stronger_v1_stronger_proto_msgTypes[2]
+	mi := &file_storage_v1_storage_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -183,7 +183,7 @@ func (x *Inode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inode.ProtoReflect.Descriptor instead.
 func (*Inode) Descriptor() ([]byte, []int) {
-	return file_stronger_v1_stronger_proto_rawDescGZIP(), []int{2}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Inode) GetIno() uint64 {
@@ -238,7 +238,7 @@ type InodeAttribute struct {
 
 func (x *InodeAttribute) Reset() {
 	*x = InodeAttribute{}
-	mi := &file_stronger_v1_stronger_proto_msgTypes[3]
+	mi := &file_storage_v1_storage_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -250,7 +250,7 @@ func (x *InodeAttribute) String() string {
 func (*InodeAttribute) ProtoMessage() {}
 
 func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
-	mi := &file_stronger_v1_stronger_proto_msgTypes[3]
+	mi := &file_storage_v1_storage_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -263,7 +263,7 @@ func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InodeAttribute.ProtoReflect.Descriptor instead.
 func (*InodeAttribute) Descriptor() ([]byte, []int) {
-	return file_stronger_v1_stronger_proto_rawDescGZIP(), []int{3}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *InodeAttribute) GetMode() uint32 {
@@ -343,25 +343,26 @@ func (x *InodeAttribute) GetCtime() *timestamppb.Timestamp {
 	return nil
 }
 
-var File_stronger_v1_stronger_proto protoreflect.FileDescriptor
+var File_storage_v1_storage_proto protoreflect.FileDescriptor
 
-const file_stronger_v1_stronger_proto_rawDesc = "" +
+const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
-	"\x1astronger/v1/stronger.proto\x12\vstronger.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"[\n" +
+	"\x18storage/v1/storage.proto\x12\n" +
+	"storage.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"[\n" +
 	"\rLookupRequest\x12&\n" +
 	"\n" +
 	"parent_ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\tparentIno\x12\"\n" +
-	"\x04name\x18\x02 \x01(\tB\x0e\xbaH\vr\t\x10\x01(\xff\x01\xba\x01\x01/R\x04name\"\xc8\x01\n" +
-	"\x0eLookupResponse\x120\n" +
-	"\x05inode\x18\x01 \x01(\v2\x12.stronger.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
+	"\x04name\x18\x02 \x01(\tB\x0e\xbaH\vr\t\x10\x01(\xff\x01\xba\x01\x01/R\x04name\"\xc7\x01\n" +
+	"\x0eLookupResponse\x12/\n" +
+	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"{\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"z\n" +
 	"\x05Inode\x12\x19\n" +
 	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\x04R\n" +
-	"generation\x127\n" +
-	"\x04attr\x18\x03 \x01(\v2\x1b.stronger.v1.InodeAttributeB\x06\xbaH\x03\xc8\x01\x01R\x04attr\"\xe0\x02\n" +
+	"generation\x126\n" +
+	"\x04attr\x18\x03 \x01(\v2\x1a.storage.v1.InodeAttributeB\x06\xbaH\x03\xc8\x01\x01R\x04attr\"\xe0\x02\n" +
 	"\x0eInodeAttribute\x12\x1b\n" +
 	"\x04mode\x18\x01 \x01(\rB\a\xbaH\x04*\x02 \x00R\x04mode\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x04R\x04size\x12\x1d\n" +
@@ -374,38 +375,38 @@ const file_stronger_v1_stronger_proto_rawDesc = "" +
 	"\x05atime\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\x05atime\x120\n" +
 	"\x05mtime\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\x05mtime\x120\n" +
-	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x05ctime2T\n" +
-	"\x0fStrongerService\x12A\n" +
-	"\x06Lookup\x12\x1a.stronger.v1.LookupRequest\x1a\x1b.stronger.v1.LookupResponseB7Z5github.com/starsrc/bowl/gen/go/stronger/v1;strongerv1b\x06proto3"
+	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x05ctime2Q\n" +
+	"\x0eStorageService\x12?\n" +
+	"\x06Lookup\x12\x19.storage.v1.LookupRequest\x1a\x1a.storage.v1.LookupResponseB5Z3github.com/starsrc/bowl/gen/go/storage/v1;storagev1b\x06proto3"
 
 var (
-	file_stronger_v1_stronger_proto_rawDescOnce sync.Once
-	file_stronger_v1_stronger_proto_rawDescData []byte
+	file_storage_v1_storage_proto_rawDescOnce sync.Once
+	file_storage_v1_storage_proto_rawDescData []byte
 )
 
-func file_stronger_v1_stronger_proto_rawDescGZIP() []byte {
-	file_stronger_v1_stronger_proto_rawDescOnce.Do(func() {
-		file_stronger_v1_stronger_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_stronger_v1_stronger_proto_rawDesc), len(file_stronger_v1_stronger_proto_rawDesc)))
+func file_storage_v1_storage_proto_rawDescGZIP() []byte {
+	file_storage_v1_storage_proto_rawDescOnce.Do(func() {
+		file_storage_v1_storage_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)))
 	})
-	return file_stronger_v1_stronger_proto_rawDescData
+	return file_storage_v1_storage_proto_rawDescData
 }
 
-var file_stronger_v1_stronger_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
-var file_stronger_v1_stronger_proto_goTypes = []any{
-	(*LookupRequest)(nil),         // 0: stronger.v1.LookupRequest
-	(*LookupResponse)(nil),        // 1: stronger.v1.LookupResponse
-	(*Inode)(nil),                 // 2: stronger.v1.Inode
-	(*InodeAttribute)(nil),        // 3: stronger.v1.InodeAttribute
+var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_storage_v1_storage_proto_goTypes = []any{
+	(*LookupRequest)(nil),         // 0: storage.v1.LookupRequest
+	(*LookupResponse)(nil),        // 1: storage.v1.LookupResponse
+	(*Inode)(nil),                 // 2: storage.v1.Inode
+	(*InodeAttribute)(nil),        // 3: storage.v1.InodeAttribute
 	(*timestamppb.Timestamp)(nil), // 4: google.protobuf.Timestamp
 }
-var file_stronger_v1_stronger_proto_depIdxs = []int32{
-	2, // 0: stronger.v1.LookupResponse.inode:type_name -> stronger.v1.Inode
-	3, // 1: stronger.v1.Inode.attr:type_name -> stronger.v1.InodeAttribute
-	4, // 2: stronger.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
-	4, // 3: stronger.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
-	4, // 4: stronger.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
-	0, // 5: stronger.v1.StrongerService.Lookup:input_type -> stronger.v1.LookupRequest
-	1, // 6: stronger.v1.StrongerService.Lookup:output_type -> stronger.v1.LookupResponse
+var file_storage_v1_storage_proto_depIdxs = []int32{
+	2, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
+	3, // 1: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
+	4, // 2: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
+	4, // 3: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
+	4, // 4: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
+	0, // 5: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
+	1, // 6: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
 	6, // [6:7] is the sub-list for method output_type
 	5, // [5:6] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name
@@ -413,26 +414,26 @@ var file_stronger_v1_stronger_proto_depIdxs = []int32{
 	0, // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_stronger_v1_stronger_proto_init() }
-func file_stronger_v1_stronger_proto_init() {
-	if File_stronger_v1_stronger_proto != nil {
+func init() { file_storage_v1_storage_proto_init() }
+func file_storage_v1_storage_proto_init() {
+	if File_storage_v1_storage_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stronger_v1_stronger_proto_rawDesc), len(file_stronger_v1_stronger_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_stronger_v1_stronger_proto_goTypes,
-		DependencyIndexes: file_stronger_v1_stronger_proto_depIdxs,
-		MessageInfos:      file_stronger_v1_stronger_proto_msgTypes,
+		GoTypes:           file_storage_v1_storage_proto_goTypes,
+		DependencyIndexes: file_storage_v1_storage_proto_depIdxs,
+		MessageInfos:      file_storage_v1_storage_proto_msgTypes,
 	}.Build()
-	File_stronger_v1_stronger_proto = out.File
-	file_stronger_v1_stronger_proto_goTypes = nil
-	file_stronger_v1_stronger_proto_depIdxs = nil
+	File_storage_v1_storage_proto = out.File
+	file_storage_v1_storage_proto_goTypes = nil
+	file_storage_v1_storage_proto_depIdxs = nil
 }

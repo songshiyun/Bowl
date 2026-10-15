@@ -1,14 +1,14 @@
 syntax = "proto3";
 
-package stronger.v1;
+package storage.v1;
 
 import "buf/validate/validate.proto";
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/starsrc/bowl/gen/go/stronger/v1;strongerv1";
+option go_package = "github.com/starsrc/bowl/gen/go/storage/v1;storagev1";
 
-// StrongerService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
-service StrongerService {
+// StorageService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
+service StorageService {
   // Lookup 执行单级目录项查找。
   // 根据父目录 Inode 与目标子项名称获取对应的 Inode 元数据及内核缓存时效。
   // 若目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
