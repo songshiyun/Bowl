@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package stronger.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/starsrc/bowl/gen/go/stronger/v1;strongerv1";
+
+// StrongerService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。
+service StrongerService {
+  // Lookup 执行单级目录项查找。
+  // 根据父目录 Inode 与目标子项名称获取对应的 Inode 元数据及内核缓存时效。
+  // 若目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  rpc Lookup(LookupRequest) returns (LookupResponse);
+}
+
+// LookupRequest 定义 Lookup 接口输入参数。
+message LookupRequest {
+  // 父目录的 Inode 编号。根目录通常为 1。
+  uint64 parent_ino = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // 待查找的子项名称（文件或目录名）。
+  // 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/'。
+  string name = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_bytes = 255,
+    (buf.validate.field).string.not_contains = "/"
+  ];
+}
+
+// LookupResponse 包含查找命中的节点元数据以及 FUSE 内核缓存有效时间。
+message LookupResponse {
+  // 命中的目标 Inode 实体元数据。
+  Inode inode = 1 [(buf.validate.field).required = true];
+
+  // 目录项 (dentry) 在 FUSE 内核中的有效缓存时长（秒）。
+  double entry_timeout_seconds = 2 [(buf.validate.field).double.gte = 0];
+
+  // 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。
+  double attr_timeout_seconds = 3 [(buf.validate.field).double.gte = 0];
+}
+
+// Inode 代表文件系统中的实体节点。
+message Inode {
+  // 节点的全局唯一持久化标识。
+  uint64 ino = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // Inode 代数版本，用于标识 Inode 复用生命周期，防止陈旧引用。
+  uint64 generation = 2;
+
+  // 节点的 POSIX 物理属性集合。
+  InodeAttribute attr = 3 [(buf.validate.field).required = true];
+}
+
+// InodeAttribute 包含遵循 POSIX 规范的节点物理属性。
+message InodeAttribute {
+  // 文件的模式位（包含文件类型 S_IFREG, S_IFDIR 及权限位 0755, 0644 等）。
+  uint32 mode = 1 [(buf.validate.field).uint32.gt = 0];
+
+  // 文件物理大小（字节数）。
+  uint64 size = 2;
+
+  // 硬链接数量。文件默认为 1；目录通常至少为 2。
+  uint32 nlink = 3 [(buf.validate.field).uint32.gt = 0];
+
+  // 所属用户 ID。
+  uint32 uid = 4;
+
+  // 所属组 ID。
+  uint32 gid = 5;
+
+  // 特殊设备号（仅当为设备文件时有效，常规文件为 0）。
+  uint32 rdev = 6;
+
+  // 块大小（字节数，例如 4096）。
+  uint32 blksize = 7;
+
+  // 占用的 512 字节块数量。
+  uint64 blocks = 8;
+
+  // 最后访问时间。
+  google.protobuf.Timestamp atime = 9;
+
+  // 最后修改时间。
+  google.protobuf.Timestamp mtime = 10;
+
+  // 状态变更时间。
+  google.protobuf.Timestamp ctime = 11;
+}
