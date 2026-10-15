@@ -3,6 +3,8 @@ version: '3'
 vars:
   PROTO_DIR: proto
   GEN_DIR: gen
+  STORAGE_DB_DSN: '{{.STORAGE_DB_DSN | default "postgres://postgres:postgres@localhost:5432/bowl?sslmode=disable"}}'
+  STORAGE_MIGRATIONS_DIR: services/storage/db/migrations
 
 tasks:
   default:
@@ -40,3 +42,19 @@ tasks:
     desc: "Run tests"
     cmds:
       - go test -v ./... {{.CLI_ARGS}}
+
+  goose:storage:up:
+    desc: "Run goose migrations up for storage service"
+    cmds:
+      - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" up {{.CLI_ARGS}}
+
+  goose:storage:down:
+    desc: "Roll back the most recent goose migration for storage service"
+    cmds:
+      - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" down {{.CLI_ARGS}}
+
+  goose:storage:status:
+    desc: "Print the status of goose migrations for storage service"
+    cmds:
+      - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" status {{.CLI_ARGS}}
+
