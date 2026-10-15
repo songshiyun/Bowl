@@ -36,7 +36,17 @@ func getMigrationsDir(t *testing.T) string {
 	return filepath.Join(wd, "migrations")
 }
 
+const (
+	modeDir  = 0o040755 // POSIX 目录类型 (S_IFDIR) 配合 0755 权限
+	modeFile = 0o100644 // POSIX 常规文件类型 (S_IFREG) 配合 0644 权限
+)
+
 func TestStorageMetadataMigrations(t *testing.T) {
+	if _, err := exec.LookPath("goose"); err != nil {
+		t.Skipf("未在系统 PATH 中找到 goose 命令，跳过迁移执行测试: %v", err)
+		return
+	}
+
 	dsn := getTestDSN()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -134,10 +144,10 @@ func TestStorageMetadataMigrations(t *testing.T) {
 	// 5.1 插入根节点 (ino = 1) 与子节点 (ino = 100)
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO inodes (ino, generation, mode, size, nlink, uid, gid, rdev)
-		VALUES (1, 0, 16877, 4096, 2, 0, 0, 0),
-		       (100, 0, 33188, 1024, 1, 0, 0, 0)
+		VALUES (1, 0, $1, 4096, 2, 0, 0, 0),
+		       (100, 0, $2, 1024, 1, 0, 0, 0)
 		ON CONFLICT (ino) DO NOTHING
-	`)
+	`, modeDir, modeFile)
 	require.NoError(t, err)
 
 	// 5.2 插入目录项 entry
@@ -190,4 +200,9 @@ func TestStorageMetadataMigrations(t *testing.T) {
 	`).Scan(&seqExists)
 	require.NoError(t, err)
 	require.False(t, seqExists, "回滚后 inode_id_seq 序列不应存在")
+
+	// 7. 重新执行 goose up，保证测试结束后环境保持最新迁移就绪状态
+	cmdRestore := exec.CommandContext(ctx, "goose", "-dir", migrationsDir, "postgres", dsn, "up")
+	outputRestore, err := cmdRestore.CombinedOutput()
+	require.NoError(t, err, "恢复 goose up 执行失败: %s", string(outputRestore))
 }

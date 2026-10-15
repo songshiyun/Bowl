@@ -44,17 +44,17 @@ tasks:
       - go test -v ./... {{.CLI_ARGS}}
 
   goose:storage:up:
-    desc: "Run goose migrations up for storage service"
+    desc: "执行 storage 服务的 goose 向上迁移 (Up)"
     cmds:
       - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" up {{.CLI_ARGS}}
 
   goose:storage:down:
-    desc: "Roll back the most recent goose migration for storage service"
+    desc: "回滚 storage 服务的最近一次 goose 迁移 (Down)"
     cmds:
       - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" down {{.CLI_ARGS}}
 
   goose:storage:status:
-    desc: "Print the status of goose migrations for storage service"
+    desc: "打印 storage 服务的 goose 迁移状态 (Status)"
     cmds:
       - goose -dir {{.STORAGE_MIGRATIONS_DIR}} postgres "{{.STORAGE_DB_DSN}}" status {{.CLI_ARGS}}
 
