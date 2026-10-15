@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stronger FUSE Lookup 接口与元数据契约设计评审 (已采纳)</title>
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --border-color: #30363d;
+      --text-primary: #c9d1d9;
+      --text-secondary: #8b949e;
+      --text-highlight: #58a6ff;
+      --accent-green: #238636;
+      --accent-green-bg: rgba(46, 160, 67, 0.15);
+      --accent-blue: #1f6feb;
+      --accent-blue-bg: rgba(56, 139, 253, 0.15);
+      --accent-yellow: #d29922;
+      --accent-yellow-bg: rgba(210, 153, 34, 0.15);
+      --code-bg: #0b0e14;
+      --font-mono: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      padding-bottom: 80px;
+    }
+
+    header {
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .header-title h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+
+    .badge {
+      font-size: 0.75rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .badge-accepted {
+      background-color: var(--accent-green-bg);
+      color: #3fb950;
+      border: 1px solid rgba(46, 160, 67, 0.4);
+      font-weight: 600;
+    }
+
+    .badge-rec {
+      background-color: var(--accent-blue-bg);
+      color: var(--text-highlight);
+      border: 1px solid rgba(56, 139, 253, 0.4);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.875rem;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-highlight);
+    }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 32px 24px;
+    }
+
+    .intro-banner {
+      background: linear-gradient(135deg, rgba(35, 134, 54, 0.15) 0%, rgba(31, 111, 235, 0.1) 100%);
+      border: 1px solid rgba(46, 160, 67, 0.4);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 32px;
+    }
+
+    .intro-banner h2 {
+      font-size: 1.4rem;
+      margin-bottom: 8px;
+      color: #f0f6fc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .intro-banner p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    .artifacts-summary {
+      display: flex;
+      gap: 16px;
+      margin-top: 16px;
+      flex-wrap: wrap;
+    }
+
+    .summary-tag {
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 0.82rem;
+      color: var(--text-primary);
+    }
+
+    .summary-tag code {
+      color: var(--text-highlight);
+      font-family: var(--font-mono);
+    }
+
+    section {
+      margin-bottom: 48px;
+      scroll-margin-top: 80px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 20px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .section-header h2 {
+      font-size: 1.3rem;
+      color: #f0f6fc;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(540px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 20px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .card:hover {
+      border-color: #58a6ff66;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 12px;
+    }
+
+    .card-header h3 {
+      font-size: 1.05rem;
+      color: #f0f6fc;
+    }
+
+    .question-body {
+      color: var(--text-primary);
+      font-size: 0.92rem;
+      margin-bottom: 16px;
+    }
+
+    .rec-box {
+      background-color: rgba(46, 160, 67, 0.08);
+      border-left: 3px solid #3fb950;
+      padding: 10px 14px;
+      border-radius: 0 4px 4px 0;
+      font-size: 0.88rem;
+      color: #e6edf3;
+    }
+
+    .rec-box strong {
+      color: #3fb950;
+    }
+
+    /* Flow diagram & Table */
+    .flow-wrapper {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .flow-steps {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      overflow-x: auto;
+      padding: 16px 0;
+    }
+
+    .flow-node {
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 12px 16px;
+      text-align: center;
+      min-width: 170px;
+      flex-shrink: 0;
+    }
+
+    .flow-node .node-title {
+      font-weight: 600;
+      font-size: 0.88rem;
+      color: #f0f6fc;
+      margin-bottom: 4px;
+    }
+
+    .flow-node .node-desc {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      font-family: var(--font-mono);
+    }
+
+    .flow-arrow {
+      color: var(--text-secondary);
+      font-size: 1.2rem;
+      flex-shrink: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      margin-top: 12px;
+    }
+
+    th, td {
+      border: 1px solid var(--border-color);
+      padding: 10px 14px;
+      text-align: left;
+    }
+
+    th {
+      background-color: var(--bg-tertiary);
+      color: #f0f6fc;
+      font-weight: 600;
+    }
+
+    td {
+      background-color: var(--bg-secondary);
+    }
+
+    td code, th code {
+      background-color: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      color: #79c0ff;
+    }
+
+    /* Code block */
+    pre {
+      background-color: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: #e6edf3;
+    }
+
+    .keyword { color: #ff7b72; font-weight: 600; }
+    .type { color: #79c0ff; }
+    .string { color: #a5d6ff; }
+    .comment { color: #8b949e; font-style: italic; }
+    .number { color: #d2a8ff; }
+
+    /* Glossary grid */
+    .glossary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 16px;
+    }
+
+    .glossary-item {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 16px;
+    }
+
+    .glossary-item h4 {
+      font-size: 0.98rem;
+      color: var(--text-highlight);
+      margin-bottom: 6px;
+    }
+
+    .glossary-item p {
+      font-size: 0.86rem;
+      color: var(--text-primary);
+      margin-bottom: 8px;
+    }
+
+    .glossary-avoid {
+      font-size: 0.78rem;
+      color: #f85149;
+      background-color: rgba(248, 81, 73, 0.1);
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-title">
+      <h1>Stronger 元数据契约设计</h1>
+      <span class="badge badge-accepted">已采纳 (Accepted) - 版本 2</span>
+      <span class="badge badge-rec">FUSE Lookup RPC</span>
+    </div>
+    <nav class="nav-links">
+      <a href="#grilling-frontier">已敲定决策</a>
+      <a href="#fuse-mapping">FUSE 协议映射</a>
+      <a href="#proto-draft">Proto 规范文件</a>
+      <a href="#domain-glossary">领域名词表</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="intro-banner">
+      <h2><span>✅</span> 全部决策已确认并成功生成代码</h2>
+      <p>
+        用户已明确“同意全部决策”。契约文件 <code>proto/stronger/v1/stronger.proto</code>、Go 桩代码及架构决策记录已正式就绪并通过 <code>buf lint</code> 与 <code>go test</code> 校验。
+      </p>
+      <div class="artifacts-summary">
+        <span class="summary-tag">Proto 定义: <code>proto/stronger/v1/stronger.proto</code></span>
+        <span class="summary-tag">架构决策记录: <code>docs/adr/0001-minimal-fuse-lookup-metadata-structure.md</code></span>
+        <span class="summary-tag">术语表: <code>GLOSSARY.md</code></span>
+        <span class="summary-tag">生成 Go SDK: <code>gen/go/stronger/v1/...</code></span>
+      </div>
+    </div>
+
+    <!-- Section 1: Grilling Frontier -->
+    <section id="grilling-frontier">
+      <div class="section-header">
+        <h2><span>🎯</span> 已确认的设计决策记录 (Decisions Settled)</h2>
+        <span style="font-size: 0.85rem; color: #3fb950;">全票采纳推荐方案</span>
+      </div>
+
+      <div class="grid-2">
+        <!-- Q1 -->
+        <div class="card" id="q1-proto-package">
+          <div class="card-header">
+            <h3>Q1 - Proto 文件路径与 Package 命名空间</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            确定文件路径为 <code>proto/stronger/v1/stronger.proto</code>，包名为 <code>stronger.v1</code>，Go 导入命名空间为 <code>github.com/starsrc/bowl/gen/go/stronger/v1;strongerv1</code>。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。目录与 Package 严格对齐 Buf 标准，并在 <code>buf.yaml</code> 与 <code>buf.gen.yaml</code> 下完成代码生成。
+          </div>
+        </div>
+
+        <!-- Q2 -->
+        <div class="card" id="q2-metadata-schema">
+          <div class="card-header">
+            <h3>Q2 - 核心元数据模型划分（Inode 与 InodeAttribute）</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            元数据划分为 <code>Inode</code>（包含持久化 <code>ino</code> 与代数 <code>generation</code>）及内嵌的 <code>InodeAttribute</code>（封装 POSIX 属性集合）。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。<code>InodeAttribute</code> 严格对齐 POSIX <code>struct stat</code>，已具备向后续 <code>GetAttr</code>、<code>SetAttr</code> 接口复用的能力。
+          </div>
+        </div>
+
+        <!-- Q3 -->
+        <div class="card" id="q3-cache-timeout">
+          <div class="card-header">
+            <h3>Q3 - FUSE 内核缓存时效控制字段</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            在 <code>LookupResponse</code> 中显式声明 <code>entry_timeout_seconds</code> 与 <code>attr_timeout_seconds</code>。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。为客户端 FUSE 驱动动态控制 VFS dentry 和属性缓存生命周期提供接口支持。
+          </div>
+        </div>
+
+        <!-- Q4 -->
+        <div class="card" id="q4-lookup-request">
+          <div class="card-header">
+            <h3>Q4 - Lookup 请求参数最小化与校验规则</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            <code>LookupRequest</code> 严格仅定义 <code>parent_ino</code> 与 <code>name</code>，通过 <code>buf.validate</code> 约束合法性。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。有效拦截父 Inode 非法、空字符串、超长文件名及非法 <code>/</code> 路径字符。
+          </div>
+        </div>
+
+        <!-- Q5 -->
+        <div class="card" id="q5-error-handling">
+          <div class="card-header">
+            <h3>Q5 - 文件未找到（ENOENT）的错误语义契约</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            使用标准 gRPC 状态码 <code>codes.NotFound</code>（ConnectRPC <code>CodeNotFound</code>），映射为 POSIX <code>ENOENT</code>。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。遵循微服务规范，避免响应体内包装冗余状态位。
+          </div>
+        </div>
+
+        <!-- Q6 -->
+        <div class="card" id="q6-timestamp-precision">
+          <div class="card-header">
+            <h3>Q6 - 时间戳表示法与精度对齐</h3>
+            <span class="badge badge-accepted">已采纳</span>
+          </div>
+          <div class="question-body">
+            文件访问与修改时间（<code>atime</code>, <code>mtime</code>, <code>ctime</code>）统一采用官方 <code>google.protobuf.Timestamp</code>。
+          </div>
+          <div class="rec-box">
+            <strong>执行状态：</strong>已完成。完整支持 POSIX 纳秒精度与跨语言序列化。
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2: FUSE Mapping -->
+    <section id="fuse-mapping">
+      <div class="section-header">
+        <h2><span>🔄</span> POSIX FUSE 内核系统调用与 Stronger RPC 映射</h2>
+      </div>
+
+      <div class="flow-wrapper" id="fuse-flow-diagram">
+        <div class="flow-steps">
+          <div class="flow-node">
+            <div class="node-title">Linux VFS 内核</div>
+            <div class="node-desc">lookup(parent, name)</div>
+          </div>
+          <div class="flow-arrow">➔</div>
+          <div class="flow-node">
+            <div class="node-title">/dev/fuse 驱动</div>
+            <div class="node-desc">FUSE_LOOKUP Inode=1</div>
+          </div>
+          <div class="flow-arrow">➔</div>
+          <div class="flow-node">
+            <div class="node-title">Stronger FUSE Client</div>
+            <div class="node-desc">用户态 FUSE 驱动</div>
+          </div>
+          <div class="flow-arrow">➔</div>
+          <div class="flow-node">
+            <div class="node-title">Stronger RPC Service</div>
+            <div class="node-desc">Lookup(LookupRequest)</div>
+          </div>
+          <div class="flow-arrow">➔</div>
+          <div class="flow-node">
+            <div class="node-title">元数据存储层</div>
+            <div class="node-desc">持久化索引解析</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="fuse-mapping-table">
+        <div class="card-header">
+          <h3>FUSE <code>fuse_entry_param</code> 与 <code>LookupResponse</code> 结构映射</h3>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>FUSE 内核参数 (fuse_entry_param)</th>
+              <th>Stronger Proto 映射字段</th>
+              <th>类型</th>
+              <th>设计说明与作用</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>ino</code> (fuse_ino_t)</td>
+              <td><code>inode.ino</code></td>
+              <td><code>uint64</code></td>
+              <td>目标实体的全局唯一索引节点标识。根目录通常为 1。</td>
+            </tr>
+            <tr>
+              <td><code>generation</code> (uint64)</td>
+              <td><code>inode.generation</code></td>
+              <td><code>uint64</code></td>
+              <td>防止 Inode 回收复用导致脏缓存击穿的代数版本。</td>
+            </tr>
+            <tr>
+              <td><code>attr.st_mode</code> (mode_t)</td>
+              <td><code>inode.attr.mode</code></td>
+              <td><code>uint32</code></td>
+              <td>文件类型掩码 (S_IFDIR, S_IFREG) 与 POSIX 权限位 (0755, 0644)。</td>
+            </tr>
+            <tr>
+              <td><code>attr.st_size</code> (off_t)</td>
+              <td><code>inode.attr.size</code></td>
+              <td><code>uint64</code></td>
+              <td>文件物理大小（字节数）。</td>
+            </tr>
+            <tr>
+              <td><code>attr.st_nlink</code> (nlink_t)</td>
+              <td><code>inode.attr.nlink</code></td>
+              <td><code>uint32</code></td>
+              <td>硬链接数。普通文件默认 1；目录至少为 2（含 <code>.</code> 与 <code>..</code>）。</td>
+            </tr>
+            <tr>
+              <td><code>attr.st_uid / st_gid</code></td>
+              <td><code>inode.attr.uid / gid</code></td>
+              <td><code>uint32</code></td>
+              <td>文件所属的用户 ID 与用户组 ID。</td>
+            </tr>
+            <tr>
+              <td><code>attr.st_atim / mtim / ctim</code></td>
+              <td><code>inode.attr.atime / mtime / ctime</code></td>
+              <td><code>google.protobuf.Timestamp</code></td>
+              <td>访问时间、修改时间与状态变更时间（纳秒级）。</td>
+            </tr>
+            <tr>
+              <td><code>entry_timeout</code> (double)</td>
+              <td><code>entry_timeout_seconds</code></td>
+              <td><code>double</code></td>
+              <td>告诉 Linux 内核可以在 VFS dentry 缓存该名称映射多少秒。</td>
+            </tr>
+            <tr>
+              <td><code>attr_timeout</code> (double)</td>
+              <td><code>attr_timeout_seconds</code></td>
+              <td><code>double</code></td>
+              <td>告诉 Linux 内核可以在 VFS 缓存该 Inode 属性多少秒。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 3: Proto Specification -->
+    <section id="proto-draft">
+      <div class="section-header">
+        <h2><span>📜</span> <code>proto/stronger/v1/stronger.proto</code> 契约正式文件</h2>
+        <span class="badge badge-accepted">已生成代码</span>
+      </div>
+
+      <div class="card" id="proto-spec-card">
+        <pre><code><span class="keyword">syntax</span> = <span class="string">"proto3"</span>;
+
+<span class="keyword">package</span> stronger.v1;
+
+<span class="keyword">option</span> go_package = <span class="string">"github.com/starsrc/bowl/gen/go/stronger/v1;strongerv1"</span>;
+
+<span class="keyword">import</span> <span class="string">"buf/validate/validate.proto"</span>;
+<span class="keyword">import</span> <span class="string">"google/protobuf/timestamp.proto"</span>;
+
+<span class="comment">// StrongerService 提供针对分布式文件系统的元数据操作与 FUSE 协议对接能力。</span>
+<span class="keyword">service</span> StrongerService {
+  <span class="comment">// Lookup 执行单级目录项查找。</span>
+  <span class="comment">// 根据父目录 Inode 与目标子项名称获取对应的 Inode 元数据及内核缓存时效。</span>
+  <span class="comment">// 若目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。</span>
+  <span class="keyword">rpc</span> <span class="type">Lookup</span> (<span class="type">LookupRequest</span>) <span class="keyword">returns</span> (<span class="type">LookupResponse</span>);
+}
+
+<span class="comment">// LookupRequest 定义 Lookup 接口输入参数。</span>
+<span class="keyword">message</span> <span class="type">LookupRequest</span> {
+  <span class="comment">// 父目录的 Inode 编号。根目录通常为 1。</span>
+  <span class="type">uint64</span> parent_ino = <span class="number">1</span> [(buf.validate.field).uint64.gt = <span class="number">0</span>];
+
+  <span class="comment">// 待查找的子项名称（文件或目录名）。</span>
+  <span class="comment">// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/'。</span>
+  <span class="type">string</span> name = <span class="number">2</span> [
+    (buf.validate.field).string.min_len = <span class="number">1</span>,
+    (buf.validate.field).string.max_bytes = <span class="number">255</span>,
+    (buf.validate.field).string.not_contains = <span class="string">"/"</span>
+  ];
+}
+
+<span class="comment">// LookupResponse 包含查找命中的节点元数据以及 FUSE 内核缓存有效时间。</span>
+<span class="keyword">message</span> <span class="type">LookupResponse</span> {
+  <span class="comment">// 命中的目标 Inode 实体元数据。</span>
+  <span class="type">Inode</span> inode = <span class="number">1</span> [(buf.validate.field).required = <span class="keyword">true</span>];
+
+  <span class="comment">// 目录项 (dentry) 在 FUSE 内核中的有效缓存时长（秒）。</span>
+  <span class="type">double</span> entry_timeout_seconds = <span class="number">2</span> [(buf.validate.field).double.gte = <span class="number">0</span>];
+
+  <span class="comment">// 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。</span>
+  <span class="type">double</span> attr_timeout_seconds = <span class="number">3</span> [(buf.validate.field).double.gte = <span class="number">0</span>];
+}
+
+<span class="comment">// Inode 代表文件系统中的实体节点。</span>
+<span class="keyword">message</span> <span class="type">Inode</span> {
+  <span class="comment">// 节点的全局唯一持久化标识。</span>
+  <span class="type">uint64</span> ino = <span class="number">1</span> [(buf.validate.field).uint64.gt = <span class="number">0</span>];
+
+  <span class="comment">// Inode 代数版本，用于标识 Inode 复用生命周期，防止陈旧引用。</span>
+  <span class="type">uint64</span> generation = <span class="number">2</span>;
+
+  <span class="comment">// 节点的 POSIX 物理属性集合。</span>
+  <span class="type">InodeAttribute</span> attr = <span class="number">3</span> [(buf.validate.field).required = <span class="keyword">true</span>];
+}
+
+<span class="comment">// InodeAttribute 包含遵循 POSIX 规范的节点物理属性。</span>
+<span class="keyword">message</span> <span class="type">InodeAttribute</span> {
+  <span class="comment">// 文件的模式位（包含文件类型 S_IFREG, S_IFDIR 及权限位 0755, 0644 等）。</span>
+  <span class="type">uint32</span> mode = <span class="number">1</span> [(buf.validate.field).uint32.gt = <span class="number">0</span>];
+
+  <span class="comment">// 文件物理大小（字节数）。</span>
+  <span class="type">uint64</span> size = <span class="number">2</span>;
+
+  <span class="comment">// 硬链接数量。文件默认为 1；目录通常至少为 2。</span>
+  <span class="type">uint32</span> nlink = <span class="number">3</span> [(buf.validate.field).uint32.gt = <span class="number">0</span>];
+
+  <span class="comment">// 所属用户 ID。</span>
+  <span class="type">uint32</span> uid = <span class="number">4</span>;
+
+  <span class="comment">// 所属组 ID。</span>
+  <span class="type">uint32</span> gid = <span class="number">5</span>;
+
+  <span class="comment">// 特殊设备号（仅当为设备文件时有效，常规文件为 0）。</span>
+  <span class="type">uint32</span> rdev = <span class="number">6</span>;
+
+  <span class="comment">// 块大小（字节数，例如 4096）。</span>
+  <span class="type">uint32</span> blksize = <span class="number">7</span>;
+
+  <span class="comment">// 占用的 512 字节块数量。</span>
+  <span class="type">uint64</span> blocks = <span class="number">8</span>;
+
+  <span class="comment">// 最后访问时间。</span>
+  <span class="type">google.protobuf.Timestamp</span> atime = <span class="number">9</span>;
+
+  <span class="comment">// 最后修改时间。</span>
+  <span class="type">google.protobuf.Timestamp</span> mtime = <span class="number">10</span>;
+
+  <span class="comment">// 状态变更时间。</span>
+  <span class="type">google.protobuf.Timestamp</span> ctime = <span class="number">11</span>;
+}
+</code></pre>
+      </div>
+    </section>
+
+    <!-- Section 4: Domain Glossary -->
+    <section id="domain-glossary">
+      <div class="section-header">
+        <h2><span>📖</span> 领域术语表 (Domain Glossary)</h2>
+        <span style="font-size: 0.85rem; color: var(--text-secondary);">遵循 ASD-STE100 规范与 Domain Modeling 原则</span>
+      </div>
+
+      <div class="glossary-grid" id="domain-glossary-card">
+        <div class="glossary-item">
+          <h4>Inode (索引节点)</h4>
+          <p>文件系统中标识文件或目录实体的唯一持久化数字标识符与元数据载体。</p>
+          <div class="glossary-avoid">_Avoid_: FileID, NodeID, ObjectId, VNode</div>
+        </div>
+
+        <div class="glossary-item">
+          <h4>Entry (目录项)</h4>
+          <p>父目录下将文件名映射至目标 Inode 的单向命名绑定关系。</p>
+          <div class="glossary-avoid">_Avoid_: Dentry, FileItem, DirRecord, Record</div>
+        </div>
+
+        <div class="glossary-item">
+          <h4>Lookup (路径查找)</h4>
+          <p>根据父级 Inode 与目标名称，解析并获取对应 Entry 及其 Inode 属性的元数据检索操作。</p>
+          <div class="glossary-avoid">_Avoid_: Find, Search, GetFile, Query</div>
+        </div>
+
+        <div class="glossary-item">
+          <h4>Attribute (文件属性)</h4>
+          <p>描述 Inode 物理特征与内核访问控制参数的集合（如大小、权限掩码、硬链接数、时间戳等）。</p>
+          <div class="glossary-avoid">_Avoid_: Stat, Meta, Properties, Info</div>
+        </div>
+
+        <div class="glossary-item">
+          <h4>Generation (代数)</h4>
+          <p>用于标识 Inode 复用生命周期的递增版本号，防止客户端缓存引用已释放后重新分配的 Inode。</p>
+          <div class="glossary-avoid">_Avoid_: Version, Revision, Epoch</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+</body>
+</html>
