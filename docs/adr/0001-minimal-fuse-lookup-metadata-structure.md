@@ -4,11 +4,11 @@
 已采纳 (accepted)
 
 ## 背景
-Stronger 元数据服务需要通过 RPC 对接 Linux FUSE 内核的 `lookup` 接口。POSIX FUSE 的 `lookup(parent, name)` 调用强制要求返回对应 `fuse_entry_param` 规范的元数据（包含 Inode 编号、代数 Generation、POSIX 物理属性集合以及内核缓存超时控制）。为了在满足当前单项查找诉求的同时，避免过度设计并保证契约在后续接口中的复用性，需要确定最小化数据结构与契约规范。
+Storage 元数据服务需要通过 RPC 对接 Linux FUSE 内核的 `lookup` 接口。POSIX FUSE 的 `lookup(parent, name)` 调用强制要求返回对应 `fuse_entry_param` 规范的元数据（包含 Inode 编号、代数 Generation、POSIX 物理属性集合以及内核缓存超时控制）。为了在满足当前单项查找诉求的同时，避免过度设计并保证契约在后续接口中的复用性，需要确定最小化数据结构与契约规范。
 
 ## 决策
 1. **目录与 Package 规范**：
-   - 文件统一置于 `proto/stronger/v1/stronger.proto`，声明 Package 为 `stronger.v1`，严格对齐 Buf 目录命名空间规范。
+   - 文件统一置于 `proto/storage/v1/storage.proto`，声明 Package 为 `storage.v1`，严格对齐 Buf 目录命名空间规范。
 2. **元数据模型解耦**：
    - 抽象实体 `Inode` 承载节点唯一持久化标识 `ino`、代数 `generation` 及关联属性 `attr`。
    - 抽象物理属性 `InodeAttribute` 封装 POSIX `struct stat` 属性（`mode`, `size`, `nlink`, `uid`, `gid`, `rdev`, `blksize`, `blocks`, `atime`, `mtime`, `ctime`），便于未来在 `GetAttr`、`SetAttr`、`ReadDir` 等操作中直接复用。

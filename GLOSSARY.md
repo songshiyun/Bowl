@@ -1,6 +1,6 @@
-# Stronger 元数据引擎
+# Storage 元数据引擎
 
-Stronger 元数据引擎负责管理分布式文件系统的目录树、节点索引及 POSIX 文件系统协议映射。
+Storage 元数据引擎负责管理分布式文件系统的目录树、节点索引及 POSIX 文件系统协议映射。
 
 ## 术语规范
 
@@ -23,3 +23,8 @@ _Avoid_: Stat, Meta, Properties, Info
 **Generation (代数)**:
 用于标识 Inode 复用周期的递增版本号，防止客户端缓存引用已释放后重新分配的 Inode。
 _Avoid_: Version, Revision, Epoch
+
+**Disk (磁盘)**:
+客户端挂载呈现的独立文件系统实例；在元数据层无实体感知，仅表现为普通的递增根目录 Inode，由客户端在挂载时将其 Inode 强制重写映射为 1。
+_Avoid_: Volume, Drive, MountPoint, Partition
+
