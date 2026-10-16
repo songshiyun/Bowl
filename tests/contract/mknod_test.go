@@ -7,6 +7,7 @@ import (
 
 	"buf.build/go/protovalidate"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // TestMknodRequestValidation 验证 MknodRequest 的字段约束与边界逻辑。
@@ -245,6 +246,9 @@ func TestMknodResponseValidation(t *testing.T) {
 		Attr: &storagev1.InodeAttribute{
 			Mode:  0o100644,
 			Nlink: 1,
+			Atime: timestamppb.Now(),
+			Mtime: timestamppb.Now(),
+			Ctime: timestamppb.Now(),
 		},
 	}
 

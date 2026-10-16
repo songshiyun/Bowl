@@ -18,6 +18,7 @@ import (
 // Manager 定义元数据领域层管理器接口。
 type Manager interface {
 	Lookup(ctx context.Context, parentIno uint64, name string) (*Inode, error)
+	GetAttr(ctx context.Context, ino uint64) (*Inode, error)
 	Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 }
 
@@ -86,6 +87,23 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name string) (*I
 		}
 	}
 	return result, nil
+}
+
+// GetAttr 执行单节点单语句直查与属性推导，支持所有文件类型与孤儿节点。
+func (m *manager) GetAttr(ctx context.Context, ino uint64) (*Inode, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	target, err := m.store.GetInode(ctx, int64(ino))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get inode %d: %w", ino, err)
+	}
+
+	return newInodeFromDB(target), nil
 }
 
 func newInodeFromDB(target db.Inode) *Inode {

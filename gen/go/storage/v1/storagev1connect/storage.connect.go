@@ -26,6 +26,8 @@ const (
 const (
 	// StorageServiceLookupProcedure is the procedure name of the StorageService's Lookup RPC.
 	StorageServiceLookupProcedure = "/storage.v1.StorageService/Lookup"
+	// StorageServiceGetAttrProcedure is the procedure name of the StorageService's GetAttr RPC.
+	StorageServiceGetAttrProcedure = "/storage.v1.StorageService/GetAttr"
 	// StorageServiceMknodProcedure is the procedure name of the StorageService's Mknod RPC.
 	StorageServiceMknodProcedure = "/storage.v1.StorageService/Mknod"
 )
@@ -36,6 +38,13 @@ var (
 			StreamType: connect.StreamTypeUnary,
 			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Lookup"),
 			Procedure:  StorageServiceLookupProcedure,
+		}
+	})
+	storageServiceGetAttrSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("GetAttr"),
+			Procedure:  StorageServiceGetAttrProcedure,
 		}
 	})
 	storageServiceMknodSpec = sync.OnceValue(func() connect.Spec {
@@ -54,6 +63,10 @@ type StorageServiceClient interface {
 	// 若父节点或目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Lookup(context.Context, *v1.LookupRequest) (*v1.LookupResponse, error)
+	// GetAttr 获取指定 Inode 的属性与内核缓存时效。
+	// 遵循 Linux FUSE FUSE_GETATTR 规范，支持已解链但仍打开的孤儿节点 (nlink == 0)。
+	// 若指定 Inode 不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	GetAttr(context.Context, *v1.GetAttrRequest) (*v1.GetAttrResponse, error)
 	// Mknod 在指定父目录下创建常规文件或特殊设备节点。
 	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -74,6 +87,10 @@ type StorageServiceHandler interface {
 	// 若父节点或目标子项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Lookup(context.Context, *v1.LookupRequest) (*v1.LookupResponse, error)
+	// GetAttr 获取指定 Inode 的属性与内核缓存时效。
+	// 遵循 Linux FUSE FUSE_GETATTR 规范，支持已解链但仍打开的孤儿节点 (nlink == 0)。
+	// 若指定 Inode 不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	GetAttr(context.Context, *v1.GetAttrRequest) (*v1.GetAttrResponse, error)
 	// Mknod 在指定父目录下创建常规文件或特殊设备节点。
 	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -87,6 +104,7 @@ func RegisterStorageServiceHandler(server *connect.Server, svc StorageServiceHan
 	adapter := storageServiceHandler{svc: svc}
 	server.Register(
 		connect.Method{Spec: storageServiceLookupSpec(), Handler: adapter.lookup},
+		connect.Method{Spec: storageServiceGetAttrSpec(), Handler: adapter.getAttr},
 		connect.Method{Spec: storageServiceMknodSpec(), Handler: adapter.mknod},
 	)
 }
@@ -96,6 +114,10 @@ type UnimplementedStorageServiceHandler struct{}
 
 func (UnimplementedStorageServiceHandler) Lookup(context.Context, *v1.LookupRequest) (*v1.LookupResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Lookup is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) GetAttr(context.Context, *v1.GetAttrRequest) (*v1.GetAttrResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.GetAttr is not implemented")
 }
 
 func (UnimplementedStorageServiceHandler) Mknod(context.Context, *v1.MknodRequest) (*v1.MknodResponse, error) {
@@ -109,6 +131,14 @@ type storageServiceClient struct {
 func (c *storageServiceClient) Lookup(ctx context.Context, req *v1.LookupRequest) (*v1.LookupResponse, error) {
 	var res v1.LookupResponse
 	if err := c.client.CallUnary(ctx, storageServiceLookupSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) GetAttr(ctx context.Context, req *v1.GetAttrRequest) (*v1.GetAttrResponse, error) {
+	var res v1.GetAttrResponse
+	if err := c.client.CallUnary(ctx, storageServiceGetAttrSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -130,6 +160,18 @@ func (h storageServiceHandler) lookup(ctx context.Context, _ connect.Spec, strea
 		return err
 	}
 	res, err := h.svc.Lookup(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) getAttr(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetAttrRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetAttr(ctx, &req)
 	if err != nil {
 		return err
 	}
