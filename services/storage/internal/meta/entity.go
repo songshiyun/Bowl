@@ -15,11 +15,23 @@ const (
 	S_IFREG          uint32 = 0o100000
 	S_IFLNK          uint32 = 0o120000
 	S_IFSOCK         uint32 = 0o140000
+	S_ISUID          uint32 = 0o4000
 	S_ISGID          uint32 = 0o2000
 	PermMask         uint32 = 0o7777
 	MaxFileNameBytes        = 255
 )
 
+// SetAttrInput 定义修改 Inode 属性的输入参数。
+type SetAttrInput struct {
+	Mode     *uint32
+	UID      *uint32
+	GID      *uint32
+	Size     *uint64
+	Atime    *time.Time
+	Mtime    *time.Time
+	AtimeNow bool
+	MtimeNow bool
+}
 
 // MknodParams 定义创建节点的输入参数。
 type MknodParams struct {
@@ -36,6 +48,7 @@ var (
 	ErrInvalidArgument = errors.New("meta: invalid argument")
 	ErrNotFound        = errors.New("meta: not found")
 	ErrNotDir          = errors.New("meta: not a directory")
+	ErrIsDir           = errors.New("meta: is a directory")
 	ErrAlreadyExists   = errors.New("meta: entry already exists")
 )
 
