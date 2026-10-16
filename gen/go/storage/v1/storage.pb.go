@@ -575,6 +575,820 @@ func (x *MknodResponse) GetAttrTimeoutSeconds() float64 {
 	return 0
 }
 
+// MkdirRequest 定义 Mkdir 接口输入参数。
+type MkdirRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
+	// 待创建的新目录名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 目录模式位（包含可选的 S_IFDIR 文件类型位及权限位，取值范围必须在 0 到 0o177777 / 65535 之间）。
+	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
+	// 所属用户 ID。
+	Uid uint32 `protobuf:"varint,4,opt,name=uid,proto3" json:"uid,omitempty"`
+	// 所属组 ID。
+	Gid           uint32 `protobuf:"varint,5,opt,name=gid,proto3" json:"gid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MkdirRequest) Reset() {
+	*x = MkdirRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MkdirRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MkdirRequest) ProtoMessage() {}
+
+func (x *MkdirRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MkdirRequest.ProtoReflect.Descriptor instead.
+func (*MkdirRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *MkdirRequest) GetParentIno() uint64 {
+	if x != nil {
+		return x.ParentIno
+	}
+	return 0
+}
+
+func (x *MkdirRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *MkdirRequest) GetMode() uint32 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+func (x *MkdirRequest) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *MkdirRequest) GetGid() uint32 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
+// MkdirResponse 包含新创建目录的元数据以及 FUSE 内核缓存有效时间。
+type MkdirResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 新创建的 Inode 实体元数据。
+	Inode *Inode `protobuf:"bytes,1,opt,name=inode,proto3" json:"inode,omitempty"`
+	// 目录项 (dentry) 在 FUSE 内核中的有效缓存时长（秒）。
+	EntryTimeoutSeconds float64 `protobuf:"fixed64,2,opt,name=entry_timeout_seconds,json=entryTimeoutSeconds,proto3" json:"entry_timeout_seconds,omitempty"`
+	// 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。
+	AttrTimeoutSeconds float64 `protobuf:"fixed64,3,opt,name=attr_timeout_seconds,json=attrTimeoutSeconds,proto3" json:"attr_timeout_seconds,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *MkdirResponse) Reset() {
+	*x = MkdirResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MkdirResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MkdirResponse) ProtoMessage() {}
+
+func (x *MkdirResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MkdirResponse.ProtoReflect.Descriptor instead.
+func (*MkdirResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *MkdirResponse) GetInode() *Inode {
+	if x != nil {
+		return x.Inode
+	}
+	return nil
+}
+
+func (x *MkdirResponse) GetEntryTimeoutSeconds() float64 {
+	if x != nil {
+		return x.EntryTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *MkdirResponse) GetAttrTimeoutSeconds() float64 {
+	if x != nil {
+		return x.AttrTimeoutSeconds
+	}
+	return 0
+}
+
+// SymlinkRequest 定义 Symlink 接口输入参数。
+type SymlinkRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
+	// 待创建的符号链接名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 符号链接指向的目标路径。
+	// 长度必须在 1 到 4096 字节之间，且严禁包含空字节 '\x00'（允许包含路径分隔符 '/'）。
+	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// 所属用户 ID。
+	Uid uint32 `protobuf:"varint,4,opt,name=uid,proto3" json:"uid,omitempty"`
+	// 所属组 ID。
+	Gid           uint32 `protobuf:"varint,5,opt,name=gid,proto3" json:"gid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SymlinkRequest) Reset() {
+	*x = SymlinkRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SymlinkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SymlinkRequest) ProtoMessage() {}
+
+func (x *SymlinkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SymlinkRequest.ProtoReflect.Descriptor instead.
+func (*SymlinkRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SymlinkRequest) GetParentIno() uint64 {
+	if x != nil {
+		return x.ParentIno
+	}
+	return 0
+}
+
+func (x *SymlinkRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SymlinkRequest) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *SymlinkRequest) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SymlinkRequest) GetGid() uint32 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
+// SymlinkResponse 包含新创建符号链接的元数据以及 FUSE 内核缓存有效时间。
+type SymlinkResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 新创建的 Inode 实体元数据。
+	Inode *Inode `protobuf:"bytes,1,opt,name=inode,proto3" json:"inode,omitempty"`
+	// 目录项 (dentry) 在 FUSE 内核中的有效缓存时长（秒）。
+	EntryTimeoutSeconds float64 `protobuf:"fixed64,2,opt,name=entry_timeout_seconds,json=entryTimeoutSeconds,proto3" json:"entry_timeout_seconds,omitempty"`
+	// 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。
+	AttrTimeoutSeconds float64 `protobuf:"fixed64,3,opt,name=attr_timeout_seconds,json=attrTimeoutSeconds,proto3" json:"attr_timeout_seconds,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *SymlinkResponse) Reset() {
+	*x = SymlinkResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SymlinkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SymlinkResponse) ProtoMessage() {}
+
+func (x *SymlinkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SymlinkResponse.ProtoReflect.Descriptor instead.
+func (*SymlinkResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SymlinkResponse) GetInode() *Inode {
+	if x != nil {
+		return x.Inode
+	}
+	return nil
+}
+
+func (x *SymlinkResponse) GetEntryTimeoutSeconds() float64 {
+	if x != nil {
+		return x.EntryTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *SymlinkResponse) GetAttrTimeoutSeconds() float64 {
+	if x != nil {
+		return x.AttrTimeoutSeconds
+	}
+	return 0
+}
+
+// ReadlinkRequest 定义 Readlink 接口输入参数。
+type ReadlinkRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标符号链接的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino           uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadlinkRequest) Reset() {
+	*x = ReadlinkRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadlinkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadlinkRequest) ProtoMessage() {}
+
+func (x *ReadlinkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadlinkRequest.ProtoReflect.Descriptor instead.
+func (*ReadlinkRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ReadlinkRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+// ReadlinkResponse 包含符号链接指向的目标路径字符串。
+type ReadlinkResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标路径字符串。
+	Target        string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReadlinkResponse) Reset() {
+	*x = ReadlinkResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReadlinkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReadlinkResponse) ProtoMessage() {}
+
+func (x *ReadlinkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReadlinkResponse.ProtoReflect.Descriptor instead.
+func (*ReadlinkResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ReadlinkResponse) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+// LinkRequest 定义 Link 接口输入参数。
+type LinkRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 待创建硬链接的源节点 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	// 目标父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	NewParentIno uint64 `protobuf:"varint,2,opt,name=new_parent_ino,json=newParentIno,proto3" json:"new_parent_ino,omitempty"`
+	// 待创建的新目录项名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	NewName       string `protobuf:"bytes,3,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LinkRequest) Reset() {
+	*x = LinkRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LinkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LinkRequest) ProtoMessage() {}
+
+func (x *LinkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LinkRequest.ProtoReflect.Descriptor instead.
+func (*LinkRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *LinkRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+func (x *LinkRequest) GetNewParentIno() uint64 {
+	if x != nil {
+		return x.NewParentIno
+	}
+	return 0
+}
+
+func (x *LinkRequest) GetNewName() string {
+	if x != nil {
+		return x.NewName
+	}
+	return ""
+}
+
+// LinkResponse 包含硬链接创建后更新的源节点元数据及内核缓存时长。
+type LinkResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 硬链接计数递增后的 Inode 实体元数据。
+	Inode *Inode `protobuf:"bytes,1,opt,name=inode,proto3" json:"inode,omitempty"`
+	// 目录项 (dentry) 在 FUSE 内核中的有效缓存时长（秒）。
+	EntryTimeoutSeconds float64 `protobuf:"fixed64,2,opt,name=entry_timeout_seconds,json=entryTimeoutSeconds,proto3" json:"entry_timeout_seconds,omitempty"`
+	// 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。
+	AttrTimeoutSeconds float64 `protobuf:"fixed64,3,opt,name=attr_timeout_seconds,json=attrTimeoutSeconds,proto3" json:"attr_timeout_seconds,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *LinkResponse) Reset() {
+	*x = LinkResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LinkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LinkResponse) ProtoMessage() {}
+
+func (x *LinkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LinkResponse.ProtoReflect.Descriptor instead.
+func (*LinkResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *LinkResponse) GetInode() *Inode {
+	if x != nil {
+		return x.Inode
+	}
+	return nil
+}
+
+func (x *LinkResponse) GetEntryTimeoutSeconds() float64 {
+	if x != nil {
+		return x.EntryTimeoutSeconds
+	}
+	return 0
+}
+
+func (x *LinkResponse) GetAttrTimeoutSeconds() float64 {
+	if x != nil {
+		return x.AttrTimeoutSeconds
+	}
+	return 0
+}
+
+// UnlinkRequest 定义 Unlink 接口输入参数。
+type UnlinkRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
+	// 待删除的非目录项名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnlinkRequest) Reset() {
+	*x = UnlinkRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnlinkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnlinkRequest) ProtoMessage() {}
+
+func (x *UnlinkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnlinkRequest.ProtoReflect.Descriptor instead.
+func (*UnlinkRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *UnlinkRequest) GetParentIno() uint64 {
+	if x != nil {
+		return x.ParentIno
+	}
+	return 0
+}
+
+func (x *UnlinkRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// UnlinkResponse 定义 Unlink 接口返回参数。
+type UnlinkResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnlinkResponse) Reset() {
+	*x = UnlinkResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnlinkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnlinkResponse) ProtoMessage() {}
+
+func (x *UnlinkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnlinkResponse.ProtoReflect.Descriptor instead.
+func (*UnlinkResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{17}
+}
+
+// RmdirRequest 定义 Rmdir 接口输入参数。
+type RmdirRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
+	// 待移除的空目录项名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RmdirRequest) Reset() {
+	*x = RmdirRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RmdirRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RmdirRequest) ProtoMessage() {}
+
+func (x *RmdirRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RmdirRequest.ProtoReflect.Descriptor instead.
+func (*RmdirRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *RmdirRequest) GetParentIno() uint64 {
+	if x != nil {
+		return x.ParentIno
+	}
+	return 0
+}
+
+func (x *RmdirRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// RmdirResponse 定义 Rmdir 接口返回参数。
+type RmdirResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RmdirResponse) Reset() {
+	*x = RmdirResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RmdirResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RmdirResponse) ProtoMessage() {}
+
+func (x *RmdirResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RmdirResponse.ProtoReflect.Descriptor instead.
+func (*RmdirResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{19}
+}
+
+// RenameRequest 定义 Rename 接口输入参数。
+type RenameRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 源父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	OldParentIno uint64 `protobuf:"varint,1,opt,name=old_parent_ino,json=oldParentIno,proto3" json:"old_parent_ino,omitempty"`
+	// 待重命名的源项名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	OldName string `protobuf:"bytes,2,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	// 目标父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	NewParentIno uint64 `protobuf:"varint,3,opt,name=new_parent_ino,json=newParentIno,proto3" json:"new_parent_ino,omitempty"`
+	// 目标项新名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+	NewName       string `protobuf:"bytes,4,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameRequest) Reset() {
+	*x = RenameRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameRequest) ProtoMessage() {}
+
+func (x *RenameRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameRequest.ProtoReflect.Descriptor instead.
+func (*RenameRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *RenameRequest) GetOldParentIno() uint64 {
+	if x != nil {
+		return x.OldParentIno
+	}
+	return 0
+}
+
+func (x *RenameRequest) GetOldName() string {
+	if x != nil {
+		return x.OldName
+	}
+	return ""
+}
+
+func (x *RenameRequest) GetNewParentIno() uint64 {
+	if x != nil {
+		return x.NewParentIno
+	}
+	return 0
+}
+
+func (x *RenameRequest) GetNewName() string {
+	if x != nil {
+		return x.NewName
+	}
+	return ""
+}
+
+// RenameResponse 定义 Rename 接口返回参数。
+type RenameResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenameResponse) Reset() {
+	*x = RenameResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenameResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenameResponse) ProtoMessage() {}
+
+func (x *RenameResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenameResponse.ProtoReflect.Descriptor instead.
+func (*RenameResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{21}
+}
+
 // Inode 代表文件系统中的实体节点。
 type Inode struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -590,7 +1404,7 @@ type Inode struct {
 
 func (x *Inode) Reset() {
 	*x = Inode{}
-	mi := &file_storage_v1_storage_proto_msgTypes[8]
+	mi := &file_storage_v1_storage_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -602,7 +1416,7 @@ func (x *Inode) String() string {
 func (*Inode) ProtoMessage() {}
 
 func (x *Inode) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[8]
+	mi := &file_storage_v1_storage_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -615,7 +1429,7 @@ func (x *Inode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inode.ProtoReflect.Descriptor instead.
 func (*Inode) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{8}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *Inode) GetIno() uint64 {
@@ -670,7 +1484,7 @@ type InodeAttribute struct {
 
 func (x *InodeAttribute) Reset() {
 	*x = InodeAttribute{}
-	mi := &file_storage_v1_storage_proto_msgTypes[9]
+	mi := &file_storage_v1_storage_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +1496,7 @@ func (x *InodeAttribute) String() string {
 func (*InodeAttribute) ProtoMessage() {}
 
 func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[9]
+	mi := &file_storage_v1_storage_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +1509,7 @@ func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InodeAttribute.ProtoReflect.Descriptor instead.
 func (*InodeAttribute) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{9}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *InodeAttribute) GetMode() uint32 {
@@ -828,7 +1642,58 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\rMknodResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"z\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xb0\x01\n" +
+	"\fMkdirRequest\x120\n" +
+	"\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
+	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12\x1d\n" +
+	"\x04mode\x18\x03 \x01(\rB\t\xbaH\x06*\x04\x18\xff\xff\x03R\x04mode\x12\x10\n" +
+	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
+	"\x03gid\x18\x05 \x01(\rR\x03gid\"\xc6\x01\n" +
+	"\rMkdirResponse\x12/\n" +
+	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
+	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xbb\x01\n" +
+	"\x0eSymlinkRequest\x120\n" +
+	"\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
+	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12&\n" +
+	"\x06target\x18\x03 \x01(\tB\x0e\xbaH\vr\t\x10\x01(\x80 \xba\x01\x01\x00R\x06target\x12\x10\n" +
+	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
+	"\x03gid\x18\x05 \x01(\rR\x03gid\"\xc8\x01\n" +
+	"\x0fSymlinkResponse\x12/\n" +
+	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
+	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"6\n" +
+	"\x0fReadlinkRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\"6\n" +
+	"\x10ReadlinkResponse\x12\"\n" +
+	"\x06target\x18\x01 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01(\x80 R\x06target\"\x9f\x01\n" +
+	"\vLinkRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x127\n" +
+	"\x0enew_parent_ino\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x122\n" +
+	"\bnew_name\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\anewName\"\xc5\x01\n" +
+	"\fLinkResponse\x12/\n" +
+	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
+	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"n\n" +
+	"\rUnlinkRequest\x120\n" +
+	"\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
+	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\"\x10\n" +
+	"\x0eUnlinkResponse\"m\n" +
+	"\fRmdirRequest\x120\n" +
+	"\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
+	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\"\x0f\n" +
+	"\rRmdirResponse\"\xe9\x01\n" +
+	"\rRenameRequest\x127\n" +
+	"\x0eold_parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\foldParentIno\x122\n" +
+	"\bold_name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\aoldName\x127\n" +
+	"\x0enew_parent_ino\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x122\n" +
+	"\bnew_name\x18\x04 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\anewName\"\x10\n" +
+	"\x0eRenameResponse\"z\n" +
 	"\x05Inode\x12\x19\n" +
 	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x1e\n" +
 	"\n" +
@@ -847,12 +1712,19 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x05atime\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05atime\x128\n" +
 	"\x05mtime\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05mtime\x128\n" +
-	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05ctime2\x97\x02\n" +
+	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05ctime2\xdb\x05\n" +
 	"\x0eStorageService\x12?\n" +
 	"\x06Lookup\x12\x19.storage.v1.LookupRequest\x1a\x1a.storage.v1.LookupResponse\x12B\n" +
 	"\aGetAttr\x12\x1a.storage.v1.GetAttrRequest\x1a\x1b.storage.v1.GetAttrResponse\x12B\n" +
 	"\aSetAttr\x12\x1a.storage.v1.SetAttrRequest\x1a\x1b.storage.v1.SetAttrResponse\x12<\n" +
-	"\x05Mknod\x12\x18.storage.v1.MknodRequest\x1a\x19.storage.v1.MknodResponseB5Z3github.com/starsrc/bowl/gen/go/storage/v1;storagev1b\x06proto3"
+	"\x05Mknod\x12\x18.storage.v1.MknodRequest\x1a\x19.storage.v1.MknodResponse\x12<\n" +
+	"\x05Mkdir\x12\x18.storage.v1.MkdirRequest\x1a\x19.storage.v1.MkdirResponse\x12B\n" +
+	"\aSymlink\x12\x1a.storage.v1.SymlinkRequest\x1a\x1b.storage.v1.SymlinkResponse\x12E\n" +
+	"\bReadlink\x12\x1b.storage.v1.ReadlinkRequest\x1a\x1c.storage.v1.ReadlinkResponse\x129\n" +
+	"\x04Link\x12\x17.storage.v1.LinkRequest\x1a\x18.storage.v1.LinkResponse\x12?\n" +
+	"\x06Unlink\x12\x19.storage.v1.UnlinkRequest\x1a\x1a.storage.v1.UnlinkResponse\x12<\n" +
+	"\x05Rmdir\x12\x18.storage.v1.RmdirRequest\x1a\x19.storage.v1.RmdirResponse\x12?\n" +
+	"\x06Rename\x12\x19.storage.v1.RenameRequest\x1a\x1a.storage.v1.RenameResponseB5Z3github.com/starsrc/bowl/gen/go/storage/v1;storagev1b\x06proto3"
 
 var (
 	file_storage_v1_storage_proto_rawDescOnce sync.Once
@@ -866,7 +1738,7 @@ func file_storage_v1_storage_proto_rawDescGZIP() []byte {
 	return file_storage_v1_storage_proto_rawDescData
 }
 
-var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_storage_v1_storage_proto_goTypes = []any{
 	(*LookupRequest)(nil),         // 0: storage.v1.LookupRequest
 	(*LookupResponse)(nil),        // 1: storage.v1.LookupResponse
@@ -876,34 +1748,65 @@ var file_storage_v1_storage_proto_goTypes = []any{
 	(*SetAttrResponse)(nil),       // 5: storage.v1.SetAttrResponse
 	(*MknodRequest)(nil),          // 6: storage.v1.MknodRequest
 	(*MknodResponse)(nil),         // 7: storage.v1.MknodResponse
-	(*Inode)(nil),                 // 8: storage.v1.Inode
-	(*InodeAttribute)(nil),        // 9: storage.v1.InodeAttribute
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*MkdirRequest)(nil),          // 8: storage.v1.MkdirRequest
+	(*MkdirResponse)(nil),         // 9: storage.v1.MkdirResponse
+	(*SymlinkRequest)(nil),        // 10: storage.v1.SymlinkRequest
+	(*SymlinkResponse)(nil),       // 11: storage.v1.SymlinkResponse
+	(*ReadlinkRequest)(nil),       // 12: storage.v1.ReadlinkRequest
+	(*ReadlinkResponse)(nil),      // 13: storage.v1.ReadlinkResponse
+	(*LinkRequest)(nil),           // 14: storage.v1.LinkRequest
+	(*LinkResponse)(nil),          // 15: storage.v1.LinkResponse
+	(*UnlinkRequest)(nil),         // 16: storage.v1.UnlinkRequest
+	(*UnlinkResponse)(nil),        // 17: storage.v1.UnlinkResponse
+	(*RmdirRequest)(nil),          // 18: storage.v1.RmdirRequest
+	(*RmdirResponse)(nil),         // 19: storage.v1.RmdirResponse
+	(*RenameRequest)(nil),         // 20: storage.v1.RenameRequest
+	(*RenameResponse)(nil),        // 21: storage.v1.RenameResponse
+	(*Inode)(nil),                 // 22: storage.v1.Inode
+	(*InodeAttribute)(nil),        // 23: storage.v1.InodeAttribute
+	(*timestamppb.Timestamp)(nil), // 24: google.protobuf.Timestamp
 }
 var file_storage_v1_storage_proto_depIdxs = []int32{
-	8,  // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
-	8,  // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
-	10, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
-	10, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
-	8,  // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
-	8,  // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
-	9,  // 6: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
-	10, // 7: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
-	10, // 8: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
-	10, // 9: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
-	0,  // 10: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
-	2,  // 11: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
-	4,  // 12: storage.v1.StorageService.SetAttr:input_type -> storage.v1.SetAttrRequest
-	6,  // 13: storage.v1.StorageService.Mknod:input_type -> storage.v1.MknodRequest
-	1,  // 14: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
-	3,  // 15: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
-	5,  // 16: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
-	7,  // 17: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
-	14, // [14:18] is the sub-list for method output_type
-	10, // [10:14] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	22, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
+	22, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
+	24, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
+	24, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
+	22, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
+	22, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
+	22, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
+	22, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
+	22, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
+	23, // 9: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
+	24, // 10: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
+	24, // 11: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
+	24, // 12: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
+	0,  // 13: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
+	2,  // 14: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
+	4,  // 15: storage.v1.StorageService.SetAttr:input_type -> storage.v1.SetAttrRequest
+	6,  // 16: storage.v1.StorageService.Mknod:input_type -> storage.v1.MknodRequest
+	8,  // 17: storage.v1.StorageService.Mkdir:input_type -> storage.v1.MkdirRequest
+	10, // 18: storage.v1.StorageService.Symlink:input_type -> storage.v1.SymlinkRequest
+	12, // 19: storage.v1.StorageService.Readlink:input_type -> storage.v1.ReadlinkRequest
+	14, // 20: storage.v1.StorageService.Link:input_type -> storage.v1.LinkRequest
+	16, // 21: storage.v1.StorageService.Unlink:input_type -> storage.v1.UnlinkRequest
+	18, // 22: storage.v1.StorageService.Rmdir:input_type -> storage.v1.RmdirRequest
+	20, // 23: storage.v1.StorageService.Rename:input_type -> storage.v1.RenameRequest
+	1,  // 24: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
+	3,  // 25: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
+	5,  // 26: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
+	7,  // 27: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
+	9,  // 28: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
+	11, // 29: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
+	13, // 30: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
+	15, // 31: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
+	17, // 32: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
+	19, // 33: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
+	21, // 34: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
+	24, // [24:35] is the sub-list for method output_type
+	13, // [13:24] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_storage_v1_storage_proto_init() }
@@ -918,7 +1821,7 @@ func file_storage_v1_storage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

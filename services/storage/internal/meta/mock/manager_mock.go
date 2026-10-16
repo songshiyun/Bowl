@@ -106,6 +106,74 @@ func (_c *MockManager_GetAttr_Call) RunAndReturn(run func(ctx context.Context, i
 	return _c
 }
 
+// Link provides a mock function for the type MockManager
+func (_mock *MockManager) Link(ctx context.Context, params meta.LinkParams) (*meta.Inode, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Link")
+	}
+
+	var r0 *meta.Inode
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.LinkParams) (*meta.Inode, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.LinkParams) *meta.Inode); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.Inode)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.LinkParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Link_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Link'
+type MockManager_Link_Call struct {
+	*mock.Call
+}
+
+// Link is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.LinkParams
+func (_e *MockManager_Expecter) Link(ctx any, params any) *MockManager_Link_Call {
+	return &MockManager_Link_Call{Call: _e.mock.On("Link", ctx, params)}
+}
+
+func (_c *MockManager_Link_Call) Run(run func(ctx context.Context, params meta.LinkParams)) *MockManager_Link_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.LinkParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.LinkParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Link_Call) Return(inode *meta.Inode, err error) *MockManager_Link_Call {
+	_c.Call.Return(inode, err)
+	return _c
+}
+
+func (_c *MockManager_Link_Call) RunAndReturn(run func(ctx context.Context, params meta.LinkParams) (*meta.Inode, error)) *MockManager_Link_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Lookup provides a mock function for the type MockManager
 func (_mock *MockManager) Lookup(ctx context.Context, parentIno uint64, name string) (*meta.Inode, error) {
 	ret := _mock.Called(ctx, parentIno, name)
@@ -180,6 +248,74 @@ func (_c *MockManager_Lookup_Call) RunAndReturn(run func(ctx context.Context, pa
 	return _c
 }
 
+// Mkdir provides a mock function for the type MockManager
+func (_mock *MockManager) Mkdir(ctx context.Context, params meta.MkdirParams) (*meta.Inode, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Mkdir")
+	}
+
+	var r0 *meta.Inode
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MkdirParams) (*meta.Inode, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MkdirParams) *meta.Inode); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.Inode)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.MkdirParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Mkdir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Mkdir'
+type MockManager_Mkdir_Call struct {
+	*mock.Call
+}
+
+// Mkdir is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.MkdirParams
+func (_e *MockManager_Expecter) Mkdir(ctx any, params any) *MockManager_Mkdir_Call {
+	return &MockManager_Mkdir_Call{Call: _e.mock.On("Mkdir", ctx, params)}
+}
+
+func (_c *MockManager_Mkdir_Call) Run(run func(ctx context.Context, params meta.MkdirParams)) *MockManager_Mkdir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.MkdirParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.MkdirParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Mkdir_Call) Return(inode *meta.Inode, err error) *MockManager_Mkdir_Call {
+	_c.Call.Return(inode, err)
+	return _c
+}
+
+func (_c *MockManager_Mkdir_Call) RunAndReturn(run func(ctx context.Context, params meta.MkdirParams) (*meta.Inode, error)) *MockManager_Mkdir_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Mknod provides a mock function for the type MockManager
 func (_mock *MockManager) Mknod(ctx context.Context, params meta.MknodParams) (*meta.Inode, error) {
 	ret := _mock.Called(ctx, params)
@@ -244,6 +380,192 @@ func (_c *MockManager_Mknod_Call) Return(inode *meta.Inode, err error) *MockMana
 }
 
 func (_c *MockManager_Mknod_Call) RunAndReturn(run func(ctx context.Context, params meta.MknodParams) (*meta.Inode, error)) *MockManager_Mknod_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Readlink provides a mock function for the type MockManager
+func (_mock *MockManager) Readlink(ctx context.Context, ino uint64) (string, error) {
+	ret := _mock.Called(ctx, ino)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Readlink")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (string, error)); ok {
+		return returnFunc(ctx, ino)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) string); ok {
+		r0 = returnFunc(ctx, ino)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
+		r1 = returnFunc(ctx, ino)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Readlink_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Readlink'
+type MockManager_Readlink_Call struct {
+	*mock.Call
+}
+
+// Readlink is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino uint64
+func (_e *MockManager_Expecter) Readlink(ctx any, ino any) *MockManager_Readlink_Call {
+	return &MockManager_Readlink_Call{Call: _e.mock.On("Readlink", ctx, ino)}
+}
+
+func (_c *MockManager_Readlink_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_Readlink_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Readlink_Call) Return(s string, err error) *MockManager_Readlink_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockManager_Readlink_Call) RunAndReturn(run func(ctx context.Context, ino uint64) (string, error)) *MockManager_Readlink_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Rename provides a mock function for the type MockManager
+func (_mock *MockManager) Rename(ctx context.Context, params meta.RenameParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Rename")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenameParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_Rename_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Rename'
+type MockManager_Rename_Call struct {
+	*mock.Call
+}
+
+// Rename is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.RenameParams
+func (_e *MockManager_Expecter) Rename(ctx any, params any) *MockManager_Rename_Call {
+	return &MockManager_Rename_Call{Call: _e.mock.On("Rename", ctx, params)}
+}
+
+func (_c *MockManager_Rename_Call) Run(run func(ctx context.Context, params meta.RenameParams)) *MockManager_Rename_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.RenameParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.RenameParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Rename_Call) Return(err error) *MockManager_Rename_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_Rename_Call) RunAndReturn(run func(ctx context.Context, params meta.RenameParams) error) *MockManager_Rename_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Rmdir provides a mock function for the type MockManager
+func (_mock *MockManager) Rmdir(ctx context.Context, parentIno uint64, name string) error {
+	ret := _mock.Called(ctx, parentIno, name)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Rmdir")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, string) error); ok {
+		r0 = returnFunc(ctx, parentIno, name)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_Rmdir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Rmdir'
+type MockManager_Rmdir_Call struct {
+	*mock.Call
+}
+
+// Rmdir is a helper method to define mock.On call
+//   - ctx context.Context
+//   - parentIno uint64
+//   - name string
+func (_e *MockManager_Expecter) Rmdir(ctx any, parentIno any, name any) *MockManager_Rmdir_Call {
+	return &MockManager_Rmdir_Call{Call: _e.mock.On("Rmdir", ctx, parentIno, name)}
+}
+
+func (_c *MockManager_Rmdir_Call) Run(run func(ctx context.Context, parentIno uint64, name string)) *MockManager_Rmdir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Rmdir_Call) Return(err error) *MockManager_Rmdir_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_Rmdir_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name string) error) *MockManager_Rmdir_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -318,6 +640,137 @@ func (_c *MockManager_SetAttr_Call) Return(inode *meta.Inode, err error) *MockMa
 }
 
 func (_c *MockManager_SetAttr_Call) RunAndReturn(run func(ctx context.Context, ino uint64, input meta.SetAttrInput) (*meta.Inode, error)) *MockManager_SetAttr_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Symlink provides a mock function for the type MockManager
+func (_mock *MockManager) Symlink(ctx context.Context, params meta.SymlinkParams) (*meta.Inode, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Symlink")
+	}
+
+	var r0 *meta.Inode
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SymlinkParams) (*meta.Inode, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SymlinkParams) *meta.Inode); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.Inode)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.SymlinkParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Symlink_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Symlink'
+type MockManager_Symlink_Call struct {
+	*mock.Call
+}
+
+// Symlink is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.SymlinkParams
+func (_e *MockManager_Expecter) Symlink(ctx any, params any) *MockManager_Symlink_Call {
+	return &MockManager_Symlink_Call{Call: _e.mock.On("Symlink", ctx, params)}
+}
+
+func (_c *MockManager_Symlink_Call) Run(run func(ctx context.Context, params meta.SymlinkParams)) *MockManager_Symlink_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.SymlinkParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.SymlinkParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Symlink_Call) Return(inode *meta.Inode, err error) *MockManager_Symlink_Call {
+	_c.Call.Return(inode, err)
+	return _c
+}
+
+func (_c *MockManager_Symlink_Call) RunAndReturn(run func(ctx context.Context, params meta.SymlinkParams) (*meta.Inode, error)) *MockManager_Symlink_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Unlink provides a mock function for the type MockManager
+func (_mock *MockManager) Unlink(ctx context.Context, parentIno uint64, name string) error {
+	ret := _mock.Called(ctx, parentIno, name)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Unlink")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, string) error); ok {
+		r0 = returnFunc(ctx, parentIno, name)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_Unlink_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Unlink'
+type MockManager_Unlink_Call struct {
+	*mock.Call
+}
+
+// Unlink is a helper method to define mock.On call
+//   - ctx context.Context
+//   - parentIno uint64
+//   - name string
+func (_e *MockManager_Expecter) Unlink(ctx any, parentIno any, name any) *MockManager_Unlink_Call {
+	return &MockManager_Unlink_Call{Call: _e.mock.On("Unlink", ctx, parentIno, name)}
+}
+
+func (_c *MockManager_Unlink_Call) Run(run func(ctx context.Context, parentIno uint64, name string)) *MockManager_Unlink_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Unlink_Call) Return(err error) *MockManager_Unlink_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_Unlink_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name string) error) *MockManager_Unlink_Call {
 	_c.Call.Return(run)
 	return _c
 }

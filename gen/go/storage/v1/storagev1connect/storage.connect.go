@@ -32,6 +32,20 @@ const (
 	StorageServiceSetAttrProcedure = "/storage.v1.StorageService/SetAttr"
 	// StorageServiceMknodProcedure is the procedure name of the StorageService's Mknod RPC.
 	StorageServiceMknodProcedure = "/storage.v1.StorageService/Mknod"
+	// StorageServiceMkdirProcedure is the procedure name of the StorageService's Mkdir RPC.
+	StorageServiceMkdirProcedure = "/storage.v1.StorageService/Mkdir"
+	// StorageServiceSymlinkProcedure is the procedure name of the StorageService's Symlink RPC.
+	StorageServiceSymlinkProcedure = "/storage.v1.StorageService/Symlink"
+	// StorageServiceReadlinkProcedure is the procedure name of the StorageService's Readlink RPC.
+	StorageServiceReadlinkProcedure = "/storage.v1.StorageService/Readlink"
+	// StorageServiceLinkProcedure is the procedure name of the StorageService's Link RPC.
+	StorageServiceLinkProcedure = "/storage.v1.StorageService/Link"
+	// StorageServiceUnlinkProcedure is the procedure name of the StorageService's Unlink RPC.
+	StorageServiceUnlinkProcedure = "/storage.v1.StorageService/Unlink"
+	// StorageServiceRmdirProcedure is the procedure name of the StorageService's Rmdir RPC.
+	StorageServiceRmdirProcedure = "/storage.v1.StorageService/Rmdir"
+	// StorageServiceRenameProcedure is the procedure name of the StorageService's Rename RPC.
+	StorageServiceRenameProcedure = "/storage.v1.StorageService/Rename"
 )
 
 var (
@@ -63,6 +77,55 @@ var (
 			Procedure:  StorageServiceMknodProcedure,
 		}
 	})
+	storageServiceMkdirSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Mkdir"),
+			Procedure:  StorageServiceMkdirProcedure,
+		}
+	})
+	storageServiceSymlinkSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Symlink"),
+			Procedure:  StorageServiceSymlinkProcedure,
+		}
+	})
+	storageServiceReadlinkSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Readlink"),
+			Procedure:  StorageServiceReadlinkProcedure,
+		}
+	})
+	storageServiceLinkSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Link"),
+			Procedure:  StorageServiceLinkProcedure,
+		}
+	})
+	storageServiceUnlinkSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Unlink"),
+			Procedure:  StorageServiceUnlinkProcedure,
+		}
+	})
+	storageServiceRmdirSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Rmdir"),
+			Procedure:  StorageServiceRmdirProcedure,
+		}
+	})
+	storageServiceRenameSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Rename"),
+			Procedure:  StorageServiceRenameProcedure,
+		}
+	})
 )
 
 // StorageServiceClient is a client for the storage.v1.StorageService service.
@@ -85,6 +148,49 @@ type StorageServiceClient interface {
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Mknod(context.Context, *v1.MknodRequest) (*v1.MknodResponse, error)
+	// Mkdir 在指定父目录下创建子目录。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Mkdir(context.Context, *v1.MkdirRequest) (*v1.MkdirResponse, error)
+	// Symlink 在指定父目录下创建指向目标路径的符号链接节点。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Symlink(context.Context, *v1.SymlinkRequest) (*v1.SymlinkResponse, error)
+	// Readlink 获取符号链接节点指向的目标路径。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若节点存在但非符号链接类型，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Readlink(context.Context, *v1.ReadlinkRequest) (*v1.ReadlinkResponse, error)
+	// Link 为已有非目录 Inode 在目标父目录下创建硬链接。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在或源节点不存在/已解链，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源节点为目录，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	Link(context.Context, *v1.LinkRequest) (*v1.LinkResponse, error)
+	// Unlink 删除指定父目录下的非目录项（解链）。
+	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 或 ".."，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Unlink(context.Context, *v1.UnlinkRequest) (*v1.UnlinkResponse, error)
+	// Rmdir 移除指定父目录下的空目录项。
+	// 若目标节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若目标目录非空，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
+	Rmdir(context.Context, *v1.RmdirRequest) (*v1.RmdirResponse, error)
+	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
+	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Rename(context.Context, *v1.RenameRequest) (*v1.RenameResponse, error)
 }
 
 // NewStorageServiceClient constructs a client for the storage.v1.StorageService service. Multiple
@@ -113,6 +219,49 @@ type StorageServiceHandler interface {
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Mknod(context.Context, *v1.MknodRequest) (*v1.MknodResponse, error)
+	// Mkdir 在指定父目录下创建子目录。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Mkdir(context.Context, *v1.MkdirRequest) (*v1.MkdirResponse, error)
+	// Symlink 在指定父目录下创建指向目标路径的符号链接节点。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Symlink(context.Context, *v1.SymlinkRequest) (*v1.SymlinkResponse, error)
+	// Readlink 获取符号链接节点指向的目标路径。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若节点存在但非符号链接类型，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Readlink(context.Context, *v1.ReadlinkRequest) (*v1.ReadlinkResponse, error)
+	// Link 为已有非目录 Inode 在目标父目录下创建硬链接。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在或源节点不存在/已解链，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源节点为目录，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	Link(context.Context, *v1.LinkRequest) (*v1.LinkResponse, error)
+	// Unlink 删除指定父目录下的非目录项（解链）。
+	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 或 ".."，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Unlink(context.Context, *v1.UnlinkRequest) (*v1.UnlinkResponse, error)
+	// Rmdir 移除指定父目录下的空目录项。
+	// 若目标节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若目标目录非空，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
+	Rmdir(context.Context, *v1.RmdirRequest) (*v1.RmdirResponse, error)
+	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
+	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Rename(context.Context, *v1.RenameRequest) (*v1.RenameResponse, error)
 }
 
 // RegisterStorageServiceHandler registers svc as the storage.v1.StorageService implementation on
@@ -124,6 +273,13 @@ func RegisterStorageServiceHandler(server *connect.Server, svc StorageServiceHan
 		connect.Method{Spec: storageServiceGetAttrSpec(), Handler: adapter.getAttr},
 		connect.Method{Spec: storageServiceSetAttrSpec(), Handler: adapter.setAttr},
 		connect.Method{Spec: storageServiceMknodSpec(), Handler: adapter.mknod},
+		connect.Method{Spec: storageServiceMkdirSpec(), Handler: adapter.mkdir},
+		connect.Method{Spec: storageServiceSymlinkSpec(), Handler: adapter.symlink},
+		connect.Method{Spec: storageServiceReadlinkSpec(), Handler: adapter.readlink},
+		connect.Method{Spec: storageServiceLinkSpec(), Handler: adapter.link},
+		connect.Method{Spec: storageServiceUnlinkSpec(), Handler: adapter.unlink},
+		connect.Method{Spec: storageServiceRmdirSpec(), Handler: adapter.rmdir},
+		connect.Method{Spec: storageServiceRenameSpec(), Handler: adapter.rename},
 	)
 }
 
@@ -144,6 +300,34 @@ func (UnimplementedStorageServiceHandler) SetAttr(context.Context, *v1.SetAttrRe
 
 func (UnimplementedStorageServiceHandler) Mknod(context.Context, *v1.MknodRequest) (*v1.MknodResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Mknod is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Mkdir(context.Context, *v1.MkdirRequest) (*v1.MkdirResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Mkdir is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Symlink(context.Context, *v1.SymlinkRequest) (*v1.SymlinkResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Symlink is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Readlink(context.Context, *v1.ReadlinkRequest) (*v1.ReadlinkResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Readlink is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Link(context.Context, *v1.LinkRequest) (*v1.LinkResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Link is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Unlink(context.Context, *v1.UnlinkRequest) (*v1.UnlinkResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Unlink is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Rmdir(context.Context, *v1.RmdirRequest) (*v1.RmdirResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Rmdir is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Rename(context.Context, *v1.RenameRequest) (*v1.RenameResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Rename is not implemented")
 }
 
 type storageServiceClient struct {
@@ -177,6 +361,62 @@ func (c *storageServiceClient) SetAttr(ctx context.Context, req *v1.SetAttrReque
 func (c *storageServiceClient) Mknod(ctx context.Context, req *v1.MknodRequest) (*v1.MknodResponse, error) {
 	var res v1.MknodResponse
 	if err := c.client.CallUnary(ctx, storageServiceMknodSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Mkdir(ctx context.Context, req *v1.MkdirRequest) (*v1.MkdirResponse, error) {
+	var res v1.MkdirResponse
+	if err := c.client.CallUnary(ctx, storageServiceMkdirSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Symlink(ctx context.Context, req *v1.SymlinkRequest) (*v1.SymlinkResponse, error) {
+	var res v1.SymlinkResponse
+	if err := c.client.CallUnary(ctx, storageServiceSymlinkSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Readlink(ctx context.Context, req *v1.ReadlinkRequest) (*v1.ReadlinkResponse, error) {
+	var res v1.ReadlinkResponse
+	if err := c.client.CallUnary(ctx, storageServiceReadlinkSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Link(ctx context.Context, req *v1.LinkRequest) (*v1.LinkResponse, error) {
+	var res v1.LinkResponse
+	if err := c.client.CallUnary(ctx, storageServiceLinkSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Unlink(ctx context.Context, req *v1.UnlinkRequest) (*v1.UnlinkResponse, error) {
+	var res v1.UnlinkResponse
+	if err := c.client.CallUnary(ctx, storageServiceUnlinkSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Rmdir(ctx context.Context, req *v1.RmdirRequest) (*v1.RmdirResponse, error) {
+	var res v1.RmdirResponse
+	if err := c.client.CallUnary(ctx, storageServiceRmdirSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Rename(ctx context.Context, req *v1.RenameRequest) (*v1.RenameResponse, error) {
+	var res v1.RenameResponse
+	if err := c.client.CallUnary(ctx, storageServiceRenameSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -226,6 +466,90 @@ func (h storageServiceHandler) mknod(ctx context.Context, _ connect.Spec, stream
 		return err
 	}
 	res, err := h.svc.Mknod(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) mkdir(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.MkdirRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Mkdir(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) symlink(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.SymlinkRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Symlink(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) readlink(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ReadlinkRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Readlink(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) link(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.LinkRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Link(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) unlink(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.UnlinkRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Unlink(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) rmdir(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RmdirRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Rmdir(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) rename(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.RenameRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Rename(ctx, &req)
 	if err != nil {
 		return err
 	}

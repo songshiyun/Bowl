@@ -19,10 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StorageService_Lookup_FullMethodName  = "/storage.v1.StorageService/Lookup"
-	StorageService_GetAttr_FullMethodName = "/storage.v1.StorageService/GetAttr"
-	StorageService_SetAttr_FullMethodName = "/storage.v1.StorageService/SetAttr"
-	StorageService_Mknod_FullMethodName   = "/storage.v1.StorageService/Mknod"
+	StorageService_Lookup_FullMethodName   = "/storage.v1.StorageService/Lookup"
+	StorageService_GetAttr_FullMethodName  = "/storage.v1.StorageService/GetAttr"
+	StorageService_SetAttr_FullMethodName  = "/storage.v1.StorageService/SetAttr"
+	StorageService_Mknod_FullMethodName    = "/storage.v1.StorageService/Mknod"
+	StorageService_Mkdir_FullMethodName    = "/storage.v1.StorageService/Mkdir"
+	StorageService_Symlink_FullMethodName  = "/storage.v1.StorageService/Symlink"
+	StorageService_Readlink_FullMethodName = "/storage.v1.StorageService/Readlink"
+	StorageService_Link_FullMethodName     = "/storage.v1.StorageService/Link"
+	StorageService_Unlink_FullMethodName   = "/storage.v1.StorageService/Unlink"
+	StorageService_Rmdir_FullMethodName    = "/storage.v1.StorageService/Rmdir"
+	StorageService_Rename_FullMethodName   = "/storage.v1.StorageService/Rename"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -49,6 +56,49 @@ type StorageServiceClient interface {
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Mknod(ctx context.Context, in *MknodRequest, opts ...grpc.CallOption) (*MknodResponse, error)
+	// Mkdir 在指定父目录下创建子目录。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*MkdirResponse, error)
+	// Symlink 在指定父目录下创建指向目标路径的符号链接节点。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Symlink(ctx context.Context, in *SymlinkRequest, opts ...grpc.CallOption) (*SymlinkResponse, error)
+	// Readlink 获取符号链接节点指向的目标路径。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若节点存在但非符号链接类型，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Readlink(ctx context.Context, in *ReadlinkRequest, opts ...grpc.CallOption) (*ReadlinkResponse, error)
+	// Link 为已有非目录 Inode 在目标父目录下创建硬链接。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在或源节点不存在/已解链，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源节点为目录，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error)
+	// Unlink 删除指定父目录下的非目录项（解链）。
+	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 或 ".."，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Unlink(ctx context.Context, in *UnlinkRequest, opts ...grpc.CallOption) (*UnlinkResponse, error)
+	// Rmdir 移除指定父目录下的空目录项。
+	// 若目标节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若目标目录非空，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
+	Rmdir(ctx context.Context, in *RmdirRequest, opts ...grpc.CallOption) (*RmdirResponse, error)
+	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
+	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
 }
 
 type storageServiceClient struct {
@@ -99,6 +149,76 @@ func (c *storageServiceClient) Mknod(ctx context.Context, in *MknodRequest, opts
 	return out, nil
 }
 
+func (c *storageServiceClient) Mkdir(ctx context.Context, in *MkdirRequest, opts ...grpc.CallOption) (*MkdirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MkdirResponse)
+	err := c.cc.Invoke(ctx, StorageService_Mkdir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Symlink(ctx context.Context, in *SymlinkRequest, opts ...grpc.CallOption) (*SymlinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SymlinkResponse)
+	err := c.cc.Invoke(ctx, StorageService_Symlink_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Readlink(ctx context.Context, in *ReadlinkRequest, opts ...grpc.CallOption) (*ReadlinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadlinkResponse)
+	err := c.cc.Invoke(ctx, StorageService_Readlink_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Link(ctx context.Context, in *LinkRequest, opts ...grpc.CallOption) (*LinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LinkResponse)
+	err := c.cc.Invoke(ctx, StorageService_Link_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Unlink(ctx context.Context, in *UnlinkRequest, opts ...grpc.CallOption) (*UnlinkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnlinkResponse)
+	err := c.cc.Invoke(ctx, StorageService_Unlink_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Rmdir(ctx context.Context, in *RmdirRequest, opts ...grpc.CallOption) (*RmdirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RmdirResponse)
+	err := c.cc.Invoke(ctx, StorageService_Rmdir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameResponse)
+	err := c.cc.Invoke(ctx, StorageService_Rename_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StorageServiceServer is the server API for StorageService service.
 // All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
@@ -123,6 +243,49 @@ type StorageServiceServer interface {
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	Mknod(context.Context, *MknodRequest) (*MknodResponse, error)
+	// Mkdir 在指定父目录下创建子目录。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error)
+	// Symlink 在指定父目录下创建指向目标路径的符号链接节点。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	Symlink(context.Context, *SymlinkRequest) (*SymlinkResponse, error)
+	// Readlink 获取符号链接节点指向的目标路径。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若节点存在但非符号链接类型，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Readlink(context.Context, *ReadlinkRequest) (*ReadlinkResponse, error)
+	// Link 为已有非目录 Inode 在目标父目录下创建硬链接。
+	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
+	// 若父节点不存在或源节点不存在/已解链，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源节点为目录，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	Link(context.Context, *LinkRequest) (*LinkResponse, error)
+	// Unlink 删除指定父目录下的非目录项（解链）。
+	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 或 ".."，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error)
+	// Rmdir 移除指定父目录下的空目录项。
+	// 若目标节点非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若目标目录非空，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若父节点不存在或目标目录项不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
+	Rmdir(context.Context, *RmdirRequest) (*RmdirResponse, error)
+	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
+	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
+	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -144,6 +307,27 @@ func (UnimplementedStorageServiceServer) SetAttr(context.Context, *SetAttrReques
 }
 func (UnimplementedStorageServiceServer) Mknod(context.Context, *MknodRequest) (*MknodResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Mknod not implemented")
+}
+func (UnimplementedStorageServiceServer) Mkdir(context.Context, *MkdirRequest) (*MkdirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Mkdir not implemented")
+}
+func (UnimplementedStorageServiceServer) Symlink(context.Context, *SymlinkRequest) (*SymlinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Symlink not implemented")
+}
+func (UnimplementedStorageServiceServer) Readlink(context.Context, *ReadlinkRequest) (*ReadlinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Readlink not implemented")
+}
+func (UnimplementedStorageServiceServer) Link(context.Context, *LinkRequest) (*LinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Link not implemented")
+}
+func (UnimplementedStorageServiceServer) Unlink(context.Context, *UnlinkRequest) (*UnlinkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Unlink not implemented")
+}
+func (UnimplementedStorageServiceServer) Rmdir(context.Context, *RmdirRequest) (*RmdirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Rmdir not implemented")
+}
+func (UnimplementedStorageServiceServer) Rename(context.Context, *RenameRequest) (*RenameResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Rename not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -238,6 +422,132 @@ func _StorageService_Mknod_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_Mkdir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MkdirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Mkdir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Mkdir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Mkdir(ctx, req.(*MkdirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Symlink_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SymlinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Symlink(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Symlink_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Symlink(ctx, req.(*SymlinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Readlink_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadlinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Readlink(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Readlink_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Readlink(ctx, req.(*ReadlinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Link_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Link(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Link_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Link(ctx, req.(*LinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Unlink_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnlinkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Unlink(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Unlink_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Unlink(ctx, req.(*UnlinkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Rmdir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RmdirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Rmdir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Rmdir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Rmdir(ctx, req.(*RmdirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Rename_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Rename(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Rename_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Rename(ctx, req.(*RenameRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -260,6 +570,34 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Mknod",
 			Handler:    _StorageService_Mknod_Handler,
+		},
+		{
+			MethodName: "Mkdir",
+			Handler:    _StorageService_Mkdir_Handler,
+		},
+		{
+			MethodName: "Symlink",
+			Handler:    _StorageService_Symlink_Handler,
+		},
+		{
+			MethodName: "Readlink",
+			Handler:    _StorageService_Readlink_Handler,
+		},
+		{
+			MethodName: "Link",
+			Handler:    _StorageService_Link_Handler,
+		},
+		{
+			MethodName: "Unlink",
+			Handler:    _StorageService_Unlink_Handler,
+		},
+		{
+			MethodName: "Rmdir",
+			Handler:    _StorageService_Rmdir_Handler,
+		},
+		{
+			MethodName: "Rename",
+			Handler:    _StorageService_Rename_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearInodeNlinkAndTouchCtime = `-- name: ClearInodeNlinkAndTouchCtime :one
+UPDATE inodes
+SET nlink = 0,
+    ctime = NOW()
+WHERE ino = $1
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
+`
+
+func (q *Queries) ClearInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error) {
+	row := q.db.QueryRow(ctx, clearInodeNlinkAndTouchCtime, ino)
+	var i Inode
+	err := row.Scan(
+		&i.Ino,
+		&i.Generation,
+		&i.Mode,
+		&i.Size,
+		&i.Nlink,
+		&i.Uid,
+		&i.Gid,
+		&i.Rdev,
+		&i.Atime,
+		&i.Mtime,
+		&i.Ctime,
+		&i.SymlinkTarget,
+	)
+	return i, err
+}
+
 const createEntry = `-- name: CreateEntry :exec
 INSERT INTO entries (parent_ino, name, ino)
 VALUES ($1, $2, $3)
@@ -30,7 +58,7 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) error 
 const createInode = `-- name: CreateInode :one
 INSERT INTO inodes (mode, nlink, uid, gid, rdev)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 `
 
 type CreateInodeParams struct {
@@ -62,12 +90,131 @@ func (q *Queries) CreateInode(ctx context.Context, arg CreateInodeParams) (Inode
 		&i.Atime,
 		&i.Mtime,
 		&i.Ctime,
+		&i.SymlinkTarget,
 	)
 	return i, err
 }
 
+const createSymlinkInode = `-- name: CreateSymlinkInode :one
+INSERT INTO inodes (mode, size, nlink, uid, gid, rdev, symlink_target)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
+`
+
+type CreateSymlinkInodeParams struct {
+	Mode          int32       `json:"mode"`
+	Size          int64       `json:"size"`
+	Nlink         int32       `json:"nlink"`
+	Uid           int32       `json:"uid"`
+	Gid           int32       `json:"gid"`
+	Rdev          int64       `json:"rdev"`
+	SymlinkTarget pgtype.Text `json:"symlink_target"`
+}
+
+func (q *Queries) CreateSymlinkInode(ctx context.Context, arg CreateSymlinkInodeParams) (Inode, error) {
+	row := q.db.QueryRow(ctx, createSymlinkInode,
+		arg.Mode,
+		arg.Size,
+		arg.Nlink,
+		arg.Uid,
+		arg.Gid,
+		arg.Rdev,
+		arg.SymlinkTarget,
+	)
+	var i Inode
+	err := row.Scan(
+		&i.Ino,
+		&i.Generation,
+		&i.Mode,
+		&i.Size,
+		&i.Nlink,
+		&i.Uid,
+		&i.Gid,
+		&i.Rdev,
+		&i.Atime,
+		&i.Mtime,
+		&i.Ctime,
+		&i.SymlinkTarget,
+	)
+	return i, err
+}
+
+const decrementInodeNlinkAndTouch = `-- name: DecrementInodeNlinkAndTouch :exec
+UPDATE inodes
+SET nlink = nlink - 1,
+    mtime = NOW(),
+    ctime = NOW()
+WHERE ino = $1
+`
+
+func (q *Queries) DecrementInodeNlinkAndTouch(ctx context.Context, ino int64) error {
+	_, err := q.db.Exec(ctx, decrementInodeNlinkAndTouch, ino)
+	return err
+}
+
+const decrementInodeNlinkAndTouchCtime = `-- name: DecrementInodeNlinkAndTouchCtime :one
+UPDATE inodes
+SET nlink = nlink - 1,
+    ctime = NOW()
+WHERE ino = $1
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
+`
+
+func (q *Queries) DecrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error) {
+	row := q.db.QueryRow(ctx, decrementInodeNlinkAndTouchCtime, ino)
+	var i Inode
+	err := row.Scan(
+		&i.Ino,
+		&i.Generation,
+		&i.Mode,
+		&i.Size,
+		&i.Nlink,
+		&i.Uid,
+		&i.Gid,
+		&i.Rdev,
+		&i.Atime,
+		&i.Mtime,
+		&i.Ctime,
+		&i.SymlinkTarget,
+	)
+	return i, err
+}
+
+const deleteEntry = `-- name: DeleteEntry :exec
+DELETE FROM entries
+WHERE parent_ino = $1 AND name = $2
+`
+
+type DeleteEntryParams struct {
+	ParentIno int64  `json:"parent_ino"`
+	Name      string `json:"name"`
+}
+
+func (q *Queries) DeleteEntry(ctx context.Context, arg DeleteEntryParams) error {
+	_, err := q.db.Exec(ctx, deleteEntry, arg.ParentIno, arg.Name)
+	return err
+}
+
+const getEntry = `-- name: GetEntry :one
+SELECT parent_ino, name, ino
+FROM entries
+WHERE parent_ino = $1 AND name = $2
+`
+
+type GetEntryParams struct {
+	ParentIno int64  `json:"parent_ino"`
+	Name      string `json:"name"`
+}
+
+func (q *Queries) GetEntry(ctx context.Context, arg GetEntryParams) (Entry, error) {
+	row := q.db.QueryRow(ctx, getEntry, arg.ParentIno, arg.Name)
+	var i Entry
+	err := row.Scan(&i.ParentIno, &i.Name, &i.Ino)
+	return i, err
+}
+
 const getInode = `-- name: GetInode :one
-SELECT ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime
+SELECT ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 FROM inodes
 WHERE ino = $1
 `
@@ -87,12 +234,13 @@ func (q *Queries) GetInode(ctx context.Context, ino int64) (Inode, error) {
 		&i.Atime,
 		&i.Mtime,
 		&i.Ctime,
+		&i.SymlinkTarget,
 	)
 	return i, err
 }
 
 const getInodeByEntry = `-- name: GetInodeByEntry :one
-SELECT i.ino, i.generation, i.mode, i.size, i.nlink, i.uid, i.gid, i.rdev, i.atime, i.mtime, i.ctime
+SELECT i.ino, i.generation, i.mode, i.size, i.nlink, i.uid, i.gid, i.rdev, i.atime, i.mtime, i.ctime, i.symlink_target
 FROM entries e
 JOIN inodes i ON e.ino = i.ino
 WHERE e.parent_ino = $1 AND e.name = $2
@@ -118,12 +266,13 @@ func (q *Queries) GetInodeByEntry(ctx context.Context, arg GetInodeByEntryParams
 		&i.Atime,
 		&i.Mtime,
 		&i.Ctime,
+		&i.SymlinkTarget,
 	)
 	return i, err
 }
 
 const getInodeForUpdate = `-- name: GetInodeForUpdate :one
-SELECT ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime
+SELECT ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 FROM inodes
 WHERE ino = $1
 FOR UPDATE
@@ -144,8 +293,126 @@ func (q *Queries) GetInodeForUpdate(ctx context.Context, ino int64) (Inode, erro
 		&i.Atime,
 		&i.Mtime,
 		&i.Ctime,
+		&i.SymlinkTarget,
 	)
 	return i, err
+}
+
+const getSymlinkTarget = `-- name: GetSymlinkTarget :one
+SELECT mode, symlink_target
+FROM inodes
+WHERE ino = $1
+`
+
+type GetSymlinkTargetRow struct {
+	Mode          int32       `json:"mode"`
+	SymlinkTarget pgtype.Text `json:"symlink_target"`
+}
+
+func (q *Queries) GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTargetRow, error) {
+	row := q.db.QueryRow(ctx, getSymlinkTarget, ino)
+	var i GetSymlinkTargetRow
+	err := row.Scan(&i.Mode, &i.SymlinkTarget)
+	return i, err
+}
+
+const hasChildEntries = `-- name: HasChildEntries :one
+SELECT EXISTS(
+    SELECT 1 FROM entries WHERE parent_ino = $1
+)
+`
+
+func (q *Queries) HasChildEntries(ctx context.Context, parentIno int64) (bool, error) {
+	row := q.db.QueryRow(ctx, hasChildEntries, parentIno)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const incrementInodeNlinkAndTouch = `-- name: IncrementInodeNlinkAndTouch :exec
+UPDATE inodes
+SET nlink = nlink + 1,
+    mtime = NOW(),
+    ctime = NOW()
+WHERE ino = $1
+`
+
+func (q *Queries) IncrementInodeNlinkAndTouch(ctx context.Context, ino int64) error {
+	_, err := q.db.Exec(ctx, incrementInodeNlinkAndTouch, ino)
+	return err
+}
+
+const incrementInodeNlinkAndTouchCtime = `-- name: IncrementInodeNlinkAndTouchCtime :one
+UPDATE inodes
+SET nlink = nlink + 1,
+    ctime = NOW()
+WHERE ino = $1
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
+`
+
+func (q *Queries) IncrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error) {
+	row := q.db.QueryRow(ctx, incrementInodeNlinkAndTouchCtime, ino)
+	var i Inode
+	err := row.Scan(
+		&i.Ino,
+		&i.Generation,
+		&i.Mode,
+		&i.Size,
+		&i.Nlink,
+		&i.Uid,
+		&i.Gid,
+		&i.Rdev,
+		&i.Atime,
+		&i.Mtime,
+		&i.Ctime,
+		&i.SymlinkTarget,
+	)
+	return i, err
+}
+
+const isSubdirectory = `-- name: IsSubdirectory :one
+WITH RECURSIVE ancestors AS (
+    SELECT
+        parent_ino,
+        ARRAY[$1::bigint, parent_ino] AS visited,
+        (parent_ino = $1::bigint) AS has_cycle
+    FROM entries
+    WHERE ino = $1::bigint
+    UNION ALL
+    SELECT
+        e.parent_ino,
+        a.visited || e.parent_ino,
+        (e.parent_ino = ANY(a.visited)) AS has_cycle
+    FROM entries e
+    JOIN ancestors a ON e.ino = a.parent_ino
+    WHERE NOT a.has_cycle
+)
+SELECT COALESCE(($1::bigint = $2::bigint) OR EXISTS (
+    SELECT 1 FROM ancestors WHERE parent_ino = $2::bigint OR has_cycle
+), false)::boolean AS is_sub
+`
+
+type IsSubdirectoryParams struct {
+	ChildIno    int64 `json:"child_ino"`
+	AncestorIno int64 `json:"ancestor_ino"`
+}
+
+func (q *Queries) IsSubdirectory(ctx context.Context, arg IsSubdirectoryParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isSubdirectory, arg.ChildIno, arg.AncestorIno)
+	var is_sub bool
+	err := row.Scan(&is_sub)
+	return is_sub, err
+}
+
+const touchInodeCtime = `-- name: TouchInodeCtime :exec
+UPDATE inodes
+SET ctime = NOW()
+WHERE ino = $1
+`
+
+func (q *Queries) TouchInodeCtime(ctx context.Context, ino int64) error {
+	_, err := q.db.Exec(ctx, touchInodeCtime, ino)
+	return err
 }
 
 const touchInodeTimestamps = `-- name: TouchInodeTimestamps :exec
@@ -156,6 +423,30 @@ WHERE ino = $1
 
 func (q *Queries) TouchInodeTimestamps(ctx context.Context, ino int64) error {
 	_, err := q.db.Exec(ctx, touchInodeTimestamps, ino)
+	return err
+}
+
+const updateEntry = `-- name: UpdateEntry :exec
+UPDATE entries
+SET parent_ino = $1,
+    name = $2
+WHERE parent_ino = $3 AND name = $4
+`
+
+type UpdateEntryParams struct {
+	NewParentIno int64  `json:"new_parent_ino"`
+	NewName      string `json:"new_name"`
+	OldParentIno int64  `json:"old_parent_ino"`
+	OldName      string `json:"old_name"`
+}
+
+func (q *Queries) UpdateEntry(ctx context.Context, arg UpdateEntryParams) error {
+	_, err := q.db.Exec(ctx, updateEntry,
+		arg.NewParentIno,
+		arg.NewName,
+		arg.OldParentIno,
+		arg.OldName,
+	)
 	return err
 }
 
@@ -170,7 +461,7 @@ SET
   mtime = CASE WHEN $8::boolean THEN clock_timestamp() ELSE $9::timestamptz END,
   ctime = clock_timestamp()
 WHERE ino = $1
-RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime
+RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 `
 
 type UpdateInodeAttrParams struct {
@@ -210,6 +501,7 @@ func (q *Queries) UpdateInodeAttr(ctx context.Context, arg UpdateInodeAttrParams
 		&i.Atime,
 		&i.Mtime,
 		&i.Ctime,
+		&i.SymlinkTarget,
 	)
 	return i, err
 }
