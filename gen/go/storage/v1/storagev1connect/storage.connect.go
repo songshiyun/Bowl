@@ -56,6 +56,16 @@ const (
 	StorageServiceFsyncProcedure = "/storage.v1.StorageService/Fsync"
 	// StorageServiceReleaseProcedure is the procedure name of the StorageService's Release RPC.
 	StorageServiceReleaseProcedure = "/storage.v1.StorageService/Release"
+	// StorageServiceOpenDirProcedure is the procedure name of the StorageService's OpenDir RPC.
+	StorageServiceOpenDirProcedure = "/storage.v1.StorageService/OpenDir"
+	// StorageServiceReleaseDirProcedure is the procedure name of the StorageService's ReleaseDir RPC.
+	StorageServiceReleaseDirProcedure = "/storage.v1.StorageService/ReleaseDir"
+	// StorageServiceReadDirProcedure is the procedure name of the StorageService's ReadDir RPC.
+	StorageServiceReadDirProcedure = "/storage.v1.StorageService/ReadDir"
+	// StorageServiceReadDirPlusProcedure is the procedure name of the StorageService's ReadDirPlus RPC.
+	StorageServiceReadDirPlusProcedure = "/storage.v1.StorageService/ReadDirPlus"
+	// StorageServiceFallocateProcedure is the procedure name of the StorageService's Fallocate RPC.
+	StorageServiceFallocateProcedure = "/storage.v1.StorageService/Fallocate"
 )
 
 var (
@@ -171,6 +181,41 @@ var (
 			Procedure:  StorageServiceReleaseProcedure,
 		}
 	})
+	storageServiceOpenDirSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("OpenDir"),
+			Procedure:  StorageServiceOpenDirProcedure,
+		}
+	})
+	storageServiceReleaseDirSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("ReleaseDir"),
+			Procedure:  StorageServiceReleaseDirProcedure,
+		}
+	})
+	storageServiceReadDirSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("ReadDir"),
+			Procedure:  StorageServiceReadDirProcedure,
+		}
+	})
+	storageServiceReadDirPlusSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("ReadDirPlus"),
+			Procedure:  StorageServiceReadDirPlusProcedure,
+		}
+	})
+	storageServiceFallocateSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_storage_v1_storage_proto.Services().ByName("StorageService").Methods().ByName("Fallocate"),
+			Procedure:  StorageServiceFallocateProcedure,
+		}
+	})
 )
 
 // StorageServiceClient is a client for the storage.v1.StorageService service.
@@ -261,6 +306,32 @@ type StorageServiceClient interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(context.Context, *v1.ReleaseRequest) (*v1.ReleaseResponse, error)
+	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	OpenDir(context.Context, *v1.OpenDirRequest) (*v1.OpenDirResponse, error)
+	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
+	ReleaseDir(context.Context, *v1.ReleaseDirRequest) (*v1.ReleaseDirResponse, error)
+	// ReadDir 读取指定目录的子项流（基本条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDir(context.Context, *v1.ReadDirRequest) (*v1.ReadDirResponse, error)
+	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDirPlus(context.Context, *v1.ReadDirPlusRequest) (*v1.ReadDirPlusResponse, error)
+	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
+	Fallocate(context.Context, *v1.FallocateRequest) (*v1.FallocateResponse, error)
 }
 
 // NewStorageServiceClient constructs a client for the storage.v1.StorageService service. Multiple
@@ -357,6 +428,32 @@ type StorageServiceHandler interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(context.Context, *v1.ReleaseRequest) (*v1.ReleaseResponse, error)
+	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	OpenDir(context.Context, *v1.OpenDirRequest) (*v1.OpenDirResponse, error)
+	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
+	ReleaseDir(context.Context, *v1.ReleaseDirRequest) (*v1.ReleaseDirResponse, error)
+	// ReadDir 读取指定目录的子项流（基本条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDir(context.Context, *v1.ReadDirRequest) (*v1.ReadDirResponse, error)
+	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDirPlus(context.Context, *v1.ReadDirPlusRequest) (*v1.ReadDirPlusResponse, error)
+	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
+	Fallocate(context.Context, *v1.FallocateRequest) (*v1.FallocateResponse, error)
 }
 
 // RegisterStorageServiceHandler registers svc as the storage.v1.StorageService implementation on
@@ -380,6 +477,11 @@ func RegisterStorageServiceHandler(server *connect.Server, svc StorageServiceHan
 		connect.Method{Spec: storageServiceFlushSpec(), Handler: adapter.flush},
 		connect.Method{Spec: storageServiceFsyncSpec(), Handler: adapter.fsync},
 		connect.Method{Spec: storageServiceReleaseSpec(), Handler: adapter.release},
+		connect.Method{Spec: storageServiceOpenDirSpec(), Handler: adapter.openDir},
+		connect.Method{Spec: storageServiceReleaseDirSpec(), Handler: adapter.releaseDir},
+		connect.Method{Spec: storageServiceReadDirSpec(), Handler: adapter.readDir},
+		connect.Method{Spec: storageServiceReadDirPlusSpec(), Handler: adapter.readDirPlus},
+		connect.Method{Spec: storageServiceFallocateSpec(), Handler: adapter.fallocate},
 	)
 }
 
@@ -448,6 +550,26 @@ func (UnimplementedStorageServiceHandler) Fsync(context.Context, *v1.FsyncReques
 
 func (UnimplementedStorageServiceHandler) Release(context.Context, *v1.ReleaseRequest) (*v1.ReleaseResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Release is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) OpenDir(context.Context, *v1.OpenDirRequest) (*v1.OpenDirResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.OpenDir is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) ReleaseDir(context.Context, *v1.ReleaseDirRequest) (*v1.ReleaseDirResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.ReleaseDir is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) ReadDir(context.Context, *v1.ReadDirRequest) (*v1.ReadDirResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.ReadDir is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) ReadDirPlus(context.Context, *v1.ReadDirPlusRequest) (*v1.ReadDirPlusResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.ReadDirPlus is not implemented")
+}
+
+func (UnimplementedStorageServiceHandler) Fallocate(context.Context, *v1.FallocateRequest) (*v1.FallocateResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "storage.v1.StorageService.Fallocate is not implemented")
 }
 
 type storageServiceClient struct {
@@ -577,6 +699,46 @@ func (c *storageServiceClient) Fsync(ctx context.Context, req *v1.FsyncRequest) 
 func (c *storageServiceClient) Release(ctx context.Context, req *v1.ReleaseRequest) (*v1.ReleaseResponse, error) {
 	var res v1.ReleaseResponse
 	if err := c.client.CallUnary(ctx, storageServiceReleaseSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) OpenDir(ctx context.Context, req *v1.OpenDirRequest) (*v1.OpenDirResponse, error) {
+	var res v1.OpenDirResponse
+	if err := c.client.CallUnary(ctx, storageServiceOpenDirSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) ReleaseDir(ctx context.Context, req *v1.ReleaseDirRequest) (*v1.ReleaseDirResponse, error) {
+	var res v1.ReleaseDirResponse
+	if err := c.client.CallUnary(ctx, storageServiceReleaseDirSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) ReadDir(ctx context.Context, req *v1.ReadDirRequest) (*v1.ReadDirResponse, error) {
+	var res v1.ReadDirResponse
+	if err := c.client.CallUnary(ctx, storageServiceReadDirSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) ReadDirPlus(ctx context.Context, req *v1.ReadDirPlusRequest) (*v1.ReadDirPlusResponse, error) {
+	var res v1.ReadDirPlusResponse
+	if err := c.client.CallUnary(ctx, storageServiceReadDirPlusSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *storageServiceClient) Fallocate(ctx context.Context, req *v1.FallocateRequest) (*v1.FallocateResponse, error) {
+	var res v1.FallocateResponse
+	if err := c.client.CallUnary(ctx, storageServiceFallocateSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -770,6 +932,66 @@ func (h storageServiceHandler) release(ctx context.Context, _ connect.Spec, stre
 		return err
 	}
 	res, err := h.svc.Release(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) openDir(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.OpenDirRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.OpenDir(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) releaseDir(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ReleaseDirRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ReleaseDir(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) readDir(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ReadDirRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ReadDir(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) readDirPlus(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ReadDirPlusRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ReadDirPlus(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h storageServiceHandler) fallocate(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.FallocateRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.Fallocate(ctx, &req)
 	if err != nil {
 		return err
 	}

@@ -35,20 +35,27 @@ type Manager interface {
 	Flush(ctx context.Context, params FlushParams) error
 	Fsync(ctx context.Context, params FsyncParams) error
 	Release(ctx context.Context, params ReleaseParams) error
+	OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirResult, error)
+	ReleaseDir(ctx context.Context, params ReleaseDirParams) error
+	ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error)
+	ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error)
+	Fallocate(ctx context.Context, params FallocateParams) error
 }
 
-
 type manager struct {
-	store db.Store
+	store        db.Store
+	entryTimeout float64
+	attrTimeout  float64
 }
 
 var _ Manager = (*manager)(nil)
 
-
 // New 创建 Manager 实例。
 func New(store db.Store) Manager {
 	return &manager{
-		store: store,
+		store:        store,
+		entryTimeout: DefaultEntryTimeoutSeconds,
+		attrTimeout:  DefaultAttrTimeoutSeconds,
 	}
 }
 
@@ -1517,12 +1524,16 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		_, err := q.GetInode(ctx, int64(ino))
+		inode, err := q.GetInode(ctx, int64(ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("get inode %d: %w", ino, err)
+		}
+
+		if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+			return ErrIsDir
 		}
 
 		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
@@ -1543,6 +1554,8 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return ErrNotFound
+		case errors.Is(err, ErrIsDir):
+			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
 			return ErrBadFileHandle
 		default:
@@ -1580,6 +1593,10 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
 		}
 
+		if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+			return ErrIsDir
+		}
+
 		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
 			Fh:  int64(params.Fh),
 			Ino: int64(params.Ino),
@@ -1592,14 +1609,8 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		}
 
 		if inode.Nlink == 0 {
-			hasRemaining, err := q.HasFileHandlesByIno(ctx, int64(params.Ino))
-			if err != nil {
-				return fmt.Errorf("check remaining file handles for inode %d: %w", params.Ino, err)
-			}
-			if !hasRemaining {
-				if err := q.DeleteInode(ctx, int64(params.Ino)); err != nil {
-					return fmt.Errorf("delete orphan inode %d: %w", params.Ino, err)
-				}
+			if err := m.reclaimOrphanIfNoHandles(ctx, q, params.Ino); err != nil {
+				return err
 			}
 		}
 
@@ -1612,6 +1623,8 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return ErrInvalidArgument
 		case errors.Is(err, ErrNotFound):
 			return ErrNotFound
+		case errors.Is(err, ErrIsDir):
+			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
 			return ErrBadFileHandle
 		default:
@@ -1622,6 +1635,518 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	return nil
 }
 
+// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirResult, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || (params.Flags&O_ACCMODE) != O_RDONLY || (params.Flags&O_TRUNC) != 0 {
+		return nil, ErrInvalidArgument
+	}
 
+	var result *OpenDirResult
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+		}
 
+		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
+			return ErrNotDir
+		}
+
+		if inode.Nlink == 0 {
+			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
+			if err != nil {
+				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)
+			}
+			if !hasHandles {
+				return ErrNotFound
+			}
+		}
+
+		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
+			Ino:   inode.Ino,
+			Flags: int32(params.Flags),
+		})
+		if err != nil {
+			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
+		}
+
+		result = &OpenDirResult{
+			Fh:        uint64(handle.Fh),
+			OpenFlags: 0,
+		}
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return nil, ErrNotDir
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		default:
+			return nil, fmt.Errorf("opendir tx: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// ReleaseDir 关闭并销毁目录句柄，且在孤儿目录无活跃句柄时执行最终物理回收。
+func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+		}
+
+		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
+			return ErrNotDir
+		}
+
+		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
+			Fh:  int64(params.Fh),
+			Ino: int64(params.Ino),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBadFileHandle
+			}
+			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		if inode.Nlink == 0 {
+			if err := m.reclaimOrphanIfNoHandles(ctx, q, params.Ino); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return ErrNotDir
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("releasedir tx: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// reclaimOrphanIfNoHandles 检查孤儿节点是否存在未释放句柄，若无任何句柄则执行物理删除。
+func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, ino uint64) error {
+	hasRemaining, err := q.HasFileHandlesByIno(ctx, int64(ino))
+	if err != nil {
+		return fmt.Errorf("check remaining file handles for inode %d: %w", ino, err)
+	}
+	if !hasRemaining {
+		if err := q.DeleteInode(ctx, int64(ino)); err != nil {
+			return fmt.Errorf("delete orphan inode %d: %w", ino, err)
+		}
+	}
+	return nil
+}
+
+func newInodeFromListDirRow(row db.ListDirEntriesRow) *Inode {
+	var blocks uint64
+	if row.Size > 0 {
+		blocks = (uint64(row.Size) + 511) / 512
+	}
+
+	return &Inode{
+		Ino:        uint64(row.Ino),
+		Generation: uint64(row.Generation),
+		Attr: Attribute{
+			Mode:    uint32(row.Mode),
+			Size:    uint64(row.Size),
+			Nlink:   uint32(row.Nlink),
+			UID:     uint32(row.Uid),
+			GID:     uint32(row.Gid),
+			Rdev:    uint32(row.Rdev),
+			Blksize: 4096,
+			Blocks:  blocks,
+			Atime:   row.Atime.Time,
+			Mtime:   row.Mtime.Time,
+			Ctime:   row.Ctime.Time,
+		},
+	}
+}
+
+// validateDirHandle 校验目录会话有效性，确认 Inode 存在、为目录且 FileHandle 属于该 Inode。
+func (m *manager) validateDirHandle(ctx context.Context, q db.Querier, ino, fh uint64) (*db.Inode, error) {
+	dirInode, err := q.GetInode(ctx, int64(ino))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("get dir inode %d: %w", ino, err)
+	}
+
+	if (uint32(dirInode.Mode) & S_IFMT) != S_IFDIR {
+		return nil, ErrNotDir
+	}
+
+	_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
+		Fh:  int64(fh),
+		Ino: int64(ino),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrBadFileHandle
+		}
+		return nil, fmt.Errorf("get file handle (fh=%d, ino=%d): %w", fh, ino, err)
+	}
+
+	return &dirInode, nil
+}
+
+// ReadDir 读取指定目录的子项流（基本条目），支持确定性分页游标与 . / .. 合成。
+func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	var entries []DirEntry
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh)
+		if err != nil {
+			return err
+		}
+
+		if dirInode.Nlink == 0 {
+			entries = []DirEntry{}
+			return nil
+		}
+
+		rem := int(params.Limit)
+		entries = make([]DirEntry, 0, min(rem, 16))
+
+		if params.Offset < 1 && rem > 0 {
+			entries = append(entries, DirEntry{
+				Ino:        uint64(dirInode.Ino),
+				Name:       ".",
+				Mode:       uint32(dirInode.Mode),
+				NextOffset: 1,
+			})
+			rem--
+		}
+
+		if params.Offset < 2 && rem > 0 {
+			parentInode, err := q.GetParentInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					parentInode = *dirInode
+				} else {
+					return fmt.Errorf("get parent inode for %d: %w", params.Ino, err)
+				}
+			}
+			entries = append(entries, DirEntry{
+				Ino:        uint64(parentInode.Ino),
+				Name:       "..",
+				Mode:       uint32(parentInode.Mode),
+				NextOffset: 2,
+			})
+			rem--
+		}
+
+		if rem > 0 {
+			var sqlOffset int64
+			if params.Offset >= 2 {
+				sqlOffset = int64(params.Offset - 2)
+			}
+			rows, err := q.ListDirEntries(ctx, db.ListDirEntriesParams{
+				ParentIno: int64(params.Ino),
+				Limit:     int32(rem),
+				Offset:    sqlOffset,
+			})
+			if err != nil {
+				return fmt.Errorf("list dir entries for parent %d (limit=%d, offset=%d): %w", params.Ino, rem, sqlOffset, err)
+			}
+
+			for i, row := range rows {
+				entries = append(entries, DirEntry{
+					Ino:        uint64(row.Ino),
+					Name:       row.Name,
+					Mode:       uint32(row.Mode),
+					NextOffset: uint64(sqlOffset) + uint64(i) + 3,
+				})
+			}
+		}
+
+		return nil
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return nil, ErrNotDir
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
+		default:
+			return nil, fmt.Errorf("readdir tx: %w", err)
+		}
+	}
+
+	if entries == nil {
+		entries = []DirEntry{}
+	}
+	return entries, nil
+}
+
+// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效，支持确定性分页游标与 . / .. 合成。
+func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	var entries []DirEntryPlus
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh)
+		if err != nil {
+			return err
+		}
+
+		if dirInode.Nlink == 0 {
+			entries = []DirEntryPlus{}
+			return nil
+		}
+
+		rem := int(params.Limit)
+		entries = make([]DirEntryPlus, 0, min(rem, 16))
+
+		if params.Offset < 1 && rem > 0 {
+			entries = append(entries, DirEntryPlus{
+				Ino:                 uint64(dirInode.Ino),
+				Name:                ".",
+				NextOffset:          1,
+				Inode:               newInodeFromDB(*dirInode),
+				EntryTimeoutSeconds: 0,
+				AttrTimeoutSeconds:  m.attrTimeout,
+			})
+			rem--
+		}
+
+		if params.Offset < 2 && rem > 0 {
+			parentInode, err := q.GetParentInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					parentInode = *dirInode
+				} else {
+					return fmt.Errorf("get parent inode for %d: %w", params.Ino, err)
+				}
+			}
+			entries = append(entries, DirEntryPlus{
+				Ino:                 uint64(parentInode.Ino),
+				Name:                "..",
+				NextOffset:          2,
+				Inode:               newInodeFromDB(parentInode),
+				EntryTimeoutSeconds: 0,
+				AttrTimeoutSeconds:  m.attrTimeout,
+			})
+			rem--
+		}
+
+		if rem > 0 {
+			var sqlOffset int64
+			if params.Offset >= 2 {
+				sqlOffset = int64(params.Offset - 2)
+			}
+			rows, err := q.ListDirEntries(ctx, db.ListDirEntriesParams{
+				ParentIno: int64(params.Ino),
+				Limit:     int32(rem),
+				Offset:    sqlOffset,
+			})
+			if err != nil {
+				return fmt.Errorf("list dir entries for parent %d (limit=%d, offset=%d): %w", params.Ino, rem, sqlOffset, err)
+			}
+
+			for i, row := range rows {
+				entries = append(entries, DirEntryPlus{
+					Ino:                 uint64(row.Ino),
+					Name:                row.Name,
+					NextOffset:          uint64(sqlOffset) + uint64(i) + 3,
+					Inode:               newInodeFromListDirRow(row),
+					EntryTimeoutSeconds: m.entryTimeout,
+					AttrTimeoutSeconds:  m.attrTimeout,
+				})
+			}
+		}
+
+		return nil
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return nil, ErrNotDir
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
+		default:
+			return nil, fmt.Errorf("readdirplus tx: %w", err)
+		}
+	}
+
+	if entries == nil {
+		entries = []DirEntryPlus{}
+	}
+	return entries, nil
+}
+
+// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+// 遵循 Linux fallocate(2) 与 ADR-0010 规范。
+func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
+	// 1. 入参边界与整型溢出防御
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Length == 0 || params.Length > math.MaxInt64 ||
+		params.Offset > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Offset > uint64(math.MaxInt64)-params.Length {
+		return ErrInvalidArgument
+	}
+
+	// 2. 模式位校验
+	if params.Mode == FallocFlPunchHole {
+		return ErrInvalidArgument
+	}
+	if params.Mode != 0 && params.Mode != FallocFlKeepSize && params.Mode != (FallocFlPunchHole|FallocFlKeepSize) {
+		return ErrNotSupported
+	}
+
+	// 3. 开启读写事务
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		current, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+		}
+
+		fileType := uint32(current.Mode) & S_IFMT
+		if fileType == S_IFDIR {
+			return ErrIsDir
+		}
+		if fileType != S_IFREG {
+			return ErrNotSupported
+		}
+
+		handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
+			Fh:  int64(params.Fh),
+			Ino: int64(params.Ino),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBadFileHandle
+			}
+			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		accMode := uint32(handle.Flags) & O_ACCMODE
+		if accMode != O_WRONLY && accMode != O_RDWR {
+			return ErrBadFileHandle
+		}
+
+		switch params.Mode {
+		case 0:
+			targetSize := params.Offset + params.Length
+			if targetSize > uint64(current.Size) {
+				_, err = q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
+					Ino:         current.Ino,
+					Mode:        current.Mode,
+					Size:        int64(targetSize),
+					Uid:         current.Uid,
+					Gid:         current.Gid,
+					SetAtimeNow: false,
+					Atime:       current.Atime,
+					SetMtimeNow: true,
+					Mtime:       pgtype.Timestamptz{},
+				})
+				if err != nil {
+					return fmt.Errorf("update inode attr %d: %w", current.Ino, err)
+				}
+			} else {
+				if err := q.TouchInodeCtime(ctx, int64(params.Ino)); err != nil {
+					return fmt.Errorf("touch inode ctime %d: %w", params.Ino, err)
+				}
+			}
+		case FallocFlKeepSize:
+			if err := q.TouchInodeCtime(ctx, int64(params.Ino)); err != nil {
+				return fmt.Errorf("touch inode ctime %d: %w", params.Ino, err)
+			}
+		case FallocFlPunchHole | FallocFlKeepSize:
+			newMode := uint32(current.Mode) &^ (S_ISUID | S_ISGID)
+			_, err = q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
+				Ino:         current.Ino,
+				Mode:        int32(newMode),
+				Size:        current.Size,
+				Uid:         current.Uid,
+				Gid:         current.Gid,
+				SetAtimeNow: false,
+				Atime:       current.Atime,
+				SetMtimeNow: true,
+				Mtime:       pgtype.Timestamptz{},
+			})
+			if err != nil {
+				return fmt.Errorf("update inode attr %d: %w", current.Ino, err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrIsDir):
+			return ErrIsDir
+		case errors.Is(err, ErrNotSupported):
+			return ErrNotSupported
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("fallocate (ino=%d, fh=%d): %w", params.Ino, params.Fh, err)
+		}
+	}
+
+	return nil
+}
 

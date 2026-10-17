@@ -19,22 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StorageService_Lookup_FullMethodName   = "/storage.v1.StorageService/Lookup"
-	StorageService_GetAttr_FullMethodName  = "/storage.v1.StorageService/GetAttr"
-	StorageService_SetAttr_FullMethodName  = "/storage.v1.StorageService/SetAttr"
-	StorageService_Mknod_FullMethodName    = "/storage.v1.StorageService/Mknod"
-	StorageService_Mkdir_FullMethodName    = "/storage.v1.StorageService/Mkdir"
-	StorageService_Symlink_FullMethodName  = "/storage.v1.StorageService/Symlink"
-	StorageService_Readlink_FullMethodName = "/storage.v1.StorageService/Readlink"
-	StorageService_Link_FullMethodName     = "/storage.v1.StorageService/Link"
-	StorageService_Unlink_FullMethodName   = "/storage.v1.StorageService/Unlink"
-	StorageService_Rmdir_FullMethodName    = "/storage.v1.StorageService/Rmdir"
-	StorageService_Rename_FullMethodName   = "/storage.v1.StorageService/Rename"
-	StorageService_Create_FullMethodName   = "/storage.v1.StorageService/Create"
-	StorageService_Open_FullMethodName     = "/storage.v1.StorageService/Open"
-	StorageService_Flush_FullMethodName    = "/storage.v1.StorageService/Flush"
-	StorageService_Fsync_FullMethodName    = "/storage.v1.StorageService/Fsync"
-	StorageService_Release_FullMethodName  = "/storage.v1.StorageService/Release"
+	StorageService_Lookup_FullMethodName      = "/storage.v1.StorageService/Lookup"
+	StorageService_GetAttr_FullMethodName     = "/storage.v1.StorageService/GetAttr"
+	StorageService_SetAttr_FullMethodName     = "/storage.v1.StorageService/SetAttr"
+	StorageService_Mknod_FullMethodName       = "/storage.v1.StorageService/Mknod"
+	StorageService_Mkdir_FullMethodName       = "/storage.v1.StorageService/Mkdir"
+	StorageService_Symlink_FullMethodName     = "/storage.v1.StorageService/Symlink"
+	StorageService_Readlink_FullMethodName    = "/storage.v1.StorageService/Readlink"
+	StorageService_Link_FullMethodName        = "/storage.v1.StorageService/Link"
+	StorageService_Unlink_FullMethodName      = "/storage.v1.StorageService/Unlink"
+	StorageService_Rmdir_FullMethodName       = "/storage.v1.StorageService/Rmdir"
+	StorageService_Rename_FullMethodName      = "/storage.v1.StorageService/Rename"
+	StorageService_Create_FullMethodName      = "/storage.v1.StorageService/Create"
+	StorageService_Open_FullMethodName        = "/storage.v1.StorageService/Open"
+	StorageService_Flush_FullMethodName       = "/storage.v1.StorageService/Flush"
+	StorageService_Fsync_FullMethodName       = "/storage.v1.StorageService/Fsync"
+	StorageService_Release_FullMethodName     = "/storage.v1.StorageService/Release"
+	StorageService_OpenDir_FullMethodName     = "/storage.v1.StorageService/OpenDir"
+	StorageService_ReleaseDir_FullMethodName  = "/storage.v1.StorageService/ReleaseDir"
+	StorageService_ReadDir_FullMethodName     = "/storage.v1.StorageService/ReadDir"
+	StorageService_ReadDirPlus_FullMethodName = "/storage.v1.StorageService/ReadDirPlus"
+	StorageService_Fallocate_FullMethodName   = "/storage.v1.StorageService/Fallocate"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -129,6 +134,32 @@ type StorageServiceClient interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(ctx context.Context, in *ReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error)
+	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	OpenDir(ctx context.Context, in *OpenDirRequest, opts ...grpc.CallOption) (*OpenDirResponse, error)
+	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
+	ReleaseDir(ctx context.Context, in *ReleaseDirRequest, opts ...grpc.CallOption) (*ReleaseDirResponse, error)
+	// ReadDir 读取指定目录的子项流（基本条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
+	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDirPlus(ctx context.Context, in *ReadDirPlusRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
+	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
+	Fallocate(ctx context.Context, in *FallocateRequest, opts ...grpc.CallOption) (*FallocateResponse, error)
 }
 
 type storageServiceClient struct {
@@ -299,6 +330,56 @@ func (c *storageServiceClient) Release(ctx context.Context, in *ReleaseRequest, 
 	return out, nil
 }
 
+func (c *storageServiceClient) OpenDir(ctx context.Context, in *OpenDirRequest, opts ...grpc.CallOption) (*OpenDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OpenDirResponse)
+	err := c.cc.Invoke(ctx, StorageService_OpenDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ReleaseDir(ctx context.Context, in *ReleaseDirRequest, opts ...grpc.CallOption) (*ReleaseDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseDirResponse)
+	err := c.cc.Invoke(ctx, StorageService_ReleaseDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadDirResponse)
+	err := c.cc.Invoke(ctx, StorageService_ReadDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ReadDirPlus(ctx context.Context, in *ReadDirPlusRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadDirPlusResponse)
+	err := c.cc.Invoke(ctx, StorageService_ReadDirPlus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Fallocate(ctx context.Context, in *FallocateRequest, opts ...grpc.CallOption) (*FallocateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FallocateResponse)
+	err := c.cc.Invoke(ctx, StorageService_Fallocate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StorageServiceServer is the server API for StorageService service.
 // All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
@@ -391,6 +472,32 @@ type StorageServiceServer interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error)
+	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	OpenDir(context.Context, *OpenDirRequest) (*OpenDirResponse, error)
+	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
+	ReleaseDir(context.Context, *ReleaseDirRequest) (*ReleaseDirResponse, error)
+	// ReadDir 读取指定目录的子项流（基本条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
+	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	ReadDirPlus(context.Context, *ReadDirPlusRequest) (*ReadDirPlusResponse, error)
+	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
+	Fallocate(context.Context, *FallocateRequest) (*FallocateResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -448,6 +555,21 @@ func (UnimplementedStorageServiceServer) Fsync(context.Context, *FsyncRequest) (
 }
 func (UnimplementedStorageServiceServer) Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Release not implemented")
+}
+func (UnimplementedStorageServiceServer) OpenDir(context.Context, *OpenDirRequest) (*OpenDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method OpenDir not implemented")
+}
+func (UnimplementedStorageServiceServer) ReleaseDir(context.Context, *ReleaseDirRequest) (*ReleaseDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseDir not implemented")
+}
+func (UnimplementedStorageServiceServer) ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadDir not implemented")
+}
+func (UnimplementedStorageServiceServer) ReadDirPlus(context.Context, *ReadDirPlusRequest) (*ReadDirPlusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadDirPlus not implemented")
+}
+func (UnimplementedStorageServiceServer) Fallocate(context.Context, *FallocateRequest) (*FallocateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Fallocate not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -758,6 +880,96 @@ func _StorageService_Release_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_OpenDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OpenDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).OpenDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_OpenDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).OpenDir(ctx, req.(*OpenDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ReleaseDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ReleaseDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ReleaseDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ReleaseDir(ctx, req.(*ReleaseDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ReadDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ReadDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ReadDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ReadDir(ctx, req.(*ReadDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ReadDirPlus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadDirPlusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ReadDirPlus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ReadDirPlus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ReadDirPlus(ctx, req.(*ReadDirPlusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Fallocate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FallocateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Fallocate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Fallocate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Fallocate(ctx, req.(*FallocateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -828,6 +1040,26 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Release",
 			Handler:    _StorageService_Release_Handler,
+		},
+		{
+			MethodName: "OpenDir",
+			Handler:    _StorageService_OpenDir_Handler,
+		},
+		{
+			MethodName: "ReleaseDir",
+			Handler:    _StorageService_ReleaseDir_Handler,
+		},
+		{
+			MethodName: "ReadDir",
+			Handler:    _StorageService_ReadDir_Handler,
+		},
+		{
+			MethodName: "ReadDirPlus",
+			Handler:    _StorageService_ReadDirPlus_Handler,
+		},
+		{
+			MethodName: "Fallocate",
+			Handler:    _StorageService_Fallocate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

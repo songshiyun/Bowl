@@ -110,6 +110,37 @@ service StorageService {
   // 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
   rpc Release(ReleaseRequest) returns (ReleaseResponse);
+
+  // OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+  // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+  // 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  // 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+  rpc OpenDir(OpenDirRequest) returns (OpenDirResponse);
+
+  // ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+  // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+  // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  // 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
+  rpc ReleaseDir(ReleaseDirRequest) returns (ReleaseDirResponse);
+
+  // ReadDir 读取指定目录的子项流（基本条目）。
+  // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+  // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  // 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+  rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
+
+  // ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
+  // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+  // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  // 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+  rpc ReadDirPlus(ReadDirPlusRequest) returns (ReadDirPlusResponse);
+
+  // Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+  // 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
+  rpc Fallocate(FallocateRequest) returns (FallocateResponse);
 }
 
 
@@ -596,6 +627,184 @@ message ReleaseRequest {
 
 // ReleaseResponse 定义 Release 接口响应结果。
 message ReleaseResponse {}
+
+// OpenDirRequest 定义 OpenDir 接口输入参数。
+message OpenDirRequest {
+  // 待打开目录节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 ino = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 打开标志位 (open flags, 如 O_RDONLY)。
+  uint32 flags = 2;
+}
+
+// OpenDirResponse 包含打开目录所分配的目录句柄及打开响应标志位。
+message OpenDirResponse {
+  // 分配的目录句柄 (DirHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 fh = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 打开响应标志位 (open flags)。
+  uint32 open_flags = 2;
+}
+
+// ReleaseDirRequest 定义 ReleaseDir 接口输入参数。
+message ReleaseDirRequest {
+  // 目标目录节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 ino = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 待关闭并销毁的目录句柄 (DirHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 fh = 2 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+}
+
+// ReleaseDirResponse 定义 ReleaseDir 接口响应结果。
+message ReleaseDirResponse {}
+
+// DirEntry 定义 ReadDir 返回的基本目录项。
+message DirEntry {
+  // 子项对应的 Inode 编号。
+  uint64 ino = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // 子项名称（支持 "." 与 ".."）。
+  // 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+  string name = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_bytes = 255,
+    (buf.validate.field).string.pattern = "^[^/\\x00]+$"
+  ];
+
+  // 文件的模式位（包含文件类型与权限位）。
+  uint32 mode = 3 [(buf.validate.field).uint32.gt = 0];
+
+  // 下一个条目的游标偏移量（单调递增，大于 0）。
+  uint64 next_offset = 4 [(buf.validate.field).uint64.gt = 0];
+}
+
+// ReadDirRequest 定义 ReadDir 接口输入参数。
+message ReadDirRequest {
+  // 目标目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 ino = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 活跃目录句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 fh = 2 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
+  uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
+
+  // 单次最大读取条目数配额（最大 4096）。
+  uint32 limit = 4 [
+    (buf.validate.field).uint32.gt = 0,
+    (buf.validate.field).uint32.lte = 4096
+  ];
+}
+
+// ReadDirResponse 定义 ReadDir 接口响应结果。
+message ReadDirResponse {
+  // 目录项列表。
+  repeated DirEntry entries = 1;
+}
+
+// DirEntryPlus 定义 ReadDirPlus 返回的扩展目录项（内联属性与缓存时效）。
+message DirEntryPlus {
+  // 子项对应的 Inode 编号。
+  uint64 ino = 1 [(buf.validate.field).uint64.gt = 0];
+
+  // 子项名称（支持 "." 与 ".."）。
+  // 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
+  string name = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.max_bytes = 255,
+    (buf.validate.field).string.pattern = "^[^/\\x00]+$"
+  ];
+
+  // 下一个条目的游标偏移量（单调递增，大于 0）。
+  uint64 next_offset = 3 [(buf.validate.field).uint64.gt = 0];
+
+  // 子项的完整 Inode 元数据。
+  Inode inode = 4 [(buf.validate.field).required = true];
+
+  // 目录项在内核中的缓存有效时间（秒）。对 "." 与 ".." 固定为 0。
+  double entry_timeout_seconds = 5 [(buf.validate.field).double.gte = 0];
+
+  // 属性在内核中的缓存有效时间（秒）。
+  double attr_timeout_seconds = 6 [(buf.validate.field).double.gte = 0];
+}
+
+// ReadDirPlusRequest 定义 ReadDirPlus 接口输入参数。
+message ReadDirPlusRequest {
+  // 目标目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 ino = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 活跃目录句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 fh = 2 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
+  uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
+
+  // 单次最大读取条目数配额（最大 4096）。
+  uint32 limit = 4 [
+    (buf.validate.field).uint32.gt = 0,
+    (buf.validate.field).uint32.lte = 4096
+  ];
+}
+
+// ReadDirPlusResponse 定义 ReadDirPlus 接口响应结果。
+message ReadDirPlusResponse {
+  // 扩展目录项列表。
+  repeated DirEntryPlus entries = 1;
+}
+
+// FallocateRequest 定义 Fallocate 接口输入参数。
+message FallocateRequest {
+  // 目标常规文件的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 ino = 1 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 活跃文件句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 fh = 2 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // 操作起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
+
+  // 操作区间长度（字节）。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+  uint64 length = 4 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+
+  // fallocate 模式位标志（支持 0、FALLOC_FL_KEEP_SIZE、FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE）。
+  uint32 mode = 5;
+}
+
+// FallocateResponse 定义 Fallocate 接口响应结果。
+message FallocateResponse {}
 
 // Inode 代表文件系统中的实体节点。
 
