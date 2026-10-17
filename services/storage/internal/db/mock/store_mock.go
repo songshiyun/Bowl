@@ -162,6 +162,72 @@ func (_c *MockStore_CreateEntry_Call) RunAndReturn(run func(ctx context.Context,
 	return _c
 }
 
+// CreateFileHandle provides a mock function for the type MockStore
+func (_mock *MockStore) CreateFileHandle(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateFileHandle")
+	}
+
+	var r0 db.FileHandle
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileHandleParams) (db.FileHandle, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileHandleParams) db.FileHandle); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.FileHandle)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.CreateFileHandleParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CreateFileHandle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateFileHandle'
+type MockStore_CreateFileHandle_Call struct {
+	*mock.Call
+}
+
+// CreateFileHandle is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.CreateFileHandleParams
+func (_e *MockStore_Expecter) CreateFileHandle(ctx any, arg any) *MockStore_CreateFileHandle_Call {
+	return &MockStore_CreateFileHandle_Call{Call: _e.mock.On("CreateFileHandle", ctx, arg)}
+}
+
+func (_c *MockStore_CreateFileHandle_Call) Run(run func(ctx context.Context, arg db.CreateFileHandleParams)) *MockStore_CreateFileHandle_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.CreateFileHandleParams
+		if args[1] != nil {
+			arg1 = args[1].(db.CreateFileHandleParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CreateFileHandle_Call) Return(fileHandle db.FileHandle, err error) *MockStore_CreateFileHandle_Call {
+	_c.Call.Return(fileHandle, err)
+	return _c
+}
+
+func (_c *MockStore_CreateFileHandle_Call) RunAndReturn(run func(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error)) *MockStore_CreateFileHandle_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateInode provides a mock function for the type MockStore
 func (_mock *MockStore) CreateInode(ctx context.Context, arg db.CreateInodeParams) (db.Inode, error) {
 	ret := _mock.Called(ctx, arg)
@@ -474,6 +540,129 @@ func (_c *MockStore_DeleteEntry_Call) RunAndReturn(run func(ctx context.Context,
 	return _c
 }
 
+// DeleteFileHandle provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteFileHandle(ctx context.Context, arg db.DeleteFileHandleParams) (int64, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteFileHandle")
+	}
+
+	var r0 int64
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.DeleteFileHandleParams) (int64, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.DeleteFileHandleParams) int64); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.DeleteFileHandleParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_DeleteFileHandle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteFileHandle'
+type MockStore_DeleteFileHandle_Call struct {
+	*mock.Call
+}
+
+// DeleteFileHandle is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.DeleteFileHandleParams
+func (_e *MockStore_Expecter) DeleteFileHandle(ctx any, arg any) *MockStore_DeleteFileHandle_Call {
+	return &MockStore_DeleteFileHandle_Call{Call: _e.mock.On("DeleteFileHandle", ctx, arg)}
+}
+
+func (_c *MockStore_DeleteFileHandle_Call) Run(run func(ctx context.Context, arg db.DeleteFileHandleParams)) *MockStore_DeleteFileHandle_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.DeleteFileHandleParams
+		if args[1] != nil {
+			arg1 = args[1].(db.DeleteFileHandleParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteFileHandle_Call) Return(n int64, err error) *MockStore_DeleteFileHandle_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockStore_DeleteFileHandle_Call) RunAndReturn(run func(ctx context.Context, arg db.DeleteFileHandleParams) (int64, error)) *MockStore_DeleteFileHandle_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteInode provides a mock function for the type MockStore
+func (_mock *MockStore) DeleteInode(ctx context.Context, ino int64) error {
+	ret := _mock.Called(ctx, ino)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteInode")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = returnFunc(ctx, ino)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockStore_DeleteInode_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteInode'
+type MockStore_DeleteInode_Call struct {
+	*mock.Call
+}
+
+// DeleteInode is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino int64
+func (_e *MockStore_Expecter) DeleteInode(ctx any, ino any) *MockStore_DeleteInode_Call {
+	return &MockStore_DeleteInode_Call{Call: _e.mock.On("DeleteInode", ctx, ino)}
+}
+
+func (_c *MockStore_DeleteInode_Call) Run(run func(ctx context.Context, ino int64)) *MockStore_DeleteInode_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_DeleteInode_Call) Return(err error) *MockStore_DeleteInode_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockStore_DeleteInode_Call) RunAndReturn(run func(ctx context.Context, ino int64) error) *MockStore_DeleteInode_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ExecTx provides a mock function for the type MockStore
 func (_mock *MockStore) ExecTx(ctx context.Context, fn func(db.Querier) error) error {
 	ret := _mock.Called(ctx, fn)
@@ -669,6 +858,72 @@ func (_c *MockStore_GetEntry_Call) Return(entry db.Entry, err error) *MockStore_
 }
 
 func (_c *MockStore_GetEntry_Call) RunAndReturn(run func(ctx context.Context, arg db.GetEntryParams) (db.Entry, error)) *MockStore_GetEntry_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetFileHandle provides a mock function for the type MockStore
+func (_mock *MockStore) GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetFileHandle")
+	}
+
+	var r0 db.FileHandle
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetFileHandleParams) (db.FileHandle, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetFileHandleParams) db.FileHandle); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.FileHandle)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.GetFileHandleParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetFileHandle_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFileHandle'
+type MockStore_GetFileHandle_Call struct {
+	*mock.Call
+}
+
+// GetFileHandle is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.GetFileHandleParams
+func (_e *MockStore_Expecter) GetFileHandle(ctx any, arg any) *MockStore_GetFileHandle_Call {
+	return &MockStore_GetFileHandle_Call{Call: _e.mock.On("GetFileHandle", ctx, arg)}
+}
+
+func (_c *MockStore_GetFileHandle_Call) Run(run func(ctx context.Context, arg db.GetFileHandleParams)) *MockStore_GetFileHandle_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.GetFileHandleParams
+		if args[1] != nil {
+			arg1 = args[1].(db.GetFileHandleParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetFileHandle_Call) Return(fileHandle db.FileHandle, err error) *MockStore_GetFileHandle_Call {
+	_c.Call.Return(fileHandle, err)
+	return _c
+}
+
+func (_c *MockStore_GetFileHandle_Call) RunAndReturn(run func(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error)) *MockStore_GetFileHandle_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -999,6 +1254,72 @@ func (_c *MockStore_HasChildEntries_Call) Return(b bool, err error) *MockStore_H
 }
 
 func (_c *MockStore_HasChildEntries_Call) RunAndReturn(run func(ctx context.Context, parentIno int64) (bool, error)) *MockStore_HasChildEntries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// HasFileHandlesByIno provides a mock function for the type MockStore
+func (_mock *MockStore) HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error) {
+	ret := _mock.Called(ctx, ino)
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasFileHandlesByIno")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) (bool, error)); ok {
+		return returnFunc(ctx, ino)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) bool); ok {
+		r0 = returnFunc(ctx, ino)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = returnFunc(ctx, ino)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_HasFileHandlesByIno_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasFileHandlesByIno'
+type MockStore_HasFileHandlesByIno_Call struct {
+	*mock.Call
+}
+
+// HasFileHandlesByIno is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino int64
+func (_e *MockStore_Expecter) HasFileHandlesByIno(ctx any, ino any) *MockStore_HasFileHandlesByIno_Call {
+	return &MockStore_HasFileHandlesByIno_Call{Call: _e.mock.On("HasFileHandlesByIno", ctx, ino)}
+}
+
+func (_c *MockStore_HasFileHandlesByIno_Call) Run(run func(ctx context.Context, ino int64)) *MockStore_HasFileHandlesByIno_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_HasFileHandlesByIno_Call) Return(b bool, err error) *MockStore_HasFileHandlesByIno_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_HasFileHandlesByIno_Call) RunAndReturn(run func(ctx context.Context, ino int64) (bool, error)) *MockStore_HasFileHandlesByIno_Call {
 	_c.Call.Return(run)
 	return _c
 }

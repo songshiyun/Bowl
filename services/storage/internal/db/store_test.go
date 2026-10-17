@@ -51,7 +51,20 @@ type RenameQuerier interface {
 	IsSubdirectory(ctx context.Context, arg db.IsSubdirectoryParams) (bool, error)
 }
 
-// 静态验证 db.Querier、db.Store 与 *db.Queries 完备实现 InodeAttrQuerier、SymlinkQuerier、LinkQuerier、UnlinkRmdirQuerier 与 RenameQuerier 接口契约。
+// FileHandleQuerier 提取文件句柄创建与持久化接口契约。
+type FileHandleQuerier interface {
+	CreateFileHandle(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error)
+	HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error)
+	GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error)
+	DeleteFileHandle(ctx context.Context, arg db.DeleteFileHandleParams) (int64, error)
+}
+
+// InodeLifecycleQuerier 提取 Inode 生命周期物理回收接口契约。
+type InodeLifecycleQuerier interface {
+	DeleteInode(ctx context.Context, ino int64) error
+}
+
+// 静态验证 db.Querier、db.Store 与 *db.Queries 完备实现 InodeAttrQuerier、SymlinkQuerier、LinkQuerier、UnlinkRmdirQuerier、RenameQuerier、FileHandleQuerier 与 InodeLifecycleQuerier 接口契约。
 var (
 	_ InodeAttrQuerier = (db.Querier)(nil)
 	_ InodeAttrQuerier = (db.Store)(nil)
@@ -72,6 +85,14 @@ var (
 	_ RenameQuerier = (db.Querier)(nil)
 	_ RenameQuerier = (db.Store)(nil)
 	_ RenameQuerier = (*db.Queries)(nil)
+
+	_ FileHandleQuerier = (db.Querier)(nil)
+	_ FileHandleQuerier = (db.Store)(nil)
+	_ FileHandleQuerier = (*db.Queries)(nil)
+
+	_ InodeLifecycleQuerier = (db.Querier)(nil)
+	_ InodeLifecycleQuerier = (db.Store)(nil)
+	_ InodeLifecycleQuerier = (*db.Queries)(nil)
 )
 
 func TestNewStore(t *testing.T) {
@@ -658,5 +679,236 @@ func TestQuerier_MknodOperators(t *testing.T) {
 			assert.ErrorIs(t, err, expectedErr)
 		})
 	})
+
+	t.Run("CreateFileHandle 算子调用与参数透传", func(t *testing.T) {
+		now := time.Now()
+		params := db.CreateFileHandleParams{
+			Ino:   100,
+			Flags: 0o2, // O_RDWR
+		}
+		expected := db.FileHandle{
+			Fh:        1,
+			Ino:       100,
+			Flags:     0o2,
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		}
+
+		t.Run("成功创建 FileHandle 并返回数据实体", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				CreateFileHandle(mock.Anything, params).
+				Return(expected, nil).
+				Once()
+
+			result, err := store.CreateFileHandle(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, expected, result)
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("database sequence error")
+			mockStore.EXPECT().
+				CreateFileHandle(mock.Anything, params).
+				Return(db.FileHandle{}, expectedErr).
+				Once()
+
+			_, err := store.CreateFileHandle(ctx, params)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
+
+	t.Run("HasFileHandlesByIno 算子调用与参数透传", func(t *testing.T) {
+		const targetIno int64 = 42
+
+		t.Run("成功查询并返回存在活跃句柄", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				HasFileHandlesByIno(mock.Anything, targetIno).
+				Return(true, nil).
+				Once()
+
+			exists, err := store.HasFileHandlesByIno(ctx, targetIno)
+			require.NoError(t, err)
+			assert.True(t, exists)
+		})
+
+		t.Run("成功查询并返回无活跃句柄", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				HasFileHandlesByIno(mock.Anything, targetIno).
+				Return(false, nil).
+				Once()
+
+			exists, err := store.HasFileHandlesByIno(ctx, targetIno)
+			require.NoError(t, err)
+			assert.False(t, exists)
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("database query error")
+			mockStore.EXPECT().
+				HasFileHandlesByIno(mock.Anything, targetIno).
+				Return(false, expectedErr).
+				Once()
+
+			_, err := store.HasFileHandlesByIno(ctx, targetIno)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
+
+	t.Run("GetFileHandle 算子调用与参数透传", func(t *testing.T) {
+		now := time.Now()
+		params := db.GetFileHandleParams{
+			Fh:  10,
+			Ino: 42,
+		}
+		expected := db.FileHandle{
+			Fh:        10,
+			Ino:       42,
+			Flags:     0o2,
+			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		}
+
+		t.Run("成功查询并返回目标 FileHandle", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				GetFileHandle(mock.Anything, params).
+				Return(expected, nil).
+				Once()
+
+			result, err := store.GetFileHandle(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, expected, result)
+		})
+
+		t.Run("目标句柄不存在返回 pgx.ErrNoRows", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				GetFileHandle(mock.Anything, params).
+				Return(db.FileHandle{}, pgx.ErrNoRows).
+				Once()
+
+			_, err := store.GetFileHandle(ctx, params)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, pgx.ErrNoRows))
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("database connection failed")
+			mockStore.EXPECT().
+				GetFileHandle(mock.Anything, params).
+				Return(db.FileHandle{}, expectedErr).
+				Once()
+
+			_, err := store.GetFileHandle(ctx, params)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
+
+	t.Run("DeleteFileHandle 算子调用与参数透传", func(t *testing.T) {
+		params := db.DeleteFileHandleParams{
+			Fh:  10,
+			Ino: 42,
+		}
+
+		t.Run("成功删除并返回 fh", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				DeleteFileHandle(mock.Anything, params).
+				Return(int64(10), nil).
+				Once()
+
+			deletedFh, err := store.DeleteFileHandle(ctx, params)
+			require.NoError(t, err)
+			assert.Equal(t, int64(10), deletedFh)
+		})
+
+		t.Run("目标句柄不存在返回 pgx.ErrNoRows", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				DeleteFileHandle(mock.Anything, params).
+				Return(int64(0), pgx.ErrNoRows).
+				Once()
+
+			_, err := store.DeleteFileHandle(ctx, params)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, pgx.ErrNoRows))
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("database connection failed")
+			mockStore.EXPECT().
+				DeleteFileHandle(mock.Anything, params).
+				Return(int64(0), expectedErr).
+				Once()
+
+			_, err := store.DeleteFileHandle(ctx, params)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
+
+	t.Run("DeleteInode 算子调用与参数透传", func(t *testing.T) {
+		targetIno := int64(42)
+
+		t.Run("成功删除孤儿 Inode", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				DeleteInode(mock.Anything, targetIno).
+				Return(nil).
+				Once()
+
+			err := store.DeleteInode(ctx, targetIno)
+			require.NoError(t, err)
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("database connection failed")
+			mockStore.EXPECT().
+				DeleteInode(mock.Anything, targetIno).
+				Return(expectedErr).
+				Once()
+
+			err := store.DeleteInode(ctx, targetIno)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
 }
+
+
 

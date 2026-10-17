@@ -30,7 +30,13 @@ type Manager interface {
 	Unlink(ctx context.Context, parentIno uint64, name string) error
 	Rmdir(ctx context.Context, parentIno uint64, name string) error
 	Rename(ctx context.Context, params RenameParams) error
+	Create(ctx context.Context, params CreateParams) (*CreateResult, error)
+	Open(ctx context.Context, params OpenParams) (*OpenResult, error)
+	Flush(ctx context.Context, params FlushParams) error
+	Fsync(ctx context.Context, params FsyncParams) error
+	Release(ctx context.Context, params ReleaseParams) error
 }
+
 
 type manager struct {
 	store db.Store
@@ -1310,7 +1316,311 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	return nil
 }
 
+// Create 在指定父目录下原子创建常规文件并分配初始文件句柄。
+func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResult, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if len(params.Name) == 0 || len(params.Name) > MaxFileNameBytes || strings.ContainsAny(params.Name, "/\x00") {
+		return nil, ErrInvalidArgument
+	}
+	if params.Mode > 0xffff {
+		return nil, ErrInvalidArgument
+	}
 
+	modeType := params.Mode & S_IFMT
+	if modeType != 0 && modeType != S_IFREG {
+		return nil, ErrInvalidArgument
+	}
+
+	targetMode := S_IFREG | (params.Mode & PermMask)
+
+	var result *CreateResult
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		parent, err := q.GetInodeForUpdate(ctx, int64(params.ParentIno))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get parent inode for update %d: %w", params.ParentIno, err)
+		}
+
+		if (uint32(parent.Mode) & S_IFMT) != S_IFDIR {
+			return ErrNotDir
+		}
+
+		if parent.Nlink == 0 {
+			return ErrNotFound
+		}
+
+		if params.Name == "." || params.Name == ".." {
+			return ErrAlreadyExists
+		}
+
+		gid := params.GID
+		if (uint32(parent.Mode) & S_ISGID) != 0 {
+			gid = uint32(parent.Gid)
+		}
+
+		newInode, err := q.CreateInode(ctx, db.CreateInodeParams{
+			Mode:  int32(targetMode),
+			Nlink: 1,
+			Uid:   int32(params.UID),
+			Gid:   int32(gid),
+			Rdev:  0,
+		})
+		if err != nil {
+			return fmt.Errorf("create inode: %w", err)
+		}
+
+		err = q.CreateEntry(ctx, db.CreateEntryParams{
+			ParentIno: int64(params.ParentIno),
+			Name:      params.Name,
+			Ino:       newInode.Ino,
+		})
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return ErrAlreadyExists
+			}
+			return fmt.Errorf("create entry: %w", err)
+		}
+
+		if err := q.TouchInodeTimestamps(ctx, parent.Ino); err != nil {
+			return fmt.Errorf("touch parent inode %d timestamps: %w", parent.Ino, err)
+		}
+
+		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
+			Ino:   newInode.Ino,
+			Flags: int32(params.Flags),
+		})
+		if err != nil {
+			return fmt.Errorf("create file handle for inode %d: %w", newInode.Ino, err)
+		}
+
+		result = &CreateResult{
+			Inode:     newInodeFromDB(newInode),
+			Fh:        uint64(handle.Fh),
+			OpenFlags: 0,
+		}
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return nil, ErrNotDir
+		case errors.Is(err, ErrAlreadyExists):
+			return nil, ErrAlreadyExists
+		default:
+			return nil, fmt.Errorf("create tx: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
+func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	var result *OpenResult
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+		}
+
+		fileType := uint32(inode.Mode) & S_IFMT
+		if fileType == S_IFDIR {
+			return ErrIsDir
+		}
+		if fileType == S_IFLNK {
+			return ErrInvalidArgument
+		}
+
+		if inode.Nlink == 0 {
+			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
+			if err != nil {
+				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)
+			}
+			if !hasHandles {
+				return ErrNotFound
+			}
+		}
+
+		if (params.Flags & O_TRUNC) != 0 {
+			if (params.Flags & O_ACCMODE) == O_RDONLY {
+				return ErrInvalidArgument
+			}
+			if fileType == S_IFREG {
+				truncatedMode := uint32(inode.Mode) &^ (S_ISUID | S_ISGID)
+				_, err = q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
+					Ino:         inode.Ino,
+					Mode:        int32(truncatedMode),
+					Size:        0,
+					Uid:         inode.Uid,
+					Gid:         inode.Gid,
+					SetAtimeNow: false,
+					Atime:       inode.Atime,
+					SetMtimeNow: true,
+					Mtime:       pgtype.Timestamptz{},
+				})
+				if err != nil {
+					return fmt.Errorf("truncate inode attr for inode %d: %w", inode.Ino, err)
+				}
+			}
+		}
+
+		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
+			Ino:   inode.Ino,
+			Flags: int32(params.Flags),
+		})
+		if err != nil {
+			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
+		}
+
+		result = &OpenResult{
+			Fh:        uint64(handle.Fh),
+			OpenFlags: 0,
+		}
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrIsDir):
+			return nil, ErrIsDir
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		default:
+			return nil, fmt.Errorf("open tx: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// checkFileHandleReadOnly 在只读 RepeatableRead 事务内校验 Inode 与 FileHandle 归属有效性。
+func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh uint64, opName string) error {
+	if ino == 0 || ino > math.MaxInt64 || fh == 0 || fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		_, err := q.GetInode(ctx, int64(ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d: %w", ino, err)
+		}
+
+		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
+			Fh:  int64(fh),
+			Ino: int64(ino),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBadFileHandle
+			}
+			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", fh, ino, err)
+		}
+
+		return nil
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("%s tx: %w", opName, err)
+		}
+	}
+
+	return nil
+}
+
+// Flush 冲刷会话句柄并校验合法性（不销毁文件句柄）。
+// 注：params.LockOwner 保留用于 Linux FUSE / POSIX 协议契约对齐，当前元数据存储层无需记录锁所有者。
+func (m *manager) Flush(ctx context.Context, params FlushParams) error {
+	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "flush")
+}
+
+// Fsync 同步文件节点与句柄关联的状态。
+// 注：params.Datasync 保留用于 Linux FUSE / POSIX 协议契约对齐，当前元数据在 PostgreSQL 事务提交时已完成持久化。
+func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
+	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "fsync")
+}
+
+// Release 关闭并销毁文件句柄，且在孤儿节点无活跃句柄时执行最终物理回收。
+func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+		}
+
+		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
+			Fh:  int64(params.Fh),
+			Ino: int64(params.Ino),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBadFileHandle
+			}
+			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		if inode.Nlink == 0 {
+			hasRemaining, err := q.HasFileHandlesByIno(ctx, int64(params.Ino))
+			if err != nil {
+				return fmt.Errorf("check remaining file handles for inode %d: %w", params.Ino, err)
+			}
+			if !hasRemaining {
+				if err := q.DeleteInode(ctx, int64(params.Ino)); err != nil {
+					return fmt.Errorf("delete orphan inode %d: %w", params.Ino, err)
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("release tx: %w", err)
+		}
+	}
+
+	return nil
+}
 
 
 
