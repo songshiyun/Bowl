@@ -1,6 +1,7 @@
 package contract_test
 
 import (
+	"bytes"
 	"math"
 	"strings"
 	"testing"
@@ -20,8 +21,8 @@ func TestSymlinkRequestValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		parentIno uint64
-		entryName string
-		target    string
+		entryName []byte
+		target    []byte
 		uid       uint32
 		gid       uint32
 		valid     bool
@@ -30,8 +31,17 @@ func TestSymlinkRequestValidation(t *testing.T) {
 		{
 			name:      "合法: 相对路径符号链接",
 			parentIno: 1,
-			entryName: "link_rel",
-			target:    "../foo/bar.txt",
+			entryName: []byte("link_rel"),
+			target:    []byte("../foo/bar.txt"),
+			uid:       1000,
+			gid:       1000,
+			valid:     true,
+		},
+		{
+			name:      "合法: 非 UTF-8 字节序列符号链接名称",
+			parentIno: 1,
+			entryName: []byte{0xff, 0xfe, 0x80, 0x81},
+			target:    []byte("target"),
 			uid:       1000,
 			gid:       1000,
 			valid:     true,
@@ -39,26 +49,35 @@ func TestSymlinkRequestValidation(t *testing.T) {
 		{
 			name:      "合法: 绝对路径符号链接",
 			parentIno: 1,
-			entryName: "link_abs",
-			target:    "/usr/local/bin/app",
+			entryName: []byte("link_abs"),
+			target:    []byte("/usr/local/bin/app"),
 			uid:       0,
 			gid:       0,
 			valid:     true,
 		},
 		{
-			name:      "合法: target 恰好 4096 字节",
+			name:      "合法: target 恰好 4095 字节",
 			parentIno: 1,
-			entryName: "link_long",
-			target:    strings.Repeat("a", 4096),
+			entryName: []byte("link_long"),
+			target:    bytes.Repeat([]byte("a"), 4095),
 			uid:       0,
 			gid:       0,
+			valid:     true,
+		},
+		{
+			name:      "合法: target 为非 UTF-8 原始字节序列",
+			parentIno: 1,
+			entryName: []byte("link_raw_bytes"),
+			target:    []byte{0xff, 0xfe, 0xfd, 0x80, 0x81, 'a', 'b'},
+			uid:       1000,
+			gid:       1000,
 			valid:     true,
 		},
 		{
 			name:      "合法: name 恰好 255 字节",
 			parentIno: 1,
-			entryName: strings.Repeat("l", 255),
-			target:    "target",
+			entryName: []byte(strings.Repeat("l", 255)),
+			target:    []byte("target"),
 			uid:       0,
 			gid:       0,
 			valid:     true,
@@ -66,8 +85,8 @@ func TestSymlinkRequestValidation(t *testing.T) {
 		{
 			name:      "合法: parent_ino 处于上限 math.MaxInt64",
 			parentIno: math.MaxInt64,
-			entryName: "link",
-			target:    "target",
+			entryName: []byte("link"),
+			target:    []byte("target"),
 			uid:       0,
 			gid:       0,
 			valid:     true,
@@ -77,15 +96,15 @@ func TestSymlinkRequestValidation(t *testing.T) {
 		{
 			name:      "非法: parent_ino 为 0",
 			parentIno: 0,
-			entryName: "link",
-			target:    "target",
+			entryName: []byte("link"),
+			target:    []byte("target"),
 			valid:     false,
 		},
 		{
 			name:      "非法: parent_ino 超过 math.MaxInt64",
 			parentIno: uint64(math.MaxInt64) + 1,
-			entryName: "link",
-			target:    "target",
+			entryName: []byte("link"),
+			target:    []byte("target"),
 			valid:     false,
 		},
 
@@ -93,52 +112,73 @@ func TestSymlinkRequestValidation(t *testing.T) {
 		{
 			name:      "非法: name 为空",
 			parentIno: 1,
-			entryName: "",
-			target:    "target",
+			entryName: []byte(""),
+			target:    []byte("target"),
 			valid:     false,
 		},
 		{
 			name:      "非法: name 超过 255 字节",
 			parentIno: 1,
-			entryName: strings.Repeat("a", 256),
-			target:    "target",
+			entryName: []byte(strings.Repeat("a", 256)),
+			target:    []byte("target"),
 			valid:     false,
 		},
 		{
 			name:      "非法: name 包含 /",
 			parentIno: 1,
-			entryName: "dir/link",
-			target:    "target",
+			entryName: []byte("dir/link"),
+			target:    []byte("target"),
 			valid:     false,
 		},
 		{
 			name:      "非法: name 包含 \\x00",
 			parentIno: 1,
-			entryName: "link\x00name",
-			target:    "target",
+			entryName: []byte("link\x00name"),
+			target:    []byte("target"),
 			valid:     false,
 		},
 
 		// 负向边界用例: target
 		{
-			name:      "非法: target 为空",
+			name:      "非法: target 为 nil",
 			parentIno: 1,
-			entryName: "link",
-			target:    "",
+			entryName: []byte("link"),
+			target:    nil,
 			valid:     false,
 		},
 		{
-			name:      "非法: target 超过 4096 字节",
+			name:      "非法: target 为空",
 			parentIno: 1,
-			entryName: "link",
-			target:    strings.Repeat("a", 4097),
+			entryName: []byte("link"),
+			target:    []byte{},
+			valid:     false,
+		},
+		{
+			name:      "非法: target 恰好 4096 字节 (超过 4095 上限)",
+			parentIno: 1,
+			entryName: []byte("link"),
+			target:    bytes.Repeat([]byte("a"), 4096),
+			valid:     false,
+		},
+		{
+			name:      "非法: target 超过 4095 字节",
+			parentIno: 1,
+			entryName: []byte("link"),
+			target:    bytes.Repeat([]byte("a"), 4097),
 			valid:     false,
 		},
 		{
 			name:      "非法: target 包含 \\x00",
 			parentIno: 1,
-			entryName: "link",
-			target:    "/path/\x00/file",
+			entryName: []byte("link"),
+			target:    []byte("/path/\x00/file"),
+			valid:     false,
+		},
+		{
+			name:      "非法: target 非 UTF-8 字节中包含 \\x00",
+			parentIno: 1,
+			entryName: []byte("link"),
+			target:    []byte{0xff, 0x00, 0xfe},
 			valid:     false,
 		},
 	} {
@@ -299,27 +339,52 @@ func TestReadlinkResponseValidation(t *testing.T) {
 
 	for _, tc := range []struct {
 		name   string
-		target string
+		target []byte
 		valid  bool
 	}{
 		{
 			name:   "合法: 非空 target",
-			target: "/etc/passwd",
+			target: []byte("/etc/passwd"),
 			valid:  true,
 		},
 		{
-			name:   "合法: target 恰好 4096 字节",
-			target: strings.Repeat("a", 4096),
+			name:   "合法: target 恰好 4095 字节",
+			target: bytes.Repeat([]byte("a"), 4095),
 			valid:  true,
 		},
 		{
-			name:   "非法: 空 target",
-			target: "",
+			name:   "合法: target 为非 UTF-8 原始字节序列",
+			target: []byte{0xfe, 0xed, 0xfa, 0xce, '/', 0x80},
+			valid:  true,
+		},
+		{
+			name:   "非法: target 为 nil",
+			target: nil,
 			valid:  false,
 		},
 		{
-			name:   "非法: target 超过 4096 字节",
-			target: strings.Repeat("a", 4097),
+			name:   "非法: 空 target",
+			target: []byte{},
+			valid:  false,
+		},
+		{
+			name:   "非法: target 恰好 4096 字节 (超过 4095 上限)",
+			target: bytes.Repeat([]byte("a"), 4096),
+			valid:  false,
+		},
+		{
+			name:   "非法: target 超过 4095 字节",
+			target: bytes.Repeat([]byte("a"), 4097),
+			valid:  false,
+		},
+		{
+			name:   "非法: target 包含 \\x00",
+			target: []byte("path/\x00/foo"),
+			valid:  false,
+		},
+		{
+			name:   "非法: target 非 UTF-8 字节中包含 \\x00",
+			target: []byte{0xff, 0x00, 0xfe},
 			valid:  false,
 		},
 	} {

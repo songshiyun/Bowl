@@ -1,10 +1,10 @@
 package meta_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
-	"strings"
 	"testing"
 	"time"
 
@@ -52,7 +52,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 			Return(baseParentRow, nil).
 			Once()
 
-		target := "../shared/lib.so"
+		target := []byte("../shared/lib.so")
 		expectedMode := int32(meta.S_IFLNK | 0o777)
 		createdInodeRow := db.Inode{
 			Ino:           int64(newIno),
@@ -66,7 +66,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 			Atime:         pgtype.Timestamptz{Time: now, Valid: true},
 			Mtime:         pgtype.Timestamptz{Time: now, Valid: true},
 			Ctime:         pgtype.Timestamptz{Time: now, Valid: true},
-			SymlinkTarget: pgtype.Text{String: target, Valid: true},
+			SymlinkTarget: target,
 		}
 
 		mockQuerier.EXPECT().
@@ -77,7 +77,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 				Uid:           1001,
 				Gid:           1002,
 				Rdev:          0,
-				SymlinkTarget: pgtype.Text{String: target, Valid: true},
+				SymlinkTarget: target,
 			}).
 			Return(createdInodeRow, nil).
 			Once()
@@ -85,7 +85,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 		mockQuerier.EXPECT().
 			CreateEntry(mock.Anything, db.CreateEntryParams{
 				ParentIno: int64(parentIno),
-				Name:      "lib_symlink",
+				Name:      []byte("lib_symlink"),
 				Ino:       int64(newIno),
 			}).
 			Return(nil).
@@ -98,7 +98,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "lib_symlink",
+			Name:      []byte("lib_symlink"),
 			Target:    target,
 			UID:       1001,
 			GID:       1002,
@@ -113,6 +113,78 @@ func TestSymlink_PositivePath(t *testing.T) {
 		assert.Equal(t, uint32(1001), inode.Attr.UID)
 		assert.Equal(t, uint32(1002), inode.Attr.GID)
 		assert.Equal(t, uint32(0), inode.Attr.Rdev)
+	})
+
+	t.Run("成功创建非 UTF-8 原始字节序列符号链接并无损存储", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore)
+
+		setupMockWriteTx(mockStore, mockQuerier)
+
+		mockQuerier.EXPECT().
+			GetInodeForUpdate(mock.Anything, int64(parentIno)).
+			Return(baseParentRow, nil).
+			Once()
+
+		rawLinkName := []byte{0xfa, 0xfb, 0xfc}
+		target := []byte{0xff, 0xfe, 0xfd, 0x80, 'l', 'i', 'b', 0x90, '.', 's', 'o'}
+		expectedMode := int32(meta.S_IFLNK | 0o777)
+		createdInodeRow := db.Inode{
+			Ino:           int64(newIno),
+			Generation:    0,
+			Mode:          expectedMode,
+			Size:          int64(len(target)),
+			Nlink:         1,
+			Uid:           1001,
+			Gid:           1002,
+			Rdev:          0,
+			Atime:         pgtype.Timestamptz{Time: now, Valid: true},
+			Mtime:         pgtype.Timestamptz{Time: now, Valid: true},
+			Ctime:         pgtype.Timestamptz{Time: now, Valid: true},
+			SymlinkTarget: target,
+		}
+
+		mockQuerier.EXPECT().
+			CreateSymlinkInode(mock.Anything, db.CreateSymlinkInodeParams{
+				Mode:          expectedMode,
+				Size:          int64(len(target)),
+				Nlink:         1,
+				Uid:           1001,
+				Gid:           1002,
+				Rdev:          0,
+				SymlinkTarget: target,
+			}).
+			Return(createdInodeRow, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			CreateEntry(mock.Anything, db.CreateEntryParams{
+				ParentIno: int64(parentIno),
+				Name:      rawLinkName,
+				Ino:       int64(newIno),
+			}).
+			Return(nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			TouchInodeTimestamps(mock.Anything, int64(parentIno)).
+			Return(nil).
+			Once()
+
+		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
+			ParentIno: parentIno,
+			Name:      rawLinkName,
+			Target:    target,
+			UID:       1001,
+			GID:       1002,
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, inode)
+		assert.Equal(t, newIno, inode.Ino)
+		assert.Equal(t, uint32(expectedMode), inode.Attr.Mode)
+		assert.Equal(t, uint64(len(target)), inode.Attr.Size)
 	})
 
 	t.Run("父目录包含 S_ISGID (0o2000): 符号链接继承父目录 GID", func(t *testing.T) {
@@ -131,7 +203,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 			Return(parentWithSGID, nil).
 			Once()
 
-		target := "/etc/hosts"
+		target := []byte("/etc/hosts")
 		expectedMode := int32(meta.S_IFLNK | 0o777)
 		createdInodeRow := db.Inode{
 			Ino:           int64(newIno),
@@ -145,7 +217,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 			Atime:         pgtype.Timestamptz{Time: now, Valid: true},
 			Mtime:         pgtype.Timestamptz{Time: now, Valid: true},
 			Ctime:         pgtype.Timestamptz{Time: now, Valid: true},
-			SymlinkTarget: pgtype.Text{String: target, Valid: true},
+			SymlinkTarget: target,
 		}
 
 		mockQuerier.EXPECT().
@@ -156,7 +228,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 				Uid:           1001,
 				Gid:           2000,
 				Rdev:          0,
-				SymlinkTarget: pgtype.Text{String: target, Valid: true},
+				SymlinkTarget: target,
 			}).
 			Return(createdInodeRow, nil).
 			Once()
@@ -164,7 +236,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 		mockQuerier.EXPECT().
 			CreateEntry(mock.Anything, db.CreateEntryParams{
 				ParentIno: int64(parentIno),
-				Name:      "hosts_link",
+				Name:      []byte("hosts_link"),
 				Ino:       int64(newIno),
 			}).
 			Return(nil).
@@ -177,7 +249,7 @@ func TestSymlink_PositivePath(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "hosts_link",
+			Name:      []byte("hosts_link"),
 			Target:    target,
 			UID:       1001,
 			GID:       3000, // 应当被父目录 GID 覆盖
@@ -194,80 +266,117 @@ func TestSymlink_InputValidation(t *testing.T) {
 	ctx := context.Background()
 
 	testCases := []struct {
-		name   string
-		params meta.SymlinkParams
+		name        string
+		params      meta.SymlinkParams
+		expectedErr error
 	}{
 		{
 			name: "parent_ino 为 0",
 			params: meta.SymlinkParams{
 				ParentIno: 0,
-				Name:      "link",
-				Target:    "target",
+				Name:      []byte("link"),
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
 			name: "parent_ino 超过 math.MaxInt64",
 			params: meta.SymlinkParams{
 				ParentIno: uint64(math.MaxInt64) + 1,
-				Name:      "link",
-				Target:    "target",
+				Name:      []byte("link"),
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
-			name: "name 为空字符串",
+			name: "name 为空切片",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "",
-				Target:    "target",
+				Name:      []byte{},
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
 			name: "name 长度超过 255 字节",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      strings.Repeat("a", 256),
-				Target:    "target",
+				Name:      bytes.Repeat([]byte("a"), 256),
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrNameTooLong,
 		},
 		{
 			name: "name 包含斜杠 /",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "dir/link",
-				Target:    "target",
+				Name:      []byte("dir/link"),
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
 			name: "name 包含空字符 \\x00",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "link\x00name",
-				Target:    "target",
+				Name:      []byte("link\x00name"),
+				Target:    []byte("target"),
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
-			name: "target 为空字符串",
+			name: "target 为 nil",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "link",
-				Target:    "",
+				Name:      []byte("link"),
+				Target:    nil,
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
-			name: "target 长度超过 4096 字节",
+			name: "target 为空切片",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "link",
-				Target:    strings.Repeat("a", 4097),
+				Name:      []byte("link"),
+				Target:    []byte{},
 			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 		{
-			name: "target 包含空字符 \\x00",
+			name: "target 长度恰好 4096 字节超过 4095 字节上限返回 ErrNameTooLong",
 			params: meta.SymlinkParams{
 				ParentIno: 1,
-				Name:      "link",
-				Target:    "tar\x00get",
+				Name:      []byte("link"),
+				Target:    bytes.Repeat([]byte("a"), 4096),
 			},
+			expectedErr: meta.ErrNameTooLong,
+		},
+		{
+			name: "target 长度超过 4095 字节返回 ErrNameTooLong",
+			params: meta.SymlinkParams{
+				ParentIno: 1,
+				Name:      []byte("link"),
+				Target:    bytes.Repeat([]byte("a"), 4097),
+			},
+			expectedErr: meta.ErrNameTooLong,
+		},
+		{
+			name: "target 包含空字符 \\x00 返回 ErrInvalidArgument",
+			params: meta.SymlinkParams{
+				ParentIno: 1,
+				Name:      []byte("link"),
+				Target:    []byte("tar\x00get"),
+			},
+			expectedErr: meta.ErrInvalidArgument,
+		},
+		{
+			name: "target 非 UTF-8 字节中包含空字符 \\x00 返回 ErrInvalidArgument",
+			params: meta.SymlinkParams{
+				ParentIno: 1,
+				Name:      []byte("link"),
+				Target:    []byte{0xff, 0x00, 0xfe},
+			},
+			expectedErr: meta.ErrInvalidArgument,
 		},
 	}
 
@@ -278,7 +387,7 @@ func TestSymlink_InputValidation(t *testing.T) {
 
 			inode, err := mgr.Symlink(ctx, tc.params)
 			assert.Nil(t, inode)
-			assert.ErrorIs(t, err, meta.ErrInvalidArgument)
+			assert.ErrorIs(t, err, tc.expectedErr)
 		})
 	}
 }
@@ -309,8 +418,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "link",
-			Target:    "target",
+			Name:      []byte("link"),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -334,8 +443,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "link",
-			Target:    "target",
+			Name:      []byte("link"),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -359,8 +468,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "link",
-			Target:    "target",
+			Name:      []byte("link"),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -381,8 +490,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      ".",
-			Target:    "target",
+			Name:      []byte("."),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -403,8 +512,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "..",
-			Target:    "target",
+			Name:      []byte(".."),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -435,8 +544,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "duplicate_link",
-			Target:    "target",
+			Name:      []byte("duplicate_link"),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -458,8 +567,8 @@ func TestSymlink_ParentInvariantsAndErrors(t *testing.T) {
 
 		inode, err := mgr.Symlink(ctx, meta.SymlinkParams{
 			ParentIno: parentIno,
-			Name:      "link",
-			Target:    "target",
+			Name:      []byte("link"),
+			Target:    []byte("target"),
 		})
 
 		assert.Nil(t, inode)
@@ -475,12 +584,12 @@ func TestReadlink_PositivePath(t *testing.T) {
 		mgr := meta.New(mockStore)
 
 		ino := uint64(55)
-		target := "/usr/bin/python3"
+		target := []byte("/usr/bin/python3")
 		mockStore.EXPECT().
 			GetSymlinkTarget(mock.Anything, int64(ino)).
 			Return(db.GetSymlinkTargetRow{
 				Mode:          int32(meta.S_IFLNK | 0o777),
-				SymlinkTarget: pgtype.Text{String: target, Valid: true},
+				SymlinkTarget: target,
 			}, nil).
 			Once()
 
@@ -494,12 +603,31 @@ func TestReadlink_PositivePath(t *testing.T) {
 		mgr := meta.New(mockStore)
 
 		ino := uint64(66)
-		target := "../relative/target"
+		target := []byte("../relative/target")
 		mockStore.EXPECT().
 			GetSymlinkTarget(mock.Anything, int64(ino)).
 			Return(db.GetSymlinkTargetRow{
 				Mode:          int32(meta.S_IFLNK | 0o777),
-				SymlinkTarget: pgtype.Text{String: target, Valid: true},
+				SymlinkTarget: target,
+			}, nil).
+			Once()
+
+		result, err := mgr.Readlink(ctx, ino)
+		require.NoError(t, err)
+		assert.Equal(t, target, result)
+	})
+
+	t.Run("成功读取非 UTF-8 原始字节序列目标路径无损往返", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		ino := uint64(77)
+		target := []byte{0xfe, 0xed, 0xfa, 0xce, '/', 0x80, 0x90, 0xff}
+		mockStore.EXPECT().
+			GetSymlinkTarget(mock.Anything, int64(ino)).
+			Return(db.GetSymlinkTargetRow{
+				Mode:          int32(meta.S_IFLNK | 0o777),
+				SymlinkTarget: target,
 			}, nil).
 			Once()
 
@@ -551,7 +679,7 @@ func TestReadlink_NegativeCases(t *testing.T) {
 			GetSymlinkTarget(mock.Anything, int64(ino)).
 			Return(db.GetSymlinkTargetRow{
 				Mode:          int32(meta.S_IFREG | 0o644),
-				SymlinkTarget: pgtype.Text{Valid: false},
+				SymlinkTarget: nil,
 			}, nil).
 			Once()
 
@@ -568,7 +696,7 @@ func TestReadlink_NegativeCases(t *testing.T) {
 			GetSymlinkTarget(mock.Anything, int64(ino)).
 			Return(db.GetSymlinkTargetRow{
 				Mode:          int32(meta.S_IFDIR | 0o755),
-				SymlinkTarget: pgtype.Text{Valid: false},
+				SymlinkTarget: nil,
 			}, nil).
 			Once()
 
@@ -585,7 +713,7 @@ func TestReadlink_NegativeCases(t *testing.T) {
 			GetSymlinkTarget(mock.Anything, int64(ino)).
 			Return(db.GetSymlinkTargetRow{
 				Mode:          int32(meta.S_IFLNK | 0o777),
-				SymlinkTarget: pgtype.Text{Valid: false},
+				SymlinkTarget: nil,
 			}, nil).
 			Once()
 

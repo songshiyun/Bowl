@@ -10,7 +10,7 @@ import (
 
 type Entry struct {
 	ParentIno int64  `json:"parent_ino"`
-	Name      string `json:"name"`
+	Name      []byte `json:"name"`
 	Ino       int64  `json:"ino"`
 }
 
@@ -33,5 +33,11 @@ type Inode struct {
 	Atime         pgtype.Timestamptz `json:"atime"`
 	Mtime         pgtype.Timestamptz `json:"mtime"`
 	Ctime         pgtype.Timestamptz `json:"ctime"`
-	SymlinkTarget pgtype.Text        `json:"symlink_target"`
+	SymlinkTarget []byte             `json:"symlink_target"`
+}
+
+type InodeXattr struct {
+	Ino   int64  `json:"ino"`
+	Name  []byte `json:"name"`
+	Value []byte `json:"value"`
 }

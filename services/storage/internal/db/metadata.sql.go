@@ -14,7 +14,7 @@ import (
 const clearInodeNlinkAndTouchCtime = `-- name: ClearInodeNlinkAndTouchCtime :one
 UPDATE inodes
 SET nlink = 0,
-    ctime = NOW()
+    ctime = clock_timestamp()
 WHERE ino = $1
 RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 `
@@ -46,7 +46,7 @@ VALUES ($1, $2, $3)
 
 type CreateEntryParams struct {
 	ParentIno int64  `json:"parent_ino"`
-	Name      string `json:"name"`
+	Name      []byte `json:"name"`
 	Ino       int64  `json:"ino"`
 }
 
@@ -125,13 +125,13 @@ RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctim
 `
 
 type CreateSymlinkInodeParams struct {
-	Mode          int32       `json:"mode"`
-	Size          int64       `json:"size"`
-	Nlink         int32       `json:"nlink"`
-	Uid           int32       `json:"uid"`
-	Gid           int32       `json:"gid"`
-	Rdev          int64       `json:"rdev"`
-	SymlinkTarget pgtype.Text `json:"symlink_target"`
+	Mode          int32  `json:"mode"`
+	Size          int64  `json:"size"`
+	Nlink         int32  `json:"nlink"`
+	Uid           int32  `json:"uid"`
+	Gid           int32  `json:"gid"`
+	Rdev          int64  `json:"rdev"`
+	SymlinkTarget []byte `json:"symlink_target"`
 }
 
 func (q *Queries) CreateSymlinkInode(ctx context.Context, arg CreateSymlinkInodeParams) (Inode, error) {
@@ -165,8 +165,8 @@ func (q *Queries) CreateSymlinkInode(ctx context.Context, arg CreateSymlinkInode
 const decrementInodeNlinkAndTouch = `-- name: DecrementInodeNlinkAndTouch :exec
 UPDATE inodes
 SET nlink = nlink - 1,
-    mtime = NOW(),
-    ctime = NOW()
+    mtime = clock_timestamp(),
+    ctime = clock_timestamp()
 WHERE ino = $1
 `
 
@@ -178,7 +178,7 @@ func (q *Queries) DecrementInodeNlinkAndTouch(ctx context.Context, ino int64) er
 const decrementInodeNlinkAndTouchCtime = `-- name: DecrementInodeNlinkAndTouchCtime :one
 UPDATE inodes
 SET nlink = nlink - 1,
-    ctime = NOW()
+    ctime = clock_timestamp()
 WHERE ino = $1
 RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 `
@@ -210,7 +210,7 @@ WHERE parent_ino = $1 AND name = $2
 
 type DeleteEntryParams struct {
 	ParentIno int64  `json:"parent_ino"`
-	Name      string `json:"name"`
+	Name      []byte `json:"name"`
 }
 
 func (q *Queries) DeleteEntry(ctx context.Context, arg DeleteEntryParams) error {
@@ -246,6 +246,24 @@ func (q *Queries) DeleteInode(ctx context.Context, ino int64) error {
 	return err
 }
 
+const deleteInodeXattr = `-- name: DeleteInodeXattr :execrows
+DELETE FROM inode_xattrs
+WHERE ino = $1 AND name = $2
+`
+
+type DeleteInodeXattrParams struct {
+	Ino  int64  `json:"ino"`
+	Name []byte `json:"name"`
+}
+
+func (q *Queries) DeleteInodeXattr(ctx context.Context, arg DeleteInodeXattrParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteInodeXattr, arg.Ino, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getEntry = `-- name: GetEntry :one
 SELECT parent_ino, name, ino
 FROM entries
@@ -254,7 +272,7 @@ WHERE parent_ino = $1 AND name = $2
 
 type GetEntryParams struct {
 	ParentIno int64  `json:"parent_ino"`
-	Name      string `json:"name"`
+	Name      []byte `json:"name"`
 }
 
 func (q *Queries) GetEntry(ctx context.Context, arg GetEntryParams) (Entry, error) {
@@ -321,7 +339,7 @@ WHERE e.parent_ino = $1 AND e.name = $2
 
 type GetInodeByEntryParams struct {
 	ParentIno int64  `json:"parent_ino"`
-	Name      string `json:"name"`
+	Name      []byte `json:"name"`
 }
 
 func (q *Queries) GetInodeByEntry(ctx context.Context, arg GetInodeByEntryParams) (Inode, error) {
@@ -371,6 +389,37 @@ func (q *Queries) GetInodeForUpdate(ctx context.Context, ino int64) (Inode, erro
 	return i, err
 }
 
+const getInodeXattr = `-- name: GetInodeXattr :one
+SELECT ino, name, value
+FROM inode_xattrs
+WHERE ino = $1 AND name = $2
+`
+
+type GetInodeXattrParams struct {
+	Ino  int64  `json:"ino"`
+	Name []byte `json:"name"`
+}
+
+func (q *Queries) GetInodeXattr(ctx context.Context, arg GetInodeXattrParams) (InodeXattr, error) {
+	row := q.db.QueryRow(ctx, getInodeXattr, arg.Ino, arg.Name)
+	var i InodeXattr
+	err := row.Scan(&i.Ino, &i.Name, &i.Value)
+	return i, err
+}
+
+const getInodeXattrNamesTotalBytes = `-- name: GetInodeXattrNamesTotalBytes :one
+SELECT COALESCE(SUM(octet_length(name) + 1), 0)::bigint AS total_bytes
+FROM inode_xattrs
+WHERE ino = $1
+`
+
+func (q *Queries) GetInodeXattrNamesTotalBytes(ctx context.Context, ino int64) (int64, error) {
+	row := q.db.QueryRow(ctx, getInodeXattrNamesTotalBytes, ino)
+	var total_bytes int64
+	err := row.Scan(&total_bytes)
+	return total_bytes, err
+}
+
 const getParentInode = `-- name: GetParentInode :one
 SELECT i.ino, i.generation, i.mode, i.size, i.nlink, i.uid, i.gid, i.rdev, i.atime, i.mtime, i.ctime, i.symlink_target
 FROM entries e
@@ -406,8 +455,8 @@ WHERE ino = $1
 `
 
 type GetSymlinkTargetRow struct {
-	Mode          int32       `json:"mode"`
-	SymlinkTarget pgtype.Text `json:"symlink_target"`
+	Mode          int32  `json:"mode"`
+	SymlinkTarget []byte `json:"symlink_target"`
 }
 
 func (q *Queries) GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTargetRow, error) {
@@ -446,8 +495,8 @@ func (q *Queries) HasFileHandlesByIno(ctx context.Context, ino int64) (bool, err
 const incrementInodeNlinkAndTouch = `-- name: IncrementInodeNlinkAndTouch :exec
 UPDATE inodes
 SET nlink = nlink + 1,
-    mtime = NOW(),
-    ctime = NOW()
+    mtime = clock_timestamp(),
+    ctime = clock_timestamp()
 WHERE ino = $1
 `
 
@@ -459,7 +508,7 @@ func (q *Queries) IncrementInodeNlinkAndTouch(ctx context.Context, ino int64) er
 const incrementInodeNlinkAndTouchCtime = `-- name: IncrementInodeNlinkAndTouchCtime :one
 UPDATE inodes
 SET nlink = nlink + 1,
-    ctime = NOW()
+    ctime = clock_timestamp()
 WHERE ino = $1
 RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target
 `
@@ -547,7 +596,7 @@ type ListDirEntriesParams struct {
 }
 
 type ListDirEntriesRow struct {
-	Name          string             `json:"name"`
+	Name          []byte             `json:"name"`
 	Ino           int64              `json:"ino"`
 	Generation    int64              `json:"generation"`
 	Mode          int32              `json:"mode"`
@@ -559,7 +608,7 @@ type ListDirEntriesRow struct {
 	Atime         pgtype.Timestamptz `json:"atime"`
 	Mtime         pgtype.Timestamptz `json:"mtime"`
 	Ctime         pgtype.Timestamptz `json:"ctime"`
-	SymlinkTarget pgtype.Text        `json:"symlink_target"`
+	SymlinkTarget []byte             `json:"symlink_target"`
 }
 
 func (q *Queries) ListDirEntries(ctx context.Context, arg ListDirEntriesParams) ([]ListDirEntriesRow, error) {
@@ -596,9 +645,36 @@ func (q *Queries) ListDirEntries(ctx context.Context, arg ListDirEntriesParams) 
 	return items, nil
 }
 
+const listInodeXattrNames = `-- name: ListInodeXattrNames :many
+SELECT name
+FROM inode_xattrs
+WHERE ino = $1
+ORDER BY name ASC
+`
+
+func (q *Queries) ListInodeXattrNames(ctx context.Context, ino int64) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listInodeXattrNames, ino)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items [][]byte
+	for rows.Next() {
+		var name []byte
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchInodeCtime = `-- name: TouchInodeCtime :exec
 UPDATE inodes
-SET ctime = NOW()
+SET ctime = clock_timestamp()
 WHERE ino = $1
 `
 
@@ -609,7 +685,7 @@ func (q *Queries) TouchInodeCtime(ctx context.Context, ino int64) error {
 
 const touchInodeTimestamps = `-- name: TouchInodeTimestamps :exec
 UPDATE inodes
-SET mtime = NOW(), ctime = NOW()
+SET mtime = clock_timestamp(), ctime = clock_timestamp()
 WHERE ino = $1
 `
 
@@ -627,9 +703,9 @@ WHERE parent_ino = $3 AND name = $4
 
 type UpdateEntryParams struct {
 	NewParentIno int64  `json:"new_parent_ino"`
-	NewName      string `json:"new_name"`
+	NewName      []byte `json:"new_name"`
 	OldParentIno int64  `json:"old_parent_ino"`
-	OldName      string `json:"old_name"`
+	OldName      []byte `json:"old_name"`
 }
 
 func (q *Queries) UpdateEntry(ctx context.Context, arg UpdateEntryParams) error {
@@ -696,4 +772,22 @@ func (q *Queries) UpdateInodeAttr(ctx context.Context, arg UpdateInodeAttrParams
 		&i.SymlinkTarget,
 	)
 	return i, err
+}
+
+const upsertInodeXattr = `-- name: UpsertInodeXattr :exec
+INSERT INTO inode_xattrs (ino, name, value)
+VALUES ($1, $2, $3)
+ON CONFLICT (ino, name) DO UPDATE
+SET value = EXCLUDED.value
+`
+
+type UpsertInodeXattrParams struct {
+	Ino   int64  `json:"ino"`
+	Name  []byte `json:"name"`
+	Value []byte `json:"value"`
+}
+
+func (q *Queries) UpsertInodeXattr(ctx context.Context, arg UpsertInodeXattrParams) error {
+	_, err := q.db.Exec(ctx, upsertInodeXattr, arg.Ino, arg.Name, arg.Value)
+	return err
 }

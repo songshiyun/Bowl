@@ -19,7 +19,7 @@ const (
 	S_ISGID               uint32 = 0o2000
 	PermMask              uint32 = 0o7777
 	MaxFileNameBytes             = 255
-	MaxSymlinkTargetBytes        = 4096
+	MaxSymlinkTargetBytes        = 4095
 )
 
 // Linux FUSE / POSIX 打开标志位常量（平台无关固定值，严禁依赖宿主机 syscall.O_*）。
@@ -40,6 +40,16 @@ const (
 	FallocFlPunchHole uint32 = 0x02
 )
 
+// Linux 扩展属性（xattr）规格常量与操作标志位。
+const (
+	MaxXattrNameBytes  = 255
+	MaxXattrValueBytes = 65536
+	MaxXattrListBytes  = 65536
+
+	XattrCreate  uint32 = 0x1
+	XattrReplace uint32 = 0x2
+)
+
 // SetAttrInput 定义修改 Inode 属性的输入参数。
 type SetAttrInput struct {
 	Mode     *uint32
@@ -55,7 +65,7 @@ type SetAttrInput struct {
 // MknodParams 定义创建节点的输入参数。
 type MknodParams struct {
 	ParentIno uint64
-	Name      string
+	Name      []byte
 	Mode      uint32
 	UID       uint32
 	GID       uint32
@@ -65,7 +75,7 @@ type MknodParams struct {
 // MkdirParams 定义创建子目录的输入参数。
 type MkdirParams struct {
 	ParentIno uint64
-	Name      string
+	Name      []byte
 	Mode      uint32
 	UID       uint32
 	GID       uint32
@@ -74,8 +84,8 @@ type MkdirParams struct {
 // SymlinkParams 定义创建符号链接的输入参数。
 type SymlinkParams struct {
 	ParentIno uint64
-	Name      string
-	Target    string
+	Name      []byte
+	Target    []byte
 	UID       uint32
 	GID       uint32
 }
@@ -84,21 +94,21 @@ type SymlinkParams struct {
 type LinkParams struct {
 	Ino          uint64
 	NewParentIno uint64
-	NewName      string
+	NewName      []byte
 }
 
 // RenameParams 定义重命名与移动操作的输入参数。
 type RenameParams struct {
 	OldParentIno uint64
-	OldName      string
+	OldName      []byte
 	NewParentIno uint64
-	NewName      string
+	NewName      []byte
 }
 
 // CreateParams 定义原子创建常规文件并分配初始文件句柄的输入参数。
 type CreateParams struct {
 	ParentIno uint64
-	Name      string
+	Name      []byte
 	Mode      uint32
 	UID       uint32
 	GID       uint32
@@ -174,7 +184,7 @@ const (
 // DirEntry 定义 ReadDir 返回的基本目录项实体。
 type DirEntry struct {
 	Ino        uint64
-	Name       string
+	Name       []byte
 	Mode       uint32
 	NextOffset uint64
 }
@@ -190,7 +200,7 @@ type ReadDirParams struct {
 // DirEntryPlus 定义 ReadDirPlus 返回的扩展目录项实体（包含完整 Inode 属性与内核缓存时效）。
 type DirEntryPlus struct {
 	Ino                 uint64
-	Name                string
+	Name                []byte
 	NextOffset          uint64
 	Inode               *Inode
 	EntryTimeoutSeconds float64
@@ -214,6 +224,14 @@ type FallocateParams struct {
 	Mode   uint32
 }
 
+// SetXattrParams 定义设置扩展属性的输入参数。
+type SetXattrParams struct {
+	Ino   uint64
+	Name  []byte
+	Value []byte
+	Flags uint32
+}
+
 // 领域哨兵错误。
 var (
 	ErrInvalidArgument = errors.New("meta: invalid argument")
@@ -225,6 +243,11 @@ var (
 	ErrNotEmpty        = errors.New("meta: directory not empty")
 	ErrBadFileHandle   = errors.New("meta: bad file handle")
 	ErrNotSupported    = errors.New("meta: operation not supported")
+	ErrNameTooLong     = errors.New("meta: file name too long")
+	ErrRange           = errors.New("meta: numerical result out of range")
+	ErrTooBig          = errors.New("meta: argument list too long")
+	ErrNoData          = errors.New("meta: no data available")
+	ErrNoSpace         = errors.New("meta: no space left on device")
 )
 
 // Inode 表示文件系统节点的领域实体。

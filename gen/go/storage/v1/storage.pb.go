@@ -30,7 +30,7 @@ type LookupRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待查找的子项名称（文件或目录名）。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name          []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -72,11 +72,11 @@ func (x *LookupRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *LookupRequest) GetName() string {
+func (x *LookupRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 // LookupResponse 包含查找命中的节点元数据以及 FUSE 内核缓存有效时间。
@@ -426,7 +426,7 @@ type MknodRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待创建的新节点名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 节点模式位（包含文件类型及权限位，取值范围必须在 1 到 0o177777 / 65535 之间）。
 	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	// 所属用户 ID。
@@ -476,11 +476,11 @@ func (x *MknodRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *MknodRequest) GetName() string {
+func (x *MknodRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 func (x *MknodRequest) GetMode() uint32 {
@@ -582,7 +582,7 @@ type MkdirRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待创建的新目录名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 目录模式位（包含可选的 S_IFDIR 文件类型位及权限位，取值范围必须在 0 到 0o177777 / 65535 之间）。
 	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	// 所属用户 ID。
@@ -630,11 +630,11 @@ func (x *MkdirRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *MkdirRequest) GetName() string {
+func (x *MkdirRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 func (x *MkdirRequest) GetMode() uint32 {
@@ -729,10 +729,10 @@ type SymlinkRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待创建的符号链接名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 符号链接指向的目标路径。
-	// 长度必须在 1 到 4096 字节之间，且严禁包含空字节 '\x00'（允许包含路径分隔符 '/'）。
-	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// 长度必须在 1 到 4095 字节之间，且严禁包含空字节 '\x00'（允许包含路径分隔符 '/'）。
+	Target []byte `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
 	// 所属用户 ID。
 	Uid uint32 `protobuf:"varint,4,opt,name=uid,proto3" json:"uid,omitempty"`
 	// 所属组 ID。
@@ -778,18 +778,18 @@ func (x *SymlinkRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *SymlinkRequest) GetName() string {
+func (x *SymlinkRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
-func (x *SymlinkRequest) GetTarget() string {
+func (x *SymlinkRequest) GetTarget() []byte {
 	if x != nil {
 		return x.Target
 	}
-	return ""
+	return nil
 }
 
 func (x *SymlinkRequest) GetUid() uint32 {
@@ -916,11 +916,11 @@ func (x *ReadlinkRequest) GetIno() uint64 {
 	return 0
 }
 
-// ReadlinkResponse 包含符号链接指向的目标路径字符串。
+// ReadlinkResponse 包含符号链接指向的目标路径。
 type ReadlinkResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标路径字符串。
-	Target        string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	// 目标路径。
+	Target        []byte `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -955,11 +955,11 @@ func (*ReadlinkResponse) Descriptor() ([]byte, []int) {
 	return file_storage_v1_storage_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *ReadlinkResponse) GetTarget() string {
+func (x *ReadlinkResponse) GetTarget() []byte {
 	if x != nil {
 		return x.Target
 	}
-	return ""
+	return nil
 }
 
 // LinkRequest 定义 Link 接口输入参数。
@@ -971,7 +971,7 @@ type LinkRequest struct {
 	NewParentIno uint64 `protobuf:"varint,2,opt,name=new_parent_ino,json=newParentIno,proto3" json:"new_parent_ino,omitempty"`
 	// 待创建的新目录项名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	NewName       string `protobuf:"bytes,3,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	NewName       []byte `protobuf:"bytes,3,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1020,11 +1020,11 @@ func (x *LinkRequest) GetNewParentIno() uint64 {
 	return 0
 }
 
-func (x *LinkRequest) GetNewName() string {
+func (x *LinkRequest) GetNewName() []byte {
 	if x != nil {
 		return x.NewName
 	}
-	return ""
+	return nil
 }
 
 // LinkResponse 包含硬链接创建后更新的源节点元数据及内核缓存时长。
@@ -1098,7 +1098,7 @@ type UnlinkRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待删除的非目录项名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name          []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1140,11 +1140,11 @@ func (x *UnlinkRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *UnlinkRequest) GetName() string {
+func (x *UnlinkRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 // UnlinkResponse 定义 Unlink 接口返回参数。
@@ -1191,7 +1191,7 @@ type RmdirRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待移除的空目录项名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name          []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1233,11 +1233,11 @@ func (x *RmdirRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *RmdirRequest) GetName() string {
+func (x *RmdirRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 // RmdirResponse 定义 Rmdir 接口返回参数。
@@ -1284,12 +1284,12 @@ type RenameRequest struct {
 	OldParentIno uint64 `protobuf:"varint,1,opt,name=old_parent_ino,json=oldParentIno,proto3" json:"old_parent_ino,omitempty"`
 	// 待重命名的源项名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	OldName string `protobuf:"bytes,2,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	OldName []byte `protobuf:"bytes,2,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
 	// 目标父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	NewParentIno uint64 `protobuf:"varint,3,opt,name=new_parent_ino,json=newParentIno,proto3" json:"new_parent_ino,omitempty"`
 	// 目标项新名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	NewName       string `protobuf:"bytes,4,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	NewName       []byte `protobuf:"bytes,4,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1331,11 +1331,11 @@ func (x *RenameRequest) GetOldParentIno() uint64 {
 	return 0
 }
 
-func (x *RenameRequest) GetOldName() string {
+func (x *RenameRequest) GetOldName() []byte {
 	if x != nil {
 		return x.OldName
 	}
-	return ""
+	return nil
 }
 
 func (x *RenameRequest) GetNewParentIno() uint64 {
@@ -1345,11 +1345,11 @@ func (x *RenameRequest) GetNewParentIno() uint64 {
 	return 0
 }
 
-func (x *RenameRequest) GetNewName() string {
+func (x *RenameRequest) GetNewName() []byte {
 	if x != nil {
 		return x.NewName
 	}
-	return ""
+	return nil
 }
 
 // RenameResponse 定义 Rename 接口返回参数。
@@ -1396,7 +1396,7 @@ type CreateRequest struct {
 	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
 	// 待创建的新常规文件名称。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 节点模式位（包含可选的 S_IFREG 文件类型位及权限位，取值范围必须在 0 到 0xffff / 65535 之间）。
 	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	// 所属用户 ID。
@@ -1446,11 +1446,11 @@ func (x *CreateRequest) GetParentIno() uint64 {
 	return 0
 }
 
-func (x *CreateRequest) GetName() string {
+func (x *CreateRequest) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 func (x *CreateRequest) GetMode() uint32 {
@@ -2176,7 +2176,7 @@ type DirEntry struct {
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
 	// 子项名称（支持 "." 与 ".."）。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 文件的模式位（包含文件类型与权限位）。
 	Mode uint32 `protobuf:"varint,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	// 下一个条目的游标偏移量（单调递增，大于 0）。
@@ -2222,11 +2222,11 @@ func (x *DirEntry) GetIno() uint64 {
 	return 0
 }
 
-func (x *DirEntry) GetName() string {
+func (x *DirEntry) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 func (x *DirEntry) GetMode() uint32 {
@@ -2369,7 +2369,7 @@ type DirEntryPlus struct {
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
 	// 子项名称（支持 "." 与 ".."）。
 	// 长度必须在 1 到 255 字节之间，且严禁包含路径分隔符 '/' 与空字节 '\x00'。
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 下一个条目的游标偏移量（单调递增，大于 0）。
 	NextOffset uint64 `protobuf:"varint,3,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
 	// 子项的完整 Inode 元数据。
@@ -2419,11 +2419,11 @@ func (x *DirEntryPlus) GetIno() uint64 {
 	return 0
 }
 
-func (x *DirEntryPlus) GetName() string {
+func (x *DirEntryPlus) GetName() []byte {
 	if x != nil {
 		return x.Name
 	}
-	return ""
+	return nil
 }
 
 func (x *DirEntryPlus) GetNextOffset() uint64 {
@@ -2692,6 +2692,409 @@ func (*FallocateResponse) Descriptor() ([]byte, []int) {
 	return file_storage_v1_storage_proto_rawDescGZIP(), []int{43}
 }
 
+// SetXattrRequest 定义 SetXattr 接口输入参数。
+type SetXattrRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	// 扩展属性名称。
+	// 长度必须在 1 到 255 字节之间（越界违规由校验器显式映射为 ErrorInfo.reason = "ERANGE"），
+	// 且严禁包含空字节 '\x00'（违规映射为 ErrorInfo.reason = "EINVAL"）。
+	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// 扩展属性值。
+	// 长度最大允许 65536 字节（超长违规由校验器显式映射为 ErrorInfo.reason = "E2BIG"）。
+	Value []byte `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
+	// 扩展属性标志位 (0: 默认覆盖或创建, 1: XATTR_CREATE, 2: XATTR_REPLACE, 3: 两者皆设)。
+	Flags         uint32 `protobuf:"varint,4,opt,name=flags,proto3" json:"flags,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetXattrRequest) Reset() {
+	*x = SetXattrRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetXattrRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetXattrRequest) ProtoMessage() {}
+
+func (x *SetXattrRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetXattrRequest.ProtoReflect.Descriptor instead.
+func (*SetXattrRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *SetXattrRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+func (x *SetXattrRequest) GetName() []byte {
+	if x != nil {
+		return x.Name
+	}
+	return nil
+}
+
+func (x *SetXattrRequest) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+func (x *SetXattrRequest) GetFlags() uint32 {
+	if x != nil {
+		return x.Flags
+	}
+	return 0
+}
+
+// SetXattrResponse 定义 SetXattr 接口响应结果。
+type SetXattrResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetXattrResponse) Reset() {
+	*x = SetXattrResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetXattrResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetXattrResponse) ProtoMessage() {}
+
+func (x *SetXattrResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetXattrResponse.ProtoReflect.Descriptor instead.
+func (*SetXattrResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{45}
+}
+
+// GetXattrRequest 定义 GetXattr 接口输入参数。
+type GetXattrRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	// 扩展属性名称。
+	// 长度必须在 1 到 255 字节之间（越界违规由校验器显式映射为 ErrorInfo.reason = "ERANGE"），
+	// 且严禁包含空字节 '\x00'（违规映射为 ErrorInfo.reason = "EINVAL"）。
+	Name          []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetXattrRequest) Reset() {
+	*x = GetXattrRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetXattrRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetXattrRequest) ProtoMessage() {}
+
+func (x *GetXattrRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetXattrRequest.ProtoReflect.Descriptor instead.
+func (*GetXattrRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *GetXattrRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+func (x *GetXattrRequest) GetName() []byte {
+	if x != nil {
+		return x.Name
+	}
+	return nil
+}
+
+// GetXattrResponse 定义 GetXattr 接口响应结果。
+type GetXattrResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 扩展属性值。
+	// 长度最大允许 65536 字节（超长违规由校验器显式映射为 ErrorInfo.reason = "E2BIG"）。
+	Value         []byte `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetXattrResponse) Reset() {
+	*x = GetXattrResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetXattrResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetXattrResponse) ProtoMessage() {}
+
+func (x *GetXattrResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetXattrResponse.ProtoReflect.Descriptor instead.
+func (*GetXattrResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *GetXattrResponse) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+// ListXattrRequest 定义 ListXattr 接口输入参数。
+type ListXattrRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino           uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListXattrRequest) Reset() {
+	*x = ListXattrRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListXattrRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListXattrRequest) ProtoMessage() {}
+
+func (x *ListXattrRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListXattrRequest.ProtoReflect.Descriptor instead.
+func (*ListXattrRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *ListXattrRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+// ListXattrResponse 定义 ListXattr 接口响应结果。
+type ListXattrResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 节点绑定的扩展属性名称列表，按原始字节序升序（BYTEA ASC）排列。
+	// 每一项名称长度必须在 1 到 255 字节之间，且严禁包含空字节 '\x00'。
+	Names         [][]byte `protobuf:"bytes,1,rep,name=names,proto3" json:"names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListXattrResponse) Reset() {
+	*x = ListXattrResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListXattrResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListXattrResponse) ProtoMessage() {}
+
+func (x *ListXattrResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListXattrResponse.ProtoReflect.Descriptor instead.
+func (*ListXattrResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *ListXattrResponse) GetNames() [][]byte {
+	if x != nil {
+		return x.Names
+	}
+	return nil
+}
+
+// RemoveXattrRequest 定义 RemoveXattr 接口输入参数。
+type RemoveXattrRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
+	// 待移除的扩展属性名称。
+	// 长度必须在 1 到 255 字节之间，且严禁包含空字节 '\x00'。
+	Name          []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveXattrRequest) Reset() {
+	*x = RemoveXattrRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveXattrRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveXattrRequest) ProtoMessage() {}
+
+func (x *RemoveXattrRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveXattrRequest.ProtoReflect.Descriptor instead.
+func (*RemoveXattrRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *RemoveXattrRequest) GetIno() uint64 {
+	if x != nil {
+		return x.Ino
+	}
+	return 0
+}
+
+func (x *RemoveXattrRequest) GetName() []byte {
+	if x != nil {
+		return x.Name
+	}
+	return nil
+}
+
+// RemoveXattrResponse 定义 RemoveXattr 接口响应结果。
+type RemoveXattrResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveXattrResponse) Reset() {
+	*x = RemoveXattrResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveXattrResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveXattrResponse) ProtoMessage() {}
+
+func (x *RemoveXattrResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveXattrResponse.ProtoReflect.Descriptor instead.
+func (*RemoveXattrResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{51}
+}
+
 type Inode struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 节点的全局唯一持久化标识。
@@ -2706,7 +3109,7 @@ type Inode struct {
 
 func (x *Inode) Reset() {
 	*x = Inode{}
-	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2718,7 +3121,7 @@ func (x *Inode) String() string {
 func (*Inode) ProtoMessage() {}
 
 func (x *Inode) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2731,7 +3134,7 @@ func (x *Inode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inode.ProtoReflect.Descriptor instead.
 func (*Inode) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{44}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *Inode) GetIno() uint64 {
@@ -2786,7 +3189,7 @@ type InodeAttribute struct {
 
 func (x *InodeAttribute) Reset() {
 	*x = InodeAttribute{}
-	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2798,7 +3201,7 @@ func (x *InodeAttribute) String() string {
 func (*InodeAttribute) ProtoMessage() {}
 
 func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2811,7 +3214,7 @@ func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InodeAttribute.ProtoReflect.Descriptor instead.
 func (*InodeAttribute) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{45}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *InodeAttribute) GetMode() uint32 {
@@ -2896,11 +3299,12 @@ var File_storage_v1_storage_proto protoreflect.FileDescriptor
 const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"\x18storage/v1/storage.proto\x12\n" +
-	"storage.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"d\n" +
+	"storage.v1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcd\x01\n" +
 	"\rLookupRequest\x12&\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\"\xc7\x01\n" +
+	"parent_ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\"\xc7\x01\n" +
 	"\x0eLookupResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
@@ -2932,11 +3336,12 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x06_mtime\"\x84\x01\n" +
 	"\x0fSetAttrResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xc6\x01\n" +
+	"\x14attr_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xaf\x02\n" +
 	"\fMknodRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12\x1f\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x1f\n" +
 	"\x04mode\x18\x03 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\x03 \x00R\x04mode\x12\x10\n" +
 	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x05 \x01(\rR\x03gid\x12\x12\n" +
@@ -2944,23 +3349,26 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\rMknodResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xb0\x01\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\x99\x02\n" +
 	"\fMkdirRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12\x1d\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x1d\n" +
 	"\x04mode\x18\x03 \x01(\rB\t\xbaH\x06*\x04\x18\xff\xff\x03R\x04mode\x12\x10\n" +
 	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x05 \x01(\rR\x03gid\"\xc6\x01\n" +
 	"\rMkdirResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xbb\x01\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\x88\x03\n" +
 	"\x0eSymlinkRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12&\n" +
-	"\x06target\x18\x03 \x01(\tB\x0e\xbaH\vr\t\x10\x01(\x80 \xba\x01\x01\x00R\x06target\x12\x10\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x89\x01\n" +
+	"\x06target\x18\x03 \x01(\fBq\xbaHn\xba\x01d\n" +
+	"\x1esymlink_request_target_no_null\x12)symlink target must not contain null byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x1fR\x06target\x12\x10\n" +
 	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x05 \x01(\rR\x03gid\"\xc8\x01\n" +
 	"\x0fSymlinkResponse\x12/\n" +
@@ -2968,38 +3376,44 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
 	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"6\n" +
 	"\x0fReadlinkRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\"6\n" +
-	"\x10ReadlinkResponse\x12\"\n" +
-	"\x06target\x18\x01 \x01(\tB\n" +
-	"\xbaH\ar\x05\x10\x01(\x80 R\x06target\"\x9f\x01\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\"\xa1\x01\n" +
+	"\x10ReadlinkResponse\x12\x8c\x01\n" +
+	"\x06target\x18\x01 \x01(\fBt\xbaHq\xba\x01g\n" +
+	" readlink_response_target_no_null\x12*readlink target must not contain null byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x1fR\x06target\"\x88\x02\n" +
 	"\vLinkRequest\x12#\n" +
 	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x127\n" +
-	"\x0enew_parent_ino\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x122\n" +
-	"\bnew_name\x18\x03 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\anewName\"\xc5\x01\n" +
+	"\x0enew_parent_ino\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x12\x9a\x01\n" +
+	"\bnew_name\x18\x03 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\anewName\"\xc5\x01\n" +
 	"\fLinkResponse\x12/\n" +
 	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x02 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"n\n" +
+	"\x14attr_timeout_seconds\x18\x03 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xd7\x01\n" +
 	"\rUnlinkRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\"\x10\n" +
-	"\x0eUnlinkResponse\"m\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\"\x10\n" +
+	"\x0eUnlinkResponse\"\xd6\x01\n" +
 	"\fRmdirRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\"\x0f\n" +
-	"\rRmdirResponse\"\xe9\x01\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\"\x0f\n" +
+	"\rRmdirResponse\"\xbb\x03\n" +
 	"\rRenameRequest\x127\n" +
-	"\x0eold_parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\foldParentIno\x122\n" +
-	"\bold_name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\aoldName\x127\n" +
-	"\x0enew_parent_ino\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x122\n" +
-	"\bnew_name\x18\x04 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\anewName\"\x10\n" +
-	"\x0eRenameResponse\"\xc7\x01\n" +
+	"\x0eold_parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\foldParentIno\x12\x9a\x01\n" +
+	"\bold_name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\aoldName\x127\n" +
+	"\x0enew_parent_ino\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\fnewParentIno\x12\x9a\x01\n" +
+	"\bnew_name\x18\x04 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\anewName\"\x10\n" +
+	"\x0eRenameResponse\"\xb0\x02\n" +
 	"\rCreateRequest\x120\n" +
 	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12\x1d\n" +
+	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x1d\n" +
 	"\x04mode\x18\x03 \x01(\rB\t\xbaH\x06*\x04\x18\xff\xff\x03R\x04mode\x12\x10\n" +
 	"\x03uid\x18\x04 \x01(\rR\x03uid\x12\x10\n" +
 	"\x03gid\x18\x05 \x01(\rR\x03gid\x12\x14\n" +
@@ -3044,10 +3458,11 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x11ReleaseDirRequest\x12#\n" +
 	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
 	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\"\x14\n" +
-	"\x12ReleaseDirResponse\"\x99\x01\n" +
+	"\x12ReleaseDirResponse\"\x82\x02\n" +
 	"\bDirEntry\x12\x19\n" +
-	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12\x1b\n" +
+	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x1b\n" +
 	"\x04mode\x18\x03 \x01(\rB\a\xbaH\x04*\x02 \x00R\x04mode\x12(\n" +
 	"\vnext_offset\x18\x04 \x01(\x04B\a\xbaH\x042\x02 \x00R\n" +
 	"nextOffset\"\xa3\x01\n" +
@@ -3059,10 +3474,11 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x05limit\x18\x04 \x01(\rB\n" +
 	"\xbaH\a*\x05\x18\x80  \x00R\x05limit\"A\n" +
 	"\x0fReadDirResponse\x12.\n" +
-	"\aentries\x18\x01 \x03(\v2\x14.storage.v1.DirEntryR\aentries\"\xb7\x02\n" +
+	"\aentries\x18\x01 \x03(\v2\x14.storage.v1.DirEntryR\aentries\"\xa0\x03\n" +
 	"\fDirEntryPlus\x12\x19\n" +
-	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12+\n" +
-	"\x04name\x18\x02 \x01(\tB\x17\xbaH\x14r\x12\x10\x01(\xff\x012\v^[^/\\x00]+$R\x04name\x12(\n" +
+	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x93\x01\n" +
+	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
+	"\x1abytes_name_no_slash_or_nul\x12#name cannot contain '/' or NUL byte\x1a/!this.contains(b'\\x00') && !this.contains(b'/')z\x05\x10\x01\x18\xff\x01R\x04name\x12(\n" +
 	"\vnext_offset\x18\x03 \x01(\x04B\a\xbaH\x042\x02 \x00R\n" +
 	"nextOffset\x12/\n" +
 	"\x05inode\x18\x04 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12B\n" +
@@ -3084,7 +3500,30 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7fR\x06offset\x12)\n" +
 	"\x06length\x18\x04 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x06length\x12\x12\n" +
 	"\x04mode\x18\x05 \x01(\rR\x04mode\"\x13\n" +
-	"\x11FallocateResponse\"z\n" +
+	"\x11FallocateResponse\"\xe9\x01\n" +
+	"\x0fSetXattrRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12q\n" +
+	"\x04name\x18\x02 \x01(\fB]\xbaHZ\xba\x01P\n" +
+	"\x11xattr_name_no_nul\x12\"xattr name cannot contain NUL byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x01R\x04name\x12\x1f\n" +
+	"\x05value\x18\x03 \x01(\fB\t\xbaH\x06z\x04\x18\x80\x80\x04R\x05value\x12\x1d\n" +
+	"\x05flags\x18\x04 \x01(\rB\a\xbaH\x04*\x02\x18\x03R\x05flags\"\x12\n" +
+	"\x10SetXattrResponse\"\xa9\x01\n" +
+	"\x0fGetXattrRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12q\n" +
+	"\x04name\x18\x02 \x01(\fB]\xbaHZ\xba\x01P\n" +
+	"\x11xattr_name_no_nul\x12\"xattr name cannot contain NUL byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x01R\x04name\"3\n" +
+	"\x10GetXattrResponse\x12\x1f\n" +
+	"\x05value\x18\x01 \x01(\fB\t\xbaH\x06z\x04\x18\x80\x80\x04R\x05value\"7\n" +
+	"\x10ListXattrRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\"\x8d\x01\n" +
+	"\x11ListXattrResponse\x12x\n" +
+	"\x05names\x18\x01 \x03(\fBb\xbaH_\x92\x01\\\"Z\xba\x01P\n" +
+	"\x11xattr_name_no_nul\x12\"xattr name cannot contain NUL byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x01R\x05names\"\xac\x01\n" +
+	"\x12RemoveXattrRequest\x12#\n" +
+	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12q\n" +
+	"\x04name\x18\x02 \x01(\fB]\xbaHZ\xba\x01P\n" +
+	"\x11xattr_name_no_nul\x12\"xattr name cannot contain NUL byte\x1a\x17!this.contains(b'\\x00')z\x05\x10\x01\x18\xff\x01R\x04name\"\x15\n" +
+	"\x13RemoveXattrResponse\"z\n" +
 	"\x05Inode\x12\x19\n" +
 	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x1e\n" +
 	"\n" +
@@ -3103,7 +3542,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x05atime\x18\t \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05atime\x128\n" +
 	"\x05mtime\x18\n" +
 	" \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05mtime\x128\n" +
-	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05ctime2\x86\v\n" +
+	"\x05ctime\x18\v \x01(\v2\x1a.google.protobuf.TimestampB\x06\xbaH\x03\xc8\x01\x01R\x05ctime2\xae\r\n" +
 	"\x0eStorageService\x12?\n" +
 	"\x06Lookup\x12\x19.storage.v1.LookupRequest\x1a\x1a.storage.v1.LookupResponse\x12B\n" +
 	"\aGetAttr\x12\x1a.storage.v1.GetAttrRequest\x1a\x1b.storage.v1.GetAttrResponse\x12B\n" +
@@ -3126,7 +3565,11 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"ReleaseDir\x12\x1d.storage.v1.ReleaseDirRequest\x1a\x1e.storage.v1.ReleaseDirResponse\x12B\n" +
 	"\aReadDir\x12\x1a.storage.v1.ReadDirRequest\x1a\x1b.storage.v1.ReadDirResponse\x12N\n" +
 	"\vReadDirPlus\x12\x1e.storage.v1.ReadDirPlusRequest\x1a\x1f.storage.v1.ReadDirPlusResponse\x12H\n" +
-	"\tFallocate\x12\x1c.storage.v1.FallocateRequest\x1a\x1d.storage.v1.FallocateResponseB5Z3github.com/starsrc/bowl/gen/go/storage/v1;storagev1b\x06proto3"
+	"\tFallocate\x12\x1c.storage.v1.FallocateRequest\x1a\x1d.storage.v1.FallocateResponse\x12E\n" +
+	"\bSetXattr\x12\x1b.storage.v1.SetXattrRequest\x1a\x1c.storage.v1.SetXattrResponse\x12E\n" +
+	"\bGetXattr\x12\x1b.storage.v1.GetXattrRequest\x1a\x1c.storage.v1.GetXattrResponse\x12H\n" +
+	"\tListXattr\x12\x1c.storage.v1.ListXattrRequest\x1a\x1d.storage.v1.ListXattrResponse\x12N\n" +
+	"\vRemoveXattr\x12\x1e.storage.v1.RemoveXattrRequest\x1a\x1f.storage.v1.RemoveXattrResponseB5Z3github.com/starsrc/bowl/gen/go/storage/v1;storagev1b\x06proto3"
 
 var (
 	file_storage_v1_storage_proto_rawDescOnce sync.Once
@@ -3140,7 +3583,7 @@ func file_storage_v1_storage_proto_rawDescGZIP() []byte {
 	return file_storage_v1_storage_proto_rawDescData
 }
 
-var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 46)
+var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_storage_v1_storage_proto_goTypes = []any{
 	(*LookupRequest)(nil),         // 0: storage.v1.LookupRequest
 	(*LookupResponse)(nil),        // 1: storage.v1.LookupResponse
@@ -3186,28 +3629,36 @@ var file_storage_v1_storage_proto_goTypes = []any{
 	(*ReadDirPlusResponse)(nil),   // 41: storage.v1.ReadDirPlusResponse
 	(*FallocateRequest)(nil),      // 42: storage.v1.FallocateRequest
 	(*FallocateResponse)(nil),     // 43: storage.v1.FallocateResponse
-	(*Inode)(nil),                 // 44: storage.v1.Inode
-	(*InodeAttribute)(nil),        // 45: storage.v1.InodeAttribute
-	(*timestamppb.Timestamp)(nil), // 46: google.protobuf.Timestamp
+	(*SetXattrRequest)(nil),       // 44: storage.v1.SetXattrRequest
+	(*SetXattrResponse)(nil),      // 45: storage.v1.SetXattrResponse
+	(*GetXattrRequest)(nil),       // 46: storage.v1.GetXattrRequest
+	(*GetXattrResponse)(nil),      // 47: storage.v1.GetXattrResponse
+	(*ListXattrRequest)(nil),      // 48: storage.v1.ListXattrRequest
+	(*ListXattrResponse)(nil),     // 49: storage.v1.ListXattrResponse
+	(*RemoveXattrRequest)(nil),    // 50: storage.v1.RemoveXattrRequest
+	(*RemoveXattrResponse)(nil),   // 51: storage.v1.RemoveXattrResponse
+	(*Inode)(nil),                 // 52: storage.v1.Inode
+	(*InodeAttribute)(nil),        // 53: storage.v1.InodeAttribute
+	(*timestamppb.Timestamp)(nil), // 54: google.protobuf.Timestamp
 }
 var file_storage_v1_storage_proto_depIdxs = []int32{
-	44, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
-	44, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
-	46, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
-	46, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
-	44, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
-	44, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
-	44, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
-	44, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
-	44, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
-	44, // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
+	52, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
+	52, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
+	54, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
+	54, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
+	52, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
+	52, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
+	52, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
+	52, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
+	52, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
+	52, // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
 	36, // 10: storage.v1.ReadDirResponse.entries:type_name -> storage.v1.DirEntry
-	44, // 11: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
+	52, // 11: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
 	39, // 12: storage.v1.ReadDirPlusResponse.entries:type_name -> storage.v1.DirEntryPlus
-	45, // 13: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
-	46, // 14: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
-	46, // 15: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
-	46, // 16: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
+	53, // 13: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
+	54, // 14: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
+	54, // 15: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
+	54, // 16: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
 	0,  // 17: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
 	2,  // 18: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
 	4,  // 19: storage.v1.StorageService.SetAttr:input_type -> storage.v1.SetAttrRequest
@@ -3229,29 +3680,37 @@ var file_storage_v1_storage_proto_depIdxs = []int32{
 	37, // 35: storage.v1.StorageService.ReadDir:input_type -> storage.v1.ReadDirRequest
 	40, // 36: storage.v1.StorageService.ReadDirPlus:input_type -> storage.v1.ReadDirPlusRequest
 	42, // 37: storage.v1.StorageService.Fallocate:input_type -> storage.v1.FallocateRequest
-	1,  // 38: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
-	3,  // 39: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
-	5,  // 40: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
-	7,  // 41: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
-	9,  // 42: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
-	11, // 43: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
-	13, // 44: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
-	15, // 45: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
-	17, // 46: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
-	19, // 47: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
-	21, // 48: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
-	23, // 49: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
-	25, // 50: storage.v1.StorageService.Open:output_type -> storage.v1.OpenResponse
-	27, // 51: storage.v1.StorageService.Flush:output_type -> storage.v1.FlushResponse
-	29, // 52: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
-	31, // 53: storage.v1.StorageService.Release:output_type -> storage.v1.ReleaseResponse
-	33, // 54: storage.v1.StorageService.OpenDir:output_type -> storage.v1.OpenDirResponse
-	35, // 55: storage.v1.StorageService.ReleaseDir:output_type -> storage.v1.ReleaseDirResponse
-	38, // 56: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
-	41, // 57: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
-	43, // 58: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
-	38, // [38:59] is the sub-list for method output_type
-	17, // [17:38] is the sub-list for method input_type
+	44, // 38: storage.v1.StorageService.SetXattr:input_type -> storage.v1.SetXattrRequest
+	46, // 39: storage.v1.StorageService.GetXattr:input_type -> storage.v1.GetXattrRequest
+	48, // 40: storage.v1.StorageService.ListXattr:input_type -> storage.v1.ListXattrRequest
+	50, // 41: storage.v1.StorageService.RemoveXattr:input_type -> storage.v1.RemoveXattrRequest
+	1,  // 42: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
+	3,  // 43: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
+	5,  // 44: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
+	7,  // 45: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
+	9,  // 46: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
+	11, // 47: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
+	13, // 48: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
+	15, // 49: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
+	17, // 50: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
+	19, // 51: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
+	21, // 52: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
+	23, // 53: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
+	25, // 54: storage.v1.StorageService.Open:output_type -> storage.v1.OpenResponse
+	27, // 55: storage.v1.StorageService.Flush:output_type -> storage.v1.FlushResponse
+	29, // 56: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
+	31, // 57: storage.v1.StorageService.Release:output_type -> storage.v1.ReleaseResponse
+	33, // 58: storage.v1.StorageService.OpenDir:output_type -> storage.v1.OpenDirResponse
+	35, // 59: storage.v1.StorageService.ReleaseDir:output_type -> storage.v1.ReleaseDirResponse
+	38, // 60: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
+	41, // 61: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
+	43, // 62: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
+	45, // 63: storage.v1.StorageService.SetXattr:output_type -> storage.v1.SetXattrResponse
+	47, // 64: storage.v1.StorageService.GetXattr:output_type -> storage.v1.GetXattrResponse
+	49, // 65: storage.v1.StorageService.ListXattr:output_type -> storage.v1.ListXattrResponse
+	51, // 66: storage.v1.StorageService.RemoveXattr:output_type -> storage.v1.RemoveXattrResponse
+	42, // [42:67] is the sub-list for method output_type
+	17, // [17:42] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
 	17, // [17:17] is the sub-list for extension extendee
 	0,  // [0:17] is the sub-list for field type_name
@@ -3270,7 +3729,7 @@ func file_storage_v1_storage_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   46,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -40,6 +40,10 @@ const (
 	StorageService_ReadDir_FullMethodName     = "/storage.v1.StorageService/ReadDir"
 	StorageService_ReadDirPlus_FullMethodName = "/storage.v1.StorageService/ReadDirPlus"
 	StorageService_Fallocate_FullMethodName   = "/storage.v1.StorageService/Fallocate"
+	StorageService_SetXattr_FullMethodName    = "/storage.v1.StorageService/SetXattr"
+	StorageService_GetXattr_FullMethodName    = "/storage.v1.StorageService/GetXattr"
+	StorageService_ListXattr_FullMethodName   = "/storage.v1.StorageService/ListXattr"
+	StorageService_RemoveXattr_FullMethodName = "/storage.v1.StorageService/RemoveXattr"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -160,6 +164,31 @@ type StorageServiceClient interface {
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
 	Fallocate(ctx context.Context, in *FallocateRequest, opts ...grpc.CallOption) (*FallocateResponse, error)
+	// SetXattr 设置指定 Inode 的扩展属性（对接 Linux FUSE FUSE_SETXATTR 协议）。
+	// 遵循 POSIX setxattr(2) 语义，支持 XATTR_CREATE (0x1) 与 XATTR_REPLACE (0x2) 标志位状态机。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	// 若违反标志位约束，分别返回 AlreadyExists (EEXIST) 或 NotFound (ENODATA)。
+	// 若新增属性超出单节点 65536 字节配额，必须返回 gRPC 标准状态码 ResourceExhausted (映射至 POSIX ENOSPC)。
+	SetXattr(ctx context.Context, in *SetXattrRequest, opts ...grpc.CallOption) (*SetXattrResponse, error)
+	// GetXattr 获取指定 Inode 的扩展属性值（对接 Linux FUSE FUSE_GETXATTR 协议）。
+	// 遵循 POSIX getxattr(2) 语义。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	GetXattr(ctx context.Context, in *GetXattrRequest, opts ...grpc.CallOption) (*GetXattrResponse, error)
+	// ListXattr 列出指定 Inode 的全部扩展属性名称列表（对接 Linux FUSE FUSE_LISTXATTR 协议）。
+	// 遵循 POSIX listxattr(2) 语义。
+	// 属性名称按原始字节序升序（BYTEA ASC）返回；不按调用方过滤（对齐 Linux 内核 FUSE 行为）。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若无属性，返回空列表。
+	ListXattr(ctx context.Context, in *ListXattrRequest, opts ...grpc.CallOption) (*ListXattrResponse, error)
+	// RemoveXattr 移除指定 Inode 的扩展属性（对接 Linux FUSE FUSE_REMOVEXATTR 协议）。
+	// 遵循 POSIX removexattr(2) 语义。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	RemoveXattr(ctx context.Context, in *RemoveXattrRequest, opts ...grpc.CallOption) (*RemoveXattrResponse, error)
 }
 
 type storageServiceClient struct {
@@ -380,6 +409,46 @@ func (c *storageServiceClient) Fallocate(ctx context.Context, in *FallocateReque
 	return out, nil
 }
 
+func (c *storageServiceClient) SetXattr(ctx context.Context, in *SetXattrRequest, opts ...grpc.CallOption) (*SetXattrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetXattrResponse)
+	err := c.cc.Invoke(ctx, StorageService_SetXattr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) GetXattr(ctx context.Context, in *GetXattrRequest, opts ...grpc.CallOption) (*GetXattrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetXattrResponse)
+	err := c.cc.Invoke(ctx, StorageService_GetXattr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ListXattr(ctx context.Context, in *ListXattrRequest, opts ...grpc.CallOption) (*ListXattrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListXattrResponse)
+	err := c.cc.Invoke(ctx, StorageService_ListXattr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) RemoveXattr(ctx context.Context, in *RemoveXattrRequest, opts ...grpc.CallOption) (*RemoveXattrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveXattrResponse)
+	err := c.cc.Invoke(ctx, StorageService_RemoveXattr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StorageServiceServer is the server API for StorageService service.
 // All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
@@ -498,6 +567,31 @@ type StorageServiceServer interface {
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
 	Fallocate(context.Context, *FallocateRequest) (*FallocateResponse, error)
+	// SetXattr 设置指定 Inode 的扩展属性（对接 Linux FUSE FUSE_SETXATTR 协议）。
+	// 遵循 POSIX setxattr(2) 语义，支持 XATTR_CREATE (0x1) 与 XATTR_REPLACE (0x2) 标志位状态机。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，必须返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	// 若违反标志位约束，分别返回 AlreadyExists (EEXIST) 或 NotFound (ENODATA)。
+	// 若新增属性超出单节点 65536 字节配额，必须返回 gRPC 标准状态码 ResourceExhausted (映射至 POSIX ENOSPC)。
+	SetXattr(context.Context, *SetXattrRequest) (*SetXattrResponse, error)
+	// GetXattr 获取指定 Inode 的扩展属性值（对接 Linux FUSE FUSE_GETXATTR 协议）。
+	// 遵循 POSIX getxattr(2) 语义。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	GetXattr(context.Context, *GetXattrRequest) (*GetXattrResponse, error)
+	// ListXattr 列出指定 Inode 的全部扩展属性名称列表（对接 Linux FUSE FUSE_LISTXATTR 协议）。
+	// 遵循 POSIX listxattr(2) 语义。
+	// 属性名称按原始字节序升序（BYTEA ASC）返回；不按调用方过滤（对齐 Linux 内核 FUSE 行为）。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若无属性，返回空列表。
+	ListXattr(context.Context, *ListXattrRequest) (*ListXattrResponse, error)
+	// RemoveXattr 移除指定 Inode 的扩展属性（对接 Linux FUSE FUSE_REMOVEXATTR 协议）。
+	// 遵循 POSIX removexattr(2) 语义。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
+	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
+	RemoveXattr(context.Context, *RemoveXattrRequest) (*RemoveXattrResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -570,6 +664,18 @@ func (UnimplementedStorageServiceServer) ReadDirPlus(context.Context, *ReadDirPl
 }
 func (UnimplementedStorageServiceServer) Fallocate(context.Context, *FallocateRequest) (*FallocateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Fallocate not implemented")
+}
+func (UnimplementedStorageServiceServer) SetXattr(context.Context, *SetXattrRequest) (*SetXattrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetXattr not implemented")
+}
+func (UnimplementedStorageServiceServer) GetXattr(context.Context, *GetXattrRequest) (*GetXattrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetXattr not implemented")
+}
+func (UnimplementedStorageServiceServer) ListXattr(context.Context, *ListXattrRequest) (*ListXattrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListXattr not implemented")
+}
+func (UnimplementedStorageServiceServer) RemoveXattr(context.Context, *RemoveXattrRequest) (*RemoveXattrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveXattr not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -970,6 +1076,78 @@ func _StorageService_Fallocate_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_SetXattr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetXattrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).SetXattr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_SetXattr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).SetXattr(ctx, req.(*SetXattrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_GetXattr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetXattrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).GetXattr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_GetXattr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).GetXattr(ctx, req.(*GetXattrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ListXattr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListXattrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ListXattr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ListXattr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ListXattr(ctx, req.(*ListXattrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_RemoveXattr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveXattrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).RemoveXattr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_RemoveXattr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).RemoveXattr(ctx, req.(*RemoveXattrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1060,6 +1238,22 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Fallocate",
 			Handler:    _StorageService_Fallocate_Handler,
+		},
+		{
+			MethodName: "SetXattr",
+			Handler:    _StorageService_SetXattr_Handler,
+		},
+		{
+			MethodName: "GetXattr",
+			Handler:    _StorageService_GetXattr_Handler,
+		},
+		{
+			MethodName: "ListXattr",
+			Handler:    _StorageService_ListXattr_Handler,
+		},
+		{
+			MethodName: "RemoveXattr",
+			Handler:    _StorageService_RemoveXattr_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

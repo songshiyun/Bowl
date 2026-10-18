@@ -1,12 +1,12 @@
 package meta
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -17,18 +17,36 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
 
+// validateEntryName 校验目录项名称合法性。
+// len(name) > MaxFileNameBytes 时返回 ErrNameTooLong；
+// len(name) == 0 或包含 '/' 或 '\x00' 时返回 ErrInvalidArgument。
+func validateEntryName(name []byte) error {
+	if len(name) > MaxFileNameBytes {
+		return ErrNameTooLong
+	}
+	if len(name) == 0 || bytes.IndexByte(name, '/') >= 0 || bytes.IndexByte(name, 0) >= 0 {
+		return ErrInvalidArgument
+	}
+	return nil
+}
+
+// isDotOrDotDot 判断目录项名称是否为 "." 或 ".."。
+func isDotOrDotDot(name []byte) bool {
+	return bytes.Equal(name, []byte(".")) || bytes.Equal(name, []byte(".."))
+}
+
 // Manager 定义元数据领域层管理器接口。
 type Manager interface {
-	Lookup(ctx context.Context, parentIno uint64, name string) (*Inode, error)
+	Lookup(ctx context.Context, parentIno uint64, name []byte) (*Inode, error)
 	GetAttr(ctx context.Context, ino uint64) (*Inode, error)
 	SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (*Inode, error)
 	Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 	Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 	Symlink(ctx context.Context, params SymlinkParams) (*Inode, error)
-	Readlink(ctx context.Context, ino uint64) (string, error)
+	Readlink(ctx context.Context, ino uint64) ([]byte, error)
 	Link(ctx context.Context, params LinkParams) (*Inode, error)
-	Unlink(ctx context.Context, parentIno uint64, name string) error
-	Rmdir(ctx context.Context, parentIno uint64, name string) error
+	Unlink(ctx context.Context, parentIno uint64, name []byte) error
+	Rmdir(ctx context.Context, parentIno uint64, name []byte) error
 	Rename(ctx context.Context, params RenameParams) error
 	Create(ctx context.Context, params CreateParams) (*CreateResult, error)
 	Open(ctx context.Context, params OpenParams) (*OpenResult, error)
@@ -40,6 +58,10 @@ type Manager interface {
 	ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error)
 	ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error)
 	Fallocate(ctx context.Context, params FallocateParams) error
+	SetXattr(ctx context.Context, params SetXattrParams) error
+	GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error)
+	ListXattr(ctx context.Context, ino uint64) ([][]byte, error)
+	RemoveXattr(ctx context.Context, ino uint64, name []byte) error
 }
 
 type manager struct {
@@ -65,9 +87,12 @@ var Module = fx.Module("meta",
 )
 
 // Lookup 执行单级目录项查找与块属性动态推导。
-func (m *manager) Lookup(ctx context.Context, parentIno uint64, name string) (*Inode, error) {
-	if parentIno == 0 || len(name) == 0 || len(name) > 255 || strings.ContainsAny(name, "/\x00") {
+func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*Inode, error) {
+	if parentIno == 0 || parentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
+	}
+	if err := validateEntryName(name); err != nil {
+		return nil, err
 	}
 
 	var result *Inode
@@ -92,7 +117,7 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name string) (*I
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			return fmt.Errorf("get inode by entry %q in parent %d: %w", name, parentIno, err)
+			return fmt.Errorf("get inode by entry %s in parent %d: %w", name, parentIno, err)
 		}
 
 		result = newInodeFromDB(target)
@@ -306,8 +331,8 @@ func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.Name) == 0 || len(params.Name) > MaxFileNameBytes || strings.ContainsAny(params.Name, "/\x00") {
-		return nil, ErrInvalidArgument
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
 	}
 	if params.Mode > 0o177777 {
 		return nil, ErrInvalidArgument
@@ -343,7 +368,7 @@ func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 			return ErrNotFound
 		}
 
-		if params.Name == "." || params.Name == ".." {
+		if isDotOrDotDot(params.Name) {
 			return ErrAlreadyExists
 		}
 
@@ -405,8 +430,8 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.Name) == 0 || len(params.Name) > MaxFileNameBytes || strings.ContainsAny(params.Name, "/\x00") {
-		return nil, ErrInvalidArgument
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
 	}
 	if params.Mode > 65535 {
 		return nil, ErrInvalidArgument
@@ -435,7 +460,7 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 			return ErrNotFound
 		}
 
-		if params.Name == "." || params.Name == ".." {
+		if isDotOrDotDot(params.Name) {
 			return ErrAlreadyExists
 		}
 
@@ -499,11 +524,14 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.Name) == 0 || len(params.Name) > MaxFileNameBytes || strings.ContainsAny(params.Name, "/\x00") {
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
+	}
+	if len(params.Target) == 0 || bytes.IndexByte(params.Target, 0) >= 0 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.Target) == 0 || len(params.Target) > MaxSymlinkTargetBytes || strings.ContainsRune(params.Target, 0) {
-		return nil, ErrInvalidArgument
+	if len(params.Target) > MaxSymlinkTargetBytes {
+		return nil, ErrNameTooLong
 	}
 
 	var result *Inode
@@ -524,7 +552,7 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 			return ErrNotFound
 		}
 
-		if params.Name == "." || params.Name == ".." {
+		if isDotOrDotDot(params.Name) {
 			return ErrAlreadyExists
 		}
 
@@ -540,7 +568,7 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 			Uid:           int32(params.UID),
 			Gid:           int32(gid),
 			Rdev:          0,
-			SymlinkTarget: pgtype.Text{String: params.Target, Valid: true},
+			SymlinkTarget: params.Target,
 		})
 		if err != nil {
 			return fmt.Errorf("create symlink inode: %w", err)
@@ -584,28 +612,28 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 }
 
 // Readlink 获取符号链接节点指向的目标路径。
-func (m *manager) Readlink(ctx context.Context, ino uint64) (string, error) {
+func (m *manager) Readlink(ctx context.Context, ino uint64) ([]byte, error) {
 	if ino == 0 || ino > math.MaxInt64 {
-		return "", ErrInvalidArgument
+		return nil, ErrInvalidArgument
 	}
 
 	row, err := m.store.GetSymlinkTarget(ctx, int64(ino))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", ErrNotFound
+			return nil, ErrNotFound
 		}
-		return "", fmt.Errorf("get symlink target %d: %w", ino, err)
+		return nil, fmt.Errorf("get symlink target %d: %w", ino, err)
 	}
 
 	if (uint32(row.Mode) & S_IFMT) != S_IFLNK {
-		return "", ErrInvalidArgument
+		return nil, ErrInvalidArgument
 	}
 
-	if !row.SymlinkTarget.Valid {
-		return "", ErrInvalidArgument
+	if len(row.SymlinkTarget) == 0 {
+		return nil, ErrInvalidArgument
 	}
 
-	return row.SymlinkTarget.String, nil
+	return row.SymlinkTarget, nil
 }
 
 // errRetryTx 表示事务预读的目录项映射在加锁前发生并发漂移，需回滚并重试当前事务。
@@ -663,13 +691,13 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 	if params.NewParentIno == 0 || params.NewParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.NewName) == 0 || len(params.NewName) > MaxFileNameBytes || strings.ContainsAny(params.NewName, "/\x00") {
-		return nil, ErrInvalidArgument
+	if err := validateEntryName(params.NewName); err != nil {
+		return nil, err
 	}
 
 	var result *Inode
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		if params.NewName == "." || params.NewName == ".." {
+		if isDotOrDotDot(params.NewName) {
 			parent, err := q.GetInodeForUpdate(ctx, int64(params.NewParentIno))
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
@@ -765,16 +793,16 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 }
 
 // Unlink 删除指定父目录下的非目录项（解链）。
-func (m *manager) Unlink(ctx context.Context, parentIno uint64, name string) error {
+func (m *manager) Unlink(ctx context.Context, parentIno uint64, name []byte) error {
 	if parentIno == 0 || parentIno > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if len(name) == 0 || len(name) > MaxFileNameBytes || strings.ContainsAny(name, "/\x00") {
-		return ErrInvalidArgument
+	if err := validateEntryName(name); err != nil {
+		return err
 	}
 
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if name == "." || name == ".." {
+		if isDotOrDotDot(name) {
 			parent, err := q.GetInodeForUpdate(ctx, int64(parentIno))
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
@@ -896,16 +924,16 @@ func (m *manager) Unlink(ctx context.Context, parentIno uint64, name string) err
 }
 
 // Rmdir 移除指定父目录下的空目录项。
-func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name string) error {
+func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name []byte) error {
 	if parentIno == 0 || parentIno > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if len(name) == 0 || len(name) > MaxFileNameBytes || strings.ContainsAny(name, "/\x00") {
-		return ErrInvalidArgument
+	if err := validateEntryName(name); err != nil {
+		return err
 	}
 
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if name == "." || name == ".." {
+		if isDotOrDotDot(name) {
 			parent, err := q.GetInodeForUpdate(ctx, int64(parentIno))
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
@@ -919,7 +947,7 @@ func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name string) erro
 			if parent.Nlink == 0 {
 				return ErrNotFound
 			}
-			if name == "." {
+			if bytes.Equal(name, []byte(".")) {
 				return ErrInvalidArgument
 			}
 			return ErrNotEmpty
@@ -1046,15 +1074,15 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	if params.NewParentIno == 0 || params.NewParentIno > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if len(params.OldName) == 0 || len(params.OldName) > MaxFileNameBytes || strings.ContainsAny(params.OldName, "/\x00") {
-		return ErrInvalidArgument
+	if err := validateEntryName(params.OldName); err != nil {
+		return err
 	}
-	if len(params.NewName) == 0 || len(params.NewName) > MaxFileNameBytes || strings.ContainsAny(params.NewName, "/\x00") {
-		return ErrInvalidArgument
+	if err := validateEntryName(params.NewName); err != nil {
+		return err
 	}
 
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if params.OldName == "." || params.OldName == ".." || params.NewName == "." || params.NewName == ".." {
+		if isDotOrDotDot(params.OldName) || isDotOrDotDot(params.NewName) {
 			if _, _, err := lockAndValidateParents(ctx, q, params.OldParentIno, params.NewParentIno); err != nil {
 				return err
 			}
@@ -1078,7 +1106,7 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 		oldIno := preOldEntry.Ino
 
 		// 同路径短路 (POSIX No-op)：锁定父目录并确认源目录项仍存在
-		if params.OldParentIno == params.NewParentIno && params.OldName == params.NewName {
+		if params.OldParentIno == params.NewParentIno && bytes.Equal(params.OldName, params.NewName) {
 			if _, _, err := lockAndValidateParents(ctx, q, params.OldParentIno, params.NewParentIno); err != nil {
 				return err
 			}
@@ -1328,8 +1356,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if len(params.Name) == 0 || len(params.Name) > MaxFileNameBytes || strings.ContainsAny(params.Name, "/\x00") {
-		return nil, ErrInvalidArgument
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
 	}
 	if params.Mode > 0xffff {
 		return nil, ErrInvalidArgument
@@ -1360,7 +1388,7 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 			return ErrNotFound
 		}
 
-		if params.Name == "." || params.Name == ".." {
+		if isDotOrDotDot(params.Name) {
 			return ErrAlreadyExists
 		}
 
@@ -1847,7 +1875,7 @@ func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry
 		if params.Offset < 1 && rem > 0 {
 			entries = append(entries, DirEntry{
 				Ino:        uint64(dirInode.Ino),
-				Name:       ".",
+				Name:       []byte("."),
 				Mode:       uint32(dirInode.Mode),
 				NextOffset: 1,
 			})
@@ -1865,7 +1893,7 @@ func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry
 			}
 			entries = append(entries, DirEntry{
 				Ino:        uint64(parentInode.Ino),
-				Name:       "..",
+				Name:       []byte(".."),
 				Mode:       uint32(parentInode.Mode),
 				NextOffset: 2,
 			})
@@ -1947,7 +1975,7 @@ func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]
 		if params.Offset < 1 && rem > 0 {
 			entries = append(entries, DirEntryPlus{
 				Ino:                 uint64(dirInode.Ino),
-				Name:                ".",
+				Name:                []byte("."),
 				NextOffset:          1,
 				Inode:               newInodeFromDB(*dirInode),
 				EntryTimeoutSeconds: 0,
@@ -1967,7 +1995,7 @@ func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]
 			}
 			entries = append(entries, DirEntryPlus{
 				Ino:                 uint64(parentInode.Ino),
-				Name:                "..",
+				Name:                []byte(".."),
 				NextOffset:          2,
 				Inode:               newInodeFromDB(parentInode),
 				EntryTimeoutSeconds: 0,
@@ -2144,6 +2172,339 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("fallocate (ino=%d, fh=%d): %w", params.Ino, params.Fh, err)
+		}
+	}
+
+	return nil
+}
+
+// validateXattrName 校验扩展属性名称合法性。
+// len(name) == 0 或 len(name) > MaxXattrNameBytes 时返回 ErrRange；
+// name 包含 NUL 字节 (\x00) 时返回 ErrInvalidArgument。
+func validateXattrName(name []byte) error {
+	if len(name) == 0 || len(name) > MaxXattrNameBytes {
+		return ErrRange
+	}
+	if bytes.IndexByte(name, 0) >= 0 {
+		return ErrInvalidArgument
+	}
+	return nil
+}
+
+// isAllowedUserXattrFileType 判定文件模式是否允许访问 user.* 命名空间扩展属性。
+// 仅允许常规文件 (S_IFREG)、目录 (S_IFDIR) 与套接字 (S_IFSOCK)。
+func isAllowedUserXattrFileType(mode uint32) bool {
+	fileType := mode & S_IFMT
+	return fileType == S_IFREG || fileType == S_IFDIR || fileType == S_IFSOCK
+}
+
+// SetXattr 设置指定 Inode 的扩展属性。
+// 遵循 Linux FUSE FUSE_SETXATTR 协议与 POSIX setxattr(2) 语义，执行 4 步求值状态机：
+// 1. 入参静态校验（不查库）：校验 Ino、Flags、Name 与 Value 边界及非法字符；
+// 2. 排他锁与存在性校验：读写事务内通过 GetInodeForUpdate 获取行锁，支持孤儿节点；
+// 3. user.* 文件类型准入校验：针对 user.* 命名空间限制仅常规文件、目录与套接字，非 user.* 命名空间直接放行；
+// 4. 属性存在性、Flags 状态机、配额校验、空值归一化与持久化：判断 XATTR_CREATE / XATTR_REPLACE 状态，
+//    并在新增属性时执行 65536 字节名称列表配额拦截（覆盖不拦截），写入后刷新 Inode ctime。
+func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
+	// 第 1 步：入参静态校验（不查库）
+	if params.Ino == 0 || params.Ino > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Flags&^(XattrCreate|XattrReplace) != 0 {
+		return ErrInvalidArgument
+	}
+	if err := validateXattrName(params.Name); err != nil {
+		return err
+	}
+	if len(params.Value) > MaxXattrValueBytes {
+		return ErrTooBig
+	}
+
+	// 开启读写事务
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		// 第 2 步：排他锁与存在性校验
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+		}
+
+		// 第 3 步：user.* 文件类型准入校验
+		if bytes.HasPrefix(params.Name, []byte("user.")) && !isAllowedUserXattrFileType(uint32(inode.Mode)) {
+			return ErrPerm
+		}
+
+		// 第 4 步：属性存在性、flags 独立判定、配额与 Upsert
+		_, err = q.GetInodeXattr(ctx, db.GetInodeXattrParams{
+			Ino:  int64(params.Ino),
+			Name: params.Name,
+		})
+
+		exists := true
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				exists = false
+			} else {
+				return fmt.Errorf("get inode xattr (ino=%d): %w", params.Ino, err)
+			}
+		}
+
+		if exists {
+			if (params.Flags & XattrCreate) != 0 {
+				return ErrAlreadyExists
+			}
+		} else {
+			if (params.Flags & XattrReplace) != 0 {
+				return ErrNoData
+			}
+
+			// 仅当新增属性名时，查询该 Inode 现有全部属性名总长，校验 65536 字节配额
+			totalBytes, err := q.GetInodeXattrNamesTotalBytes(ctx, int64(params.Ino))
+			if err != nil {
+				return fmt.Errorf("get inode xattr names total bytes %d: %w", params.Ino, err)
+			}
+			if totalBytes+int64(len(params.Name))+1 > MaxXattrListBytes {
+				return ErrNoSpace
+			}
+		}
+
+		// 若 value == nil，归一化为 []byte{}，防止 pgx 序列化为 SQL NULL
+		val := params.Value
+		if val == nil {
+			val = []byte{}
+		}
+
+		// 写入数据库
+		if err := q.UpsertInodeXattr(ctx, db.UpsertInodeXattrParams{
+			Ino:   int64(params.Ino),
+			Name:  params.Name,
+			Value: val,
+		}); err != nil {
+			return fmt.Errorf("upsert inode xattr (ino=%d): %w", params.Ino, err)
+		}
+
+		// 刷新 Inode ctime
+		if err := q.TouchInodeCtime(ctx, int64(params.Ino)); err != nil {
+			return fmt.Errorf("touch inode ctime %d: %w", params.Ino, err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrPerm):
+			return ErrPerm
+		case errors.Is(err, ErrAlreadyExists):
+			return ErrAlreadyExists
+		case errors.Is(err, ErrNoData):
+			return ErrNoData
+		case errors.Is(err, ErrNoSpace):
+			return ErrNoSpace
+		case errors.Is(err, ErrRange):
+			return ErrRange
+		case errors.Is(err, ErrTooBig):
+			return ErrTooBig
+		default:
+			return fmt.Errorf("setxattr (ino=%d): %w", params.Ino, err)
+		}
+	}
+
+	return nil
+}
+
+// GetXattr 获取指定 Inode 的扩展属性值。
+// 遵循 Linux FUSE FUSE_GETXATTR 协议与 POSIX getxattr(2) 语义，执行 4 步求值状态机：
+// 1. 入参静态校验（不查库）：校验 Ino 与 Name 边界及非法空字符；
+// 2. 只读快照隔离与存在性校验：在 RepeatableRead 只读事务内通过 GetInode 查询节点，支持孤儿节点；
+// 3. user.* 文件类型准入校验：针对 user.* 命名空间限制仅常规文件、目录与套接字，对其它非法文件类型直接返回 ErrNoData（对齐 Linux xattr_permission 读掩码行为），非 user.* 命名空间不限制；
+// 4. 读取属性值：调用 GetInodeXattr 读取扩展属性值，未命中返回 ErrNoData，命中则原样返回 value（含 0 字节空切片与非 UTF-8 原始字节）。遵循 noatime 策略不刷新 atime。
+func (m *manager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error) {
+	// 第 1 步：入参静态校验（不查库）
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateXattrName(name); err != nil {
+		return nil, err
+	}
+
+	var value []byte
+
+	// 开启只读事务 (RepeatableRead)
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		// 第 2 步：Inode 存在性校验
+		inode, err := q.GetInode(ctx, int64(ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d: %w", ino, err)
+		}
+
+		// 第 3 步：user.* 文件类型准入校验
+		if bytes.HasPrefix(name, []byte("user.")) && !isAllowedUserXattrFileType(uint32(inode.Mode)) {
+			return ErrNoData
+		}
+
+		// 第 4 步：读取属性值
+		xattr, err := q.GetInodeXattr(ctx, db.GetInodeXattrParams{
+			Ino:  int64(ino),
+			Name: name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNoData
+			}
+			return fmt.Errorf("get inode xattr (ino=%d): %w", ino, err)
+		}
+
+		value = xattr.Value
+		return nil
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrRange):
+			return nil, ErrRange
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNoData):
+			return nil, ErrNoData
+		default:
+			return nil, fmt.Errorf("getxattr (ino=%d): %w", ino, err)
+		}
+	}
+
+	return value, nil
+}
+
+// ListXattr 列出指定 Inode 的全部扩展属性名称列表。
+// 遵循 Linux FUSE FUSE_LISTXATTR 协议与 POSIX listxattr(2) 语义，执行 3 步求值状态机：
+// 1. 入参静态校验（不查库）：校验 Ino 必须大于 0 且在 int64 正数范围内 (<= math.MaxInt64)，否则返回 ErrInvalidArgument；
+// 2. 只读快照隔离与 Inode 存在性校验：在 RepeatableRead 只读事务（tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead)）中调用 GetInode(ino)；若未命中返回 ErrNotFound；支持孤儿节点 (nlink == 0)；
+// 3. 查询属性名列表：调用 ListInodeXattrNames(ino) 查询该节点绑定的全部属性名称；
+//    - 结果按名称原始字节序升序（BYTEA ASC）返回；不按调用方过滤（对齐 Linux 内核 FUSE 行为）；
+//    - 若无属性，返回空切片 [][]byte{}；
+//    - 遵循 noatime 策略不刷新 atime。
+func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
+	// 第 1 步：入参静态校验（不查库）
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	names := [][]byte{}
+
+	// 开启只读事务 (RepeatableRead)
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		// 第 2 步：Inode 存在性校验
+		_, err := q.GetInode(ctx, int64(ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d: %w", ino, err)
+		}
+
+		// 第 3 步：查询属性名列表（按 BYTEA ASC 升序排列，不按命名空间过滤）
+		items, err := q.ListInodeXattrNames(ctx, int64(ino))
+		if err != nil {
+			return fmt.Errorf("list inode xattr names (ino=%d): %w", ino, err)
+		}
+
+		if len(items) > 0 {
+			names = items
+		}
+		return nil
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		default:
+			return nil, fmt.Errorf("listxattr (ino=%d): %w", ino, err)
+		}
+	}
+
+	return names, nil
+}
+
+// RemoveXattr 移除指定 Inode 的扩展属性。
+// 遵循 Linux FUSE FUSE_REMOVEXATTR 协议与 POSIX removexattr(2) 语义，执行 4 步求值状态机：
+// 1. 入参静态校验（不查库）：
+//    - ino == 0 || ino > math.MaxInt64 返回 ErrInvalidArgument；
+//    - len(name) == 0 || len(name) > MaxXattrNameBytes 返回 ErrRange；
+//    - bytes.IndexByte(name, 0) >= 0 返回 ErrInvalidArgument；
+// 2. Inode 行级排他锁与存在性校验：在读写事务内调用 GetInodeForUpdate(ino)；未命中返回 ErrNotFound；支持孤儿节点 (nlink == 0)；
+// 3. user.* 文件类型准入校验：若以 user. 为前缀，仅允许常规文件 (S_IFREG)、目录 (S_IFDIR) 与套接字 (S_IFSOCK)；对符号链接、字符设备、块设备、FIFO 返回 ErrPerm（对齐 Linux xattr_permission 写掩码行为）；非 user.* 命名空间不限制；
+// 4. 删除属性与刷新 ctime：调用 DeleteInodeXattr(ino, name)；若受影响行数为 0 返回 ErrNoData；删除成功后调用 TouchInodeCtime(ino) 刷新 ctime（使用 clock_timestamp()，不修改 mtime 与 atime）。
+func (m *manager) RemoveXattr(ctx context.Context, ino uint64, name []byte) error {
+	// 第 1 步：入参静态校验（不查库）
+	if ino == 0 || ino > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateXattrName(name); err != nil {
+		return err
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		// 第 2 步：Inode 行级排他锁与存在性校验
+		inode, err := q.GetInodeForUpdate(ctx, int64(ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode for update %d: %w", ino, err)
+		}
+
+		// 第 3 步：user.* 文件类型准入校验
+		if bytes.HasPrefix(name, []byte("user.")) && !isAllowedUserXattrFileType(uint32(inode.Mode)) {
+			return ErrPerm
+		}
+
+		// 第 4 步：删除属性与刷新 ctime
+		rowsAffected, err := q.DeleteInodeXattr(ctx, db.DeleteInodeXattrParams{
+			Ino:  int64(ino),
+			Name: name,
+		})
+		if err != nil {
+			return fmt.Errorf("delete inode xattr (ino=%d): %w", ino, err)
+		}
+		if rowsAffected == 0 {
+			return ErrNoData
+		}
+
+		if err := q.TouchInodeCtime(ctx, int64(ino)); err != nil {
+			return fmt.Errorf("touch inode ctime %d: %w", ino, err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrPerm):
+			return ErrPerm
+		case errors.Is(err, ErrNoData):
+			return ErrNoData
+		case errors.Is(err, ErrRange):
+			return ErrRange
+		default:
+			return fmt.Errorf("removexattr (ino=%d): %w", ino, err)
 		}
 	}
 
