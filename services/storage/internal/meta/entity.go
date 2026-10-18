@@ -2,6 +2,7 @@ package meta
 
 import (
 	"errors"
+	"math"
 	"time"
 )
 
@@ -48,6 +49,24 @@ const (
 
 	XattrCreate  uint32 = 0x1
 	XattrReplace uint32 = 0x2
+)
+
+// Linux FUSE 文件锁类型、标志位、最大偏移量与会话租约常量（平台无关固定值，严禁依赖宿主机 syscall.F_*）。
+const (
+	F_RDLCK uint32 = 0
+	F_WRLCK uint32 = 1
+	F_UNLCK uint32 = 2
+
+	FuseLkFlock            uint32 = 0x1
+	FuseReleaseFlockUnlock uint32 = 0x2
+
+	OffsetMax uint64 = math.MaxInt64
+
+	DefaultSessionLeaseTTL = 60 * time.Second
+
+	WaiterStatusPending   int16 = 1
+	WaiterStatusGranted   int16 = 2
+	WaiterStatusCancelled int16 = 3
 )
 
 // SetAttrInput 定义修改 Inode 属性的输入参数。
@@ -134,11 +153,12 @@ type OpenResult struct {
 	OpenFlags uint32
 }
 
-// FlushParams 定义会话句柄冲刷操作的输入参数。
+// FlushParams 定义会话句柄冲刷与进程级 POSIX 记录锁清理操作的输入参数。
 type FlushParams struct {
 	Ino       uint64
 	Fh        uint64
 	LockOwner *uint64
+	SessionID *uint64
 }
 
 // FsyncParams 定义文件同步操作的输入参数。
@@ -148,10 +168,13 @@ type FsyncParams struct {
 	Datasync bool
 }
 
-// ReleaseParams 定义文件句柄销毁与孤儿回收操作的输入参数。
+// ReleaseParams 定义文件句柄销毁、BSD flock 句柄锁清理与孤儿回收操作的输入参数。
 type ReleaseParams struct {
-	Ino uint64
-	Fh  uint64
+	Ino          uint64
+	Fh           uint64
+	LockOwner    *uint64
+	ReleaseFlags uint32
+	SessionID    *uint64
 }
 
 // OpenDirParams 定义打开目录并分配目录句柄的输入参数。
@@ -232,6 +255,45 @@ type SetXattrParams struct {
 	Flags uint32
 }
 
+// FileLock 表示 FUSE 文件锁领域实体。
+type FileLock struct {
+	Start uint64
+	End   uint64
+	Type  uint32
+	PID   uint32
+}
+
+// GetLkParams 定义 FUSE_GETLK (31) 冲突锁探测操作的输入参数。
+type GetLkParams struct {
+	Ino       uint64
+	Fh        uint64
+	LockOwner uint64
+	Lk        FileLock
+	LkFlags   uint32
+	SessionID uint64
+}
+
+// SetLkParams 定义 FUSE_SETLK (32) 非阻塞加解锁操作的输入参数。
+type SetLkParams struct {
+	Ino       uint64
+	Fh        uint64
+	LockOwner uint64
+	Lk        FileLock
+	LkFlags   uint32
+	SessionID uint64
+}
+
+// SetLkwParams 定义 FUSE_SETLKW (33) 阻塞等待加解锁操作的输入参数。
+type SetLkwParams struct {
+	Ino       uint64
+	Fh        uint64
+	LockOwner uint64
+	Lk        FileLock
+	LkFlags   uint32
+	SessionID uint64
+	RequestID uint64
+}
+
 // 领域哨兵错误。
 var (
 	ErrInvalidArgument = errors.New("meta: invalid argument")
@@ -248,6 +310,9 @@ var (
 	ErrTooBig          = errors.New("meta: argument list too long")
 	ErrNoData          = errors.New("meta: no data available")
 	ErrNoSpace         = errors.New("meta: no space left on device")
+	ErrAgain           = errors.New("meta: resource temporarily unavailable")
+	ErrDeadlock        = errors.New("meta: resource deadlock avoided")
+	ErrInterrupted     = errors.New("meta: interrupted system call")
 )
 
 // Inode 表示文件系统节点的领域实体。

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -62,28 +64,55 @@ type Manager interface {
 	GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error)
 	ListXattr(ctx context.Context, ino uint64) ([][]byte, error)
 	RemoveXattr(ctx context.Context, ino uint64, name []byte) error
+	GetLk(ctx context.Context, params GetLkParams) (*FileLock, error)
+	SetLk(ctx context.Context, params SetLkParams) error
+	SetLkw(ctx context.Context, params SetLkwParams) error
 }
 
 type manager struct {
-	store        db.Store
-	entryTimeout float64
-	attrTimeout  float64
+	store           db.Store
+	entryTimeout    float64
+	attrTimeout     float64
+	sessionLeaseTTL time.Duration
+	lockNotifyMu    sync.Mutex
+	lockNotifyChans map[uint64]chan struct{}
 }
 
 var _ Manager = (*manager)(nil)
 
-// New 创建 Manager 实例。
-func New(store db.Store) Manager {
-	return &manager{
-		store:        store,
-		entryTimeout: DefaultEntryTimeoutSeconds,
-		attrTimeout:  DefaultAttrTimeoutSeconds,
+// Option 定义 Manager 的配置选项。
+type Option func(*manager)
+
+// WithSessionLeaseTTL 配置客户端会话租约的续期时长（TTL <= 0 时忽略并保持默认值）。
+func WithSessionLeaseTTL(ttl time.Duration) Option {
+	return func(m *manager) {
+		if ttl > 0 {
+			m.sessionLeaseTTL = ttl
+		}
 	}
+}
+
+// New 创建 Manager 实例。
+func New(store db.Store, opts ...Option) Manager {
+	m := &manager{
+		store:           store,
+		entryTimeout:    DefaultEntryTimeoutSeconds,
+		attrTimeout:     DefaultAttrTimeoutSeconds,
+		sessionLeaseTTL: DefaultSessionLeaseTTL,
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	return m
 }
 
 // Module 提供 meta 依赖注入模块。
 var Module = fx.Module("meta",
-	fx.Provide(New),
+	fx.Provide(func(store db.Store) Manager {
+		return New(store)
+	}),
 )
 
 // Lookup 执行单级目录项查找与块属性动态推导。
@@ -1595,9 +1624,89 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 }
 
 // Flush 冲刷会话句柄并校验合法性（不销毁文件句柄）。
-// 注：params.LockOwner 保留用于 Linux FUSE / POSIX 协议契约对齐，当前元数据存储层无需记录锁所有者。
+// 遵循 ADR-0012：
+// 1. 当未传入 LockOwner（LockOwner == nil）时，保持只读事务校验 (ino, fh) 合法性；
+// 2. 当传入 LockOwner（LockOwner != nil）时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
+//    原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
+//    无论这些锁最初是通过哪个 FileHandle 申请或合并的；Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
 func (m *manager) Flush(ctx context.Context, params FlushParams) error {
-	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "flush")
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.SessionID != nil && (*params.SessionID == 0 || *params.SessionID > OffsetMax) {
+		return ErrInvalidArgument
+	}
+
+	if params.LockOwner == nil {
+		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "flush")
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+		}
+
+		if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+			return ErrIsDir
+		}
+
+		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
+			Fh:  int64(params.Fh),
+			Ino: int64(params.Ino),
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrBadFileHandle
+			}
+			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		if params.SessionID != nil {
+			if err := m.renewClientSession(ctx, q, *params.SessionID); err != nil {
+				return err
+			}
+			_, err = q.DeletePosixFileLocksBySessionAndOwner(ctx, db.DeletePosixFileLocksBySessionAndOwnerParams{
+				SessionID: int64(*params.SessionID),
+				Ino:       int64(params.Ino),
+				LockOwner: int64(*params.LockOwner),
+			})
+			if err != nil {
+				return fmt.Errorf("delete posix file locks by session and owner (session_id=%d, ino=%d, lock_owner=%d): %w", *params.SessionID, params.Ino, *params.LockOwner, err)
+			}
+		} else {
+			_, err = q.DeletePosixFileLocksByOwner(ctx, db.DeletePosixFileLocksByOwnerParams{
+				Ino:       int64(params.Ino),
+				LockOwner: int64(*params.LockOwner),
+			})
+			if err != nil {
+				return fmt.Errorf("delete posix file locks by owner (ino=%d, lock_owner=%d): %w", params.Ino, *params.LockOwner, err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrIsDir):
+			return ErrIsDir
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("flush tx: %w", err)
+		}
+	}
+
+	m.notifyLockWaiters(params.Ino)
+	return nil
 }
 
 // Fsync 同步文件节点与句柄关联的状态。
@@ -1606,9 +1715,20 @@ func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
 	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "fsync")
 }
 
-// Release 关闭并销毁文件句柄，且在孤儿节点无活跃句柄时执行最终物理回收。
+// Release 关闭并销毁文件句柄，按标志位清理 BSD flock 句柄锁，且在孤儿节点无活跃句柄时执行最终物理回收。
+// 遵循 ADR-0012：
+// 1. 静态校验 ino、fh、release_flags（仅允许 0 或 FuseReleaseFlockUnlock）与可选 session_id 范围；
+// 2. 在 READ COMMITTED 写事务中锁定目标 Inode 并删除 file_handles(fh)；
+// 3. 仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
+// 4. 若 nlink == 0 且无剩余活跃句柄，执行孤儿节点物理回收（数据库 ON DELETE CASCADE 自动清理残留锁）。
 func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if (params.ReleaseFlags &^ FuseReleaseFlockUnlock) != 0 {
+		return ErrInvalidArgument
+	}
+	if params.SessionID != nil && (*params.SessionID == 0 || *params.SessionID > OffsetMax) {
 		return ErrInvalidArgument
 	}
 
@@ -1636,6 +1756,30 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
 		}
 
+		if (params.ReleaseFlags & FuseReleaseFlockUnlock) != 0 {
+			if params.SessionID != nil {
+				if err := m.renewClientSession(ctx, q, *params.SessionID); err != nil {
+					return err
+				}
+				_, err = q.DeleteFlockFileLocksBySessionAndFh(ctx, db.DeleteFlockFileLocksBySessionAndFhParams{
+					SessionID: int64(*params.SessionID),
+					Ino:       int64(params.Ino),
+					Fh:        int64(params.Fh),
+				})
+				if err != nil {
+					return fmt.Errorf("delete flock file locks by session and fh (session_id=%d, ino=%d, fh=%d): %w", *params.SessionID, params.Ino, params.Fh, err)
+				}
+			} else {
+				_, err = q.DeleteFlockFileLocksByFh(ctx, db.DeleteFlockFileLocksByFhParams{
+					Ino: int64(params.Ino),
+					Fh:  int64(params.Fh),
+				})
+				if err != nil {
+					return fmt.Errorf("delete flock file locks by fh (ino=%d, fh=%d): %w", params.Ino, params.Fh, err)
+				}
+			}
+		}
+
 		if inode.Nlink == 0 {
 			if err := m.reclaimOrphanIfNoHandles(ctx, q, params.Ino); err != nil {
 				return err
@@ -1660,6 +1804,9 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		}
 	}
 
+	if (params.ReleaseFlags & FuseReleaseFlockUnlock) != 0 {
+		m.notifyLockWaiters(params.Ino)
+	}
 	return nil
 }
 
