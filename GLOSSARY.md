@@ -41,11 +41,11 @@ _Avoid_: DeleteFile, RemoveFile, Erase, DestroyNode
 _Avoid_: DeleteDir, RemoveFolder, PurgeDir
 
 **Rename (目录项重命名)**:
-在同一或不同父目录间原子性地移动或覆盖 Entry 绑定关系的元数据变更操作。
+在同一或不同父目录间原子性地移动、覆盖或交换 Entry 绑定关系（支持禁止覆盖与双向交换模式）的元数据变更操作。
 _Avoid_: Move, Mv, Relocate, Rebind
 
 **Link (硬链接创建)**:
-在指定父目录下为已存在的非目录 Inode 绑定新 Entry 并递增其硬链接计数的元数据变更操作。
+在指定父目录下为已存在的非目录 Inode（或未携带独占标志的活跃匿名临时文件）绑定新 Entry 并递增其硬链接计数的元数据变更操作。
 _Avoid_: HardLink, AddLink, AliasNode
 
 **Symlink (符号链接创建)**:
@@ -57,7 +57,7 @@ _Avoid_: SoftLink, CreateShortcut, MakeAlias
 _Avoid_: GetSymlink, ResolveLink, ReadTarget
 
 **Orphan Inode (孤儿节点)**:
-所有 Entry 均已解链（硬链接计数归零）但尚未被物理回收的 Inode 实体。
+所有 Entry 均已解链或自创建起未绑定 Entry（硬链接计数为零）但尚未被物理回收的 Inode 实体。
 _Avoid_: ZombieNode, DanglingInode, DeletedFile
 
 **Attribute (文件属性)**:
@@ -73,12 +73,16 @@ _Avoid_: Version, Revision, Epoch
 _Avoid_: Volume, Drive, MountPoint, Partition
 
 **FileHandle (文件句柄)**:
-文件系统为单次文件打开会话分配的唯一持久化数字标识符，用于在打开生命周期内关联后续的冲刷、同步与释放操作。
+文件系统为单次文件或目录打开会话分配的、受客户端会话租约管辖的唯一持久化数字标识符，用于在打开生命周期内关联后续的遍历、冲刷、同步与释放操作。
 _Avoid_: Fd, FileDescriptor, SessionID, HandleID, StreamID
 
 **Create (文件创建并打开)**:
 在指定父目录下原子性地创建常规文件 Inode、绑定同名 Entry 并分配初始 FileHandle 的元数据变更与会话建立操作。
 _Avoid_: CreateAndOpen, TouchAndOpen, NewFile
+
+**TmpFile (匿名临时文件创建)**:
+在指定父目录下直接创建未绑定 Entry（硬链接计数为零）的匿名常规文件 Inode 并分配初始 FileHandle 的元数据变更与会话建立操作。
+_Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
 
 **Open (文件打开)**:
 针对已存在的非目录 Inode 建立打开会话并分配 FileHandle（可按需伴随文件截断）的生命周期操作。
@@ -107,6 +111,10 @@ _Avoid_: ListDir, ReadEntries, FetchDir, ScanDir
 **ReadDirPlus (增强目录读取)**:
 在 ReadDir 基础之上，内联预取并返回子项完整 Inode 属性与内核缓存时效的批量元数据检索操作。
 _Avoid_: ReadDirWithAttr, BatchLookup, ScanDirPlus
+
+**FsyncDir (目录同步)**:
+确认目标目录 Inode 及其活跃目录 FileHandle 关联状态（支持完整同步与仅数据同步语义）已持久化的同步操作。
+_Avoid_: SyncDir, CommitDir, FlushDir
 
 **ReleaseDir (目录句柄释放)**:
 销毁指定目录 FileHandle 并在目标目录 Inode 无剩余活跃 FileHandle 且处于 Orphan Inode 状态时触发物理回收的会话终止操作。
