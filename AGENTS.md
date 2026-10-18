@@ -1,3 +1,5 @@
+1. ceph, computer, juicefs, drive9 这四个项目为参考项目，他们是我找的权威的开源的一些项目，有可参考的内容。
+
 ## Build, Test & Tooling
 
 - **多模块与 Worktree 隔离**：仓库包含根模块（`gen/go` Protobuf 生成代码）与 [`services/storage`](services/storage/go.mod) 子模块。根目录 [`go.work`](go.work) 已 gitignore。在 `.worktrees/<ticket>` 内执行 `go` 或 `mockery` 命令时，必须通过 [`Taskfile.yml`](Taskfile.yml)（已内置 `GOWORK=off`）或显式指定 `GOWORK=off`，切勿无隔离运行导致向上命中父仓库 `go.work`。
