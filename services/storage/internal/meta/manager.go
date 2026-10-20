@@ -51,11 +51,13 @@ type Manager interface {
 	Rmdir(ctx context.Context, parentIno uint64, name []byte) error
 	Rename(ctx context.Context, params RenameParams) error
 	Create(ctx context.Context, params CreateParams) (*CreateResult, error)
+	TmpFile(ctx context.Context, params TmpFileParams) (*CreateResult, error)
 	Open(ctx context.Context, params OpenParams) (*OpenResult, error)
 	Flush(ctx context.Context, params FlushParams) error
 	Fsync(ctx context.Context, params FsyncParams) error
 	Release(ctx context.Context, params ReleaseParams) error
 	OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirResult, error)
+	FsyncDir(ctx context.Context, params FsyncDirParams) error
 	ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 	ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error)
 	ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error)
@@ -67,6 +69,7 @@ type Manager interface {
 	GetLk(ctx context.Context, params GetLkParams) (*FileLock, error)
 	SetLk(ctx context.Context, params SetLkParams) error
 	SetLkw(ctx context.Context, params SetLkwParams) error
+	RenewSession(ctx context.Context, sessionID uint64) (time.Time, error)
 }
 
 type manager struct {
@@ -745,6 +748,7 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 
 		// 按全局 ino 升序锁定目标父目录与源节点，避免跨层操作逆序死锁
 		var parent db.Inode
+		var isTmpFileMaterializing bool
 		for _, ino := range uniqueSortedInos(int64(params.NewParentIno), int64(params.Ino)) {
 			row, err := q.GetInodeForUpdate(ctx, ino)
 			if err != nil {
@@ -767,9 +771,19 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 				if (uint32(row.Mode) & S_IFMT) == S_IFDIR {
 					return ErrPerm
 				}
-				// 禁止复活孤儿节点
+				// 当 nlink == 0 时，仅允许持有有效且未携带 O_EXCL 的 O_TMPFILE 常规文件一次性具名化，严禁复活已 Unlink 孤儿节点
 				if row.Nlink == 0 {
-					return ErrNotFound
+					if (uint32(row.Mode) & S_IFMT) != S_IFREG {
+						return ErrNotFound
+					}
+					linkable, err := q.HasLinkableTmpFileHandleByIno(ctx, row.Ino)
+					if err != nil {
+						return fmt.Errorf("check linkable tmpfile handle for inode %d: %w", row.Ino, err)
+					}
+					if !linkable {
+						return ErrNotFound
+					}
+					isTmpFileMaterializing = true
 				}
 			}
 		}
@@ -792,6 +806,13 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 		updatedSrc, err := q.IncrementInodeNlinkAndTouchCtime(ctx, int64(params.Ino))
 		if err != nil {
 			return fmt.Errorf("increment source inode %d nlink and touch ctime: %w", params.Ino, err)
+		}
+
+		// 若为匿名 TmpFile 首次具名化，原子清除关联句柄的 O_TMPFILE 位，防止后续被 Unlink 后二次复活
+		if isTmpFileMaterializing {
+			if err := q.ClearTmpFileFlagByIno(ctx, int64(params.Ino)); err != nil {
+				return fmt.Errorf("clear tmpfile flag for inode %d: %w", params.Ino, err)
+			}
 		}
 
 		// 刷新目标父目录 mtime 与 ctime (父目录 nlink 保持不变)
@@ -1095,12 +1116,15 @@ func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name []byte) erro
 	return nil
 }
 
-// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
+// Rename 执行原子文件/目录重命名、移动或交换（支持 FUSE_RENAME2 标志位）。
 func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	if params.OldParentIno == 0 || params.OldParentIno > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
 	if params.NewParentIno == 0 || params.NewParentIno > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Flags != 0 && params.Flags != RenameNoReplace && params.Flags != RenameExchange {
 		return ErrInvalidArgument
 	}
 	if err := validateEntryName(params.OldName); err != nil {
@@ -1148,6 +1172,9 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 				}
 				return fmt.Errorf("verify old entry %d/%s: %w", params.OldParentIno, params.OldName, err)
 			}
+			if params.Flags == RenameNoReplace {
+				return ErrAlreadyExists
+			}
 			return nil
 		}
 
@@ -1160,7 +1187,14 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 		if err == nil {
 			hasNewEntry = true
 			newIno = preNewEntry.Ino
-		} else if !errors.Is(err, pgx.ErrNoRows) {
+		} else if errors.Is(err, pgx.ErrNoRows) {
+			if params.Flags == RenameExchange {
+				if _, _, pErr := lockAndValidateParents(ctx, q, params.OldParentIno, params.NewParentIno); pErr != nil {
+					return pErr
+				}
+				return ErrNotFound
+			}
+		} else {
 			return fmt.Errorf("get new entry %d/%s: %w", params.NewParentIno, params.NewName, err)
 		}
 
@@ -1223,7 +1257,12 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			return errRetryTx
 		}
 
-		// 同节点硬链接短路 (POSIX No-op)
+		// RenameNoReplace：只要目标 Entry 已存在（包含同一 Inode 的不同硬链接与异 Inode），一律返回 ErrAlreadyExists
+		if params.Flags == RenameNoReplace && hasNewEntry {
+			return ErrAlreadyExists
+		}
+
+		// 同节点硬链接短路 (POSIX No-op / RenameExchange 同节点短路)
 		if hasNewEntry && oldIno == newIno {
 			return nil
 		}
@@ -1234,8 +1273,9 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 		newInode := locked[newIno]
 
 		oldIsDir := (uint32(oldInode.Mode) & S_IFMT) == S_IFDIR
+		newIsDir := hasNewEntry && (uint32(newInode.Mode)&S_IFMT) == S_IFDIR
 
-		// 祖先环检测：当源节点为目录且跨目录移动时
+		// 祖先环检测：当源节点为目录且跨目录移动或交换时（正向检测）
 		if oldIsDir && params.OldParentIno != params.NewParentIno {
 			if params.NewParentIno == uint64(oldIno) {
 				return ErrInvalidArgument
@@ -1252,9 +1292,85 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			}
 		}
 
+		// RenameExchange 双向原子交换分支
+		if params.Flags == RenameExchange {
+			// 反向祖先环检测：当目标节点为目录且跨目录交换时
+			if newIsDir && params.OldParentIno != params.NewParentIno {
+				if params.OldParentIno == uint64(newIno) {
+					return ErrInvalidArgument
+				}
+				isSub, err := q.IsSubdirectory(ctx, db.IsSubdirectoryParams{
+					ChildIno:    int64(params.OldParentIno),
+					AncestorIno: newIno,
+				})
+				if err != nil {
+					return fmt.Errorf("check reverse is subdirectory %d in %d: %w", params.OldParentIno, newIno, err)
+				}
+				if isSub {
+					return ErrInvalidArgument
+				}
+			}
+
+			// 原地互换两个目录项的目标 Ino
+			if err := q.UpdateEntryIno(ctx, db.UpdateEntryInoParams{
+				ParentIno: int64(params.OldParentIno),
+				Name:      params.OldName,
+				Ino:       newIno,
+			}); err != nil {
+				return fmt.Errorf("update old entry %d/%s ino -> %d: %w", params.OldParentIno, params.OldName, newIno, err)
+			}
+			if err := q.UpdateEntryIno(ctx, db.UpdateEntryInoParams{
+				ParentIno: int64(params.NewParentIno),
+				Name:      params.NewName,
+				Ino:       oldIno,
+			}); err != nil {
+				return fmt.Errorf("update new entry %d/%s ino -> %d: %w", params.NewParentIno, params.NewName, oldIno, err)
+			}
+
+			// 刷新双节点 ctime
+			if err := q.TouchInodeCtime(ctx, oldIno); err != nil {
+				return fmt.Errorf("touch old inode %d ctime: %w", oldIno, err)
+			}
+			if err := q.TouchInodeCtime(ctx, newIno); err != nil {
+				return fmt.Errorf("touch new inode %d ctime: %w", newIno, err)
+			}
+
+			// 维护父目录 nlink 与时间戳
+			if params.OldParentIno == params.NewParentIno {
+				if err := q.TouchInodeTimestamps(ctx, oldParent.Ino); err != nil {
+					return fmt.Errorf("touch parent inode %d timestamps: %w", oldParent.Ino, err)
+				}
+			} else if oldIsDir == newIsDir {
+				// 跨父目录且双方同为目录或同为非目录：双父目录 nlink 不变，仅刷新时间戳
+				if err := q.TouchInodeTimestamps(ctx, oldParent.Ino); err != nil {
+					return fmt.Errorf("touch old parent inode %d timestamps: %w", oldParent.Ino, err)
+				}
+				if err := q.TouchInodeTimestamps(ctx, newParent.Ino); err != nil {
+					return fmt.Errorf("touch new parent inode %d timestamps: %w", newParent.Ino, err)
+				}
+			} else if oldIsDir && !newIsDir {
+				// 跨父目录且源为目录、目标为非目录：oldParent 移出目录 nlink - 1，newParent 移入目录 nlink + 1
+				if err := q.DecrementInodeNlinkAndTouch(ctx, oldParent.Ino); err != nil {
+					return fmt.Errorf("decrement old parent inode %d nlink and touch: %w", oldParent.Ino, err)
+				}
+				if err := q.IncrementInodeNlinkAndTouch(ctx, newParent.Ino); err != nil {
+					return fmt.Errorf("increment new parent inode %d nlink and touch: %w", newParent.Ino, err)
+				}
+			} else {
+				// 跨父目录且源为非目录、目标为目录：oldParent 移入目录 nlink + 1，newParent 移出目录 nlink - 1
+				if err := q.IncrementInodeNlinkAndTouch(ctx, oldParent.Ino); err != nil {
+					return fmt.Errorf("increment old parent inode %d nlink and touch: %w", oldParent.Ino, err)
+				}
+				if err := q.DecrementInodeNlinkAndTouch(ctx, newParent.Ino); err != nil {
+					return fmt.Errorf("decrement new parent inode %d nlink and touch: %w", newParent.Ino, err)
+				}
+			}
+
+			return nil
+		}
+
 		// 异节点覆盖兼容矩阵校验
 		if hasNewEntry {
-			newIsDir := (uint32(newInode.Mode) & S_IFMT) == S_IFDIR
 			if oldIsDir && !newIsDir {
 				return ErrNotDir // POSIX ENOTDIR: old is dir, new is not dir
 			}
@@ -1364,6 +1480,8 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 		switch {
 		case errors.Is(err, ErrNotFound):
 			return ErrNotFound
+		case errors.Is(err, ErrAlreadyExists):
+			return ErrAlreadyExists
 		case errors.Is(err, ErrNotDir):
 			return ErrNotDir
 		case errors.Is(err, ErrIsDir):
@@ -1380,15 +1498,48 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	return nil
 }
 
+func validateOptionalSessionID(sessionID *uint64) error {
+	if sessionID != nil && (*sessionID == 0 || *sessionID > OffsetMax) {
+		return ErrInvalidArgument
+	}
+	return nil
+}
+
+func toPgSessionID(sessionID *uint64) pgtype.Int8 {
+	if sessionID == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{
+		Int64: int64(*sessionID),
+		Valid: true,
+	}
+}
+
+// renewOptionalClientSession 若传入了有效的客户端会话标识，则在当前事务中执行会话租约续期并清理相关孤儿节点。
+func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, sessionID *uint64) error {
+	if sessionID == nil {
+		return nil
+	}
+	_, err := m.renewClientSession(ctx, q, *sessionID)
+	return err
+}
+
 // Create 在指定父目录下原子创建常规文件并分配初始文件句柄。
+// 严禁在 flags 中携带 O_TMPFILE 标志位（匿名临时文件必须使用 TmpFile 接口创建），否则静态入参校验直接返回 ErrInvalidArgument。
 func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResult, error) {
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
 		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
 	}
 	if err := validateEntryName(params.Name); err != nil {
 		return nil, err
 	}
 	if params.Mode > 0xffff {
+		return nil, ErrInvalidArgument
+	}
+	if (params.Flags & O_TMPFILE) != 0 {
 		return nil, ErrInvalidArgument
 	}
 
@@ -1454,9 +1605,14 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 			return fmt.Errorf("touch parent inode %d timestamps: %w", parent.Ino, err)
 		}
 
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
 		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
-			Ino:   newInode.Ino,
-			Flags: int32(params.Flags),
+			Ino:       newInode.Ino,
+			Flags:     int32(params.Flags),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			return fmt.Errorf("create file handle for inode %d: %w", newInode.Ino, err)
@@ -1486,9 +1642,109 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 	return result, nil
 }
 
+// TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄。
+func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateResult, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	if params.Mode > 0xffff {
+		return nil, ErrInvalidArgument
+	}
+
+	modeType := params.Mode & S_IFMT
+	if modeType != 0 && modeType != S_IFREG {
+		return nil, ErrInvalidArgument
+	}
+
+	accMode := params.Flags & O_ACCMODE
+	if accMode != O_WRONLY && accMode != O_RDWR {
+		return nil, ErrInvalidArgument
+	}
+
+	targetMode := S_IFREG | (params.Mode & PermMask)
+
+	var result *CreateResult
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		parent, err := q.GetInodeForUpdate(ctx, int64(params.ParentIno))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("get parent inode for update %d: %w", params.ParentIno, err)
+		}
+
+		if (uint32(parent.Mode) & S_IFMT) != S_IFDIR {
+			return ErrNotDir
+		}
+
+		if parent.Nlink == 0 {
+			return ErrNotFound
+		}
+
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
+		gid := params.GID
+		if (uint32(parent.Mode) & S_ISGID) != 0 {
+			gid = uint32(parent.Gid)
+		}
+
+		newInode, err := q.CreateInode(ctx, db.CreateInodeParams{
+			Mode:  int32(targetMode),
+			Nlink: 0,
+			Uid:   int32(params.UID),
+			Gid:   int32(gid),
+			Rdev:  0,
+		})
+		if err != nil {
+			return fmt.Errorf("create tmpfile inode: %w", err)
+		}
+
+		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
+			Ino:       newInode.Ino,
+			Flags:     int32(params.Flags | O_TMPFILE),
+			SessionID: toPgSessionID(params.SessionID),
+		})
+		if err != nil {
+			return fmt.Errorf("create file handle for tmpfile inode %d: %w", newInode.Ino, err)
+		}
+
+		result = &CreateResult{
+			Inode:     newInodeFromDB(newInode),
+			Fh:        uint64(handle.Fh),
+			OpenFlags: 0,
+		}
+		return nil
+	})
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return nil, ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return nil, ErrNotDir
+		default:
+			return nil, fmt.Errorf("tmpfile tx: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
 // Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
+// 严禁在 flags 中携带 O_TMPFILE 标志位（严防伪造 O_TMPFILE 绕过独占限制或非法复活孤儿节点），否则静态入参校验直接返回 ErrInvalidArgument。
 func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, error) {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	if (params.Flags & O_TMPFILE) != 0 {
 		return nil, ErrInvalidArgument
 	}
 
@@ -1543,9 +1799,14 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			}
 		}
 
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
 		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
-			Ino:   inode.Ino,
-			Flags: int32(params.Flags),
+			Ino:       inode.Ino,
+			Flags:     int32(params.Flags),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
@@ -1575,7 +1836,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 }
 
 // checkFileHandleReadOnly 在只读 RepeatableRead 事务内校验 Inode 与 FileHandle 归属有效性。
-func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh uint64, opName string) error {
+func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh uint64, sessionID *uint64, opName string) error {
 	if ino == 0 || ino > math.MaxInt64 || fh == 0 || fh > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
@@ -1594,8 +1855,9 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 		}
 
 		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:  int64(fh),
-			Ino: int64(ino),
+			Fh:        int64(fh),
+			Ino:       int64(ino),
+			SessionID: toPgSessionID(sessionID),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1625,20 +1887,20 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 
 // Flush 冲刷会话句柄并校验合法性（不销毁文件句柄）。
 // 遵循 ADR-0012：
-// 1. 当未传入 LockOwner（LockOwner == nil）时，保持只读事务校验 (ino, fh) 合法性；
-// 2. 当传入 LockOwner（LockOwner != nil）时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
-//    原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
+// 1. 当未传入 LockOwner 与 SessionID（LockOwner == nil && SessionID == nil）时，保持只读事务校验 (ino, fh) 合法性；
+// 2. 当传入 LockOwner 或 SessionID 时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
+//    若携带 SessionID 则续期会话并触发孤儿节点兜底回收；若携带 LockOwner 则原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
 //    无论这些锁最初是通过哪个 FileHandle 申请或合并的；Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
 func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if params.SessionID != nil && (*params.SessionID == 0 || *params.SessionID > OffsetMax) {
-		return ErrInvalidArgument
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
 	}
 
-	if params.LockOwner == nil {
-		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "flush")
+	if params.LockOwner == nil && params.SessionID == nil {
+		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, nil, "flush")
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
@@ -1655,8 +1917,9 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 		}
 
 		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1665,25 +1928,28 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
 		}
 
-		if params.SessionID != nil {
-			if err := m.renewClientSession(ctx, q, *params.SessionID); err != nil {
-				return err
-			}
-			_, err = q.DeletePosixFileLocksBySessionAndOwner(ctx, db.DeletePosixFileLocksBySessionAndOwnerParams{
-				SessionID: int64(*params.SessionID),
-				Ino:       int64(params.Ino),
-				LockOwner: int64(*params.LockOwner),
-			})
-			if err != nil {
-				return fmt.Errorf("delete posix file locks by session and owner (session_id=%d, ino=%d, lock_owner=%d): %w", *params.SessionID, params.Ino, *params.LockOwner, err)
-			}
-		} else {
-			_, err = q.DeletePosixFileLocksByOwner(ctx, db.DeletePosixFileLocksByOwnerParams{
-				Ino:       int64(params.Ino),
-				LockOwner: int64(*params.LockOwner),
-			})
-			if err != nil {
-				return fmt.Errorf("delete posix file locks by owner (ino=%d, lock_owner=%d): %w", params.Ino, *params.LockOwner, err)
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
+		if params.LockOwner != nil {
+			if params.SessionID != nil {
+				_, err = q.DeletePosixFileLocksBySessionAndOwner(ctx, db.DeletePosixFileLocksBySessionAndOwnerParams{
+					SessionID: int64(*params.SessionID),
+					Ino:       int64(params.Ino),
+					LockOwner: int64(*params.LockOwner),
+				})
+				if err != nil {
+					return fmt.Errorf("delete posix file locks by session and owner (session_id=%d, ino=%d, lock_owner=%d): %w", *params.SessionID, params.Ino, *params.LockOwner, err)
+				}
+			} else {
+				_, err = q.DeletePosixFileLocksByOwner(ctx, db.DeletePosixFileLocksByOwnerParams{
+					Ino:       int64(params.Ino),
+					LockOwner: int64(*params.LockOwner),
+				})
+				if err != nil {
+					return fmt.Errorf("delete posix file locks by owner (ino=%d, lock_owner=%d): %w", params.Ino, *params.LockOwner, err)
+				}
 			}
 		}
 
@@ -1705,21 +1971,26 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 		}
 	}
 
-	m.notifyLockWaiters(params.Ino)
+	if params.LockOwner != nil {
+		m.notifyLockWaiters(params.Ino)
+	}
 	return nil
 }
 
 // Fsync 同步文件节点与句柄关联的状态。
 // 注：params.Datasync 保留用于 Linux FUSE / POSIX 协议契约对齐，当前元数据在 PostgreSQL 事务提交时已完成持久化。
 func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
-	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, "fsync")
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, params.SessionID, "fsync")
 }
 
 // Release 关闭并销毁文件句柄，按标志位清理 BSD flock 句柄锁，且在孤儿节点无活跃句柄时执行最终物理回收。
 // 遵循 ADR-0012：
 // 1. 静态校验 ino、fh、release_flags（仅允许 0 或 FuseReleaseFlockUnlock）与可选 session_id 范围；
 // 2. 在 READ COMMITTED 写事务中锁定目标 Inode 并删除 file_handles(fh)；
-// 3. 仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
+// 3. 若传入 session_id，续期客户端会话并执行无引用孤儿节点兜底回收；仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
 // 4. 若 nlink == 0 且无剩余活跃句柄，执行孤儿节点物理回收（数据库 ON DELETE CASCADE 自动清理残留锁）。
 func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
@@ -1728,8 +1999,8 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	if (params.ReleaseFlags &^ FuseReleaseFlockUnlock) != 0 {
 		return ErrInvalidArgument
 	}
-	if params.SessionID != nil && (*params.SessionID == 0 || *params.SessionID > OffsetMax) {
-		return ErrInvalidArgument
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
@@ -1746,8 +2017,9 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		}
 
 		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -1756,11 +2028,12 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
 		}
 
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
 		if (params.ReleaseFlags & FuseReleaseFlockUnlock) != 0 {
 			if params.SessionID != nil {
-				if err := m.renewClientSession(ctx, q, *params.SessionID); err != nil {
-					return err
-				}
 				_, err = q.DeleteFlockFileLocksBySessionAndFh(ctx, db.DeleteFlockFileLocksBySessionAndFhParams{
 					SessionID: int64(*params.SessionID),
 					Ino:       int64(params.Ino),
@@ -1810,10 +2083,13 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	return nil
 }
 
-// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+// OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
 func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirResult, error) {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || (params.Flags&O_ACCMODE) != O_RDONLY || (params.Flags&O_TRUNC) != 0 {
 		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
 	}
 
 	var result *OpenDirResult
@@ -1840,9 +2116,14 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 			}
 		}
 
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
+		}
+
 		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
-			Ino:   inode.Ino,
-			Flags: int32(params.Flags),
+			Ino:       inode.Ino,
+			Flags:     int32(params.Flags),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
@@ -1871,10 +2152,46 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 	return result, nil
 }
 
+// FsyncDir 同步目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
+// 注：params.Datasync 保留用于 Linux FUSE / POSIX 协议契约对齐，当前元数据在 PostgreSQL 事务提交时已完成持久化。
+func (m *manager) FsyncDir(ctx context.Context, params FsyncDirParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		_, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
+		return err
+	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
+
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrInvalidArgument):
+			return ErrInvalidArgument
+		case errors.Is(err, ErrNotFound):
+			return ErrNotFound
+		case errors.Is(err, ErrNotDir):
+			return ErrNotDir
+		case errors.Is(err, ErrBadFileHandle):
+			return ErrBadFileHandle
+		default:
+			return fmt.Errorf("fsyncdir tx: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // ReleaseDir 关闭并销毁目录句柄，且在孤儿目录无活跃句柄时执行最终物理回收。
 func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
@@ -1891,14 +2208,19 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 		}
 
 		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrBadFileHandle
 			}
 			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
 		}
 
 		if inode.Nlink == 0 {
@@ -1968,7 +2290,7 @@ func newInodeFromListDirRow(row db.ListDirEntriesRow) *Inode {
 }
 
 // validateDirHandle 校验目录会话有效性，确认 Inode 存在、为目录且 FileHandle 属于该 Inode。
-func (m *manager) validateDirHandle(ctx context.Context, q db.Querier, ino, fh uint64) (*db.Inode, error) {
+func (m *manager) validateDirHandle(ctx context.Context, q db.Querier, ino, fh uint64, sessionID *uint64) (*db.Inode, error) {
 	dirInode, err := q.GetInode(ctx, int64(ino))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1982,8 +2304,9 @@ func (m *manager) validateDirHandle(ctx context.Context, q db.Querier, ino, fh u
 	}
 
 	_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
-		Fh:  int64(fh),
-		Ino: int64(ino),
+		Fh:        int64(fh),
+		Ino:       int64(ino),
+		SessionID: toPgSessionID(sessionID),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -2003,10 +2326,13 @@ func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry
 		params.Offset > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
 
 	var entries []DirEntry
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh)
+		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
 		if err != nil {
 			return err
 		}
@@ -2103,10 +2429,13 @@ func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]
 		params.Offset > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
 
 	var entries []DirEntryPlus
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh)
+		dirInode, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
 		if err != nil {
 			return err
 		}
@@ -2214,6 +2543,9 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 	if params.Offset > uint64(math.MaxInt64)-params.Length {
 		return ErrInvalidArgument
 	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
 
 	// 2. 模式位校验
 	if params.Mode == FallocFlPunchHole {
@@ -2242,8 +2574,9 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 		}
 
 		handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: toPgSessionID(params.SessionID),
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -2255,6 +2588,10 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 		accMode := uint32(handle.Flags) & O_ACCMODE
 		if accMode != O_WRONLY && accMode != O_RDWR {
 			return ErrBadFileHandle
+		}
+
+		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+			return err
 		}
 
 		switch params.Mode {
@@ -2656,5 +2993,35 @@ func (m *manager) RemoveXattr(ctx context.Context, ino uint64, name []byte) erro
 	}
 
 	return nil
+}
+
+// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
+// 遵循 ADR-0013：
+// 1. 静态校验入参合法性（sessionID == 0 或 > math.MaxInt64 返回 ErrInvalidArgument / EINVAL）；
+// 2. 在读写事务中执行 m.renewClientSession(ctx, q, sessionID)；
+// 3. 自动清理超期会话、更新当前会话租约、通过 FOR UPDATE SKIP LOCKED 非阻塞物理回收无有效句柄引用的 Orphan Inode；
+// 4. 成功时返回刷新后的租约绝对截止时间 expires_at。
+func (m *manager) RenewSession(ctx context.Context, sessionID uint64) (time.Time, error) {
+	if sessionID == 0 || sessionID > math.MaxInt64 {
+		return time.Time{}, ErrInvalidArgument
+	}
+
+	var expiresAt time.Time
+	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		exp, err := m.renewClientSession(ctx, q, sessionID)
+		if err != nil {
+			return err
+		}
+		expiresAt = exp
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrInvalidArgument) {
+			return time.Time{}, ErrInvalidArgument
+		}
+		return time.Time{}, fmt.Errorf("renew session tx: %w", err)
+	}
+
+	return expiresAt, nil
 }
 

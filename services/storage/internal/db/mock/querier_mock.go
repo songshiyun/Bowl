@@ -104,6 +104,63 @@ func (_c *MockQuerier_ClearInodeNlinkAndTouchCtime_Call) RunAndReturn(run func(c
 	return _c
 }
 
+// ClearTmpFileFlagByIno provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) ClearTmpFileFlagByIno(ctx context.Context, ino int64) error {
+	ret := _mock.Called(ctx, ino)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClearTmpFileFlagByIno")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = returnFunc(ctx, ino)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockQuerier_ClearTmpFileFlagByIno_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearTmpFileFlagByIno'
+type MockQuerier_ClearTmpFileFlagByIno_Call struct {
+	*mock.Call
+}
+
+// ClearTmpFileFlagByIno is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino int64
+func (_e *MockQuerier_Expecter) ClearTmpFileFlagByIno(ctx any, ino any) *MockQuerier_ClearTmpFileFlagByIno_Call {
+	return &MockQuerier_ClearTmpFileFlagByIno_Call{Call: _e.mock.On("ClearTmpFileFlagByIno", ctx, ino)}
+}
+
+func (_c *MockQuerier_ClearTmpFileFlagByIno_Call) Run(run func(ctx context.Context, ino int64)) *MockQuerier_ClearTmpFileFlagByIno_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_ClearTmpFileFlagByIno_Call) Return(err error) *MockQuerier_ClearTmpFileFlagByIno_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockQuerier_ClearTmpFileFlagByIno_Call) RunAndReturn(run func(ctx context.Context, ino int64) error) *MockQuerier_ClearTmpFileFlagByIno_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateEntry provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) CreateEntry(ctx context.Context, arg db.CreateEntryParams) error {
 	ret := _mock.Called(ctx, arg)
@@ -1232,6 +1289,57 @@ func (_c *MockQuerier_DeletePosixFileLocksBySessionAndOwner_Call) RunAndReturn(r
 	return _c
 }
 
+// DeleteUnreferencedOrphanInodes provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) DeleteUnreferencedOrphanInodes(ctx context.Context) error {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteUnreferencedOrphanInodes")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockQuerier_DeleteUnreferencedOrphanInodes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteUnreferencedOrphanInodes'
+type MockQuerier_DeleteUnreferencedOrphanInodes_Call struct {
+	*mock.Call
+}
+
+// DeleteUnreferencedOrphanInodes is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockQuerier_Expecter) DeleteUnreferencedOrphanInodes(ctx any) *MockQuerier_DeleteUnreferencedOrphanInodes_Call {
+	return &MockQuerier_DeleteUnreferencedOrphanInodes_Call{Call: _e.mock.On("DeleteUnreferencedOrphanInodes", ctx)}
+}
+
+func (_c *MockQuerier_DeleteUnreferencedOrphanInodes_Call) Run(run func(ctx context.Context)) *MockQuerier_DeleteUnreferencedOrphanInodes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_DeleteUnreferencedOrphanInodes_Call) Return(err error) *MockQuerier_DeleteUnreferencedOrphanInodes_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockQuerier_DeleteUnreferencedOrphanInodes_Call) RunAndReturn(run func(ctx context.Context) error) *MockQuerier_DeleteUnreferencedOrphanInodes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetEntry provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) GetEntry(ctx context.Context, arg db.GetEntryParams) (db.Entry, error) {
 	ret := _mock.Called(ctx, arg)
@@ -2090,6 +2198,72 @@ func (_c *MockQuerier_HasFileHandlesByIno_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
+// HasLinkableTmpFileHandleByIno provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) HasLinkableTmpFileHandleByIno(ctx context.Context, ino int64) (bool, error) {
+	ret := _mock.Called(ctx, ino)
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasLinkableTmpFileHandleByIno")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) (bool, error)); ok {
+		return returnFunc(ctx, ino)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int64) bool); ok {
+		r0 = returnFunc(ctx, ino)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, int64) error); ok {
+		r1 = returnFunc(ctx, ino)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_HasLinkableTmpFileHandleByIno_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasLinkableTmpFileHandleByIno'
+type MockQuerier_HasLinkableTmpFileHandleByIno_Call struct {
+	*mock.Call
+}
+
+// HasLinkableTmpFileHandleByIno is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino int64
+func (_e *MockQuerier_Expecter) HasLinkableTmpFileHandleByIno(ctx any, ino any) *MockQuerier_HasLinkableTmpFileHandleByIno_Call {
+	return &MockQuerier_HasLinkableTmpFileHandleByIno_Call{Call: _e.mock.On("HasLinkableTmpFileHandleByIno", ctx, ino)}
+}
+
+func (_c *MockQuerier_HasLinkableTmpFileHandleByIno_Call) Run(run func(ctx context.Context, ino int64)) *MockQuerier_HasLinkableTmpFileHandleByIno_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int64
+		if args[1] != nil {
+			arg1 = args[1].(int64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_HasLinkableTmpFileHandleByIno_Call) Return(b bool, err error) *MockQuerier_HasLinkableTmpFileHandleByIno_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockQuerier_HasLinkableTmpFileHandleByIno_Call) RunAndReturn(run func(ctx context.Context, ino int64) (bool, error)) *MockQuerier_HasLinkableTmpFileHandleByIno_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // IncrementInodeNlinkAndTouch provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) IncrementInodeNlinkAndTouch(ctx context.Context, ino int64) error {
 	ret := _mock.Called(ctx, ino)
@@ -2718,6 +2892,63 @@ func (_c *MockQuerier_UpdateEntry_Call) Return(err error) *MockQuerier_UpdateEnt
 }
 
 func (_c *MockQuerier_UpdateEntry_Call) RunAndReturn(run func(ctx context.Context, arg db.UpdateEntryParams) error) *MockQuerier_UpdateEntry_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateEntryIno provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) UpdateEntryIno(ctx context.Context, arg db.UpdateEntryInoParams) error {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateEntryIno")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.UpdateEntryInoParams) error); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockQuerier_UpdateEntryIno_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateEntryIno'
+type MockQuerier_UpdateEntryIno_Call struct {
+	*mock.Call
+}
+
+// UpdateEntryIno is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.UpdateEntryInoParams
+func (_e *MockQuerier_Expecter) UpdateEntryIno(ctx any, arg any) *MockQuerier_UpdateEntryIno_Call {
+	return &MockQuerier_UpdateEntryIno_Call{Call: _e.mock.On("UpdateEntryIno", ctx, arg)}
+}
+
+func (_c *MockQuerier_UpdateEntryIno_Call) Run(run func(ctx context.Context, arg db.UpdateEntryInoParams)) *MockQuerier_UpdateEntryIno_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.UpdateEntryInoParams
+		if args[1] != nil {
+			arg1 = args[1].(db.UpdateEntryInoParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_UpdateEntryIno_Call) Return(err error) *MockQuerier_UpdateEntryIno_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockQuerier_UpdateEntryIno_Call) RunAndReturn(run func(ctx context.Context, arg db.UpdateEntryInoParams) error) *MockQuerier_UpdateEntryIno_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -39,6 +39,18 @@ func (q *Queries) ClearInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (
 	return i, err
 }
 
+const clearTmpFileFlagByIno = `-- name: ClearTmpFileFlagByIno :exec
+UPDATE file_handles
+SET flags = flags & ~4194304 -- 4194304 = 0o20000000 (O_TMPFILE)
+WHERE ino = $1
+`
+
+// 4194304 = 0o20000000 (O_TMPFILE)
+func (q *Queries) ClearTmpFileFlagByIno(ctx context.Context, ino int64) error {
+	_, err := q.db.Exec(ctx, clearTmpFileFlagByIno, ino)
+	return err
+}
+
 const createEntry = `-- name: CreateEntry :exec
 INSERT INTO entries (parent_ino, name, ino)
 VALUES ($1, $2, $3)
@@ -56,24 +68,26 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) error 
 }
 
 const createFileHandle = `-- name: CreateFileHandle :one
-INSERT INTO file_handles (ino, flags)
-VALUES ($1, $2)
-RETURNING fh, ino, flags, created_at
+INSERT INTO file_handles (ino, flags, session_id)
+VALUES ($1, $2, $3)
+RETURNING fh, ino, flags, created_at, session_id
 `
 
 type CreateFileHandleParams struct {
-	Ino   int64 `json:"ino"`
-	Flags int32 `json:"flags"`
+	Ino       int64       `json:"ino"`
+	Flags     int32       `json:"flags"`
+	SessionID pgtype.Int8 `json:"session_id"`
 }
 
 func (q *Queries) CreateFileHandle(ctx context.Context, arg CreateFileHandleParams) (FileHandle, error) {
-	row := q.db.QueryRow(ctx, createFileHandle, arg.Ino, arg.Flags)
+	row := q.db.QueryRow(ctx, createFileHandle, arg.Ino, arg.Flags, arg.SessionID)
 	var i FileHandle
 	err := row.Scan(
 		&i.Fh,
 		&i.Ino,
 		&i.Flags,
 		&i.CreatedAt,
+		&i.SessionID,
 	)
 	return i, err
 }
@@ -280,18 +294,30 @@ func (q *Queries) DeleteExpiredClientSessions(ctx context.Context) error {
 }
 
 const deleteFileHandle = `-- name: DeleteFileHandle :one
-DELETE FROM file_handles
-WHERE fh = $1 AND ino = $2
-RETURNING fh
+DELETE FROM file_handles fh
+WHERE fh.fh = $1
+  AND fh.ino = $2
+  AND fh.session_id IS NOT DISTINCT FROM $3
+  AND (
+      $3 IS NULL
+      OR EXISTS (
+          SELECT 1
+          FROM client_sessions s
+          WHERE s.session_id = fh.session_id
+              AND s.expires_at > clock_timestamp()
+      )
+  )
+RETURNING fh.fh
 `
 
 type DeleteFileHandleParams struct {
-	Fh  int64 `json:"fh"`
-	Ino int64 `json:"ino"`
+	Fh        int64       `json:"fh"`
+	Ino       int64       `json:"ino"`
+	SessionID pgtype.Int8 `json:"session_id"`
 }
 
 func (q *Queries) DeleteFileHandle(ctx context.Context, arg DeleteFileHandleParams) (int64, error) {
-	row := q.db.QueryRow(ctx, deleteFileHandle, arg.Fh, arg.Ino)
+	row := q.db.QueryRow(ctx, deleteFileHandle, arg.Fh, arg.Ino, arg.SessionID)
 	var fh int64
 	err := row.Scan(&fh)
 	return fh, err
@@ -437,6 +463,28 @@ func (q *Queries) DeletePosixFileLocksBySessionAndOwner(ctx context.Context, arg
 	return result.RowsAffected(), nil
 }
 
+const deleteUnreferencedOrphanInodes = `-- name: DeleteUnreferencedOrphanInodes :exec
+DELETE FROM inodes
+WHERE ino IN (
+    SELECT i.ino
+    FROM inodes i
+    WHERE i.nlink = 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM file_handles fh
+          LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+          WHERE fh.ino = i.ino
+            AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+      )
+    FOR UPDATE SKIP LOCKED
+)
+`
+
+func (q *Queries) DeleteUnreferencedOrphanInodes(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, deleteUnreferencedOrphanInodes)
+	return err
+}
+
 const getEntry = `-- name: GetEntry :one
 SELECT parent_ino, name, ino
 FROM entries
@@ -456,23 +504,30 @@ func (q *Queries) GetEntry(ctx context.Context, arg GetEntryParams) (Entry, erro
 }
 
 const getFileHandle = `-- name: GetFileHandle :one
-SELECT fh, ino, flags, created_at FROM file_handles
-WHERE fh = $1 AND ino = $2
+SELECT fh.fh, fh.ino, fh.flags, fh.created_at, fh.session_id
+FROM file_handles fh
+LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+WHERE fh.fh = $1
+  AND fh.ino = $2
+  AND fh.session_id IS NOT DISTINCT FROM $3
+  AND ($3 IS NULL OR s.expires_at > clock_timestamp())
 `
 
 type GetFileHandleParams struct {
-	Fh  int64 `json:"fh"`
-	Ino int64 `json:"ino"`
+	Fh        int64       `json:"fh"`
+	Ino       int64       `json:"ino"`
+	SessionID pgtype.Int8 `json:"session_id"`
 }
 
 func (q *Queries) GetFileHandle(ctx context.Context, arg GetFileHandleParams) (FileHandle, error) {
-	row := q.db.QueryRow(ctx, getFileHandle, arg.Fh, arg.Ino)
+	row := q.db.QueryRow(ctx, getFileHandle, arg.Fh, arg.Ino, arg.SessionID)
 	var i FileHandle
 	err := row.Scan(
 		&i.Fh,
 		&i.Ino,
 		&i.Flags,
 		&i.CreatedAt,
+		&i.SessionID,
 	)
 	return i, err
 }
@@ -743,12 +798,36 @@ func (q *Queries) HasChildEntries(ctx context.Context, parentIno int64) (bool, e
 
 const hasFileHandlesByIno = `-- name: HasFileHandlesByIno :one
 SELECT EXISTS (
-    SELECT 1 FROM file_handles WHERE ino = $1
+    SELECT 1
+    FROM file_handles fh
+    LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+    WHERE fh.ino = $1
+      AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
 )
 `
 
 func (q *Queries) HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error) {
 	row := q.db.QueryRow(ctx, hasFileHandlesByIno, ino)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const hasLinkableTmpFileHandleByIno = `-- name: HasLinkableTmpFileHandleByIno :one
+SELECT EXISTS (
+    SELECT 1
+    FROM file_handles fh
+    LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+    WHERE fh.ino = $1
+      AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+      AND (fh.flags & 4194304) <> 0 -- 4194304 = 0o20000000 (O_TMPFILE)
+      AND (fh.flags & 128) = 0      -- 128 = 0o200 (O_EXCL)
+)
+`
+
+// 4194304 = 0o20000000 (O_TMPFILE), 128 = 0o200 (O_EXCL)
+func (q *Queries) HasLinkableTmpFileHandleByIno(ctx context.Context, ino int64) (bool, error) {
+	row := q.db.QueryRow(ctx, hasLinkableTmpFileHandleByIno, ino)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
@@ -1073,6 +1152,23 @@ func (q *Queries) UpdateEntry(ctx context.Context, arg UpdateEntryParams) error 
 		arg.OldParentIno,
 		arg.OldName,
 	)
+	return err
+}
+
+const updateEntryIno = `-- name: UpdateEntryIno :exec
+UPDATE entries
+SET ino = $3
+WHERE parent_ino = $1 AND name = $2
+`
+
+type UpdateEntryInoParams struct {
+	ParentIno int64  `json:"parent_ino"`
+	Name      []byte `json:"name"`
+	Ino       int64  `json:"ino"`
+}
+
+func (q *Queries) UpdateEntryIno(ctx context.Context, arg UpdateEntryInoParams) error {
+	_, err := q.db.Exec(ctx, updateEntryIno, arg.ParentIno, arg.Name, arg.Ino)
 	return err
 }
 

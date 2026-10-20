@@ -48,15 +48,15 @@ func validatePosixOpenMode(lockType uint32, handleFlags int32) error {
 	return nil
 }
 
-func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionID uint64) error {
+func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionID uint64) (time.Time, error) {
 	leaseTTL := m.sessionLeaseTTL
 	if leaseTTL <= 0 {
 		leaseTTL = DefaultSessionLeaseTTL
 	}
 	if err := q.DeleteExpiredClientSessions(ctx); err != nil {
-		return fmt.Errorf("delete expired client sessions: %w", err)
+		return time.Time{}, fmt.Errorf("delete expired client sessions: %w", err)
 	}
-	_, err := q.UpsertClientSession(ctx, db.UpsertClientSessionParams{
+	session, err := q.UpsertClientSession(ctx, db.UpsertClientSessionParams{
 		SessionID: int64(sessionID),
 		ExpiresAt: pgtype.Timestamptz{
 			Time:  time.Now().Add(leaseTTL),
@@ -64,9 +64,12 @@ func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionI
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("upsert client session %d: %w", sessionID, err)
+		return time.Time{}, fmt.Errorf("upsert client session %d: %w", sessionID, err)
 	}
-	return nil
+	if err := q.DeleteUnreferencedOrphanInodes(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("delete unreferenced orphan inodes: %w", err)
+	}
+	return session.ExpiresAt.Time, nil
 }
 
 // GetLk 执行 FUSE_GETLK (31) 冲突锁探测操作。
@@ -98,8 +101,9 @@ func (m *manager) GetLk(ctx context.Context, params GetLkParams) (*FileLock, err
 		}
 
 		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: pgtype.Int8{Int64: int64(params.SessionID), Valid: true},
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -215,8 +219,9 @@ func (m *manager) SetLk(ctx context.Context, params SetLkParams) error {
 		}
 
 		handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:  int64(params.Fh),
-			Ino: int64(params.Ino),
+			Fh:        int64(params.Fh),
+			Ino:       int64(params.Ino),
+			SessionID: pgtype.Int8{Int64: int64(params.SessionID), Valid: true},
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -231,7 +236,7 @@ func (m *manager) SetLk(ctx context.Context, params SetLkParams) error {
 			}
 		}
 
-		if err := m.renewClientSession(ctx, q, params.SessionID); err != nil {
+		if _, err := m.renewClientSession(ctx, q, params.SessionID); err != nil {
 			return err
 		}
 
@@ -772,8 +777,9 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 			}
 
 			handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
-				Fh:  fh,
-				Ino: ino,
+				Fh:        fh,
+				Ino:       ino,
+				SessionID: pgtype.Int8{Int64: sessionID, Valid: true},
 			})
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
@@ -788,7 +794,7 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 				}
 			}
 
-			if err := m.renewClientSession(ctx, q, params.SessionID); err != nil {
+			if _, err := m.renewClientSession(ctx, q, params.SessionID); err != nil {
 				return err
 			}
 

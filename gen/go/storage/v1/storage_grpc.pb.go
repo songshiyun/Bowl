@@ -19,34 +19,37 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StorageService_Lookup_FullMethodName      = "/storage.v1.StorageService/Lookup"
-	StorageService_GetAttr_FullMethodName     = "/storage.v1.StorageService/GetAttr"
-	StorageService_SetAttr_FullMethodName     = "/storage.v1.StorageService/SetAttr"
-	StorageService_Mknod_FullMethodName       = "/storage.v1.StorageService/Mknod"
-	StorageService_Mkdir_FullMethodName       = "/storage.v1.StorageService/Mkdir"
-	StorageService_Symlink_FullMethodName     = "/storage.v1.StorageService/Symlink"
-	StorageService_Readlink_FullMethodName    = "/storage.v1.StorageService/Readlink"
-	StorageService_Link_FullMethodName        = "/storage.v1.StorageService/Link"
-	StorageService_Unlink_FullMethodName      = "/storage.v1.StorageService/Unlink"
-	StorageService_Rmdir_FullMethodName       = "/storage.v1.StorageService/Rmdir"
-	StorageService_Rename_FullMethodName      = "/storage.v1.StorageService/Rename"
-	StorageService_Create_FullMethodName      = "/storage.v1.StorageService/Create"
-	StorageService_Open_FullMethodName        = "/storage.v1.StorageService/Open"
-	StorageService_Flush_FullMethodName       = "/storage.v1.StorageService/Flush"
-	StorageService_Fsync_FullMethodName       = "/storage.v1.StorageService/Fsync"
-	StorageService_Release_FullMethodName     = "/storage.v1.StorageService/Release"
-	StorageService_OpenDir_FullMethodName     = "/storage.v1.StorageService/OpenDir"
-	StorageService_ReleaseDir_FullMethodName  = "/storage.v1.StorageService/ReleaseDir"
-	StorageService_ReadDir_FullMethodName     = "/storage.v1.StorageService/ReadDir"
-	StorageService_ReadDirPlus_FullMethodName = "/storage.v1.StorageService/ReadDirPlus"
-	StorageService_Fallocate_FullMethodName   = "/storage.v1.StorageService/Fallocate"
-	StorageService_SetXattr_FullMethodName    = "/storage.v1.StorageService/SetXattr"
-	StorageService_GetXattr_FullMethodName    = "/storage.v1.StorageService/GetXattr"
-	StorageService_ListXattr_FullMethodName   = "/storage.v1.StorageService/ListXattr"
-	StorageService_RemoveXattr_FullMethodName = "/storage.v1.StorageService/RemoveXattr"
-	StorageService_GetLk_FullMethodName       = "/storage.v1.StorageService/GetLk"
-	StorageService_SetLk_FullMethodName       = "/storage.v1.StorageService/SetLk"
-	StorageService_SetLkw_FullMethodName      = "/storage.v1.StorageService/SetLkw"
+	StorageService_Lookup_FullMethodName       = "/storage.v1.StorageService/Lookup"
+	StorageService_GetAttr_FullMethodName      = "/storage.v1.StorageService/GetAttr"
+	StorageService_SetAttr_FullMethodName      = "/storage.v1.StorageService/SetAttr"
+	StorageService_Mknod_FullMethodName        = "/storage.v1.StorageService/Mknod"
+	StorageService_Mkdir_FullMethodName        = "/storage.v1.StorageService/Mkdir"
+	StorageService_Symlink_FullMethodName      = "/storage.v1.StorageService/Symlink"
+	StorageService_Readlink_FullMethodName     = "/storage.v1.StorageService/Readlink"
+	StorageService_Link_FullMethodName         = "/storage.v1.StorageService/Link"
+	StorageService_Unlink_FullMethodName       = "/storage.v1.StorageService/Unlink"
+	StorageService_Rmdir_FullMethodName        = "/storage.v1.StorageService/Rmdir"
+	StorageService_Rename_FullMethodName       = "/storage.v1.StorageService/Rename"
+	StorageService_Create_FullMethodName       = "/storage.v1.StorageService/Create"
+	StorageService_TmpFile_FullMethodName      = "/storage.v1.StorageService/TmpFile"
+	StorageService_Open_FullMethodName         = "/storage.v1.StorageService/Open"
+	StorageService_Flush_FullMethodName        = "/storage.v1.StorageService/Flush"
+	StorageService_Fsync_FullMethodName        = "/storage.v1.StorageService/Fsync"
+	StorageService_Release_FullMethodName      = "/storage.v1.StorageService/Release"
+	StorageService_OpenDir_FullMethodName      = "/storage.v1.StorageService/OpenDir"
+	StorageService_FsyncDir_FullMethodName     = "/storage.v1.StorageService/FsyncDir"
+	StorageService_ReleaseDir_FullMethodName   = "/storage.v1.StorageService/ReleaseDir"
+	StorageService_ReadDir_FullMethodName      = "/storage.v1.StorageService/ReadDir"
+	StorageService_ReadDirPlus_FullMethodName  = "/storage.v1.StorageService/ReadDirPlus"
+	StorageService_Fallocate_FullMethodName    = "/storage.v1.StorageService/Fallocate"
+	StorageService_SetXattr_FullMethodName     = "/storage.v1.StorageService/SetXattr"
+	StorageService_GetXattr_FullMethodName     = "/storage.v1.StorageService/GetXattr"
+	StorageService_ListXattr_FullMethodName    = "/storage.v1.StorageService/ListXattr"
+	StorageService_RemoveXattr_FullMethodName  = "/storage.v1.StorageService/RemoveXattr"
+	StorageService_GetLk_FullMethodName        = "/storage.v1.StorageService/GetLk"
+	StorageService_SetLk_FullMethodName        = "/storage.v1.StorageService/SetLk"
+	StorageService_SetLkw_FullMethodName       = "/storage.v1.StorageService/SetLkw"
+	StorageService_RenewSession_FullMethodName = "/storage.v1.StorageService/RenewSession"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -106,14 +109,15 @@ type StorageServiceClient interface {
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
 	Rmdir(ctx context.Context, in *RmdirRequest, opts ...grpc.CallOption) (*RmdirResponse, error)
-	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
-	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// Rename 执行原子文件/目录重命名、移动或双向交换（支持 FUSE_RENAME2 的 RENAME_NOREPLACE 与 RENAME_EXCHANGE）。
+	// 当 flags 为 0 时，执行传统覆盖重命名；若源与目标为同一路径或同一 Inode 的硬链接，执行无副作用短路成功返回。
+	// 当 flags 为 RENAME_NOREPLACE (0x1) 时，禁止覆盖已存在的目标项（包含同一路径或同一 Inode 的不同硬链接），若目标已存在则返回 AlreadyExists (EEXIST)。
+	// 当 flags 为 RENAME_EXCHANGE (0x2) 时，要求源与目标均存在（任一不存在返回 NotFound / ENOENT），原子交换两个目录项的 Inode 绑定并执行双向祖先环检测。
+	// 若传入互斥组合（RENAME_NOREPLACE | RENAME_EXCHANGE）、RENAME_WHITEOUT (0x4) 或未知标志位，返回 InvalidArgument (EINVAL)。
 	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
-	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 当 flags 为 0 覆盖目标时：若源为目录而目标为非目录返回 FailedPrecondition (ENOTDIR)；若源为非目录而目标为目录返回 FailedPrecondition (EISDIR)；若源为目录而目标为非空目录返回 FailedPrecondition (ENOTEMPTY)。
+	// 若尝试将目录移动或交换为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	Rename(ctx context.Context, in *RenameRequest, opts ...grpc.CallOption) (*RenameResponse, error)
 	// Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
@@ -122,6 +126,11 @@ type StorageServiceClient interface {
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)。
 	Create(ctx context.Context, in *CreateRequest, opts ...grpc.CallOption) (*CreateResponse, error)
+	// TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄 (FileHandle)（对接 Linux FUSE FUSE_TMPFILE = 51 协议）。
+	// 若父节点不存在或已解链 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)，且打开标志位必须为 O_WRONLY 或 O_RDWR，否则返回 InvalidArgument (映射至 POSIX EINVAL)。
+	TmpFile(ctx context.Context, in *TmpFileRequest, opts ...grpc.CallOption) (*TmpFileResponse, error)
 	// Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
 	// 若目标为符号链接，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
@@ -141,12 +150,18 @@ type StorageServiceClient interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(ctx context.Context, in *ReleaseRequest, opts ...grpc.CallOption) (*ReleaseResponse, error)
-	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	OpenDir(ctx context.Context, in *OpenDirRequest, opts ...grpc.CallOption) (*OpenDirResponse, error)
-	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
+	FsyncDir(ctx context.Context, in *FsyncDirRequest, opts ...grpc.CallOption) (*FsyncDirResponse, error)
+	// ReleaseDir 关闭并销毁目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
@@ -207,6 +222,10 @@ type StorageServiceClient interface {
 	// SetLkw 阻塞式申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLKW = 33 协议）。
 	// 若存在冲突锁则阻塞等待，直至锁释放唤醒、检测到同节点死锁返回 Aborted (映射至 POSIX EDEADLK)、或收到取消信号返回 Canceled (映射至 POSIX EINTR)。
 	SetLkw(ctx context.Context, in *SetLkwRequest, opts ...grpc.CallOption) (*SetLkwResponse, error)
+	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
+	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 续期成功返回刷新后的租约截止时间 expires_at。
+	RenewSession(ctx context.Context, in *RenewSessionRequest, opts ...grpc.CallOption) (*RenewSessionResponse, error)
 }
 
 type storageServiceClient struct {
@@ -337,6 +356,16 @@ func (c *storageServiceClient) Create(ctx context.Context, in *CreateRequest, op
 	return out, nil
 }
 
+func (c *storageServiceClient) TmpFile(ctx context.Context, in *TmpFileRequest, opts ...grpc.CallOption) (*TmpFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TmpFileResponse)
+	err := c.cc.Invoke(ctx, StorageService_TmpFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storageServiceClient) Open(ctx context.Context, in *OpenRequest, opts ...grpc.CallOption) (*OpenResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OpenResponse)
@@ -381,6 +410,16 @@ func (c *storageServiceClient) OpenDir(ctx context.Context, in *OpenDirRequest, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OpenDirResponse)
 	err := c.cc.Invoke(ctx, StorageService_OpenDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) FsyncDir(ctx context.Context, in *FsyncDirRequest, opts ...grpc.CallOption) (*FsyncDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FsyncDirResponse)
+	err := c.cc.Invoke(ctx, StorageService_FsyncDir_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -497,6 +536,16 @@ func (c *storageServiceClient) SetLkw(ctx context.Context, in *SetLkwRequest, op
 	return out, nil
 }
 
+func (c *storageServiceClient) RenewSession(ctx context.Context, in *RenewSessionRequest, opts ...grpc.CallOption) (*RenewSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewSessionResponse)
+	err := c.cc.Invoke(ctx, StorageService_RenewSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StorageServiceServer is the server API for StorageService service.
 // All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
@@ -554,14 +603,15 @@ type StorageServiceServer interface {
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 对 "." 返回 InvalidArgument (EINVAL)；对 ".." 返回 FailedPrecondition (ENOTEMPTY)。
 	Rmdir(context.Context, *RmdirRequest) (*RmdirResponse, error)
-	// Rename 执行原子文件/目录重命名或移动（支持覆盖已存在的目标项）。
-	// 若源与目标为同一路径或同一 Inode 的硬链接，执行 POSIX 规范要求的无副作用短路成功返回。
+	// Rename 执行原子文件/目录重命名、移动或双向交换（支持 FUSE_RENAME2 的 RENAME_NOREPLACE 与 RENAME_EXCHANGE）。
+	// 当 flags 为 0 时，执行传统覆盖重命名；若源与目标为同一路径或同一 Inode 的硬链接，执行无副作用短路成功返回。
+	// 当 flags 为 RENAME_NOREPLACE (0x1) 时，禁止覆盖已存在的目标项（包含同一路径或同一 Inode 的不同硬链接），若目标已存在则返回 AlreadyExists (EEXIST)。
+	// 当 flags 为 RENAME_EXCHANGE (0x2) 时，要求源与目标均存在（任一不存在返回 NotFound / ENOENT），原子交换两个目录项的 Inode 绑定并执行双向祖先环检测。
+	// 若传入互斥组合（RENAME_NOREPLACE | RENAME_EXCHANGE）、RENAME_WHITEOUT (0x4) 或未知标志位，返回 InvalidArgument (EINVAL)。
 	// 若源项或父目录不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父目录存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若源为目录而目标为非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若源为非目录而目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若源为目录而目标为非空目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTEMPTY)。
-	// 若尝试将目录移动为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 当 flags 为 0 覆盖目标时：若源为目录而目标为非目录返回 FailedPrecondition (ENOTDIR)；若源为非目录而目标为目录返回 FailedPrecondition (EISDIR)；若源为目录而目标为非空目录返回 FailedPrecondition (ENOTEMPTY)。
+	// 若尝试将目录移动或交换为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	Rename(context.Context, *RenameRequest) (*RenameResponse, error)
 	// Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
@@ -570,6 +620,11 @@ type StorageServiceServer interface {
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)。
 	Create(context.Context, *CreateRequest) (*CreateResponse, error)
+	// TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄 (FileHandle)（对接 Linux FUSE FUSE_TMPFILE = 51 协议）。
+	// 若父节点不存在或已解链 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)，且打开标志位必须为 O_WRONLY 或 O_RDWR，否则返回 InvalidArgument (映射至 POSIX EINVAL)。
+	TmpFile(context.Context, *TmpFileRequest) (*TmpFileResponse, error)
 	// Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
 	// 若目标为符号链接，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
@@ -589,12 +644,18 @@ type StorageServiceServer interface {
 	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
 	Release(context.Context, *ReleaseRequest) (*ReleaseResponse, error)
-	// OpenDir 打开指定目录 Inode 节点并分配目录句柄 (DirHandle)。
+	// OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	OpenDir(context.Context, *OpenDirRequest) (*OpenDirResponse, error)
-	// ReleaseDir 关闭并销毁目录句柄 (DirHandle)。
+	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
+	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
+	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
+	FsyncDir(context.Context, *FsyncDirRequest) (*FsyncDirResponse, error)
+	// ReleaseDir 关闭并销毁目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
@@ -655,6 +716,10 @@ type StorageServiceServer interface {
 	// SetLkw 阻塞式申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLKW = 33 协议）。
 	// 若存在冲突锁则阻塞等待，直至锁释放唤醒、检测到同节点死锁返回 Aborted (映射至 POSIX EDEADLK)、或收到取消信号返回 Canceled (映射至 POSIX EINTR)。
 	SetLkw(context.Context, *SetLkwRequest) (*SetLkwResponse, error)
+	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
+	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
+	// 续期成功返回刷新后的租约截止时间 expires_at。
+	RenewSession(context.Context, *RenewSessionRequest) (*RenewSessionResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -701,6 +766,9 @@ func (UnimplementedStorageServiceServer) Rename(context.Context, *RenameRequest)
 func (UnimplementedStorageServiceServer) Create(context.Context, *CreateRequest) (*CreateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Create not implemented")
 }
+func (UnimplementedStorageServiceServer) TmpFile(context.Context, *TmpFileRequest) (*TmpFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method TmpFile not implemented")
+}
 func (UnimplementedStorageServiceServer) Open(context.Context, *OpenRequest) (*OpenResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Open not implemented")
 }
@@ -715,6 +783,9 @@ func (UnimplementedStorageServiceServer) Release(context.Context, *ReleaseReques
 }
 func (UnimplementedStorageServiceServer) OpenDir(context.Context, *OpenDirRequest) (*OpenDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method OpenDir not implemented")
+}
+func (UnimplementedStorageServiceServer) FsyncDir(context.Context, *FsyncDirRequest) (*FsyncDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FsyncDir not implemented")
 }
 func (UnimplementedStorageServiceServer) ReleaseDir(context.Context, *ReleaseDirRequest) (*ReleaseDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReleaseDir not implemented")
@@ -748,6 +819,9 @@ func (UnimplementedStorageServiceServer) SetLk(context.Context, *SetLkRequest) (
 }
 func (UnimplementedStorageServiceServer) SetLkw(context.Context, *SetLkwRequest) (*SetLkwResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetLkw not implemented")
+}
+func (UnimplementedStorageServiceServer) RenewSession(context.Context, *RenewSessionRequest) (*RenewSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewSession not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -986,6 +1060,24 @@ func _StorageService_Create_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_TmpFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TmpFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).TmpFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_TmpFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).TmpFile(ctx, req.(*TmpFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StorageService_Open_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(OpenRequest)
 	if err := dec(in); err != nil {
@@ -1072,6 +1164,24 @@ func _StorageService_OpenDir_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StorageServiceServer).OpenDir(ctx, req.(*OpenDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_FsyncDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FsyncDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).FsyncDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_FsyncDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).FsyncDir(ctx, req.(*FsyncDirRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1274,6 +1384,24 @@ func _StorageService_SetLkw_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_RenewSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).RenewSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_RenewSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).RenewSession(ctx, req.(*RenewSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1330,6 +1458,10 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StorageService_Create_Handler,
 		},
 		{
+			MethodName: "TmpFile",
+			Handler:    _StorageService_TmpFile_Handler,
+		},
+		{
 			MethodName: "Open",
 			Handler:    _StorageService_Open_Handler,
 		},
@@ -1348,6 +1480,10 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "OpenDir",
 			Handler:    _StorageService_OpenDir_Handler,
+		},
+		{
+			MethodName: "FsyncDir",
+			Handler:    _StorageService_FsyncDir_Handler,
 		},
 		{
 			MethodName: "ReleaseDir",
@@ -1392,6 +1528,10 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetLkw",
 			Handler:    _StorageService_SetLkw_Handler,
+		},
+		{
+			MethodName: "RenewSession",
+			Handler:    _StorageService_RenewSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

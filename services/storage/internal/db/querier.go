@@ -10,6 +10,8 @@ import (
 
 type Querier interface {
 	ClearInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
+	// 4194304 = 0o20000000 (O_TMPFILE)
+	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
 	CreateEntry(ctx context.Context, arg CreateEntryParams) error
 	CreateFileHandle(ctx context.Context, arg CreateFileHandleParams) (FileHandle, error)
 	CreateFileLock(ctx context.Context, arg CreateFileLockParams) (FileLock, error)
@@ -28,6 +30,7 @@ type Querier interface {
 	DeleteInodeXattr(ctx context.Context, arg DeleteInodeXattrParams) (int64, error)
 	DeletePosixFileLocksByOwner(ctx context.Context, arg DeletePosixFileLocksByOwnerParams) (int64, error)
 	DeletePosixFileLocksBySessionAndOwner(ctx context.Context, arg DeletePosixFileLocksBySessionAndOwnerParams) (int64, error)
+	DeleteUnreferencedOrphanInodes(ctx context.Context) error
 	GetEntry(ctx context.Context, arg GetEntryParams) (Entry, error)
 	GetFileHandle(ctx context.Context, arg GetFileHandleParams) (FileHandle, error)
 	GetFileLockWaiter(ctx context.Context, arg GetFileLockWaiterParams) (FileLockWaiter, error)
@@ -41,6 +44,8 @@ type Querier interface {
 	GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTargetRow, error)
 	HasChildEntries(ctx context.Context, parentIno int64) (bool, error)
 	HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error)
+	// 4194304 = 0o20000000 (O_TMPFILE), 128 = 0o200 (O_EXCL)
+	HasLinkableTmpFileHandleByIno(ctx context.Context, ino int64) (bool, error)
 	IncrementInodeNlinkAndTouch(ctx context.Context, ino int64) error
 	IncrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
 	IsSubdirectory(ctx context.Context, arg IsSubdirectoryParams) (bool, error)
@@ -51,6 +56,7 @@ type Querier interface {
 	TouchInodeCtime(ctx context.Context, ino int64) error
 	TouchInodeTimestamps(ctx context.Context, ino int64) error
 	UpdateEntry(ctx context.Context, arg UpdateEntryParams) error
+	UpdateEntryIno(ctx context.Context, arg UpdateEntryInoParams) error
 	UpdateInodeAttr(ctx context.Context, arg UpdateInodeAttrParams) (Inode, error)
 	UpsertClientSession(ctx context.Context, arg UpsertClientSessionParams) (ClientSession, error)
 	UpsertFileLockWaiter(ctx context.Context, arg UpsertFileLockWaiterParams) (FileLockWaiter, error)

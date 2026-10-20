@@ -6,6 +6,7 @@ package mock
 
 import (
 	"context"
+	"time"
 
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 	mock "github.com/stretchr/testify/mock"
@@ -273,6 +274,63 @@ func (_c *MockManager_Fsync_Call) Return(err error) *MockManager_Fsync_Call {
 }
 
 func (_c *MockManager_Fsync_Call) RunAndReturn(run func(ctx context.Context, params meta.FsyncParams) error) *MockManager_Fsync_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// FsyncDir provides a mock function for the type MockManager
+func (_mock *MockManager) FsyncDir(ctx context.Context, params meta.FsyncDirParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FsyncDir")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.FsyncDirParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_FsyncDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FsyncDir'
+type MockManager_FsyncDir_Call struct {
+	*mock.Call
+}
+
+// FsyncDir is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.FsyncDirParams
+func (_e *MockManager_Expecter) FsyncDir(ctx any, params any) *MockManager_FsyncDir_Call {
+	return &MockManager_FsyncDir_Call{Call: _e.mock.On("FsyncDir", ctx, params)}
+}
+
+func (_c *MockManager_FsyncDir_Call) Run(run func(ctx context.Context, params meta.FsyncDirParams)) *MockManager_FsyncDir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.FsyncDirParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.FsyncDirParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_FsyncDir_Call) Return(err error) *MockManager_FsyncDir_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_FsyncDir_Call) RunAndReturn(run func(ctx context.Context, params meta.FsyncDirParams) error) *MockManager_FsyncDir_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1407,6 +1465,72 @@ func (_c *MockManager_Rename_Call) RunAndReturn(run func(ctx context.Context, pa
 	return _c
 }
 
+// RenewSession provides a mock function for the type MockManager
+func (_mock *MockManager) RenewSession(ctx context.Context, sessionID uint64) (time.Time, error) {
+	ret := _mock.Called(ctx, sessionID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenewSession")
+	}
+
+	var r0 time.Time
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (time.Time, error)); ok {
+		return returnFunc(ctx, sessionID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) time.Time); ok {
+		r0 = returnFunc(ctx, sessionID)
+	} else {
+		r0 = ret.Get(0).(time.Time)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
+		r1 = returnFunc(ctx, sessionID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_RenewSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewSession'
+type MockManager_RenewSession_Call struct {
+	*mock.Call
+}
+
+// RenewSession is a helper method to define mock.On call
+//   - ctx context.Context
+//   - sessionID uint64
+func (_e *MockManager_Expecter) RenewSession(ctx any, sessionID any) *MockManager_RenewSession_Call {
+	return &MockManager_RenewSession_Call{Call: _e.mock.On("RenewSession", ctx, sessionID)}
+}
+
+func (_c *MockManager_RenewSession_Call) Run(run func(ctx context.Context, sessionID uint64)) *MockManager_RenewSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_RenewSession_Call) Return(time1 time.Time, err error) *MockManager_RenewSession_Call {
+	_c.Call.Return(time1, err)
+	return _c
+}
+
+func (_c *MockManager_RenewSession_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64) (time.Time, error)) *MockManager_RenewSession_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Rmdir provides a mock function for the type MockManager
 func (_mock *MockManager) Rmdir(ctx context.Context, parentIno uint64, name []byte) error {
 	ret := _mock.Called(ctx, parentIno, name)
@@ -1779,6 +1903,74 @@ func (_c *MockManager_Symlink_Call) Return(inode *meta.Inode, err error) *MockMa
 }
 
 func (_c *MockManager_Symlink_Call) RunAndReturn(run func(ctx context.Context, params meta.SymlinkParams) (*meta.Inode, error)) *MockManager_Symlink_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// TmpFile provides a mock function for the type MockManager
+func (_mock *MockManager) TmpFile(ctx context.Context, params meta.TmpFileParams) (*meta.CreateResult, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TmpFile")
+	}
+
+	var r0 *meta.CreateResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.TmpFileParams) (*meta.CreateResult, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.TmpFileParams) *meta.CreateResult); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.CreateResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.TmpFileParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_TmpFile_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TmpFile'
+type MockManager_TmpFile_Call struct {
+	*mock.Call
+}
+
+// TmpFile is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.TmpFileParams
+func (_e *MockManager_Expecter) TmpFile(ctx any, params any) *MockManager_TmpFile_Call {
+	return &MockManager_TmpFile_Call{Call: _e.mock.On("TmpFile", ctx, params)}
+}
+
+func (_c *MockManager_TmpFile_Call) Run(run func(ctx context.Context, params meta.TmpFileParams)) *MockManager_TmpFile_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.TmpFileParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.TmpFileParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_TmpFile_Call) Return(createResult *meta.CreateResult, err error) *MockManager_TmpFile_Call {
+	_c.Call.Return(createResult, err)
+	return _c
+}
+
+func (_c *MockManager_TmpFile_Call) RunAndReturn(run func(ctx context.Context, params meta.TmpFileParams) (*meta.CreateResult, error)) *MockManager_TmpFile_Call {
 	_c.Call.Return(run)
 	return _c
 }

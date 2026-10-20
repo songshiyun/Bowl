@@ -47,6 +47,7 @@ type UnlinkRmdirQuerier interface {
 // RenameQuerier 提取 Rename 原子重命名、更新目录项与递归环检测接口契约。
 type RenameQuerier interface {
 	UpdateEntry(ctx context.Context, arg db.UpdateEntryParams) error
+	UpdateEntryIno(ctx context.Context, arg db.UpdateEntryInoParams) error
 	TouchInodeCtime(ctx context.Context, ino int64) error
 	IsSubdirectory(ctx context.Context, arg db.IsSubdirectoryParams) (bool, error)
 }
@@ -56,6 +57,8 @@ type FileHandleQuerier interface {
 	CreateFileHandle(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error)
 	HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error)
 	GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error)
+	HasLinkableTmpFileHandleByIno(ctx context.Context, ino int64) (bool, error)
+	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
 	DeleteFileHandle(ctx context.Context, arg db.DeleteFileHandleParams) (int64, error)
 }
 
@@ -83,6 +86,7 @@ type XattrQuerier interface {
 type FileLockQuerier interface {
 	DeleteExpiredClientSessions(ctx context.Context) error
 	UpsertClientSession(ctx context.Context, arg db.UpsertClientSessionParams) (db.ClientSession, error)
+	DeleteUnreferencedOrphanInodes(ctx context.Context) error
 	GetFirstConflictingFileLock(ctx context.Context, arg db.GetFirstConflictingFileLockParams) (db.FileLock, error)
 	ListActiveFileLocksByInoAndFlags(ctx context.Context, arg db.ListActiveFileLocksByInoAndFlagsParams) ([]db.FileLock, error)
 	CreateFileLock(ctx context.Context, arg db.CreateFileLockParams) (db.FileLock, error)
@@ -667,6 +671,37 @@ func TestQuerier_MknodOperators(t *testing.T) {
 		})
 	})
 
+	t.Run("UpdateEntryIno 算子调用与参数透传", func(t *testing.T) {
+		t.Run("成功原地更新目录项的目标 Ino", func(t *testing.T) {
+			mockQuerier := dbmock.NewMockQuerier(t)
+			params := db.UpdateEntryInoParams{
+				ParentIno: 1,
+				Name:      []byte("swap.txt"),
+				Ino:       200,
+			}
+			mockQuerier.EXPECT().UpdateEntryIno(ctx, params).Return(nil).Once()
+
+			var q db.Querier = mockQuerier
+			err := q.UpdateEntryIno(ctx, params)
+			require.NoError(t, err)
+		})
+
+		t.Run("底层执行失败透传错误", func(t *testing.T) {
+			mockQuerier := dbmock.NewMockQuerier(t)
+			params := db.UpdateEntryInoParams{
+				ParentIno: 1,
+				Name:      []byte("swap.txt"),
+				Ino:       200,
+			}
+			expectedErr := errors.New("update entry ino error")
+			mockQuerier.EXPECT().UpdateEntryIno(ctx, params).Return(expectedErr).Once()
+
+			var q db.Querier = mockQuerier
+			err := q.UpdateEntryIno(ctx, params)
+			assert.ErrorIs(t, err, expectedErr)
+		})
+	})
+
 	t.Run("TouchInodeCtime 算子调用与参数透传", func(t *testing.T) {
 		t.Run("成功刷新 Inode ctime", func(t *testing.T) {
 			mockQuerier := dbmock.NewMockQuerier(t)
@@ -752,6 +787,33 @@ func TestQuerier_MknodOperators(t *testing.T) {
 			assert.Equal(t, expected, result)
 		})
 
+		t.Run("成功创建绑定 session_id 的 FileHandle 并返回数据实体", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			withSessParams := db.CreateFileHandleParams{
+				Ino:       100,
+				Flags:     0o2,
+				SessionID: pgtype.Int8{Int64: 1001, Valid: true},
+			}
+			withSessExpected := db.FileHandle{
+				Fh:        2,
+				Ino:       100,
+				Flags:     0o2,
+				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				SessionID: pgtype.Int8{Int64: 1001, Valid: true},
+			}
+
+			mockStore.EXPECT().
+				CreateFileHandle(mock.Anything, withSessParams).
+				Return(withSessExpected, nil).
+				Once()
+
+			result, err := store.CreateFileHandle(ctx, withSessParams)
+			require.NoError(t, err)
+			assert.Equal(t, withSessExpected, result)
+		})
+
 		t.Run("底层执行失败透传错误", func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
 			var store db.Store = mockStore
@@ -818,8 +880,9 @@ func TestQuerier_MknodOperators(t *testing.T) {
 	t.Run("GetFileHandle 算子调用与参数透传", func(t *testing.T) {
 		now := time.Now()
 		params := db.GetFileHandleParams{
-			Fh:  10,
-			Ino: 42,
+			Fh:        10,
+			Ino:       42,
+			SessionID: pgtype.Int8{Int64: 100, Valid: true},
 		}
 		expected := db.FileHandle{
 			Fh:        10,
@@ -872,10 +935,72 @@ func TestQuerier_MknodOperators(t *testing.T) {
 		})
 	})
 
+	t.Run("HasLinkableTmpFileHandleByIno 与 ClearTmpFileFlagByIno 算子调用与参数透传", func(t *testing.T) {
+		const targetIno int64 = 42
+
+		t.Run("HasLinkableTmpFileHandleByIno 成功查询并返回存在可具名化临时文件句柄", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				HasLinkableTmpFileHandleByIno(mock.Anything, targetIno).
+				Return(true, nil).
+				Once()
+
+			linkable, err := store.HasLinkableTmpFileHandleByIno(ctx, targetIno)
+			require.NoError(t, err)
+			assert.True(t, linkable)
+		})
+
+		t.Run("HasLinkableTmpFileHandleByIno 底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("db query failed")
+			mockStore.EXPECT().
+				HasLinkableTmpFileHandleByIno(mock.Anything, targetIno).
+				Return(false, expectedErr).
+				Once()
+
+			_, err := store.HasLinkableTmpFileHandleByIno(ctx, targetIno)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+
+		t.Run("ClearTmpFileFlagByIno 成功清除 O_TMPFILE 标志位", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			mockStore.EXPECT().
+				ClearTmpFileFlagByIno(mock.Anything, targetIno).
+				Return(nil).
+				Once()
+
+			err := store.ClearTmpFileFlagByIno(ctx, targetIno)
+			require.NoError(t, err)
+		})
+
+		t.Run("ClearTmpFileFlagByIno 底层执行失败透传错误", func(t *testing.T) {
+			mockStore := dbmock.NewMockStore(t)
+			var store db.Store = mockStore
+
+			expectedErr := errors.New("db update failed")
+			mockStore.EXPECT().
+				ClearTmpFileFlagByIno(mock.Anything, targetIno).
+				Return(expectedErr).
+				Once()
+
+			err := store.ClearTmpFileFlagByIno(ctx, targetIno)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, expectedErr))
+		})
+	})
+
 	t.Run("DeleteFileHandle 算子调用与参数透传", func(t *testing.T) {
 		params := db.DeleteFileHandleParams{
-			Fh:  10,
-			Ino: 42,
+			Fh:        10,
+			Ino:       42,
+			SessionID: pgtype.Int8{Int64: 100, Valid: true},
 		}
 
 		t.Run("成功删除并返回 fh", func(t *testing.T) {
@@ -1276,6 +1401,12 @@ func TestStore_FileLockBehavior(t *testing.T) {
 		session, err := store.UpsertClientSession(ctx, upsertParams)
 		require.NoError(t, err)
 		assert.Equal(t, expectedSession, session)
+
+		mockStore.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil).
+			Once()
+		require.NoError(t, store.DeleteUnreferencedOrphanInodes(ctx))
 	})
 
 	t.Run("GetFirstConflictingFileLock 与 ListActiveFileLocksByInoAndFlags", func(t *testing.T) {

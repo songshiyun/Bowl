@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -44,8 +45,9 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 
 		mockQuerier.EXPECT().
 			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh1),
-				Ino: int64(ino),
+				Fh:        int64(fh1),
+				Ino:       int64(ino),
+				SessionID: pgtype.Int8{Int64: 10, Valid: true},
 			}).
 			Return(db.FileHandle{
 				Fh:    int64(fh1),
@@ -62,6 +64,11 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.Anything).
 			Return(db.ClientSession{SessionID: 10}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -134,8 +141,9 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 
 		mockQuerier.EXPECT().
 			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh2),
-				Ino: int64(ino),
+				Fh:        int64(fh2),
+				Ino:       int64(ino),
+				SessionID: pgtype.Int8{Int64: 10, Valid: true},
 			}).
 			Return(db.FileHandle{
 				Fh:    int64(fh2),
@@ -152,6 +160,11 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.Anything).
 			Return(db.ClientSession{SessionID: 10}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -226,8 +239,9 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 
 		mockQuerier.EXPECT().
 			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh1),
-				Ino: int64(ino),
+				Fh:        int64(fh1),
+				Ino:       int64(ino),
+				SessionID: pgtype.Int8{Int64: 10, Valid: true},
 			}).
 			Return(db.FileHandle{
 				Fh:    int64(fh1),
@@ -244,6 +258,11 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.Anything).
 			Return(db.ClientSession{SessionID: 10}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil).
 			Once()
 
 		// 第一步：在事务内删除 fh1 原本持有的 F_RDLCK (返回删除了 1 行)
@@ -310,8 +329,9 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 
 		mockQuerier.EXPECT().
 			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh1),
-				Ino: int64(ino),
+				Fh:        int64(fh1),
+				Ino:       int64(ino),
+				SessionID: pgtype.Int8{Int64: 10, Valid: true},
 			}).
 			Return(db.FileHandle{
 				Fh:    int64(fh1),
@@ -328,6 +348,11 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.Anything).
 			Return(db.ClientSession{SessionID: 10}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil).
 			Once()
 
 		// fh1 先前已持有排他 flock，DeleteFlockFileLocksBySessionAndFh 删除 1 条记录
@@ -414,6 +439,12 @@ func TestSetLk_FlockPostgresSemantics(t *testing.T) {
 		_ = store.DeleteInode(context.Background(), rootDir.Ino)
 	}()
 
+	session1 := uint64(940001)
+	session2 := uint64(940002)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(session1), int64(session2))
+	}()
+
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: uint64(rootDir.Ino),
 		Name:      []byte("setlk_flock_test.txt"),
@@ -421,6 +452,7 @@ func TestSetLk_FlockPostgresSemantics(t *testing.T) {
 		UID:       1000,
 		GID:       1000,
 		Flags:     meta.O_RDONLY,
+		SessionID: &session1,
 	})
 	require.NoError(t, err)
 	fileIno := createRes.Inode.Ino
@@ -430,24 +462,20 @@ func TestSetLk_FlockPostgresSemantics(t *testing.T) {
 	}()
 
 	open2RO, err := mgr.Open(ctx, meta.OpenParams{
-		Ino:   fileIno,
-		Flags: meta.O_RDONLY,
+		Ino:       fileIno,
+		Flags:     meta.O_RDONLY,
+		SessionID: &session1,
 	})
 	require.NoError(t, err)
 	fh2RO := open2RO.Fh
 
 	open3RDWR, err := mgr.Open(ctx, meta.OpenParams{
-		Ino:   fileIno,
-		Flags: meta.O_RDWR,
+		Ino:       fileIno,
+		Flags:     meta.O_RDWR,
+		SessionID: &session2,
 	})
 	require.NoError(t, err)
 	fh3RDWR := open3RDWR.Fh
-
-	session1 := uint64(940001)
-	session2 := uint64(940002)
-	defer func() {
-		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(session1), int64(session2))
-	}()
 
 	// AC 1 & AC 2: 使用 O_RDONLY 的 fh1RO 申请排他 BSD flock (lk_flags == 1, F_WRLCK) 成功，不触发 EBADF；
 	// 且在同一 Inode 上持有排他 flock 时，另一持有者仍可成功申请 POSIX 读写锁 (lk_flags == 0)，反之亦然。

@@ -33,12 +33,19 @@ const (
 	O_EXCL    = 0o200
 	O_TRUNC   = 0o1000
 	O_APPEND  = 0o2000
+	O_TMPFILE = 0o20000000
 )
 
 // Linux FUSE / POSIX fallocate 模式标志位常量（平台无关固定值）。
 const (
 	FallocFlKeepSize  uint32 = 0x01
 	FallocFlPunchHole uint32 = 0x02
+)
+
+// Linux FUSE_RENAME2 (45) 重命名标志位常量（平台无关固定值，严禁依赖宿主机 syscall）。
+const (
+	RenameNoReplace uint32 = 0x1
+	RenameExchange  uint32 = 0x2
 )
 
 // Linux 扩展属性（xattr）规格常量与操作标志位。
@@ -116,15 +123,17 @@ type LinkParams struct {
 	NewName      []byte
 }
 
-// RenameParams 定义重命名与移动操作的输入参数。
+// RenameParams 定义重命名、移动与交换操作的输入参数。
 type RenameParams struct {
 	OldParentIno uint64
 	OldName      []byte
 	NewParentIno uint64
 	NewName      []byte
+	Flags        uint32
 }
 
 // CreateParams 定义原子创建常规文件并分配初始文件句柄的输入参数。
+// 严禁在 Flags 中携带 O_TMPFILE 标志位（匿名临时文件必须通过 TmpFile 接口创建）。
 type CreateParams struct {
 	ParentIno uint64
 	Name      []byte
@@ -132,6 +141,7 @@ type CreateParams struct {
 	UID       uint32
 	GID       uint32
 	Flags     uint32
+	SessionID *uint64
 }
 
 // CreateResult 包含新建文件的 Inode 元数据、初始分配的 FileHandle 与打开响应标志。
@@ -141,10 +151,22 @@ type CreateResult struct {
 	OpenFlags uint32
 }
 
+// TmpFileParams 定义原子创建匿名临时常规文件并分配初始文件句柄的输入参数。
+type TmpFileParams struct {
+	ParentIno uint64
+	Mode      uint32
+	UID       uint32
+	GID       uint32
+	Flags     uint32
+	SessionID *uint64
+}
+
 // OpenParams 定义打开文件并分配文件句柄的输入参数。
+// 严禁在 Flags 中携带 O_TMPFILE 标志位（严防伪造 O_TMPFILE 绕过独占限制或非法复活孤儿节点）。
 type OpenParams struct {
-	Ino   uint64
-	Flags uint32
+	Ino       uint64
+	Flags     uint32
+	SessionID *uint64
 }
 
 // OpenResult 包含打开文件分配的 FileHandle 与打开响应标志。
@@ -163,9 +185,10 @@ type FlushParams struct {
 
 // FsyncParams 定义文件同步操作的输入参数。
 type FsyncParams struct {
-	Ino      uint64
-	Fh       uint64
-	Datasync bool
+	Ino       uint64
+	Fh        uint64
+	Datasync  bool
+	SessionID *uint64
 }
 
 // ReleaseParams 定义文件句柄销毁、BSD flock 句柄锁清理与孤儿回收操作的输入参数。
@@ -179,20 +202,30 @@ type ReleaseParams struct {
 
 // OpenDirParams 定义打开目录并分配目录句柄的输入参数。
 type OpenDirParams struct {
-	Ino   uint64
-	Flags uint32
+	Ino       uint64
+	Flags     uint32
+	SessionID *uint64
 }
 
-// OpenDirResult 包含打开目录分配的 DirHandle 与打开响应标志。
+// OpenDirResult 包含打开目录分配的 FileHandle 与打开响应标志。
 type OpenDirResult struct {
 	Fh        uint64
 	OpenFlags uint32
 }
 
+// FsyncDirParams 定义目录句柄同步操作的输入参数。
+type FsyncDirParams struct {
+	Ino       uint64
+	Fh        uint64
+	Datasync  bool
+	SessionID *uint64
+}
+
 // ReleaseDirParams 定义目录句柄销毁与孤儿回收操作的输入参数。
 type ReleaseDirParams struct {
-	Ino uint64
-	Fh  uint64
+	Ino       uint64
+	Fh        uint64
+	SessionID *uint64
 }
 
 // 目录遍历最大单次条目配额限制。
@@ -214,10 +247,11 @@ type DirEntry struct {
 
 // ReadDirParams 定义目录项流式遍历输入参数。
 type ReadDirParams struct {
-	Ino    uint64
-	Fh     uint64
-	Offset uint64
-	Limit  uint32
+	Ino       uint64
+	Fh        uint64
+	Offset    uint64
+	Limit     uint32
+	SessionID *uint64
 }
 
 // DirEntryPlus 定义 ReadDirPlus 返回的扩展目录项实体（包含完整 Inode 属性与内核缓存时效）。
@@ -232,19 +266,21 @@ type DirEntryPlus struct {
 
 // ReadDirPlusParams 定义扩展目录项流式遍历输入参数。
 type ReadDirPlusParams struct {
-	Ino    uint64
-	Fh     uint64
-	Offset uint64
-	Limit  uint32
+	Ino       uint64
+	Fh        uint64
+	Offset    uint64
+	Limit     uint32
+	SessionID *uint64
 }
 
 // FallocateParams 定义文件空间预分配与打洞操作的输入参数。
 type FallocateParams struct {
-	Ino    uint64
-	Fh     uint64
-	Offset uint64
-	Length uint64
-	Mode   uint32
+	Ino       uint64
+	Fh        uint64
+	Offset    uint64
+	Length    uint64
+	Mode      uint32
+	SessionID *uint64
 }
 
 // SetXattrParams 定义设置扩展属性的输入参数。

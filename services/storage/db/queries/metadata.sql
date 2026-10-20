@@ -107,6 +107,11 @@ SET parent_ino = @new_parent_ino,
     name = @new_name
 WHERE parent_ino = @old_parent_ino AND name = @old_name;
 
+-- name: UpdateEntryIno :exec
+UPDATE entries
+SET ino = $3
+WHERE parent_ino = $1 AND name = $2;
+
 -- name: TouchInodeCtime :exec
 UPDATE inodes
 SET ctime = clock_timestamp()
@@ -134,23 +139,61 @@ SELECT COALESCE((@child_ino::bigint = @ancestor_ino::bigint) OR EXISTS (
 ), false)::boolean AS is_sub;
 
 -- name: CreateFileHandle :one
-INSERT INTO file_handles (ino, flags)
-VALUES ($1, $2)
+INSERT INTO file_handles (ino, flags, session_id)
+VALUES ($1, $2, $3)
 RETURNING *;
 
 -- name: HasFileHandlesByIno :one
 SELECT EXISTS (
-    SELECT 1 FROM file_handles WHERE ino = $1
+    SELECT 1
+    FROM file_handles fh
+    LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+    WHERE fh.ino = $1
+      AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
 );
 
 -- name: GetFileHandle :one
-SELECT * FROM file_handles
-WHERE fh = $1 AND ino = $2;
+SELECT fh.*
+FROM file_handles fh
+LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+WHERE fh.fh = $1
+  AND fh.ino = $2
+  AND fh.session_id IS NOT DISTINCT FROM sqlc.narg('session_id')
+  AND (sqlc.narg('session_id') IS NULL OR s.expires_at > clock_timestamp());
+
+-- name: HasLinkableTmpFileHandleByIno :one
+-- 4194304 = 0o20000000 (O_TMPFILE), 128 = 0o200 (O_EXCL)
+SELECT EXISTS (
+    SELECT 1
+    FROM file_handles fh
+    LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+    WHERE fh.ino = $1
+      AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+      AND (fh.flags & 4194304) <> 0 -- 4194304 = 0o20000000 (O_TMPFILE)
+      AND (fh.flags & 128) = 0      -- 128 = 0o200 (O_EXCL)
+);
+
+-- name: ClearTmpFileFlagByIno :exec
+-- 4194304 = 0o20000000 (O_TMPFILE)
+UPDATE file_handles
+SET flags = flags & ~4194304 -- 4194304 = 0o20000000 (O_TMPFILE)
+WHERE ino = $1;
 
 -- name: DeleteFileHandle :one
-DELETE FROM file_handles
-WHERE fh = $1 AND ino = $2
-RETURNING fh;
+DELETE FROM file_handles fh
+WHERE fh.fh = $1
+  AND fh.ino = $2
+  AND fh.session_id IS NOT DISTINCT FROM sqlc.narg('session_id')
+  AND (
+      sqlc.narg('session_id') IS NULL
+      OR EXISTS (
+          SELECT 1
+          FROM client_sessions s
+          WHERE s.session_id = fh.session_id
+              AND s.expires_at > clock_timestamp()
+      )
+  )
+RETURNING fh.fh;
 
 -- name: DeleteInode :exec
 DELETE FROM inodes
@@ -221,6 +264,22 @@ ON CONFLICT (session_id) DO UPDATE
 SET expires_at = EXCLUDED.expires_at,
     updated_at = clock_timestamp()
 RETURNING session_id, expires_at, updated_at;
+
+-- name: DeleteUnreferencedOrphanInodes :exec
+DELETE FROM inodes
+WHERE ino IN (
+    SELECT i.ino
+    FROM inodes i
+    WHERE i.nlink = 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM file_handles fh
+          LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+          WHERE fh.ino = i.ino
+            AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+      )
+    FOR UPDATE SKIP LOCKED
+);
 
 -- name: GetFirstConflictingFileLock :one
 SELECT l.id, l.session_id, l.ino, l.fh, l.lock_owner, l.lk_flags, l.start_offset, l.end_offset, l.lock_type, l.pid, l.created_at
