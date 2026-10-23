@@ -65,6 +65,14 @@ tasks:
       - task: test:disk
         vars: { CLI_ARGS: '{{.CLI_ARGS}}' }
 
+  lint:
+    desc: "Run buf lint and go vet across all modules"
+    cmds:
+      - buf lint
+      - go vet ./...
+      - go -C services/storage vet ./...
+      - go -C services/disk vet ./...
+
   goose:storage:up:
     desc: "执行 storage 服务的 goose 向上迁移 (Up)"
     cmds:
