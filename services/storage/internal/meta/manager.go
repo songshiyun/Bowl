@@ -72,6 +72,11 @@ type Manager interface {
 	RenewSession(ctx context.Context, sessionID uint64) (time.Time, error)
 	RenewSessionWithStatus(ctx context.Context, sessionID uint64) (RenewSessionResult, error)
 	GetParents(ctx context.Context, ino uint64) (map[uint64]uint32, error)
+	CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error)
+	GetDisk(ctx context.Context, diskID string) (*Disk, error)
+	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
+	DeleteDisk(ctx context.Context, diskID string) error
+	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 }
 
 type manager struct {
@@ -256,6 +261,7 @@ func (m *manager) newInodeFromListDirRow(row db.ListDirEntriesRow) *Inode {
 		SymlinkTarget: row.SymlinkTarget,
 		Flags:         row.Flags,
 		ParentIno:     row.ParentIno,
+		RootIno:       row.RootIno,
 	}, entryTimeout, m.attrTimeout)
 }
 
@@ -390,7 +396,7 @@ func (m *manager) RenewSessionWithStatus(ctx context.Context, sessionID uint64) 
 		return RenewSessionResult{}, ErrInvalidArgument
 	}
 	var res RenewSessionResult
-	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		leaseTTL := m.sessionLeaseTTL
 		if leaseTTL <= 0 {
 			leaseTTL = DefaultSessionLeaseTTL
@@ -412,12 +418,8 @@ func (m *manager) RenewSessionWithStatus(ctx context.Context, sessionID uint64) 
 		if err != nil {
 			return fmt.Errorf("upsert client session %d: %w", sessionID, err)
 		}
-		deletedInos, err := q.DeleteUnreferencedOrphanInodes(ctx)
-		if err != nil {
-			return fmt.Errorf("delete unreferenced orphan inodes: %w", err)
-		}
-		if len(deletedInos) > 0 {
-			m.cleanLockWaitersForInos(deletedInos)
+		if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
+			return err
 		}
 		res.ExpiresAt = session.ExpiresAt.Time
 		res.SessionRecreated = session.CreatedAt.Time.Equal(session.UpdatedAt.Time)
@@ -432,17 +434,88 @@ func (m *manager) RenewSessionWithStatus(ctx context.Context, sessionID uint64) 
 	return res, nil
 }
 
-// reclaimOrphanIfNoHandles 检查孤儿节点是否存在未释放句柄，若无任何句柄则执行物理删除并唤醒清理锁等待通道。
-func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, ino uint64) error {
-	hasRemaining, err := q.HasFileHandlesByIno(ctx, int64(ino))
+// reclaimUnreferencedOrphans 批量清理无句柄引用的超期孤儿节点，并按 root_ino 汇总退还磁盘配额。
+func (m *manager) reclaimUnreferencedOrphans(ctx context.Context, q db.Querier) error {
+	deletedOrphans, err := q.DeleteUnreferencedOrphanInodes(ctx)
 	if err != nil {
-		return fmt.Errorf("check remaining file handles for inode %d: %w", ino, err)
+		return fmt.Errorf("delete unreferenced orphan inodes: %w", err)
 	}
-	if !hasRemaining {
-		if err := q.DeleteInode(ctx, int64(ino)); err != nil {
-			return fmt.Errorf("delete orphan inode %d: %w", ino, err)
+	if len(deletedOrphans) == 0 {
+		return nil
+	}
+
+	type quotaDelta struct {
+		deltaBytes  int64
+		deltaInodes int64
+	}
+	quotaDeltas := make(map[int64]*quotaDelta)
+	deletedInos := make([]int64, 0, len(deletedOrphans))
+
+	for _, row := range deletedOrphans {
+		deletedInos = append(deletedInos, row.Ino)
+		if row.RootIno <= 0 {
+			continue
 		}
-		m.notifyLockWaiters(ino)
+		agg, ok := quotaDeltas[row.RootIno]
+		if !ok {
+			agg = &quotaDelta{}
+			quotaDeltas[row.RootIno] = agg
+		}
+		agg.deltaInodes--
+		if (uint32(row.Mode)&S_IFMT) == S_IFREG && row.Size > 0 {
+			agg.deltaBytes -= row.Size
+		}
+	}
+
+	rootInos := make([]int64, 0, len(quotaDeltas))
+	for rootIno := range quotaDeltas {
+		rootInos = append(rootInos, rootIno)
+	}
+	slices.Sort(rootInos)
+
+	for _, rootIno := range rootInos {
+		agg := quotaDeltas[rootIno]
+		if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
+			RootIno:     rootIno,
+			DeltaBytes:  agg.deltaBytes,
+			DeltaInodes: agg.deltaInodes,
+		}); err != nil {
+			return fmt.Errorf("reclaim disk quota for root_ino %d: %w", rootIno, err)
+		}
+	}
+
+	m.cleanLockWaitersForInos(deletedInos)
+	return nil
+}
+
+// reclaimOrphanIfNoHandles 检查孤儿节点是否存在未释放句柄，若无任何句柄则执行物理删除并唤醒清理锁等待通道。
+// 若节点所属 RootIno > 0，在物理删除后联动退还 used_bytes 与 used_inodes 配额。
+func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, inode db.Inode) error {
+	hasRemaining, err := q.HasFileHandlesByIno(ctx, inode.Ino)
+	if err != nil {
+		return fmt.Errorf("check remaining file handles for inode %d: %w", inode.Ino, err)
+	}
+	if hasRemaining {
+		return nil
+	}
+
+	if err := q.DeleteInode(ctx, inode.Ino); err != nil {
+		return fmt.Errorf("delete orphan inode %d: %w", inode.Ino, err)
+	}
+	m.notifyLockWaiters(uint64(inode.Ino))
+
+	if inode.RootIno > 0 {
+		var deltaBytes int64
+		if (uint32(inode.Mode)&S_IFMT) == S_IFREG && inode.Size > 0 {
+			deltaBytes = -inode.Size
+		}
+		if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
+			RootIno:     inode.RootIno,
+			DeltaBytes:  deltaBytes,
+			DeltaInodes: -1,
+		}); err != nil {
+			return fmt.Errorf("reclaim orphan disk quota for root_ino %d: %w", inode.RootIno, err)
+		}
 	}
 	return nil
 }

@@ -37,7 +37,7 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 	}
 
 	var result *Inode
-	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		if isDotOrDotDot(params.NewName) {
 			parent, err := q.GetInodeForUpdate(ctx, int64(params.NewParentIno))
 			if err != nil {
@@ -57,6 +57,7 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 
 		// 按全局 ino 升序锁定目标父目录与源节点，避免跨层操作逆序死锁
 		var parent db.Inode
+		var srcInode db.Inode
 		var isTmpFileMaterializing bool
 		for _, ino := range uniqueSortedInos(int64(params.NewParentIno), int64(params.Ino)) {
 			row, err := q.GetInodeForUpdate(ctx, ino)
@@ -76,6 +77,7 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 				parent = row
 			}
 			if ino == int64(params.Ino) {
+				srcInode = row
 				// 禁止目录硬链接
 				if (uint32(row.Mode) & S_IFMT) == S_IFDIR {
 					return ErrPerm
@@ -99,6 +101,10 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 					isTmpFileMaterializing = true
 				}
 			}
+		}
+
+		if parent.RootIno != srcInode.RootIno {
+			return ErrCrossDevice
 		}
 
 		// 插入新目录项
@@ -149,6 +155,8 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 			return nil, ErrAlreadyExists
 		case errors.Is(err, ErrTooManyLinks):
 			return nil, ErrTooManyLinks
+		case errors.Is(err, ErrCrossDevice):
+			return nil, ErrCrossDevice
 		default:
 			return nil, fmt.Errorf("link tx: %w", err)
 		}
@@ -260,14 +268,22 @@ func (m *manager) Unlink(ctx context.Context, parentIno uint64, name []byte) err
 			return fmt.Errorf("delete entry %d/%s: %w", parentIno, name, err)
 		}
 
-		// 递减子节点硬链接数并刷新 ctime (即使 nlink 降为 0 也保留 Inode 行)
-		if _, err := q.DecrementInodeNlinkAndTouchCtime(ctx, child.Ino); err != nil {
+		// 递减子节点硬链接数并刷新 ctime
+		updatedChild, err := q.DecrementInodeNlinkAndTouchCtime(ctx, child.Ino)
+		if err != nil {
 			return fmt.Errorf("decrement child inode %d nlink and touch ctime: %w", child.Ino, err)
 		}
 
 		// 刷新父目录 mtime 与 ctime (父目录 nlink 保持不变)
 		if err := q.TouchInodeTimestamps(ctx, parent.Ino); err != nil {
 			return fmt.Errorf("touch parent inode %d timestamps: %w", parent.Ino, err)
+		}
+
+		// 当硬链接数降为 0 时，若无活跃句柄则物理删除 Inode 行、唤醒锁等待队列并退还所属 Disk 配额
+		if updatedChild.Nlink == 0 {
+			if err := m.reclaimOrphanIfNoHandles(ctx, q, child); err != nil {
+				return err
+			}
 		}
 
 		return nil
@@ -416,6 +432,11 @@ func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name []byte) erro
 			return fmt.Errorf("decrement parent inode %d nlink and touch: %w", parent.Ino, err)
 		}
 
+		// 检查目标目录当前是否存在活跃目录句柄 (rmdir-whilst-open)，若无活跃句柄则物理删除并退还配额
+		if err := m.reclaimOrphanIfNoHandles(ctx, q, child); err != nil {
+			return err
+		}
+
 		return nil
 	})
 
@@ -532,12 +553,9 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			return fmt.Errorf("get new entry %d/%s: %w", params.NewParentIno, params.NewName, err)
 		}
 
-		inosToLock := []int64{int64(params.OldParentIno), int64(params.NewParentIno)}
-		if !hasNewEntry || oldIno != newIno {
-			inosToLock = append(inosToLock, oldIno)
-			if hasNewEntry {
-				inosToLock = append(inosToLock, newIno)
-			}
+		inosToLock := []int64{int64(params.OldParentIno), int64(params.NewParentIno), oldIno}
+		if hasNewEntry && oldIno != newIno {
+			inosToLock = append(inosToLock, newIno)
 		}
 
 		locked := make(map[int64]db.Inode, len(inosToLock))
@@ -591,6 +609,21 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			return errRetryTx
 		}
 
+		oldParent := locked[int64(params.OldParentIno)]
+		newParent := locked[int64(params.NewParentIno)]
+		oldInode := locked[oldIno]
+
+		// 跨虚拟磁盘拓扑隔离校验：oldParent、newParent 与 oldInode 必须属于同一虚拟磁盘
+		if oldParent.RootIno != newParent.RootIno || oldInode.RootIno != oldParent.RootIno {
+			return ErrCrossDevice
+		}
+		if hasNewEntry && oldIno != newIno {
+			newInode := locked[newIno]
+			if newInode.RootIno != oldParent.RootIno {
+				return ErrCrossDevice
+			}
+		}
+
 		// RenameNoReplace：只要目标 Entry 已存在（包含同一 Inode 的不同硬链接与异 Inode），一律返回 ErrAlreadyExists
 		if params.Flags == RenameNoReplace && hasNewEntry {
 			return ErrAlreadyExists
@@ -601,9 +634,6 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			return nil
 		}
 
-		oldParent := locked[int64(params.OldParentIno)]
-		newParent := locked[int64(params.NewParentIno)]
-		oldInode := locked[oldIno]
 		newInode := locked[newIno]
 
 		oldIsDir := (uint32(oldInode.Mode) & S_IFMT) == S_IFDIR
@@ -758,14 +788,27 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			}
 
 			if newIsDir {
-				// 被覆盖目标为空目录：nlink 直接置 0，刷新 ctime (保留 Inode 行)
+				// 被覆盖目标为空目录：nlink 直接置 0，刷新 ctime
 				if _, err := q.ClearInodeNlinkAndTouchCtime(ctx, newIno); err != nil {
 					return fmt.Errorf("clear target dir %d nlink: %w", newIno, err)
 				}
+
+				// 检查被覆盖空目录是否存在活跃目录句柄 (rmdir-whilst-open)，若无活跃句柄则物理删除并退还配额
+				if err := m.reclaimOrphanIfNoHandles(ctx, q, newInode); err != nil {
+					return err
+				}
 			} else {
-				// 被覆盖目标为非目录：nlink 递减 1，刷新 ctime (保留 Inode 行)
-				if _, err := q.DecrementInodeNlinkAndTouchCtime(ctx, newIno); err != nil {
+				// 被覆盖目标为非目录：nlink 递减 1，刷新 ctime
+				updatedTarget, err := q.DecrementInodeNlinkAndTouchCtime(ctx, newIno)
+				if err != nil {
 					return fmt.Errorf("decrement target file %d nlink: %w", newIno, err)
+				}
+
+				// 当硬链接数降为 0 时，若无活跃句柄则物理删除 Inode 行、唤醒锁等待队列并退还配额
+				if updatedTarget.Nlink == 0 {
+					if err := m.reclaimOrphanIfNoHandles(ctx, q, newInode); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -868,6 +911,8 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 			return ErrNotSupported
 		case errors.Is(err, ErrInvalidArgument):
 			return ErrInvalidArgument
+		case errors.Is(err, ErrCrossDevice):
+			return ErrCrossDevice
 		default:
 			return fmt.Errorf("rename tx: %w", err)
 		}

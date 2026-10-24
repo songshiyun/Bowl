@@ -2,6 +2,7 @@ package meta
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 )
@@ -39,6 +40,14 @@ const (
 const (
 	DefaultBlockSize uint32 = 65536
 	DefaultDirSize   uint64 = 4096
+)
+
+// 磁盘与 StatFS 常量。
+const (
+	// MaxDiskNameBytes 定义磁盘名称最大字节长度（255 字节）。
+	MaxDiskNameBytes = 255
+	// DefaultStatFSBlockSize 定义 StatFS 默认换算块大小（4096 字节）。
+	DefaultStatFSBlockSize = 4096
 )
 
 // Inode 文件系统标志位常量（对齐 Linux chattr / FS_*_FL）。
@@ -412,6 +421,8 @@ var (
 	ErrIllegalSeek     = errors.New("meta: illegal seek")
 	ErrIO              = errors.New("meta: input/output error")
 	ErrAccess          = errors.New("meta: permission denied")
+	ErrInvalidShrink   = fmt.Errorf("%w: cannot shrink disk capacity below current usage", ErrInvalidArgument)
+	ErrCrossDevice     = errors.New("meta: invalid cross-device link")
 )
 
 // Inode 表示文件系统节点的领域实体。
@@ -458,3 +469,44 @@ type RenewSessionResult struct {
 	ExpiresAt        time.Time
 	SessionRecreated bool
 }
+
+// Disk 描述虚拟磁盘领域实体。
+type Disk struct {
+	DiskID     string
+	Name       string
+	RootIno    uint64
+	MaxBytes   uint64
+	UsedBytes  uint64
+	UsedInodes uint64
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// CreateDiskParams 描述创建虚拟磁盘入参。
+type CreateDiskParams struct {
+	Name     string
+	MaxBytes uint64
+}
+
+// UpdateDiskParams 描述更新虚拟磁盘入参。
+type UpdateDiskParams struct {
+	DiskID   string
+	Name     *string
+	MaxBytes *uint64
+}
+
+// StatFSResult 描述磁盘文件系统统计状态（对接 Linux FUSE FUSE_STATFS = 17 协议）。
+type StatFSResult struct {
+	TotalBytes uint64
+	UsedBytes  uint64
+	AvailBytes uint64
+	Bsize      uint32
+	Frsize     uint32
+	Blocks     uint64
+	Bfree      uint64
+	Bavail     uint64
+	Files      uint64
+	Ffree      uint64
+	Namelen    uint32
+}
+
