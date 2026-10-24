@@ -3,8 +3,9 @@
 ## Build, Test & Tooling
 
 - **多模块与目录布局**：
-  - 根模块（[`go.mod`](go.mod)）：包含 `gen/go`（Protobuf 生成代码）、[`pkg/errcode`](pkg/errcode) 及 [`tests/contract`](tests/contract)（跨模块契约测试）。
-  - Storage 子模块（[`services/storage/go.mod`](services/storage/go.mod)）：代码位于 `services/storage/internal/{meta,db}` 与 `services/storage/db/{migrations,queries}`（不存在 `internal/service`、`internal/handler` 或 `internal/store` 目录）。
+  - 根模块（[`go.mod`](go.mod)）：包含 `proto/storage/v1/`（Protobuf 源文件）、`gen/go`（Protobuf 生成代码）、[`pkg/validator`](pkg/validator)（请求校验器）及 [`tests/contract`](tests/contract)（跨模块契约测试；仓库不存在 `pkg/errcode` 或 `proto/bowl`）。
+  - Storage 子模块（[`services/storage/go.mod`](services/storage/go.mod)）：代码位于 `services/storage/internal/{meta,db}` 与 `services/storage/db/{migrations,queries}`（不存在 `internal/service`、`internal/handler`、`internal/store` 或 `services/storage/storage_test.go`）。
+  - `services/storage/internal/meta/` 文件职责索引：领域实体、常量与哨兵错误定义在 `entity.go`；gRPC 状态码与 `ErrorInfo` 映射在 `status.go`；文件锁（Flock/POSIX 锁）在 `lock.go`；元数据核心逻辑按职责切分为 `manager.go` 及 `manager_{lookup_getattr,create_open,dir_topology,readdir_xattr,setattr_fallocate,handle_session,disk}.go`（不存在 `types.go`、`errors.go` 或 `handler.go`）。
   - 查阅 [`docs/adr/`](docs/adr) 时，先列出目录获取准确文件名，切勿盲猜文件名。
 - **Worktree 与模块隔离**：根目录 [`go.work`](go.work) 已 gitignore。在 `.worktrees/<ticket>` 内执行 `go`（含 `go test`、`go tool cover`）或 `mockery` 命令时，必须通过 [`Taskfile.yml`](Taskfile.yml)（已内置 `GOWORK=off`）或显式指定 `GOWORK=off` 并带 `-C services/<mod>` 运行，切勿在根模块直接跑子模块路径或无隔离运行。
 - **常用任务 (`task`)**：
