@@ -863,4 +863,3 @@ func TestLink_CrossDeviceTopologyIsolation(t *testing.T) {
 		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 }
-

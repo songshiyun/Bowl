@@ -563,6 +563,3 @@ func TestFsyncDir_PostgresIntegration(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, meta.ErrBadFileHandle)
 }
-
-
-

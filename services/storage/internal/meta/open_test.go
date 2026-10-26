@@ -131,7 +131,6 @@ func TestOpen_PositivePath(t *testing.T) {
 			specialRow.Mode = int32(spec.mode)
 			specialRow.Rdev = int64(spec.rdev)
 
-
 			mockQuerier.EXPECT().
 				GetInodeForUpdate(mock.Anything, int64(ino)).
 				Return(specialRow, nil).

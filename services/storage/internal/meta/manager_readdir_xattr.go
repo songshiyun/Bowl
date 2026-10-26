@@ -277,11 +277,11 @@ func isAllowedUserXattrFileType(mode uint32) bool {
 
 // SetXattr 设置指定 Inode 的扩展属性。
 // 遵循 Linux FUSE FUSE_SETXATTR 协议与 POSIX setxattr(2) 语义，执行 4 步求值状态机：
-// 1. 入参静态校验（不查库）：校验 Ino、Flags、Name 与 Value 边界及非法字符；
-// 2. 排他锁与存在性校验：读写事务内通过 GetInodeForUpdate 获取行锁，支持孤儿节点；
-// 3. user.* 文件类型准入校验：针对 user.* 命名空间限制仅常规文件、目录与套接字，非 user.* 命名空间直接放行；
-// 4. 属性存在性、Flags 状态机、配额校验、空值归一化与持久化：判断 XATTR_CREATE / XATTR_REPLACE 状态，
-//    并在新增属性时执行 65536 字节名称列表配额拦截（覆盖不拦截），写入后刷新 Inode ctime。
+//  1. 入参静态校验（不查库）：校验 Ino、Flags、Name 与 Value 边界及非法字符；
+//  2. 排他锁与存在性校验：读写事务内通过 GetInodeForUpdate 获取行锁，支持孤儿节点；
+//  3. user.* 文件类型准入校验：针对 user.* 命名空间限制仅常规文件、目录与套接字，非 user.* 命名空间直接放行；
+//  4. 属性存在性、Flags 状态机、配额校验、空值归一化与持久化：判断 XATTR_CREATE / XATTR_REPLACE 状态，
+//     并在新增属性时执行 65536 字节名称列表配额拦截（覆盖不拦截），写入后刷新 Inode ctime。
 func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 	// 第 1 步：入参静态校验（不查库）
 	if params.Ino == 0 || params.Ino > math.MaxInt64 {
@@ -468,9 +468,9 @@ func (m *manager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte
 // 1. 入参静态校验（不查库）：校验 Ino 必须大于 0 且在 int64 正数范围内 (<= math.MaxInt64)，否则返回 ErrInvalidArgument；
 // 2. 只读快照隔离与 Inode 存在性校验：在 RepeatableRead 只读事务（tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead)）中调用 GetInode(ino)；若未命中返回 ErrNotFound；支持孤儿节点 (nlink == 0)；
 // 3. 查询属性名列表：调用 ListInodeXattrNames(ino) 查询该节点绑定的全部属性名称；
-//    - 结果按名称原始字节序升序（BYTEA ASC）返回；不按调用方过滤（对齐 Linux 内核 FUSE 行为）；
-//    - 若无属性，返回空切片 [][]byte{}；
-//    - 遵循 noatime 策略不刷新 atime。
+//   - 结果按名称原始字节序升序（BYTEA ASC）返回；不按调用方过滤（对齐 Linux 内核 FUSE 行为）；
+//   - 若无属性，返回空切片 [][]byte{}；
+//   - 遵循 noatime 策略不刷新 atime。
 func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
 	// 第 1 步：入参静态校验（不查库）
 	if ino == 0 || ino > math.MaxInt64 {
@@ -519,9 +519,10 @@ func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
 // RemoveXattr 移除指定 Inode 的扩展属性。
 // 遵循 Linux FUSE FUSE_REMOVEXATTR 协议与 POSIX removexattr(2) 语义，执行 4 步求值状态机：
 // 1. 入参静态校验（不查库）：
-//    - ino == 0 || ino > math.MaxInt64 返回 ErrInvalidArgument；
-//    - len(name) == 0 || len(name) > MaxXattrNameBytes 返回 ErrRange；
-//    - bytes.IndexByte(name, 0) >= 0 返回 ErrInvalidArgument；
+//   - ino == 0 || ino > math.MaxInt64 返回 ErrInvalidArgument；
+//   - len(name) == 0 || len(name) > MaxXattrNameBytes 返回 ErrRange；
+//   - bytes.IndexByte(name, 0) >= 0 返回 ErrInvalidArgument；
+//
 // 2. Inode 行级排他锁与存在性校验：在读写事务内调用 GetInodeForUpdate(ino)；未命中返回 ErrNotFound；支持孤儿节点 (nlink == 0)；
 // 3. user.* 文件类型准入校验：若以 user. 为前缀，仅允许常规文件 (S_IFREG)、目录 (S_IFDIR) 与套接字 (S_IFSOCK)；对符号链接、字符设备、块设备、FIFO 返回 ErrPerm（对齐 Linux xattr_permission 写掩码行为）；非 user.* 命名空间不限制；
 // 4. 删除属性与刷新 ctime：调用 DeleteInodeXattr(ino, name)；若受影响行数为 0 返回 ErrNoData；删除成功后调用 TouchInodeCtime(ino) 刷新 ctime（使用 clock_timestamp()，不修改 mtime 与 atime）。

@@ -1002,6 +1002,3 @@ func TestSetLk_PostgresSemantics(t *testing.T) {
 	assert.Equal(t, beforeInode.Attr.Mtime, orphanAfter.Attr.Mtime)
 	assert.Equal(t, orphanBefore.Attr.Ctime, orphanAfter.Attr.Ctime)
 }
-
-
-

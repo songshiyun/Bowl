@@ -541,5 +541,3 @@ func TestStorageDiskContract_DeleteDiskRequest_Invalid(t *testing.T) {
 		assertStorageErrorInfoReason(t, v.Validate(req), validator.ReasonInvalidArgument)
 	})
 }
-
-

@@ -65,10 +65,10 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 
 // Flush 冲刷会话句柄并校验合法性（不销毁文件句柄）。
 // 遵循 ADR-0012：
-// 1. 当未传入 LockOwner 与 SessionID（LockOwner == nil && SessionID == nil）时，保持只读事务校验 (ino, fh) 合法性；
-// 2. 当传入 LockOwner 或 SessionID 时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
-//    若携带 SessionID 则续期会话并触发孤儿节点兜底回收；若携带 LockOwner 则原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
-//    无论这些锁最初是通过哪个 FileHandle 申请或合并的；Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
+//  1. 当未传入 LockOwner 与 SessionID（LockOwner == nil && SessionID == nil）时，保持只读事务校验 (ino, fh) 合法性；
+//  2. 当传入 LockOwner 或 SessionID 时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
+//     若携带 SessionID 则续期会话并触发孤儿节点兜底回收；若携带 LockOwner 则原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
+//     无论这些锁最初是通过哪个 FileHandle 申请或合并的；Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
 func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument

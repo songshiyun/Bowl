@@ -22,8 +22,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-
-
 func ptr[T any](v T) *T {
 	return &v
 }
@@ -701,8 +699,8 @@ func TestSetAttr_POSIX_FileTypeAndSize(t *testing.T) {
 	})
 
 	nonRegularTestCases := []struct {
-		name     string
-		mode     uint32
+		name string
+		mode uint32
 	}{
 		{name: "符号链接 S_IFLNK", mode: 0o120777},
 		{name: "FIFO 命名管道 S_IFIFO", mode: 0o010666},
@@ -1904,5 +1902,3 @@ func TestSetAttr_DiskQuota(t *testing.T) {
 		mockQuerier.AssertExpectations(t)
 	})
 }
-
-

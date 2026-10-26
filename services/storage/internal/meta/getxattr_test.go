@@ -220,8 +220,8 @@ func TestGetXattr_TxOptionsAndInodeLookup(t *testing.T) {
 // TestGetXattr_UserNamespaceAdmission 验证第 3 步 user.* 命名空间文件类型准入控制（7 种文件类型）。
 func TestGetXattr_UserNamespaceAdmission(t *testing.T) {
 	all7Types := []struct {
-		typeName   string
-		mode       uint32
+		typeName    string
+		mode        uint32
 		userAllowed bool
 	}{
 		{typeName: "常规文件 S_IFREG", mode: meta.S_IFREG | 0o644, userAllowed: true},

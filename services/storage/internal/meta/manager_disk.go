@@ -321,5 +321,3 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		Namelen:    MaxFileNameBytes,
 	}, nil
 }
-
-

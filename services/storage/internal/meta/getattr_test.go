@@ -23,15 +23,15 @@ func TestGetAttr_PositivePath(t *testing.T) {
 	now := time.Now().Truncate(time.Microsecond)
 
 	testCases := []struct {
-		name       string
-		ino        uint64
-		generation int64
-		mode       int32
-		size       int64
-		nlink      int32
-		uid        int32
-		gid        int32
-		rdev       int64
+		name        string
+		ino         uint64
+		generation  int64
+		mode        int32
+		size        int64
+		nlink       int32
+		uid         int32
+		gid         int32
+		rdev        int64
 		expectedBlk uint64
 	}{
 		{

@@ -920,4 +920,3 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 
 	return nil
 }
-

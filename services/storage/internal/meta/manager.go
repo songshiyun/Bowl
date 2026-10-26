@@ -531,4 +531,3 @@ func (m *manager) shouldTouchAtime(atime, mtime, ctime, now time.Time) bool {
 		return false
 	}
 }
-

@@ -65,9 +65,10 @@ tasks:
       - go test -count=1 -v ./internal/meta -run "TestFormal" {{.CLI_ARGS}}
 
   lint:
-    desc: "Run buf lint and go vet across all modules"
+    desc: "Run buf lint, gofmt check, and go vet across all modules"
     cmds:
       - buf lint
+      - test -z "$(gofmt -s -l .)"
       - go vet ./...
       - go -C services/storage vet ./...
 

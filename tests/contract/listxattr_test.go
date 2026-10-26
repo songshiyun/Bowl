@@ -103,7 +103,7 @@ func TestListXattrResponseValidation(t *testing.T) {
 		},
 		{
 			name:  "合法: 属性名包含非 UTF-8 原始字节序列",
-			names: [][]byte{[]byte{0xff, 0xfe, 0x80, 'a'}},
+			names: [][]byte{{0xff, 0xfe, 0x80, 'a'}},
 			valid: true,
 		},
 		{
@@ -120,7 +120,7 @@ func TestListXattrResponseValidation(t *testing.T) {
 		// 负向用例：repeated items 约束
 		{
 			name:  "非法: names 包含空字节切片 (0 字节属性名)",
-			names: [][]byte{[]byte{}},
+			names: [][]byte{{}},
 			valid: false,
 		},
 		{

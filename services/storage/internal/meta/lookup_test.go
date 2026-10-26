@@ -267,81 +267,81 @@ func TestLookup_InputValidation(t *testing.T) {
 	ctx := context.Background()
 
 	testCases := []struct {
-		name       string
-		parentIno  uint64
-		entryName  []byte
-		wantErr    error
-		expectTx   bool
+		name      string
+		parentIno uint64
+		entryName []byte
+		wantErr   error
+		expectTx  bool
 	}{
 		{
-			name:       "parentIno 0 invalid",
-			parentIno:  0,
-			entryName:  []byte("file.txt"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "parentIno 0 invalid",
+			parentIno: 0,
+			entryName: []byte("file.txt"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with slash invalid",
-			parentIno:  2,
-			entryName:  []byte("dir/file.txt"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with slash invalid",
+			parentIno: 2,
+			entryName: []byte("dir/file.txt"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with leading slash invalid",
-			parentIno:  2,
-			entryName:  []byte("/file.txt"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with leading slash invalid",
+			parentIno: 2,
+			entryName: []byte("/file.txt"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with trailing slash invalid",
-			parentIno:  2,
-			entryName:  []byte("file.txt/"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with trailing slash invalid",
+			parentIno: 2,
+			entryName: []byte("file.txt/"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with embedded NUL byte invalid",
-			parentIno:  2,
-			entryName:  []byte("a\x00b"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with embedded NUL byte invalid",
+			parentIno: 2,
+			entryName: []byte("a\x00b"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with single NUL byte invalid",
-			parentIno:  2,
-			entryName:  []byte("\x00"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with single NUL byte invalid",
+			parentIno: 2,
+			entryName: []byte("\x00"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with leading NUL byte invalid",
-			parentIno:  2,
-			entryName:  []byte("\x00file.txt"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with leading NUL byte invalid",
+			parentIno: 2,
+			entryName: []byte("\x00file.txt"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with trailing NUL byte invalid",
-			parentIno:  2,
-			entryName:  []byte("file.txt\x00"),
-			wantErr:    meta.ErrInvalidArgument,
-			expectTx:   false,
+			name:      "name with trailing NUL byte invalid",
+			parentIno: 2,
+			entryName: []byte("file.txt\x00"),
+			wantErr:   meta.ErrInvalidArgument,
+			expectTx:  false,
 		},
 		{
-			name:       "name with 256 chars invalid",
-			parentIno:  2,
-			entryName:  []byte(strings.Repeat("a", 256)),
-			wantErr:    meta.ErrNameTooLong,
-			expectTx:   false,
+			name:      "name with 256 chars invalid",
+			parentIno: 2,
+			entryName: []byte(strings.Repeat("a", 256)),
+			wantErr:   meta.ErrNameTooLong,
+			expectTx:  false,
 		},
 		{
-			name:       "name with exactly 255 chars valid",
-			parentIno:  2,
-			entryName:  []byte(strings.Repeat("a", 255)),
-			wantErr:    nil,
-			expectTx:   true,
+			name:      "name with exactly 255 chars valid",
+			parentIno: 2,
+			entryName: []byte(strings.Repeat("a", 255)),
+			wantErr:   nil,
+			expectTx:  true,
 		},
 	}
 

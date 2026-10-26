@@ -1303,4 +1303,3 @@ func TestMknod_DiskQuotaAndRootInoInheritance(t *testing.T) {
 		mockQuerier.AssertExpectations(t)
 	})
 }
-

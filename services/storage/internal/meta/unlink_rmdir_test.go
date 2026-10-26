@@ -1857,4 +1857,3 @@ func TestMkdir_Rmdir_StatFS_Integration(t *testing.T) {
 	_, err = store.GetInode(ctx, int64(subDir.Ino))
 	assert.ErrorIs(t, err, pgx.ErrNoRows, "无打开句柄的空目录在 Rmdir 后 Inode 必须被物理清理")
 }
-

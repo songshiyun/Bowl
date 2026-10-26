@@ -275,7 +275,7 @@ func TestSetAttrResponseValidation(t *testing.T) {
 		{
 			name: "合法: 完整 Inode 且超时时长大于等于 0",
 			resp: &storagev1.SetAttrResponse{
-				Inode:               validInode,
+				Inode:              validInode,
 				AttrTimeoutSeconds: 1.0,
 			},
 			isValid: true,
@@ -283,7 +283,7 @@ func TestSetAttrResponseValidation(t *testing.T) {
 		{
 			name: "合法: 超时时长为 0",
 			resp: &storagev1.SetAttrResponse{
-				Inode:               validInode,
+				Inode:              validInode,
 				AttrTimeoutSeconds: 0.0,
 			},
 			isValid: true,
@@ -291,7 +291,7 @@ func TestSetAttrResponseValidation(t *testing.T) {
 		{
 			name: "非法: 缺失 Inode 必填字段",
 			resp: &storagev1.SetAttrResponse{
-				Inode:               nil,
+				Inode:              nil,
 				AttrTimeoutSeconds: 1.0,
 			},
 			isValid: false,
@@ -299,7 +299,7 @@ func TestSetAttrResponseValidation(t *testing.T) {
 		{
 			name: "非法: 属性超时时长为负数",
 			resp: &storagev1.SetAttrResponse{
-				Inode:               validInode,
+				Inode:              validInode,
 				AttrTimeoutSeconds: -0.1,
 			},
 			isValid: false,

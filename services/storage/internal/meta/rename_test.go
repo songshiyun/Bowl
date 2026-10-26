@@ -2592,9 +2592,3 @@ func TestRename_Overwrite_QuotaAndLifecycle(t *testing.T) {
 		assert.ErrorIs(t, err, quotaErr)
 	})
 }
-
-
-
-
-
-
