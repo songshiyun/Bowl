@@ -31,3 +31,7 @@ Canonical triage roles mapped to Linear labels. See [docs/agents/triage-labels.m
 ### Domain docs
 
 Single-context layout at repo root. See [docs/agents/domain.md](docs/agents/domain.md).
+
+### Coding standards
+
+Review-stage engineering and test-authenticity standards. See [CODING_STANDARDS.md](CODING_STANDARDS.md).

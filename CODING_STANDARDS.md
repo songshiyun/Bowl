@@ -1,0 +1,20 @@
+# Bowl Coding Standards
+
+This document defines non-mechanical engineering standards enforced during the **Standards** axis of `/code-review`. Mechanical checks (`buf lint`, `gofmt -s`, `go vet`) are enforced by `task lint`.
+
+## 1. Test Authenticity & Independent Oracles
+
+- **No Silent Error Swallowing**: Never guard assertions behind `if err == nil` or broad error whitelists (`ErrIO`, `context.DeadlineExceeded`) that allow broken execution paths to pass silently. Assert exact expected sentinel errors (`require.ErrorIs`) or `require.NoError`.
+- **Independent Reference Model (No Self-Oracle)**: State-machine and integration assertions must compute expected post-state from an independent in-memory model or pre-operation snapshot, never by reading back from the system under test to overwrite the model's expectation.
+- **Direct Table Audits for Deletion/Reclamation**: When verifying cascading deletion (`DeleteDisk`, orphan reclamation, expired session sweep), query child tables (`entries`, `file_handles`, `file_locks`, `file_lock_waiters`) directly by recorded target IDs (`WHERE ino = ANY($1)`), never via `INNER JOIN` against a parent row that was already deleted.
+
+## 2. Deterministic Replay & Concurrency Control
+
+- **Deterministic Map Iteration**: In seed-driven state-machine tests (`TestFormal*`), never iterate directly over Go `map` types when selecting candidate actions, targets, or probes. Always extract keys and sort them (`slices.Sort`) before sampling from the PRNG so any `BOWL_FORMAL_SEED` reproduces the exact execution trace.
+- **PRNG Stream Isolation**: Read-only probes and invariant auditors must use a dedicated secondary PRNG (`env.ProbeRNG()`) rather than advancing the primary action PRNG (`env.Rng`), ensuring changes to probe frequency never alter the state-transition trajectory.
+- **Explicit Timeout Bounds on Blocking Operations**: Tests invoking potentially blocking operations (`SetLkw` expected not to block, background lease sweep) must bind a bounded `context.WithTimeout` and synchronize lease TTLs with sleep intervals so tests fail fast rather than hanging or masking race conditions.
+
+## 3. Cross-Layer Error & Domain Consistency
+
+- **Database Constraint Mapping**: Translate PostgreSQL SQLSTATE errors (`23505` unique violation, `23503` foreign-key violation under concurrent sweep) at the `internal/meta` boundary into canonical POSIX sentinel errors (`ErrExist`, `ErrNotFound`, `ErrNotEmpty`) mapped in `status.go`; never leak raw `pgconn.PgError` to RPC callers.
+- **Ubiquitous Language**: Align all identifiers, comments, and error messages with [`GLOSSARY.md`](GLOSSARY.md).
