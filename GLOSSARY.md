@@ -1,6 +1,6 @@
 # Bowl 分布式存储系统
 
-Bowl 负责管理分布式文件系统的 POSIX 元数据目录树、商业化磁盘实例生命周期与容量配额核算。
+Bowl 负责管理分布式文件系统的 POSIX 元数据目录树、文件分块数据读写、商业化磁盘实例生命周期与容量配额核算。
 
 ## Storage 元数据引擎
 
@@ -171,6 +171,33 @@ _Avoid_: Volume, Drive, MountPoint, Partition, Bucket
 **StatFS (文件系统状态查询)**:
 检索目标文件系统实例的总容量、已用空间、可用空间、Inode 节点统计及派生 POSIX 文件系统块指标的状态检索操作。
 _Avoid_: GetDiskStat, StatVFS, DiskInfo, GetCapacity
+
+## Storage 数据层
+
+**Chunk (逻辑分块)**:
+将常规文件连续字节空间按固定跨度切分的逻辑寻址单元，用于隔离并索引文件局部区间内的写入切片序列。
+_Avoid_: Segment, Stripe, Partition, Part
+
+**Slice (写入切片)**:
+针对单个 Chunk 发起单次连续数据写入或空洞标记所生成的不可变逻辑区间描述符，按追加顺序叠加并在读取时裁剪合并为有效数据视图。
+_Avoid_: Extent, Patch, Fragment, Delta
+
+**Block (物理数据块)**:
+将 Slice 的实际字节载荷按固定上限切分后持久化至底层存储介质的不可变物理存储单元。
+_Avoid_: Blob, Page, Cell, Sector, ObjectFile
+
+**Read (文件数据读取)**:
+根据目标常规文件 Inode、活跃可读 FileHandle、字节偏移量与期望长度，合并目标区间内的 Slice 视图并组装返回对应字节流的读取操作。
+_Avoid_: FetchData, GetBytes, ReadFile, PullStream
+
+**Write (文件数据写入)**:
+根据目标常规文件 Inode、活跃可写 FileHandle、字节偏移量与待写字节序列，将载荷持久化为底层 Block、追加 Slice 元数据映射并同步更新文件大小与配额的写入操作。
+_Avoid_: PutData, WriteBytes, AppendFile, PushStream
+
+**Compaction (切片合并)**:
+将单个 Chunk 内累积的多层重叠或碎片化 Slice 读取重整为连续新 Slice 并替换旧映射序列的后台碎片整理操作。
+_Avoid_: Defrag, MergeSlices, Squash, Pack
+
 
 
 
