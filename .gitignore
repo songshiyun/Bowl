@@ -32,5 +32,6 @@ go.work.sum
 docker-compose.yaml
 services/storage/vendor/
 .worktrees/
+.archify/
 .r3-export/
 .r3-ui/

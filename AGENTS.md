@@ -1,24 +1,10 @@
 1. ceph, computer, juicefs, drive9 这四个项目为参考项目，他们是我找的权威的开源的一些项目，有可参考的内容（例如 JuiceFS 的 FUSE 适配位于 `pkg/fuse/`、VFS 语义位于 `pkg/vfs/`、元数据与锁/会话位于 `pkg/meta/{base,sql,sql_lock}.go`）。
 
-## Build, Test & Tooling
-
-- **多模块与目录布局**：
-  - 根模块（[`go.mod`](go.mod)）：包含 `proto/storage/v1/`（Protobuf 源文件）、`gen/go`（Protobuf 生成代码）、[`pkg/validator`](pkg/validator)（请求校验器）及 [`tests/contract`](tests/contract)（跨模块契约测试；仓库不存在 `pkg/errcode` 或 `proto/bowl`）。
-  - Storage 子模块（[`services/storage/go.mod`](services/storage/go.mod)）：代码位于 `services/storage/internal/{meta,db}` 与 `services/storage/db/{migrations,queries}`（不存在 `internal/service`、`internal/handler`、`internal/store` 或 `services/storage/storage_test.go`）。
-  - `services/storage/internal/meta/` 文件职责索引：领域实体、常量与哨兵错误定义在 `entity.go`；gRPC 状态码与 `ErrorInfo` 映射在 `status.go`；文件锁（Flock/POSIX 锁）在 `lock.go`；元数据核心逻辑按职责切分为 `manager.go` 及 `manager_{lookup_getattr,create_open,dir_topology,readdir_xattr,setattr_fallocate,handle_session,disk}.go`（不存在 `types.go`、`errors.go` 或 `handler.go`）。
-  - 查阅 [`docs/adr/`](docs/adr) 时，先列出目录获取准确文件名，切勿盲猜文件名。
-- **Worktree 与模块隔离**：根目录 [`go.work`](go.work) 已 gitignore。在 `.worktrees/<ticket>` 内执行 `go`（含 `go test`、`go tool cover`）或 `mockery` 命令时，必须通过 [`Taskfile.yml`](Taskfile.yml)（已内置 `GOWORK=off`）或显式指定 `GOWORK=off` 并带 `-C services/<mod>` 运行，切勿在根模块直接跑子模块路径或无隔离运行。
-- **常用任务 (`task`)**：
-  - `task test` / `task test:storage`：运行全量（含根模块 `tests/contract`）或 `storage` 服务测试。修改服务接口或状态码后，提交前必须运行 `task test` 与 `task lint` 确保根模块 `tests/contract` 同步通过。
-  - `task lint` / `task buf:lint` / `task buf:generate`：静态检查、校验并生成 `proto/` 下的 ConnectRPC 契约代码。
-  - `task sqlc:generate`（或 `task sqlc:storage:generate`）：生成 sqlc 数据库访问代码。
-  - `task mockery:storage`：生成接口 Mock 代码（必须在接口定义落盘且编译通过后执行）。
-  - `task goose:storage:up`（及 `down` / `status`）：执行数据库迁移（默认 DSN：`postgres://postgres:postgres@localhost:5432/bowl?sslmode=disable`，共享本地容器 `aether-postgres`）。
-- **跨仓事务契约与 Mock 规范**：
-  - 事务管理依赖 `github.com/starsrc/Aether/pkg/tx`（`Transactor[Querier]`、`ExecTx`、`WithReadOnly()`、`WithIsoLevel(...)`）。
-  - [`services/storage/.mockery.yml`](services/storage/.mockery.yml) 启用了 `unroll-variadic: true`。对 `ExecTxWithOptions(ctx, fn, opts ...tx.Option)` 打桩时，若被测代码未传 `opts`，底层 `mock.On` 仅匹配 `(ctx, fn)` 两个参数；若传入了 `opts`，则按展开后的变参顺序逐个匹配。
-
 ## Agent skills
+
+### Build, test & tooling
+
+多模块目录布局、`.worktrees` `GOWORK=off` 隔离红线、`task` 构建/测试/代码生成/迁移命令与 Mock 打桩规范（检索代码模块或执行任何构建、测试、代码生成命令前必读）。See [docs/agents/tooling.md](docs/agents/tooling.md).
 
 ### Issue tracker
 
