@@ -166,7 +166,22 @@ tasks:
     desc: "Run buf lint, gofmt check, and go vet across all modules"
     cmds:
       - buf lint
-      - test -z "$(gofmt -s -l .)"
+      - test -z "$(gofmt -s -l . | grep -Ev '^(\.worktrees/|(.*/)?vendor/)')"
+      - >-
+        sh -c '
+        for f in services/storage/internal/meta/*_test.go; do
+          base=$(basename "$f");
+          if [ "$base" != "testdb_helper_test.go" ] && [ "$base" != "disk_test.go" ]; then
+            if grep -Eq "STORAGE_DB_DSN|STORAGE_TEST_DSN|TEST_DB_DSN|BOWL_TEST_POSTGRES_DSN|:(5432|9432)/bowl" "$f"; then
+              echo "lint error: $f 私自解析或硬编码数据库 DSN，请统一调用 setupMetaTestDB(t)" >&2;
+              exit 1;
+            fi;
+            if grep -Eq "pgxpool\.New(WithConfig)?\(" "$f" && ! grep -Eq "resolveAndConnectTestDB|getStorageTestDSN" "$f"; then
+              echo "lint error: $f 绕过统一辅助函数直接调用 pgxpool.New，请统一调用 setupMetaTestDB(t)" >&2;
+              exit 1;
+            fi;
+          fi;
+        done'
       - go vet ./...
       - go -C services/storage vet ./...
       - GOOS=linux CGO_ENABLED=0 go -C client vet ./...
