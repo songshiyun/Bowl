@@ -198,6 +198,17 @@ _Avoid_: PutData, WriteBytes, AppendFile, PushStream
 将单个 Chunk 内累积的多层重叠或碎片化 Slice 读取重整为连续新 Slice 并替换旧映射序列的后台碎片整理操作。
 _Avoid_: Defrag, MergeSlices, Squash, Pack
 
+## Client 客户端挂载层
 
+**ClientSession (客户端会话)**:
+单次客户端挂载实例向服务端注册并按租约周期保活的运行期身份上下文，用于统一归属该挂载实例持有的全部活跃 FileHandle 与 FileLock。
+_Avoid_: MountSession, Connection, ClientLease, PeerSession
 
+**Mount (磁盘挂载)**:
+根据目标 Disk 唯一标识符建立 ClientSession、将磁盘根目录重写映射为本地 FUSE 根节点并挂载至宿主机目标目录的生命周期建立操作。
+_Avoid_: Attach, BindDisk, ConnectVolume
+
+**Umount (磁盘卸载)**:
+解除宿主机目标目录上的 FUSE 文件系统挂载绑定并终止对应客户端守护进程的生命周期释放操作（CLI 兼容 `unmount` 别名）。
+_Avoid_: Detach, UnbindDisk, DisconnectVolume
 

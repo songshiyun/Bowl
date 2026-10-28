@@ -12,6 +12,7 @@ Issues for this repo are tracked in **Linear** via the `ACE_linear` MCP tools.
 - **Milestones**:
   - `M1: Disk & Storage Services`: `b1aa3a89-c6ed-495e-b619-0fc70a791c96`
   - `M2: Chunking & S3 Object Storage Engine`: `bbc56709-9989-4dcf-947d-26a6c4aa9f4f`
+  - `M3: Linux FUSE Client`: `5fee39d6-0636-424d-b87d-6077ed51acd0`
 - **Priority**: `1` (Urgent), `2` (High), `3` (Normal), `4` (Low)
 
 ## Agent Operations (`ACE_linear` Exact Parameter Signatures)
