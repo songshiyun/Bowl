@@ -12,6 +12,8 @@
 
 根目录 `go.work` 已 gitignore。在 `.worktrees/<ticket>` 内执行 `go`（含 `go test`、`go tool cover`）或 `mockery` 命令时，必须通过根目录 [`Taskfile.yml`](../../Taskfile.yml)（已内置 `GOWORK=off`）或显式指定 `GOWORK=off` 并带 `-C services/storage` 或 `-C client` 运行，切勿在根模块直接跑子模块路径或无隔离运行。
 
+本机只有一套 bowl 容器栈：[`docker-compose.yaml.example`](../../docker-compose.yaml.example) 固定了容器名（`bowl-postgres` 等）与端口。在任何工作树内都以 `bowl` 作为 Compose 项目名（`docker compose -p bowl ...` 或 `COMPOSE_PROJECT_NAME=bowl task run`）；容器已在运行时直接复用，不另起项目名启动第二套。
+
 ## 提交前守门
 
 [`.githooks/pre-commit`](../../.githooks/pre-commit) 对暂存的 Go 文件执行 `gofmt -s` 检查，新克隆仓库先运行一次 `git config core.hooksPath .githooks` 启用（所有工作树共享）。
