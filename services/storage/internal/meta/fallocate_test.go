@@ -559,6 +559,15 @@ func TestFallocate_PositivePaths(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
+			AppendExistingChunkSlice(mock.Anything, db.AppendExistingChunkSliceParams{
+				Ino:    10,
+				Indx:   0,
+				Slices: meta.EncodeSlice(meta.Slice{Pos: 1024, ID: 0, Size: 0, Off: 0, Len: 2048}),
+			}).
+			Return(int64(1), nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			UpdateInodeAttr(mock.Anything, db.UpdateInodeAttrParams{
 				Ino:         10,
 				Mode:        expectedCleanMode, // 特权位被剥离
@@ -616,6 +625,15 @@ func TestFallocate_PositivePaths(t *testing.T) {
 				Ino:   10,
 				Flags: int32(meta.O_WRONLY),
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			AppendExistingChunkSlice(mock.Anything, db.AppendExistingChunkSliceParams{
+				Ino:    10,
+				Indx:   0,
+				Slices: meta.EncodeSlice(meta.Slice{Pos: 512, ID: 0, Size: 0, Off: 0, Len: 1024}),
+			}).
+			Return(int64(1), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -1090,6 +1108,15 @@ func TestFallocate_DiskQuota(t *testing.T) {
 				Ino:   testIno,
 				Flags: int32(meta.O_RDWR),
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			AppendExistingChunkSlice(mock.Anything, db.AppendExistingChunkSliceParams{
+				Ino:    testIno,
+				Indx:   0,
+				Slices: meta.EncodeSlice(meta.Slice{Pos: 50, ID: 0, Size: 0, Off: 0, Len: 50}),
+			}).
+			Return(int64(1), nil).
 			Once()
 
 		mockQuerier.EXPECT().

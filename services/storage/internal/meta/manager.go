@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -78,6 +80,16 @@ type Manager interface {
 	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
 	DeleteDisk(ctx context.Context, diskID string) error
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
+	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)
+	Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error)
+	CompactChunk(ctx context.Context, ino uint64, indx uint32) error
+	CollectGarbage(ctx context.Context, limit int32) (int, error)
+	StartGCWorker(ctx context.Context, interval time.Duration, batchLimit int32)
+}
+
+type chunkKey struct {
+	ino  uint64
+	indx uint32
 }
 
 type dirCursorKey struct {
@@ -107,32 +119,56 @@ type dirCursorAnchor struct {
 }
 
 type manager struct {
-	store                db.Store
-	entryTimeout         float64
-	attrTimeout          float64
-	dirEntryTimeout      float64
-	openKeepCache        bool
-	openDirCache         bool
-	atimeMode            AtimeMode
-	sessionLeaseTTL      time.Duration
-	lockNotifyMu         sync.Mutex
-	lockNotifyChans      map[uint64]*lockNotifyEntry
-	crossDirRenameMu     sync.Mutex
-	dirCursorMu          sync.Mutex
-	dirCursors           map[dirCursorKey]dirCursorAnchor
-	dirMutationSeq       map[uint64]uint64
-	inFlightDirMutations map[uint64]int
-	activeDirReads       map[uint64]*inFlightDirRead
-	nextDirReadID        uint64
-	inFlightGrantMu      sync.Mutex
-	inFlightGrants       map[inFlightGrantKey]*inFlightGrant
-	nextInFlightGrantID  uint64
+	store                 db.Store
+	blockStore            BlockStore
+	entryTimeout          float64
+	attrTimeout           float64
+	dirEntryTimeout       float64
+	openKeepCache         bool
+	openDirCache          bool
+	atimeMode             AtimeMode
+	sessionLeaseTTL       time.Duration
+	compactSliceThreshold int
+	chunkWriteCountsMu    sync.Mutex
+	chunkWriteCounts      map[chunkKey]int
+	lockNotifyMu          sync.Mutex
+	lockNotifyChans       map[uint64]*lockNotifyEntry
+	crossDirRenameMu      sync.Mutex
+	dirCursorMu           sync.Mutex
+	dirCursors            map[dirCursorKey]dirCursorAnchor
+	dirMutationSeq        map[uint64]uint64
+	inFlightDirMutations  map[uint64]int
+	activeDirReads        map[uint64]*inFlightDirRead
+	nextDirReadID         uint64
+	inFlightGrantMu       sync.Mutex
+	inFlightGrants        map[inFlightGrantKey]*inFlightGrant
+	nextInFlightGrantID   uint64
 }
 
 var _ Manager = (*manager)(nil)
 
 // Option 定义 Manager 的配置选项。
 type Option func(*manager)
+
+// WithBlockStore 配置底层物理块存储引擎。
+func WithBlockStore(bs BlockStore) Option {
+	return func(m *manager) {
+		m.blockStore = bs
+	}
+}
+
+// BlockStore 返回底层物理块存储引擎（未配置时可能为 nil）。
+func (m *manager) BlockStore() BlockStore {
+	return m.blockStore
+}
+
+// getBlockStore 返回底层物理块存储引擎；若未配置则兜底使用基于临时目录的 LocalFSBlockStore。
+func (m *manager) getBlockStore() BlockStore {
+	if m.blockStore != nil {
+		return m.blockStore
+	}
+	return NewLocalFSBlockStore(filepath.Join(os.TempDir(), "bowl_data"))
+}
 
 // WithSessionLeaseTTL 配置客户端会话租约的续期时长（TTL <= 0 时忽略并保持默认值）。
 func WithSessionLeaseTTL(ttl time.Duration) Option {
@@ -191,20 +227,31 @@ func WithAtimeMode(mode AtimeMode) Option {
 	}
 }
 
+// WithCompactSliceThreshold 配置单 Chunk 累积写入 Slice 达到触发 Compaction 的阈值。
+func WithCompactSliceThreshold(threshold int) Option {
+	return func(m *manager) {
+		if threshold > 0 {
+			m.compactSliceThreshold = threshold
+		}
+	}
+}
+
 // New 创建 Manager 实例。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
-		store:                store,
-		entryTimeout:         DefaultEntryTimeoutSeconds,
-		attrTimeout:          DefaultAttrTimeoutSeconds,
-		dirEntryTimeout:      DefaultEntryTimeoutSeconds,
-		sessionLeaseTTL:      DefaultSessionLeaseTTL,
-		lockNotifyChans:      make(map[uint64]*lockNotifyEntry),
-		dirCursors:           make(map[dirCursorKey]dirCursorAnchor),
-		dirMutationSeq:       make(map[uint64]uint64),
-		inFlightDirMutations: make(map[uint64]int),
-		activeDirReads:       make(map[uint64]*inFlightDirRead),
-		inFlightGrants:       make(map[inFlightGrantKey]*inFlightGrant),
+		store:                 store,
+		entryTimeout:          DefaultEntryTimeoutSeconds,
+		attrTimeout:           DefaultAttrTimeoutSeconds,
+		dirEntryTimeout:       DefaultEntryTimeoutSeconds,
+		sessionLeaseTTL:       DefaultSessionLeaseTTL,
+		compactSliceThreshold: CompactSliceThreshold,
+		chunkWriteCounts:      make(map[chunkKey]int),
+		lockNotifyChans:       make(map[uint64]*lockNotifyEntry),
+		dirCursors:            make(map[dirCursorKey]dirCursorAnchor),
+		dirMutationSeq:        make(map[uint64]uint64),
+		inFlightDirMutations:  make(map[uint64]int),
+		activeDirReads:        make(map[uint64]*inFlightDirRead),
+		inFlightGrants:        make(map[inFlightGrantKey]*inFlightGrant),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -494,9 +541,10 @@ func (t *dirMutationTracker) done() {
 type ManagerParams struct {
 	fx.In
 
-	Store   db.Store
-	MetaCfg *config.MetaConfig `optional:"true"`
-	MetaVal config.MetaConfig  `optional:"true"`
+	Store      db.Store
+	BlockStore BlockStore         `optional:"true"`
+	MetaCfg    *config.MetaConfig `optional:"true"`
+	MetaVal    config.MetaConfig  `optional:"true"`
 }
 
 func newManagerFromParams(params ManagerParams) Manager {
@@ -507,8 +555,19 @@ func newManagerFromParams(params ManagerParams) Manager {
 		metaCfg = &params.MetaVal
 	}
 
+	opts := make([]Option, 0, 10)
+
+	// BlockStore 依赖解析：优先使用注入的 BlockStore，否则根据 MetaConfig.DataDir 构造默认 LocalFSBlockStore
+	if params.BlockStore != nil {
+		opts = append(opts, WithBlockStore(params.BlockStore))
+	} else if metaCfg != nil && metaCfg.DataDir() != "" {
+		opts = append(opts, WithBlockStore(NewLocalFSBlockStore(metaCfg.DataDir())))
+	} else {
+		opts = append(opts, WithBlockStore(NewLocalFSBlockStore(config.DefaultDataDir)))
+	}
+
 	if metaCfg == nil {
-		return New(params.Store)
+		return New(params.Store, opts...)
 	}
 
 	var atimeMode AtimeMode
@@ -521,8 +580,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 		atimeMode = AtimeModeNoAtime
 	}
 
-	return New(
-		params.Store,
+	opts = append(opts,
 		WithSessionLeaseTTL(metaCfg.SessionLeaseTTL()),
 		WithAtimeMode(atimeMode),
 		WithEntryTimeout(metaCfg.EntryTimeoutSeconds()),
@@ -531,6 +589,8 @@ func newManagerFromParams(params ManagerParams) Manager {
 		WithOpenKeepCache(metaCfg.OpenKeepCache()),
 		WithOpenDirCache(metaCfg.OpenDirCache()),
 	)
+
+	return New(params.Store, opts...)
 }
 
 // Module 提供 meta 依赖注入模块。
@@ -826,6 +886,12 @@ func (m *manager) reclaimUnreferencedOrphans(ctx context.Context, q db.Querier) 
 		}
 	}
 
+	if len(deletedInos) > 0 {
+		if err := deleteAllChunksByInos(ctx, q, deletedInos); err != nil {
+			return fmt.Errorf("delete chunks for unreferenced orphan inodes: %w", err)
+		}
+	}
+
 	rootInos := make([]int64, 0, len(quotaDeltas))
 	for rootIno := range quotaDeltas {
 		rootInos = append(rootInos, rootIno)
@@ -863,6 +929,13 @@ func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, in
 	}
 	if hasRemaining {
 		return nil
+	}
+
+	// 若为常规文件，在同一数据库事务内物理删除其全部 chunks 行并批量扣减关联物理切片的引用计数
+	if (uint32(inode.Mode) & S_IFMT) == S_IFREG {
+		if err := deleteAllChunksByIno(ctx, q, inode.Ino); err != nil {
+			return err
+		}
 	}
 
 	if err := q.DeleteInode(ctx, inode.Ino); err != nil {

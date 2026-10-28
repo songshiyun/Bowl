@@ -39,6 +39,135 @@ func (_m *MockManager) EXPECT() *MockManager_Expecter {
 	return &MockManager_Expecter{mock: &_m.Mock}
 }
 
+// CollectGarbage provides a mock function for the type MockManager
+func (_mock *MockManager) CollectGarbage(ctx context.Context, limit int32) (int, error) {
+	ret := _mock.Called(ctx, limit)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CollectGarbage")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int32) (int, error)); ok {
+		return returnFunc(ctx, limit)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, int32) int); ok {
+		r0 = returnFunc(ctx, limit)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, int32) error); ok {
+		r1 = returnFunc(ctx, limit)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_CollectGarbage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CollectGarbage'
+type MockManager_CollectGarbage_Call struct {
+	*mock.Call
+}
+
+// CollectGarbage is a helper method to define mock.On call
+//   - ctx context.Context
+//   - limit int32
+func (_e *MockManager_Expecter) CollectGarbage(ctx any, limit any) *MockManager_CollectGarbage_Call {
+	return &MockManager_CollectGarbage_Call{Call: _e.mock.On("CollectGarbage", ctx, limit)}
+}
+
+func (_c *MockManager_CollectGarbage_Call) Run(run func(ctx context.Context, limit int32)) *MockManager_CollectGarbage_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 int32
+		if args[1] != nil {
+			arg1 = args[1].(int32)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_CollectGarbage_Call) Return(n int, err error) *MockManager_CollectGarbage_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockManager_CollectGarbage_Call) RunAndReturn(run func(ctx context.Context, limit int32) (int, error)) *MockManager_CollectGarbage_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CompactChunk provides a mock function for the type MockManager
+func (_mock *MockManager) CompactChunk(ctx context.Context, ino uint64, indx uint32) error {
+	ret := _mock.Called(ctx, ino, indx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompactChunk")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, uint32) error); ok {
+		r0 = returnFunc(ctx, ino, indx)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_CompactChunk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompactChunk'
+type MockManager_CompactChunk_Call struct {
+	*mock.Call
+}
+
+// CompactChunk is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ino uint64
+//   - indx uint32
+func (_e *MockManager_Expecter) CompactChunk(ctx any, ino any, indx any) *MockManager_CompactChunk_Call {
+	return &MockManager_CompactChunk_Call{Call: _e.mock.On("CompactChunk", ctx, ino, indx)}
+}
+
+func (_c *MockManager_CompactChunk_Call) Run(run func(ctx context.Context, ino uint64, indx uint32)) *MockManager_CompactChunk_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 uint64
+		if args[1] != nil {
+			arg1 = args[1].(uint64)
+		}
+		var arg2 uint32
+		if args[2] != nil {
+			arg2 = args[2].(uint32)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_CompactChunk_Call) Return(err error) *MockManager_CompactChunk_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_CompactChunk_Call) RunAndReturn(run func(ctx context.Context, ino uint64, indx uint32) error) *MockManager_CompactChunk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Create provides a mock function for the type MockManager
 func (_mock *MockManager) Create(ctx context.Context, params meta.CreateParams) (*meta.CreateResult, error) {
 	ret := _mock.Called(ctx, params)
@@ -1288,6 +1417,74 @@ func (_c *MockManager_OpenDir_Call) RunAndReturn(run func(ctx context.Context, p
 	return _c
 }
 
+// Read provides a mock function for the type MockManager
+func (_mock *MockManager) Read(ctx context.Context, req *meta.ReadRequest) (*meta.ReadResponse, error) {
+	ret := _mock.Called(ctx, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Read")
+	}
+
+	var r0 *meta.ReadResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.ReadRequest) (*meta.ReadResponse, error)); ok {
+		return returnFunc(ctx, req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.ReadRequest) *meta.ReadResponse); ok {
+		r0 = returnFunc(ctx, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.ReadResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *meta.ReadRequest) error); ok {
+		r1 = returnFunc(ctx, req)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Read_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Read'
+type MockManager_Read_Call struct {
+	*mock.Call
+}
+
+// Read is a helper method to define mock.On call
+//   - ctx context.Context
+//   - req *meta.ReadRequest
+func (_e *MockManager_Expecter) Read(ctx any, req any) *MockManager_Read_Call {
+	return &MockManager_Read_Call{Call: _e.mock.On("Read", ctx, req)}
+}
+
+func (_c *MockManager_Read_Call) Run(run func(ctx context.Context, req *meta.ReadRequest)) *MockManager_Read_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *meta.ReadRequest
+		if args[1] != nil {
+			arg1 = args[1].(*meta.ReadRequest)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Read_Call) Return(readResponse *meta.ReadResponse, err error) *MockManager_Read_Call {
+	_c.Call.Return(readResponse, err)
+	return _c
+}
+
+func (_c *MockManager_Read_Call) RunAndReturn(run func(ctx context.Context, req *meta.ReadRequest) (*meta.ReadResponse, error)) *MockManager_Read_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ReadDir provides a mock function for the type MockManager
 func (_mock *MockManager) ReadDir(ctx context.Context, params meta.ReadDirParams) ([]meta.DirEntry, error) {
 	ret := _mock.Called(ctx, params)
@@ -2166,6 +2363,58 @@ func (_c *MockManager_SetXattr_Call) RunAndReturn(run func(ctx context.Context, 
 	return _c
 }
 
+// StartGCWorker provides a mock function for the type MockManager
+func (_mock *MockManager) StartGCWorker(ctx context.Context, interval time.Duration, batchLimit int32) {
+	_mock.Called(ctx, interval, batchLimit)
+	return
+}
+
+// MockManager_StartGCWorker_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartGCWorker'
+type MockManager_StartGCWorker_Call struct {
+	*mock.Call
+}
+
+// StartGCWorker is a helper method to define mock.On call
+//   - ctx context.Context
+//   - interval time.Duration
+//   - batchLimit int32
+func (_e *MockManager_Expecter) StartGCWorker(ctx any, interval any, batchLimit any) *MockManager_StartGCWorker_Call {
+	return &MockManager_StartGCWorker_Call{Call: _e.mock.On("StartGCWorker", ctx, interval, batchLimit)}
+}
+
+func (_c *MockManager_StartGCWorker_Call) Run(run func(ctx context.Context, interval time.Duration, batchLimit int32)) *MockManager_StartGCWorker_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 time.Duration
+		if args[1] != nil {
+			arg1 = args[1].(time.Duration)
+		}
+		var arg2 int32
+		if args[2] != nil {
+			arg2 = args[2].(int32)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_StartGCWorker_Call) Return() *MockManager_StartGCWorker_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockManager_StartGCWorker_Call) RunAndReturn(run func(ctx context.Context, interval time.Duration, batchLimit int32)) *MockManager_StartGCWorker_Call {
+	_c.Run(run)
+	return _c
+}
+
 // StatFS provides a mock function for the type MockManager
 func (_mock *MockManager) StatFS(ctx context.Context, ino uint64) (*meta.StatFSResult, error) {
 	ret := _mock.Called(ctx, ino)
@@ -2497,6 +2746,74 @@ func (_c *MockManager_UpdateDisk_Call) Return(disk *meta.Disk, err error) *MockM
 }
 
 func (_c *MockManager_UpdateDisk_Call) RunAndReturn(run func(ctx context.Context, params meta.UpdateDiskParams) (*meta.Disk, error)) *MockManager_UpdateDisk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Write provides a mock function for the type MockManager
+func (_mock *MockManager) Write(ctx context.Context, req *meta.WriteRequest) (*meta.WriteResponse, error) {
+	ret := _mock.Called(ctx, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Write")
+	}
+
+	var r0 *meta.WriteResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.WriteRequest) (*meta.WriteResponse, error)); ok {
+		return returnFunc(ctx, req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.WriteRequest) *meta.WriteResponse); ok {
+		r0 = returnFunc(ctx, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.WriteResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, *meta.WriteRequest) error); ok {
+		r1 = returnFunc(ctx, req)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Write_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Write'
+type MockManager_Write_Call struct {
+	*mock.Call
+}
+
+// Write is a helper method to define mock.On call
+//   - ctx context.Context
+//   - req *meta.WriteRequest
+func (_e *MockManager_Expecter) Write(ctx any, req any) *MockManager_Write_Call {
+	return &MockManager_Write_Call{Call: _e.mock.On("Write", ctx, req)}
+}
+
+func (_c *MockManager_Write_Call) Run(run func(ctx context.Context, req *meta.WriteRequest)) *MockManager_Write_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *meta.WriteRequest
+		if args[1] != nil {
+			arg1 = args[1].(*meta.WriteRequest)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Write_Call) Return(writeResponse *meta.WriteResponse, err error) *MockManager_Write_Call {
+	_c.Call.Return(writeResponse, err)
+	return _c
+}
+
+func (_c *MockManager_Write_Call) RunAndReturn(run func(ctx context.Context, req *meta.WriteRequest) (*meta.WriteResponse, error)) *MockManager_Write_Call {
 	_c.Call.Return(run)
 	return _c
 }

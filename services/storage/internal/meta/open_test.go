@@ -613,6 +613,11 @@ func TestOpen_OTrunc(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
 				Ino:   int64(ino),
 				Flags: int32(meta.O_WRONLY | meta.O_TRUNC),
@@ -664,6 +669,11 @@ func TestOpen_OTrunc(t *testing.T) {
 				Mtime:       pgtype.Timestamptz{},
 			}).
 			Return(normalRegRow, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -774,6 +784,11 @@ func TestOpen_OTrunc(t *testing.T) {
 			Return(baseFileRow, nil).
 			Once()
 
+		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
+			Once()
+
 		dbErr := errors.New("insert file handle failed")
 		mockQuerier.EXPECT().
 			CreateFileHandle(mock.Anything, mock.Anything).
@@ -838,6 +853,11 @@ func TestOpen_OTrunc(t *testing.T) {
 				diskState.UsedInodes += arg.DeltaInodes
 				return nil
 			}).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -923,6 +943,11 @@ func TestOpen_OTrunc(t *testing.T) {
 				DeltaInodes: 0,
 			}).
 			Return(nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
 			Once()
 
 		mockQuerier.EXPECT().
