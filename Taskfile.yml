@@ -8,7 +8,7 @@ vars:
   TAG: '{{.TAG | default "latest"}}'
   PROTO_DIR: proto
   GEN_DIR: gen
-  STORAGE_DB_DSN: '{{.STORAGE_DB_DSN | default "postgres://postgres:postgres@localhost:5432/bowl?sslmode=disable"}}'
+  STORAGE_DB_DSN: '{{.STORAGE_DB_DSN | default "postgres://postgres:postgres@127.0.0.1:9432/bowl?sslmode=disable"}}'
   STORAGE_MIGRATIONS_DIR: services/storage/db/migrations
   CLIENT_DOCKERFILE: client/Dockerfile.test
   CLIENT_TEST_IMAGE: '{{.CLIENT_TEST_IMAGE | default "bowl-client-test"}}'
