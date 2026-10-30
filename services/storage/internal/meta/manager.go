@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -152,6 +153,12 @@ type manager struct {
 	writeSessionTouchDisabled bool
 	writeSessionTouchMu       sync.Mutex
 	writeSessionTouches       map[uint64]writeSessionTouchState
+	writeGroupMaxBatchSize    int
+	writeInFlightStage1       atomic.Int64
+	writeGroupMu              sync.Mutex
+	writeLeaderActive         bool
+	writePendingQueue         []*writeBatchTask
+	writeCoalesceCh           chan struct{}
 	inFlightCompactsMu        sync.Mutex
 	inFlightCompacts          map[chunkKey]bool
 	lockNotifyMu              sync.Mutex
@@ -319,6 +326,15 @@ func WithWriteSessionTouchInterval(d time.Duration) Option {
 	}
 }
 
+// WithWriteGroupMaxBatchSize 配置 Write 阶段 2 Group Commit 单批次最大聚合请求数（batchSize > 0 时生效，默认 DefaultWriteGroupMaxBatchSize）。
+func WithWriteGroupMaxBatchSize(batchSize int) Option {
+	return func(m *manager) {
+		if batchSize > 0 {
+			m.writeGroupMaxBatchSize = batchSize
+		}
+	}
+}
+
 // New 创建 Manager 实例。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
@@ -335,6 +351,8 @@ func New(store db.Store, opts ...Option) Manager {
 		sliceIDBatchSize:          DefaultSliceIDBatchSize,
 		writeSessionTouchInterval: DefaultWriteSessionTouchInterval,
 		writeSessionTouches:       make(map[uint64]writeSessionTouchState),
+		writeGroupMaxBatchSize:    DefaultWriteGroupMaxBatchSize,
+		writeCoalesceCh:           make(chan struct{}, 1),
 		inFlightCompacts:          make(map[chunkKey]bool),
 		lockNotifyChans:           make(map[uint64]*lockNotifyEntry),
 		dirCursors:                make(map[dirCursorKey]dirCursorAnchor),
