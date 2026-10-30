@@ -85,7 +85,7 @@ _Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
 _Avoid_: OpenFile, AcquireHandle, ConnectFile
 
 **Flush (句柄冲刷)**:
-在单个文件描述符关闭时触发、校验目标 Inode 与活跃 FileHandle 归属有效性的会话同步操作（不销毁 FileHandle）。
+在单个文件描述符关闭时触发、校验目标 Inode 与活跃 FileHandle 归属有效性并释放对应 LockOwner 所持 POSIX 记录锁的会话同步操作（不销毁 FileHandle）。
 _Avoid_: Close, SyncHandle, Drain
 
 **Fsync (文件同步)**:
