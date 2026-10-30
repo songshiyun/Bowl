@@ -8,10 +8,25 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
+
+func (m *manager) lookupHandleCreatedAt(ctx context.Context, fh, ino, sessionID uint64) pgtype.Timestamptz {
+	pp, ok := m.store.(poolProvider)
+	if !ok || pp == nil || pp.Pool() == nil {
+		return pgtype.Timestamptz{}
+	}
+	var createdAt pgtype.Timestamptz
+	_ = pp.Pool().QueryRow(
+		ctx,
+		`SELECT created_at FROM file_handles WHERE fh = $1 AND ino = $2 AND session_id = $3`,
+		int64(fh), int64(ino), int64(sessionID),
+	).Scan(&createdAt)
+	return createdAt
+}
 
 // checkFileHandleReadOnly 在只读 RepeatableRead 事务内校验 Inode 与 FileHandle 归属有效性。
 func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh uint64, sessionID *uint64, opName string) error {
@@ -170,9 +185,7 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 		case errors.Is(err, ErrIsDir):
 			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && params.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *params.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("flush tx: %w", err)
@@ -240,7 +253,8 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 
 		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
 		if params.SessionID != nil {
-			if err := m.touchActiveClientSession(ctx, q, *params.SessionID); err != nil {
+			handleCreatedAt := m.lookupHandleCreatedAt(ctx, params.Fh, params.Ino, *params.SessionID)
+			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err
 			}
 		}
@@ -308,9 +322,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		case errors.Is(err, ErrIsDir):
 			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && params.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *params.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("release tx: %w", err)
@@ -380,7 +392,8 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 
 		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
 		if params.SessionID != nil {
-			if err := m.touchActiveClientSession(ctx, q, *params.SessionID); err != nil {
+			handleCreatedAt := m.lookupHandleCreatedAt(ctx, params.Fh, params.Ino, *params.SessionID)
+			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err
 			}
 		}
@@ -416,9 +429,7 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 		case errors.Is(err, ErrNotDir):
 			return ErrNotDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && params.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *params.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("releasedir tx: %w", err)

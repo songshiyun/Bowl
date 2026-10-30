@@ -299,9 +299,7 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 		case errors.Is(err, ErrIsDir):
 			return nil, ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && req.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *req.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, err)
 			return nil, ErrBadFileHandle
 		case errors.Is(err, ErrIO):
 			return nil, err

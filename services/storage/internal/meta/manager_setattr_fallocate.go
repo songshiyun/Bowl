@@ -251,9 +251,7 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 		case errors.Is(err, ErrIsDir):
 			return nil, ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && input.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *input.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, input.SessionID, err)
 			return nil, ErrBadFileHandle
 		case errors.Is(err, ErrInvalidArgument):
 			return nil, ErrInvalidArgument
@@ -430,9 +428,7 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 		case errors.Is(err, ErrNotSupported):
 			return ErrNotSupported
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && params.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *params.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		case errors.Is(err, ErrNoSpace):
 			return ErrNoSpace

@@ -64,6 +64,67 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 		leaseTTL = DefaultSessionLeaseTTL
 	}
 
+	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle {
+		interval := m.writeSessionTouchInterval
+		if interval <= 0 {
+			interval = DefaultWriteSessionTouchInterval
+		}
+		now := time.Now()
+		m.writeSessionTouchMu.Lock()
+		if m.writeSessionTouches == nil {
+			m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
+		}
+		prev, hadPrev := m.writeSessionTouches[sessionID]
+		inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
+		m.writeSessionTouchMu.Unlock()
+
+		if inWindow {
+			if pp == nil {
+				if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
+					return ErrBadFileHandle
+				}
+				return nil
+			}
+
+			var sessionCreatedAt pgtype.Timestamptz
+			var alive, hasPendingCleanup bool
+			err := pp.Pool().QueryRow(ctx, `
+				SELECT
+					cs.created_at,
+					(cs.expires_at > clock_timestamp()) AS alive,
+					(
+						EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
+						OR EXISTS (
+							SELECT 1 FROM inodes i
+							WHERE i.nlink = 0
+							  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
+						)
+					) AS has_pending_cleanup
+				FROM client_sessions cs
+				WHERE cs.session_id = $1
+			`, int64(sessionID)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					m.clearWriteSessionTouch(sessionID)
+					return errExpiredSessionBadHandle
+				}
+				return fmt.Errorf("check active client session %d: %w", sessionID, err)
+			}
+			if !alive {
+				m.clearWriteSessionTouch(sessionID)
+				return errExpiredSessionBadHandle
+			}
+			if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
+				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+				return ErrBadFileHandle
+			}
+			if !hasPendingCleanup {
+				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+				return nil
+			}
+		}
+	}
+
 	deletedCount, err := q.DeleteExpiredClientSessions(ctx)
 	if err != nil {
 		return fmt.Errorf("delete expired client sessions: %w", err)
@@ -83,14 +144,17 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 		return fmt.Errorf("upsert client session %d: %w", sessionID, err)
 	}
 	if session.CreatedAt.Valid && session.UpdatedAt.Valid && session.CreatedAt.Time.Equal(session.UpdatedAt.Time) {
+		m.clearWriteSessionTouch(sessionID)
 		return errExpiredSessionBadHandle
 	}
 	if handleCreatedAt.Valid && session.CreatedAt.Valid && handleCreatedAt.Time.Before(session.CreatedAt.Time) {
+		m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
 		return ErrBadFileHandle
 	}
 	if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 		return err
 	}
+	m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
 	return nil
 }
 
@@ -252,6 +316,21 @@ func (m *manager) cleanExpiredSessionByID(ctx context.Context, sessionID uint64)
 	})
 }
 
+func (m *manager) handleBadFileHandleSessionCleanup(ctx context.Context, sessionID *uint64, err error) {
+	if sessionID == nil || !errors.Is(err, ErrBadFileHandle) {
+		return
+	}
+	if errors.Is(err, errExpiredSessionBadHandle) {
+		m.cleanExpiredSessionByID(ctx, *sessionID)
+		return
+	}
+	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
+		if !m.isClientSessionAlive(ctx, *sessionID) {
+			m.cleanExpiredSessionByID(ctx, *sessionID)
+		}
+	}
+}
+
 func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionID uint64) (time.Time, error) {
 	leaseTTL := m.sessionLeaseTTL
 	if leaseTTL <= 0 {
@@ -278,7 +357,7 @@ func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionI
 	if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 		return time.Time{}, err
 	}
-	m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
+	m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
 	return session.ExpiresAt.Time, nil
 }
 
