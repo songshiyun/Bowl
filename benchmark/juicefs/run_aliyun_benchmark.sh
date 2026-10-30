@@ -748,7 +748,7 @@ if [[ -f "${RESULTS_DIR}/stage_timings.jsonl" ]]; then
 fi
 scp -r "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/"* "${RESULTS_DIR}/"
 if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
-  cat "${WORK_DIR}/prev_stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl" | jq -sc 'unique_by(.target + ":" + .suite) | .[]' > "${WORK_DIR}/merged_timings.jsonl"
+  cat "${RESULTS_DIR}/stage_timings.jsonl" "${WORK_DIR}/prev_stage_timings.jsonl" | jq -sc 'unique_by(.target + ":" + .suite) | .[]' > "${WORK_DIR}/merged_timings.jsonl"
   mv "${WORK_DIR}/merged_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
 fi
 if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
