@@ -62,6 +62,7 @@ func cleanupCompactTestIno(ctx context.Context, store db.Store, ino int64) {
 type recordingBlockStore struct {
 	realBS           meta.BlockStore
 	mu               sync.Mutex
+	gets             []uint64
 	puts             []uint64
 	deletes          []uint64
 	onBeforePutBlock func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error
@@ -89,6 +90,9 @@ func (r *recordingBlockStore) PutBlock(ctx context.Context, sliceID uint64, bloc
 }
 
 func (r *recordingBlockStore) GetBlock(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32, offset uint32, dst []byte) error {
+	r.mu.Lock()
+	r.gets = append(r.gets, sliceID)
+	r.mu.Unlock()
 	return r.realBS.GetBlock(ctx, sliceID, blockIdx, blockSize, offset, dst)
 }
 
@@ -1174,7 +1178,7 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 			})
 		})
 
-		part1 := bytes.Repeat([]byte{0x55}, int(2.5*1024*1024))
+		part1 := bytes.Repeat([]byte{0x55}, 3*1024*1024)
 		_, err = initMgr.Write(ctx, &meta.WriteRequest{
 			Ino:    ino2,
 			Fh:     fh2,
@@ -1183,11 +1187,11 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 		})
 		require.NoError(t, err)
 
-		part2 := bytes.Repeat([]byte{0x66}, int(2.5*1024*1024))
+		part2 := bytes.Repeat([]byte{0x66}, 3*1024*1024)
 		_, err = initMgr.Write(ctx, &meta.WriteRequest{
 			Ino:    ino2,
 			Fh:     fh2,
-			Offset: uint64(len(part1)),
+			Offset: 2 * 1024 * 1024,
 			Data:   part2,
 		})
 		require.NoError(t, err)
@@ -1831,4 +1835,622 @@ func TestCompactChunk_HighSparseChunkIndxBeyondInt32_PostgresIntegration(t *test
 	})
 	require.NoError(t, err)
 	assert.Equal(t, lowData, readLow.Data)
+}
+
+func readFullFileForCompactTest(t *testing.T, ctx context.Context, mgr meta.Manager, ino uint64, fh uint64, totalSize int) []byte {
+	t.Helper()
+	out := make([]byte, 0, totalSize)
+	for off := 0; off < totalSize; {
+		chunkLen := min(int(meta.BlockSize), totalSize-off)
+		res, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(off),
+			Size:   uint32(chunkLen),
+		})
+		require.NoError(t, err)
+		require.Len(t, res.Data, chunkLen)
+		out = append(out, res.Data...)
+		off += chunkLen
+	}
+	return out
+}
+
+// TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite 验收标准 1：
+// 64 个无重叠 1 MiB 实心 Slice 顺序填满 64 MiB Chunk 触发 Compaction 时，
+// skipSome 将全部 64 个 Slice 跳过，零物理 Block 读取/新写，chunks.slices 与 slice_refs 不变，Read 完整读回 64 MiB 数据。
+func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, _, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	recBS := &recordingBlockStore{realBS: realBS}
+	mgr := meta.New(store, meta.WithBlockStore(recBS), meta.WithCompactSliceThreshold(64))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{
+		Ino:   ino,
+		Flags: meta.O_RDWR,
+	})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	const sliceLen = int(meta.CompactSkipSliceMinSize) // 1 MiB
+	const sliceCount = 64
+	expected := make([]byte, sliceCount*sliceLen)
+
+	for i := 0; i < sliceCount; i++ {
+		buf := bytes.Repeat([]byte{byte(i + 1)}, sliceLen)
+		offset := uint64(i * sliceLen)
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: offset,
+			Data:   buf,
+		})
+		require.NoError(t, err)
+		copy(expected[i*sliceLen:(i+1)*sliceLen], buf)
+	}
+
+	chunkBefore, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesBefore, err := meta.DecodeSlices(chunkBefore.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesBefore, sliceCount)
+
+	// 显式调用 CompactChunk 确保后台/前台 Compaction 均已执行完毕
+	err = mgr.CompactChunk(ctx, ino, 0)
+	require.NoError(t, err)
+
+	// 断言 Compaction 期间零 GetBlock 读取、零额外 PutBlock 重写（总 PutBlock 仅等于 64 次前台 Write）
+	recBS.mu.Lock()
+	getsCount := len(recBS.gets)
+	putsCount := len(recBS.puts)
+	deletesCount := len(recBS.deletes)
+	recBS.mu.Unlock()
+
+	assert.Equal(t, 0, getsCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次读取物理 Block")
+	assert.Equal(t, sliceCount, putsCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次新增写入物理 Block")
+	assert.Equal(t, 0, deletesCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次删除物理 Block")
+
+	// 断言 chunks.slices 与原 64 个切片完全一致，且所有 slice_refs.refs == 1
+	chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	assert.Equal(t, chunkBefore.Slices, chunkAfter.Slices, "chunks.slices 必须原样保留 64 条 1 MiB 切片")
+
+	for _, s := range slicesBefore {
+		ref, err := store.GetSliceRef(ctx, int64(s.ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), ref.Refs, "slice_id=%d 的引用计数必须保持为 1", s.ID)
+	}
+
+	// 验证 Read 完整读回 64 MiB 数据（此时 Read 会调用 GetBlock，在断言零 Compaction 读写之后执行）
+	readData := readFullFileForCompactTest(t, ctx, mgr, ino, fh, len(expected))
+	assert.Equal(t, expected, readData, "Read 必须完整读回 64 MiB 顺序写入数据")
+}
+
+// TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted 验收标准 2：
+// 前部写入若干个 >= 1 MiB 无重叠 Slice，后部写入 >= 64 个小粒度碎片/重叠 Slice，
+// 触发 Compaction 后：前部 Slice 的 slice_id 与 slice_refs 原样保留（且不读取前部物理块），
+// 后部旧 Slice 引用计数准确递减并回收，合并后全块 Read 视图与合并前 100% 一致。
+func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, _, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	recBS := &recordingBlockStore{realBS: realBS}
+	// 使用默认阈值 64：验证前部 4 个 1 MiB 整洁大块 + 60 个小碎片时不触发重写，补满 64 个小碎片后自动增量合并尾部
+	mgr := meta.New(store, meta.WithBlockStore(recBS), meta.WithCompactSliceThreshold(64))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{
+		Ino:   ino,
+		Flags: meta.O_RDWR,
+	})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	const prefixCount = 4
+	const prefixSliceLen = int(meta.CompactSkipSliceMinSize) // 1 MiB
+	const tailCount = 64
+	const tailStep = 8 * 1024 // 8 KiB 步进
+	const tailLen = 16 * 1024 // 16 KiB 写入（相邻重叠 8 KiB）
+	totalSize := prefixCount*prefixSliceLen + (tailCount-1)*tailStep + tailLen
+	expected := make([]byte, totalSize)
+
+	// 1. 写入前部 4 个 1 MiB 无重叠大块
+	for i := 0; i < prefixCount; i++ {
+		data := bytes.Repeat([]byte{byte(0x10 + i)}, prefixSliceLen)
+		off := i * prefixSliceLen
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(off),
+			Data:   data,
+		})
+		require.NoError(t, err)
+		copy(expected[off:off+prefixSliceLen], data)
+	}
+
+	// 清空 recordingBlockStore 统计，开始观测后续写入与 Compaction 的物理块读取
+	recBS.mu.Lock()
+	recBS.gets = nil
+	recBS.puts = nil
+	recBS.deletes = nil
+	recBS.mu.Unlock()
+
+	// 2. 先写入 60 个尾部小碎片（总切片数 4+60=64 触发后台检查，但尾部 60 < 64 应短路不重写）
+	tailBase := prefixCount * prefixSliceLen
+	for j := 0; j < 60; j++ {
+		data := bytes.Repeat([]byte{byte(0x40 + (j % 60))}, tailLen)
+		off := tailBase + j*tailStep
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(off),
+			Data:   data,
+		})
+		require.NoError(t, err)
+		copy(expected[off:off+tailLen], data)
+	}
+
+	chunkAt60, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesAt60, err := meta.DecodeSlices(chunkAt60.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesAt60, prefixCount+60)
+
+	prefixSliceDesc := append([]meta.Slice(nil), slicesAt60[:prefixCount]...)
+	prefixSliceIDs := make(map[uint64]bool, prefixCount)
+	for i := 0; i < prefixCount; i++ {
+		prefixSliceIDs[prefixSliceDesc[i].ID] = true
+	}
+	var tailOldSliceIDs []int64
+	for i := prefixCount; i < len(slicesAt60); i++ {
+		tailOldSliceIDs = append(tailOldSliceIDs, int64(slicesAt60[i].ID))
+	}
+
+	// 3. 继续补齐最后 4 个尾部小碎片（尾部达 64 条 >= 阈值 64）
+	for j := 60; j < tailCount; j++ {
+		data := bytes.Repeat([]byte{byte(0x40 + (j % 60))}, tailLen)
+		off := tailBase + j*tailStep
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(off),
+			Data:   data,
+		})
+		require.NoError(t, err)
+		copy(expected[off:off+tailLen], data)
+	}
+
+	// 等待后台或显式 Compaction 完成尾部增量合并（总切片数收敛至 4 + 1 = 5）
+	require.Eventually(t, func() bool {
+		c, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		if gErr != nil {
+			return false
+		}
+		return len(c.Slices)/meta.SliceBytes == prefixCount+1
+	}, 3*time.Second, 20*time.Millisecond, "尾部满 64 条碎片后应自动增量合并收敛至 prefixCount+1 条")
+
+	// 断言 Compaction 期间绝未读取前部 4 个 1 MiB 物理块，且仅额外写入了 1 个合并后的尾部块（64 次前台尾部写 + 1 次尾部合并写 = 65）
+	recBS.mu.Lock()
+	compactedGets := append([]uint64(nil), recBS.gets...)
+	compactedPuts := append([]uint64(nil), recBS.puts...)
+	recBS.mu.Unlock()
+
+	for _, gotID := range compactedGets {
+		assert.False(t, prefixSliceIDs[gotID], "前部已跳过大块 slice_id=%d 绝不能在 Compaction 中被 GetBlock 读取", gotID)
+	}
+	assert.Len(t, compactedPuts, tailCount+1, "64 次尾部写入加 1 次尾部增量合并应仅产生 65 次 PutBlock")
+
+	// 断言合并后 chunks.slices 精确为 4 条原样保留的前部大块 + 1 条新合并尾部块
+	chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesAfter, err := meta.DecodeSlices(chunkAfter.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesAfter, prefixCount+1)
+
+	for i := 0; i < prefixCount; i++ {
+		assert.Equal(t, prefixSliceDesc[i], slicesAfter[i], "前部第 %d 个 Slice 描述符必须原样保留", i)
+		ref, err := store.GetSliceRef(ctx, int64(prefixSliceDesc[i].ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), ref.Refs, "前部第 %d 个 Slice 的 refs 必须保持为 1", i)
+	}
+
+	// 断言后部旧 Slice 的 refs 全部降为 0，且新尾部 Slice 的 refs 为 1
+	for _, oldTailID := range tailOldSliceIDs {
+		ref, err := store.GetSliceRef(ctx, oldTailID)
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), ref.Refs, "后部旧碎片 slice_id=%d 的 refs 必须递减为 0", oldTailID)
+	}
+	newTailRef, err := store.GetSliceRef(ctx, int64(slicesAfter[prefixCount].ID))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), newTailRef.Refs, "后部新合并 Slice 的 refs 必须为 1")
+
+	// 执行 GC 回收后部旧块，验证前部块与新尾部块不受影响
+	reclaimed, err := mgr.CollectGarbage(ctx, 200)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, reclaimed, tailCount)
+
+	// 验证全块 Read 数据与独立构造的内存黄金期望数组 100% 一致
+	readData := readFullFileForCompactTest(t, ctx, mgr, ino, fh, len(expected))
+	assert.Equal(t, expected, readData)
+}
+
+// TestCompactChunk_SkipSome_StopsAtFirstOverlappedOrHolePrefix 验收标准 3：
+// 前部 >= 1 MiB 大块被后续写入或打洞（ID=0）部分/完全覆盖时，在首个发生区间重叠的前部 Slice 处停止跳过，
+// 确保被覆盖的历史数据参与合并裁剪并释放冗余 slice_refs。
+func TestCompactChunk_SkipSome_StopsAtFirstOverlappedOrHolePrefix(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, _, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	const oneMiB = int(meta.CompactSkipSliceMinSize)
+
+	t.Run("后续写入部分覆盖第2个1MiB大块时在S1处停止跳过", func(t *testing.T) {
+		recBS := &recordingBlockStore{realBS: realBS}
+		mgr := meta.New(store, meta.WithBlockStore(recBS))
+
+		fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+			Mode:  int32(meta.S_IFREG | 0o644),
+			Nlink: 1,
+			Uid:   1000,
+			Gid:   1000,
+		})
+		require.NoError(t, err)
+		ino := uint64(fileRow.Ino)
+		t.Cleanup(func() {
+			cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+		})
+
+		openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+		require.NoError(t, err)
+		fh := openRes.Fh
+		t.Cleanup(func() {
+			_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+		})
+
+		expected := make([]byte, 3*oneMiB)
+		// S0: [0, 1 MiB), S1: [1 MiB, 2 MiB), S2: [2 MiB, 3 MiB)
+		for i := 0; i < 3; i++ {
+			buf := bytes.Repeat([]byte{byte(0xA0 + i)}, oneMiB)
+			_, err := mgr.Write(ctx, &meta.WriteRequest{
+				Ino:    ino,
+				Fh:     fh,
+				Offset: uint64(i * oneMiB),
+				Data:   buf,
+			})
+			require.NoError(t, err)
+			copy(expected[i*oneMiB:(i+1)*oneMiB], buf)
+		}
+
+		// S3: 64 KiB 覆写 S1 的中间区间 [1.5 MiB, 1.5 MiB + 64 KiB)
+		overOff := oneMiB + oneMiB/2
+		overData := bytes.Repeat([]byte{0xFF}, 64*1024)
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(overOff),
+			Data:   overData,
+		})
+		require.NoError(t, err)
+		copy(expected[overOff:overOff+len(overData)], overData)
+
+		chunkBefore, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		slicesBefore, err := meta.DecodeSlices(chunkBefore.Slices)
+		require.NoError(t, err)
+		require.Len(t, slicesBefore, 4)
+		s0 := slicesBefore[0]
+		s1 := slicesBefore[1]
+		s2 := slicesBefore[2]
+		s3 := slicesBefore[3]
+
+		recBS.mu.Lock()
+		recBS.gets = nil
+		recBS.mu.Unlock()
+
+		err = mgr.CompactChunk(ctx, ino, 0)
+		require.NoError(t, err)
+
+		// S0 必须被跳过（未被 GetBlock 读取），而 S1、S2、S3 必须在 S1 处停止跳过并参与合并
+		recBS.mu.Lock()
+		gets := append([]uint64(nil), recBS.gets...)
+		recBS.mu.Unlock()
+		assert.NotContains(t, gets, s0.ID, "无重叠的 S0 必须被跳过，不读取物理块")
+		assert.Contains(t, gets, s1.ID, "被后续写入覆盖的 S1 必须参与合并读取")
+		assert.Contains(t, gets, s2.ID, "S1 之后的 S2 必须一同参与尾部合并")
+
+		chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		slicesAfter, err := meta.DecodeSlices(chunkAfter.Slices)
+		require.NoError(t, err)
+		// S0 原样保留 + [1 MiB, 3 MiB) 合并为 1 条 2 MiB 紧致 Slice = 共 2 条
+		require.Len(t, slicesAfter, 2)
+		assert.Equal(t, s0, slicesAfter[0], "S0 必须原样保留在首位")
+
+		// S0 的 refs == 1，而被合并替换的 S1、S2、S3 的 refs 必须归零
+		ref0, err := store.GetSliceRef(ctx, int64(s0.ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), ref0.Refs)
+
+		for _, oldID := range []uint64{s1.ID, s2.ID, s3.ID} {
+			ref, err := store.GetSliceRef(ctx, int64(oldID))
+			require.NoError(t, err)
+			assert.Equal(t, int32(0), ref.Refs, "被合并替换的旧 slice_id=%d refs 必须归零", oldID)
+		}
+
+		readRes, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Size:   uint32(len(expected)),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected, readRes.Data)
+	})
+
+	t.Run("后续打洞ID=0覆盖前部大块及尾部全空洞裁剪", func(t *testing.T) {
+		mgr := meta.New(store, meta.WithBlockStore(realBS))
+
+		fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+			Mode:  int32(meta.S_IFREG | 0o644),
+			Nlink: 1,
+			Uid:   1000,
+			Gid:   1000,
+		})
+		require.NoError(t, err)
+		ino := uint64(fileRow.Ino)
+		t.Cleanup(func() {
+			cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+		})
+
+		openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+		require.NoError(t, err)
+		fh := openRes.Fh
+		t.Cleanup(func() {
+			_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+		})
+
+		expected := make([]byte, 2*oneMiB)
+		s0Data := bytes.Repeat([]byte{0xB0}, oneMiB)
+		s1Data := bytes.Repeat([]byte{0xB1}, oneMiB)
+		_, err = mgr.Write(ctx, &meta.WriteRequest{Ino: ino, Fh: fh, Offset: 0, Data: s0Data})
+		require.NoError(t, err)
+		copy(expected[0:oneMiB], s0Data)
+
+		_, err = mgr.Write(ctx, &meta.WriteRequest{Ino: ino, Fh: fh, Offset: uint64(oneMiB), Data: s1Data})
+		require.NoError(t, err)
+		copy(expected[oneMiB:2*oneMiB], s1Data)
+
+		chunkInit, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		slicesInit, err := meta.DecodeSlices(chunkInit.Slices)
+		require.NoError(t, err)
+		require.Len(t, slicesInit, 2)
+		s0 := slicesInit[0]
+		s1 := slicesInit[1]
+
+		// 对 S1 的全区间 [1 MiB, 2 MiB) 执行 PunchHole 打洞（使尾部裁剪后全为空洞）
+		err = mgr.Fallocate(ctx, meta.FallocateParams{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(oneMiB),
+			Length: uint64(oneMiB),
+			Mode:   meta.FallocFlPunchHole | meta.FallocFlKeepSize,
+		})
+		require.NoError(t, err)
+		clear(expected[oneMiB : 2*oneMiB])
+
+		err = mgr.CompactChunk(ctx, ino, 0)
+		require.NoError(t, err)
+
+		// S0 未被覆盖应原样保留，S1 被打洞完全抹除后 refs 归零，且 chunks.slices 仅剩 S0（绝不能追加全块空洞覆盖 S0）
+		chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		slicesAfter, err := meta.DecodeSlices(chunkAfter.Slices)
+		require.NoError(t, err)
+		require.Len(t, slicesAfter, 1)
+		assert.Equal(t, s0, slicesAfter[0], "S0 必须原样保留且不被尾部全空洞覆盖")
+
+		ref0, err := store.GetSliceRef(ctx, int64(s0.ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), ref0.Refs)
+
+		ref1, err := store.GetSliceRef(ctx, int64(s1.ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), ref1.Refs, "被打洞完全覆盖的 S1 refs 必须归零")
+
+		readRes, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Size:   uint32(len(expected)),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, expected, readRes.Data)
+	})
+}
+
+// TestCompactChunk_SkipSome_ConcurrentWriteCASPreservesPrefixAndSuffix 验收标准 4：
+// 当 skipCount > 0 的增量 Compaction Phase 1 与 Phase 2 之间有并发 Write 追加新 Slice 时，
+// CAS 将 chunks.slices 原子更新为 skippedPrefix + compactedSuffix + concurrentAppendedTail，绝不丢失并发追加数据。
+func TestCompactChunk_SkipSome_ConcurrentWriteCASPreservesPrefixAndSuffix(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, initMgr, _, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := initMgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = initMgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	const oneMiB = int(meta.CompactSkipSliceMinSize)
+	const tailFragLen = 16 * 1024
+	expected := make([]byte, 2*oneMiB+3*tailFragLen)
+
+	// 1. 写入 2 个 1 MiB 无重叠大块前缀 P0, P1
+	for i := 0; i < 2; i++ {
+		buf := bytes.Repeat([]byte{byte(0xC0 + i)}, oneMiB)
+		_, err := initMgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(i * oneMiB),
+			Data:   buf,
+		})
+		require.NoError(t, err)
+		copy(expected[i*oneMiB:(i+1)*oneMiB], buf)
+	}
+
+	// 2. 写入 2 个 16 KiB 尾部碎片 T0, T1
+	for j := 0; j < 2; j++ {
+		buf := bytes.Repeat([]byte{byte(0xD0 + j)}, tailFragLen)
+		off := 2*oneMiB + j*tailFragLen
+		_, err := initMgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(off),
+			Data:   buf,
+		})
+		require.NoError(t, err)
+		copy(expected[off:off+tailFragLen], buf)
+	}
+
+	chunkBefore, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesBefore, err := meta.DecodeSlices(chunkBefore.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesBefore, 4)
+	p0, p1 := slicesBefore[0], slicesBefore[1]
+	t0, t1 := slicesBefore[2], slicesBefore[3]
+
+	// 3. 在增量 Compaction Phase 1 PutBlock 时并发追加 C0
+	concurrentData := bytes.Repeat([]byte{0xEE}, tailFragLen)
+	concurrentOff := 2*oneMiB + 2*tailFragLen
+	copy(expected[concurrentOff:concurrentOff+tailFragLen], concurrentData)
+
+	var concurrentSliceID uint64
+	var hookOnce sync.Once
+	hookBS := &recordingBlockStore{
+		realBS: realBS,
+		onBeforePutBlock: func(putCtx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+			var hookErr error
+			hookOnce.Do(func() {
+				_, wErr := initMgr.Write(context.Background(), &meta.WriteRequest{
+					Ino:    ino,
+					Fh:     fh,
+					Offset: uint64(concurrentOff),
+					Data:   concurrentData,
+				})
+				if wErr != nil {
+					hookErr = wErr
+					return
+				}
+				c, gErr := store.GetChunk(context.Background(), db.GetChunkParams{Ino: int64(ino), Indx: 0})
+				if gErr != nil {
+					hookErr = gErr
+					return
+				}
+				sl, dErr := meta.DecodeSlices(c.Slices)
+				if dErr != nil {
+					hookErr = dErr
+					return
+				}
+				if len(sl) >= 5 {
+					concurrentSliceID = sl[4].ID
+				}
+			})
+			return hookErr
+		},
+	}
+
+	mgrWithHook := meta.New(store, meta.WithBlockStore(hookBS))
+	err = mgrWithHook.CompactChunk(ctx, ino, 0)
+	require.NoError(t, err)
+
+	// 断言 chunks.slices == [P0, P1, compactedTail, C0] 共 4 条
+	chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesAfter, err := meta.DecodeSlices(chunkAfter.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesAfter, 4, "CAS 更新后应包含 2 条跳过前缀 + 1 条合并尾部 + 1 条并发追加切片")
+
+	assert.Equal(t, p0, slicesAfter[0], "前缀 P0 必须原样保留")
+	assert.Equal(t, p1, slicesAfter[1], "前缀 P1 必须原样保留")
+	assert.Equal(t, uint32(2*oneMiB), slicesAfter[2].Pos)
+	assert.Equal(t, uint32(2*tailFragLen), slicesAfter[2].Len)
+	assert.Equal(t, concurrentSliceID, slicesAfter[3].ID, "并发追加切片 C0 必须保留在末尾")
+
+	// 引用计数校验：P0, P1, compactedTail, C0 的 refs == 1；T0, T1 的 refs == 0
+	for _, activeID := range []uint64{p0.ID, p1.ID, slicesAfter[2].ID, concurrentSliceID} {
+		ref, err := store.GetSliceRef(ctx, int64(activeID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), ref.Refs, "有效 slice_id=%d 的 refs 必须为 1", activeID)
+	}
+	for _, oldTailID := range []uint64{t0.ID, t1.ID} {
+		ref, err := store.GetSliceRef(ctx, int64(oldTailID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), ref.Refs, "被替换尾部旧切片 slice_id=%d 的 refs 必须归零", oldTailID)
+	}
+
+	// 验证全量读取包含前缀、合并尾部与并发追加数据
+	readRes, err := initMgr.Read(ctx, &meta.ReadRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 0,
+		Size:   uint32(len(expected)),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, expected, readRes.Data)
 }

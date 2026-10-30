@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -93,7 +94,150 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 	return nil
 }
 
+func (m *manager) recordWriteSessionTouch(sessionID uint64, touchedAt time.Time, sessionCreatedAt pgtype.Timestamptz) {
+	if sessionID == 0 {
+		return
+	}
+	m.writeSessionTouchMu.Lock()
+	defer m.writeSessionTouchMu.Unlock()
+	if m.writeSessionTouches == nil {
+		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
+	}
+	st := m.writeSessionTouches[sessionID]
+	if !touchedAt.IsZero() {
+		st.lastTouchedAt = touchedAt
+	}
+	if sessionCreatedAt.Valid {
+		st.sessionCreatedAt = sessionCreatedAt
+	}
+	m.writeSessionTouches[sessionID] = st
+}
+
+func (m *manager) clearWriteSessionTouch(sessionID uint64) {
+	if sessionID == 0 {
+		return
+	}
+	m.writeSessionTouchMu.Lock()
+	defer m.writeSessionTouchMu.Unlock()
+	delete(m.writeSessionTouches, sessionID)
+}
+
+func (m *manager) rollbackWriteSessionTouch(sessionID uint64, claimedAt time.Time, prev writeSessionTouchState, hadPrev bool) {
+	if sessionID == 0 {
+		return
+	}
+	m.writeSessionTouchMu.Lock()
+	defer m.writeSessionTouchMu.Unlock()
+	cur, ok := m.writeSessionTouches[sessionID]
+	if !ok || !cur.lastTouchedAt.Equal(claimedAt) {
+		return
+	}
+	if hadPrev {
+		m.writeSessionTouches[sessionID] = prev
+	} else {
+		delete(m.writeSessionTouches, sessionID)
+	}
+}
+
+// touchWriteClientSessionForHandle 专为 Write 热路径提供带内存时间窗口节流的活跃会话校验与续期，
+// 剥离全表过期会话清理与孤儿节点扫描，消除单客户端多线程并发写时的 client_sessions 行锁争用。
+func (m *manager) touchWriteClientSessionForHandle(ctx context.Context, q db.Querier, sessionID uint64, handleCreatedAt pgtype.Timestamptz) (func(), error) {
+	leaseTTL := m.sessionLeaseTTL
+	if leaseTTL <= 0 {
+		leaseTTL = DefaultSessionLeaseTTL
+	}
+
+	var interval time.Duration
+	if !m.writeSessionTouchDisabled {
+		interval = m.writeSessionTouchInterval
+		if interval <= 0 {
+			interval = DefaultWriteSessionTouchInterval
+		}
+	}
+
+	now := time.Now()
+	m.writeSessionTouchMu.Lock()
+	if m.writeSessionTouches == nil {
+		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
+	}
+	prev, hadPrev := m.writeSessionTouches[sessionID]
+	throttled := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
+	if !throttled {
+		m.writeSessionTouches[sessionID] = writeSessionTouchState{
+			lastTouchedAt:    now,
+			sessionCreatedAt: prev.sessionCreatedAt,
+		}
+	}
+	m.writeSessionTouchMu.Unlock()
+
+	if throttled {
+		type poolProvider interface {
+			Pool() *pgxpool.Pool
+		}
+		if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
+			var sessionCreatedAt pgtype.Timestamptz
+			var alive bool
+			err := pp.Pool().QueryRow(
+				ctx,
+				`SELECT created_at, (expires_at > clock_timestamp()) FROM client_sessions WHERE session_id = $1`,
+				int64(sessionID),
+			).Scan(&sessionCreatedAt, &alive)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					m.clearWriteSessionTouch(sessionID)
+					return nil, errExpiredSessionBadHandle
+				}
+				return nil, fmt.Errorf("check active client session %d: %w", sessionID, err)
+			}
+			if !alive {
+				m.clearWriteSessionTouch(sessionID)
+				return nil, errExpiredSessionBadHandle
+			}
+			if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
+				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+				return nil, ErrBadFileHandle
+			}
+			return nil, nil
+		}
+
+		if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
+			return nil, ErrBadFileHandle
+		}
+		return nil, nil
+	}
+
+	rollback := func() {
+		m.rollbackWriteSessionTouch(sessionID, now, prev, hadPrev)
+	}
+
+	session, err := q.UpsertClientSession(db.WithLeaseTTL(ctx, leaseTTL), db.UpsertClientSessionParams{
+		SessionID: int64(sessionID),
+		ExpiresAt: pgtype.Timestamptz{
+			Time:  now.Add(leaseTTL),
+			Valid: true,
+		},
+	})
+	if err != nil {
+		rollback()
+		return nil, fmt.Errorf("upsert client session %d: %w", sessionID, err)
+	}
+	if session.CreatedAt.Valid && session.UpdatedAt.Valid && session.CreatedAt.Time.Equal(session.UpdatedAt.Time) {
+		m.clearWriteSessionTouch(sessionID)
+		return nil, errExpiredSessionBadHandle
+	}
+	if handleCreatedAt.Valid && session.CreatedAt.Valid && handleCreatedAt.Time.Before(session.CreatedAt.Time) {
+		m.rollbackWriteSessionTouch(sessionID, now, writeSessionTouchState{
+			lastTouchedAt:    prev.lastTouchedAt,
+			sessionCreatedAt: session.CreatedAt,
+		}, true)
+		return nil, ErrBadFileHandle
+	}
+	m.recordWriteSessionTouch(sessionID, now, session.CreatedAt)
+	return rollback, nil
+}
+
 func (m *manager) cleanExpiredSessionByID(ctx context.Context, sessionID uint64) {
+	m.clearWriteSessionTouch(sessionID)
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = m.execWriteTxWithRetry(cleanupCtx, func(q db.Querier) error {
@@ -134,6 +278,7 @@ func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionI
 	if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 		return time.Time{}, err
 	}
+	m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
 	return session.ExpiresAt.Time, nil
 }
 

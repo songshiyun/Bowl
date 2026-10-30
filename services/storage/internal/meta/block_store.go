@@ -37,6 +37,15 @@ type BlockStore interface {
 	DeleteBlock(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32) error
 }
 
+// StagedBlockStore 定义支持阶段化原子发布（先写入重命名落盘、再按父目录去重批量同步）的块存储扩展接口。
+type StagedBlockStore interface {
+	BlockStore
+	// StageBlock 将切片子块数据写入同目录唯一临时文件、执行文件级 Sync 并原子 Rename 至目标路径，返回待同步的父目录路径。
+	StageBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) (parentDir string, err error)
+	// SyncDirs 对给定的父目录路径集合按首次出现顺序去重后逐一执行目录级持久化 Sync。
+	SyncDirs(ctx context.Context, dirs []string) error
+}
+
 // SliceBlockInfo 表示一个 Slice 包含的物理 Block 索引与大小信息。
 type SliceBlockInfo struct {
 	BlockIdx  uint32
@@ -166,6 +175,15 @@ func WithOpenDirHook(fn func(dir string) (DirHandle, error)) LocalFSBlockStoreOp
 	}
 }
 
+// WithStatHook 注入查询文件/目录状态的钩子（默认调用 os.Stat）。
+func WithStatHook(fn func(name string) (os.FileInfo, error)) LocalFSBlockStoreOption {
+	return func(s *LocalFSBlockStore) {
+		if fn != nil {
+			s.statFn = fn
+		}
+	}
+}
+
 type blockScanCursor struct {
 	lvl1 string
 	lvl2 string
@@ -175,17 +193,19 @@ type blockScanCursor struct {
 // LocalFSBlockStore 实现基于本地 NVMe SSD 文件系统的两级散列目录存储引擎。
 type LocalFSBlockStore struct {
 	dataDir         string
-	dirMu           sync.Mutex
+	dirMu           sync.RWMutex
 	syncedDirs      map[string]struct{}
 	pendingSyncDirs map[string]struct{}
 	openDirFn       func(dir string) (DirHandle, error)
+	statFn          func(name string) (os.FileInfo, error)
 	scanMu          sync.Mutex
 	scanCursor      blockScanCursor
 }
 
 var (
-	_ BlockStore  = (*LocalFSBlockStore)(nil)
-	_ BlockLister = (*LocalFSBlockStore)(nil)
+	_ BlockStore       = (*LocalFSBlockStore)(nil)
+	_ StagedBlockStore = (*LocalFSBlockStore)(nil)
+	_ BlockLister      = (*LocalFSBlockStore)(nil)
 )
 
 // NewLocalFSBlockStore 创建基于本地文件系统的 BlockStore 实例。
@@ -197,6 +217,7 @@ func NewLocalFSBlockStore(dataDir string, opts ...LocalFSBlockStoreOption) *Loca
 		openDirFn: func(dir string) (DirHandle, error) {
 			return os.Open(dir)
 		},
+		statFn: os.Stat,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -204,6 +225,20 @@ func NewLocalFSBlockStore(dataDir string, opts ...LocalFSBlockStoreOption) *Loca
 		}
 	}
 	return s
+}
+
+func (s *LocalFSBlockStore) statDir(name string) (os.FileInfo, error) {
+	if s.statFn != nil {
+		return s.statFn(name)
+	}
+	return os.Stat(name)
+}
+
+func (s *LocalFSBlockStore) invalidateSyncedDir(targetDir string) {
+	cleanTarget := filepath.Clean(targetDir)
+	s.dirMu.Lock()
+	delete(s.syncedDirs, cleanTarget)
+	s.dirMu.Unlock()
 }
 
 // blockDir 计算指定 sliceID 对应的两级十六进制散列父目录路径。
@@ -249,6 +284,16 @@ func (s *LocalFSBlockStore) syncDir(dir string) error {
 
 // ensureDirSynced 保证 targetDir 及其所有祖先目录项均已持久化刷盘。
 func (s *LocalFSBlockStore) ensureDirSynced(targetDir string) error {
+	cleanTarget := filepath.Clean(targetDir)
+
+	s.dirMu.RLock()
+	_, fastSynced := s.syncedDirs[cleanTarget]
+	noPending := len(s.pendingSyncDirs) == 0
+	s.dirMu.RUnlock()
+	if fastSynced && noPending {
+		return nil
+	}
+
 	s.dirMu.Lock()
 	defer s.dirMu.Unlock()
 
@@ -259,24 +304,16 @@ func (s *LocalFSBlockStore) ensureDirSynced(targetDir string) error {
 		s.pendingSyncDirs = make(map[string]struct{})
 	}
 
-	cleanBase := filepath.Clean(s.dataDir)
-	cleanTarget := filepath.Clean(targetDir)
-
 	if _, ok := s.syncedDirs[cleanTarget]; ok && len(s.pendingSyncDirs) == 0 {
-		fi, err := os.Stat(cleanTarget)
-		if err == nil {
-			if fi.IsDir() {
-				return nil
-			}
-			return fmt.Errorf("%w: path %s exists but is not a directory", ErrIO, cleanTarget)
-		}
-		delete(s.syncedDirs, cleanTarget)
+		return nil
 	}
+
+	cleanBase := filepath.Clean(s.dataDir)
 
 	var toCreate []string
 	curr := cleanTarget
 	for {
-		fi, err := os.Stat(curr)
+		fi, err := s.statDir(curr)
 		if err == nil {
 			if !fi.IsDir() {
 				return fmt.Errorf("%w: path %s exists but is not a directory", ErrIO, curr)
@@ -303,7 +340,7 @@ func (s *LocalFSBlockStore) ensureDirSynced(targetDir string) error {
 			if !errors.Is(err, os.ErrExist) {
 				return fmt.Errorf("%w: failed to create directory %s: %v", ErrIO, d, err)
 			}
-			fi, statErr := os.Stat(d)
+			fi, statErr := s.statDir(d)
 			if statErr != nil || !fi.IsDir() {
 				return fmt.Errorf("%w: path %s already exists and is not a directory: %v", ErrIO, d, statErr)
 			}
@@ -357,10 +394,10 @@ func (s *LocalFSBlockStore) ensureDirSynced(targetDir string) error {
 	return nil
 }
 
-// PutBlock 采用两级目录散列，通过写入同目录唯一临时文件、Sync 刷盘并原子重命名发布到目标路径。
-func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+// StageBlock 采用两级目录散列，将子块写入同目录唯一临时文件、执行文件级 Sync 并原子重命名至目标路径，返回待同步的父目录路径。
+func (s *LocalFSBlockStore) StageBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 
 	blockSize := uint32(len(data))
@@ -368,12 +405,21 @@ func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockI
 	dir := s.blockDir(sliceID)
 
 	if err := s.ensureDirSynced(dir); err != nil {
-		return fmt.Errorf("%w: failed to create chunk directory %s: %v", ErrIO, dir, err)
+		return "", fmt.Errorf("%w: failed to create chunk directory %s: %v", ErrIO, dir, err)
 	}
 
-	tmpFile, err := os.CreateTemp(dir, fmt.Sprintf(".tmp_%d_%d_*", sliceID, blockIdx))
+	tmpPattern := fmt.Sprintf(".tmp_%d_%d_*", sliceID, blockIdx)
+	tmpFile, err := os.CreateTemp(dir, tmpPattern)
 	if err != nil {
-		return fmt.Errorf("%w: failed to create temp block file: %v", ErrIO, err)
+		// 防御性自愈：若已缓存的父目录被外部移除，剔除该目录缓存后重新创建同步并重试一次
+		s.invalidateSyncedDir(dir)
+		if syncErr := s.ensureDirSynced(dir); syncErr != nil {
+			return "", fmt.Errorf("%w: failed to create chunk directory %s: %v", ErrIO, dir, syncErr)
+		}
+		tmpFile, err = os.CreateTemp(dir, tmpPattern)
+		if err != nil {
+			return "", fmt.Errorf("%w: failed to create temp block file: %v", ErrIO, err)
+		}
 	}
 	tmpPath := tmpFile.Name()
 
@@ -387,31 +433,70 @@ func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockI
 
 	if len(data) > 0 {
 		if _, err := tmpFile.Write(data); err != nil {
-			return fmt.Errorf("%w: failed to write block data: %v", ErrIO, err)
+			return "", fmt.Errorf("%w: failed to write block data: %v", ErrIO, err)
 		}
 	}
 
 	if err := ctx.Err(); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := tmpFile.Sync(); err != nil {
-		return fmt.Errorf("%w: failed to sync block file: %v", ErrIO, err)
+		return "", fmt.Errorf("%w: failed to sync block file: %v", ErrIO, err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close temp block file: %v", ErrIO, err)
+		return "", fmt.Errorf("%w: failed to close temp block file: %v", ErrIO, err)
 	}
 
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("%w: failed to rename temp block to %s: %v", ErrIO, finalPath, err)
+		return "", fmt.Errorf("%w: failed to rename temp block to %s: %v", ErrIO, finalPath, err)
 	}
 
 	success = true
+	return dir, nil
+}
 
-	if err := s.syncDir(dir); err != nil {
+// SyncDirs 对给定的父目录路径集合按首次出现顺序去重（忽略空字符串）后逐一执行目录级持久化 Sync。
+func (s *LocalFSBlockStore) SyncDirs(ctx context.Context, dirs []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(dirs) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cleanDir := filepath.Clean(dir)
+		if _, ok := seen[cleanDir]; ok {
+			continue
+		}
+		seen[cleanDir] = struct{}{}
+		if err := s.syncDir(cleanDir); err != nil {
+			return fmt.Errorf("%w: failed to sync chunk directory %s after rename: %v", ErrIO, dir, err)
+		}
+	}
+	return nil
+}
+
+// PutBlock 采用两级目录散列，通过写入同目录唯一临时文件、Sync 刷盘、原子重命名发布到目标路径并同步父目录。
+func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+	dir, err := s.StageBlock(ctx, sliceID, blockIdx, data)
+	if err != nil {
+		return err
+	}
+
+	if err := s.SyncDirs(ctx, []string{dir}); err != nil {
+		finalPath := s.blockPath(sliceID, blockIdx, uint32(len(data)))
 		_ = os.Remove(finalPath)
-		return fmt.Errorf("%w: failed to sync chunk directory %s after rename: %v", ErrIO, dir, err)
+		return err
 	}
 
 	return nil

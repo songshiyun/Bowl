@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -124,37 +125,56 @@ type dirCursorAnchor struct {
 	handleCreatedAt time.Time
 }
 
+type writeSessionTouchState struct {
+	lastTouchedAt    time.Time
+	sessionCreatedAt pgtype.Timestamptz
+}
+
 type manager struct {
-	store                 db.Store
-	blockStore            BlockStore
-	entryTimeout          float64
-	attrTimeout           float64
-	dirEntryTimeout       float64
-	openKeepCache         bool
-	openDirCache          bool
-	atimeMode             AtimeMode
-	sessionLeaseTTL       time.Duration
-	sessionProbeTimeout   time.Duration
-	gcInterval            time.Duration
-	gcBatchLimit          int32
-	gcOrphanGracePeriod   time.Duration
-	compactSliceThreshold int
-	inFlightCompactsMu    sync.Mutex
-	inFlightCompacts      map[chunkKey]bool
-	lockNotifyMu          sync.Mutex
-	lockNotifyChans       map[uint64]*lockNotifyEntry
-	crossDirRenameMu      sync.Mutex
-	dirCursorMu           sync.Mutex
-	dirCursors            map[dirCursorKey]dirCursorAnchor
-	dirMutationSeq        map[uint64]uint64
-	inFlightDirMutations  map[uint64]int
-	activeDirReads        map[uint64]*inFlightDirRead
-	nextDirReadID         uint64
-	inFlightGrantMu       sync.Mutex
-	inFlightGrants        map[inFlightGrantKey]*inFlightGrant
-	nextInFlightGrantID   uint64
-	watchHubMu            sync.Mutex
-	watchHub              *SessionWatchHub
+	store                     db.Store
+	blockStore                BlockStore
+	entryTimeout              float64
+	attrTimeout               float64
+	dirEntryTimeout           float64
+	openKeepCache             bool
+	openDirCache              bool
+	atimeMode                 AtimeMode
+	sessionLeaseTTL           time.Duration
+	sessionProbeTimeout       time.Duration
+	gcInterval                time.Duration
+	gcBatchLimit              int32
+	gcOrphanGracePeriod       time.Duration
+	compactSliceThreshold     int
+	sliceIDBatchSize          int
+	sliceIDMu                 sync.Mutex
+	sliceIDQueue              []int64
+	lastAllocatedSliceID      int64
+	writeSessionTouchInterval time.Duration
+	writeSessionTouchDisabled bool
+	writeSessionTouchMu       sync.Mutex
+	writeSessionTouches       map[uint64]writeSessionTouchState
+	writeGroupMaxBatchSize    int
+	writeInFlightStage1       atomic.Int64
+	writeGroupMu              sync.Mutex
+	writeLeaderActive         bool
+	writePendingQueue         []*writeBatchTask
+	writeCoalesceCh           chan struct{}
+	inFlightCompactsMu        sync.Mutex
+	inFlightCompacts          map[chunkKey]bool
+	lockNotifyMu              sync.Mutex
+	lockNotifyChans           map[uint64]*lockNotifyEntry
+	crossDirRenameMu          sync.Mutex
+	dirCursorMu               sync.Mutex
+	dirCursors                map[dirCursorKey]dirCursorAnchor
+	dirMutationSeq            map[uint64]uint64
+	inFlightDirMutations      map[uint64]int
+	activeDirReads            map[uint64]*inFlightDirRead
+	nextDirReadID             uint64
+	inFlightGrantMu           sync.Mutex
+	inFlightGrants            map[inFlightGrantKey]*inFlightGrant
+	nextInFlightGrantID       uint64
+	watchHubMu                sync.Mutex
+	watchHub                  *SessionWatchHub
 }
 
 var _ Manager = (*manager)(nil)
@@ -284,27 +304,63 @@ func WithGCOrphanGracePeriod(d time.Duration) Option {
 	}
 }
 
+// WithSliceIDBatchSize 配置服务端分配 slice_id 的内存号段预取步长（batchSize > 0 时生效，默认 DefaultSliceIDBatchSize）。
+func WithSliceIDBatchSize(batchSize int) Option {
+	return func(m *manager) {
+		if batchSize > 0 {
+			m.sliceIDBatchSize = batchSize
+		}
+	}
+}
+
+// WithWriteSessionTouchInterval 配置 Write 热路径对同一活跃客户端会话执行租约续期的最小节流时间窗口（d >= 0 时生效，默认 DefaultWriteSessionTouchInterval）。
+func WithWriteSessionTouchInterval(d time.Duration) Option {
+	return func(m *manager) {
+		if d == 0 {
+			m.writeSessionTouchInterval = 0
+			m.writeSessionTouchDisabled = true
+		} else if d > 0 {
+			m.writeSessionTouchInterval = d
+			m.writeSessionTouchDisabled = false
+		}
+	}
+}
+
+// WithWriteGroupMaxBatchSize 配置 Write 阶段 2 Group Commit 单批次最大聚合请求数（batchSize > 0 时生效，默认 DefaultWriteGroupMaxBatchSize）。
+func WithWriteGroupMaxBatchSize(batchSize int) Option {
+	return func(m *manager) {
+		if batchSize > 0 {
+			m.writeGroupMaxBatchSize = batchSize
+		}
+	}
+}
+
 // New 创建 Manager 实例。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
-		store:                 store,
-		entryTimeout:          DefaultEntryTimeoutSeconds,
-		attrTimeout:           DefaultAttrTimeoutSeconds,
-		dirEntryTimeout:       DefaultEntryTimeoutSeconds,
-		sessionLeaseTTL:       DefaultSessionLeaseTTL,
-		sessionProbeTimeout:   DefaultSessionProbeTimeout,
-		gcInterval:            DefaultGCInterval,
-		gcBatchLimit:          DefaultGCBatchLimit,
-		gcOrphanGracePeriod:   DefaultGCOrphanGracePeriod,
-		compactSliceThreshold: CompactSliceThreshold,
-		inFlightCompacts:      make(map[chunkKey]bool),
-		lockNotifyChans:       make(map[uint64]*lockNotifyEntry),
-		dirCursors:            make(map[dirCursorKey]dirCursorAnchor),
-		dirMutationSeq:        make(map[uint64]uint64),
-		inFlightDirMutations:  make(map[uint64]int),
-		activeDirReads:        make(map[uint64]*inFlightDirRead),
-		inFlightGrants:        make(map[inFlightGrantKey]*inFlightGrant),
-		watchHub:              NewSessionWatchHub(),
+		store:                     store,
+		entryTimeout:              DefaultEntryTimeoutSeconds,
+		attrTimeout:               DefaultAttrTimeoutSeconds,
+		dirEntryTimeout:           DefaultEntryTimeoutSeconds,
+		sessionLeaseTTL:           DefaultSessionLeaseTTL,
+		sessionProbeTimeout:       DefaultSessionProbeTimeout,
+		gcInterval:                DefaultGCInterval,
+		gcBatchLimit:              DefaultGCBatchLimit,
+		gcOrphanGracePeriod:       DefaultGCOrphanGracePeriod,
+		compactSliceThreshold:     CompactSliceThreshold,
+		sliceIDBatchSize:          DefaultSliceIDBatchSize,
+		writeSessionTouchInterval: DefaultWriteSessionTouchInterval,
+		writeSessionTouches:       make(map[uint64]writeSessionTouchState),
+		writeGroupMaxBatchSize:    DefaultWriteGroupMaxBatchSize,
+		writeCoalesceCh:           make(chan struct{}, 1),
+		inFlightCompacts:          make(map[chunkKey]bool),
+		lockNotifyChans:           make(map[uint64]*lockNotifyEntry),
+		dirCursors:                make(map[dirCursorKey]dirCursorAnchor),
+		dirMutationSeq:            make(map[uint64]uint64),
+		inFlightDirMutations:      make(map[uint64]int),
+		activeDirReads:            make(map[uint64]*inFlightDirRead),
+		inFlightGrants:            make(map[inFlightGrantKey]*inFlightGrant),
+		watchHub:                  NewSessionWatchHub(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -312,6 +368,85 @@ func New(store db.Store, opts ...Option) Manager {
 		}
 	}
 	return m
+}
+
+// allocSliceID 从内存号段分配器领取一个全局唯一 slice_id；当缓存号段耗尽时按步长向底层 Store 批量预取。
+func (m *manager) allocSliceID(ctx context.Context) (int64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	m.sliceIDMu.Lock()
+	defer m.sliceIDMu.Unlock()
+
+	if len(m.sliceIDQueue) > 0 {
+		id := m.sliceIDQueue[0]
+		m.sliceIDQueue = m.sliceIDQueue[1:]
+		return id, nil
+	}
+
+	batchSize := m.sliceIDBatchSize
+	if batchSize <= 0 {
+		batchSize = DefaultSliceIDBatchSize
+	}
+
+	firstID, err := m.store.NextSliceID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if batchSize <= 1 {
+		if firstID > m.lastAllocatedSliceID {
+			m.lastAllocatedSliceID = firstID
+		}
+		return firstID, nil
+	}
+
+	type poolProvider interface {
+		Pool() *pgxpool.Pool
+	}
+	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
+		rows, qErr := pp.Pool().Query(ctx, `SELECT nextval('slice_id_seq')::bigint FROM generate_series(1, $1)`, batchSize-1)
+		if qErr != nil {
+			if firstID > m.lastAllocatedSliceID {
+				m.lastAllocatedSliceID = firstID
+			}
+			return firstID, nil
+		}
+		if cap(m.sliceIDQueue) < batchSize-1 {
+			m.sliceIDQueue = make([]int64, 0, batchSize-1)
+		} else {
+			m.sliceIDQueue = m.sliceIDQueue[:0]
+		}
+		for rows.Next() {
+			var nextID int64
+			if scanErr := rows.Scan(&nextID); scanErr != nil {
+				break
+			}
+			m.sliceIDQueue = append(m.sliceIDQueue, nextID)
+			if nextID > m.lastAllocatedSliceID {
+				m.lastAllocatedSliceID = nextID
+			}
+		}
+		rows.Close()
+		if firstID > m.lastAllocatedSliceID {
+			m.lastAllocatedSliceID = firstID
+		}
+		return firstID, nil
+	}
+
+	if firstID <= m.lastAllocatedSliceID {
+		firstID = m.lastAllocatedSliceID + 1
+	}
+	if cap(m.sliceIDQueue) < batchSize-1 {
+		m.sliceIDQueue = make([]int64, 0, batchSize-1)
+	} else {
+		m.sliceIDQueue = m.sliceIDQueue[:0]
+	}
+	for i := 1; i < batchSize; i++ {
+		m.sliceIDQueue = append(m.sliceIDQueue, firstID+int64(i))
+	}
+	m.lastAllocatedSliceID = firstID + int64(batchSize-1)
+	return firstID, nil
 }
 
 func (m *manager) getDirMutationSeq(ino uint64) uint64 {
@@ -952,6 +1087,7 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 		if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 			return err
 		}
+		m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
 		res.ExpiresAt = session.ExpiresAt.Time
 		res.SessionRecreated = session.CreatedAt.Time.Equal(session.UpdatedAt.Time)
 		return nil
@@ -1059,6 +1195,7 @@ func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64,
 		m.notifyAllLockWaiters()
 	}
 	m.invalidateDirCursorsBySession(sessionID)
+	m.clearWriteSessionTouch(sessionID)
 	return false, nil
 }
 
