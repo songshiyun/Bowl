@@ -54,6 +54,9 @@ func (m *manager) CollectGarbage(ctx context.Context, limit int32) (int, error) 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
+			if m.isSliceReadInFlight(row.SliceID) {
+				continue
+			}
 
 			// 非法 ID 或零大小异常切片，直接从数据库元数据中移除
 			if row.SliceID <= 0 || row.Size <= 0 {
