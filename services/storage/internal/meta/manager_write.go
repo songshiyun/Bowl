@@ -586,9 +586,7 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 			t.cleanupBlocks()
 		}
 
-		if errors.Is(txErr, errExpiredSessionBadHandle) && req.SessionID != nil {
-			m.cleanExpiredSessionByID(ctx, *req.SessionID)
-		}
+		m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, txErr)
 		return nil, mapWriteBizError(txErr)
 	}
 
@@ -965,10 +963,10 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 			if !everReachedCommit || t.bizErr != nil {
 				t.cleanupBlocks()
 			}
-			if errors.Is(t.bizErr, errExpiredSessionBadHandle) && t.req.SessionID != nil {
+			if errors.Is(t.bizErr, ErrBadFileHandle) && t.req.SessionID != nil {
 				if _, ok := cleanedSessions[*t.req.SessionID]; !ok {
 					cleanedSessions[*t.req.SessionID] = struct{}{}
-					m.cleanExpiredSessionByID(t.ctx, *t.req.SessionID)
+					m.handleBadFileHandleSessionCleanup(t.ctx, t.req.SessionID, t.bizErr)
 				}
 			}
 			t.resp = nil
@@ -981,10 +979,10 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 	for _, t := range validTasks {
 		if t.bizErr != nil {
 			t.cleanupBlocks()
-			if errors.Is(t.bizErr, errExpiredSessionBadHandle) && t.req.SessionID != nil {
+			if errors.Is(t.bizErr, ErrBadFileHandle) && t.req.SessionID != nil {
 				if _, ok := cleanedSessions[*t.req.SessionID]; !ok {
 					cleanedSessions[*t.req.SessionID] = struct{}{}
-					m.cleanExpiredSessionByID(t.ctx, *t.req.SessionID)
+					m.handleBadFileHandleSessionCleanup(t.ctx, t.req.SessionID, t.bizErr)
 				}
 			}
 			t.resp = nil
@@ -1067,9 +1065,7 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 		case errors.Is(err, ErrIsDir):
 			return nil, ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) && req.SessionID != nil {
-				m.cleanExpiredSessionByID(ctx, *req.SessionID)
-			}
+			m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, err)
 			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("write zero bytes tx: %w", err)

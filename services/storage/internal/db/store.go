@@ -43,6 +43,11 @@ func WithLockSyncIno(ctx context.Context, ino int64) context.Context {
 	return context.WithValue(ctx, lockSyncInoContextKey{}, ino)
 }
 
+// LockSyncInoFromContext 从上下文中提取锁操作目标 Ino（若存在）。
+func LockSyncInoFromContext(ctx context.Context) (int64, bool) {
+	return lockSyncInoFromContext(ctx)
+}
+
 func lockSyncInoFromContext(ctx context.Context) (int64, bool) {
 	if ctx == nil {
 		return 0, false
