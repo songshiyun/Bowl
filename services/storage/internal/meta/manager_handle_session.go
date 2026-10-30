@@ -462,7 +462,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			err         error
 			lockedInode bool
 		)
-		if (params.ReleaseFlags & FuseReleaseFlockUnlock) != 0 {
+		if (params.ReleaseFlags&FuseReleaseFlockUnlock) != 0 || m.hasPosixLockActivity(params.Ino) {
 			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
