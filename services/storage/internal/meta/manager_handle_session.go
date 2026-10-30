@@ -109,13 +109,14 @@ func (m *manager) tryThrottledSessionTouchReadOnly(ctx context.Context, sessionI
 	return false, nil
 }
 
-func (m *manager) lookupHandleCreatedAt(ctx context.Context, fh, ino, sessionID uint64) pgtype.Timestamptz {
-	pp, ok := m.store.(poolProvider)
-	if !ok || pp == nil || pp.Pool() == nil {
+func (m *manager) lookupHandleCreatedAt(ctx context.Context, q db.Querier, fh, ino, sessionID uint64) pgtype.Timestamptz {
+	pp, _ := m.store.(poolProvider)
+	dbtx := queryDBTX(q, pp)
+	if dbtx == nil {
 		return pgtype.Timestamptz{}
 	}
 	var createdAt pgtype.Timestamptz
-	_ = pp.Pool().QueryRow(
+	_ = dbtx.QueryRow(
 		ctx,
 		`SELECT created_at FROM file_handles WHERE fh = $1 AND ino = $2 AND session_id = $3`,
 		int64(fh), int64(ino), int64(sessionID),
@@ -500,7 +501,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 
 		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
 		if params.SessionID != nil {
-			handleCreatedAt := m.lookupHandleCreatedAt(ctx, params.Fh, params.Ino, *params.SessionID)
+			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
 			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err
 			}
@@ -670,7 +671,7 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 
 		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
 		if params.SessionID != nil {
-			handleCreatedAt := m.lookupHandleCreatedAt(ctx, params.Fh, params.Ino, *params.SessionID)
+			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
 			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err
 			}

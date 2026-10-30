@@ -12,7 +12,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -79,7 +78,8 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 		m.writeSessionTouchMu.Unlock()
 
 		if inWindow {
-			if pp == nil {
+			dbtx := queryDBTX(q, pp)
+			if dbtx == nil {
 				if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
 					return ErrBadFileHandle
 				}
@@ -88,7 +88,7 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 
 			var sessionCreatedAt pgtype.Timestamptz
 			var alive, hasPendingCleanup bool
-			err := pp.Pool().QueryRow(ctx, `
+			err := dbtx.QueryRow(ctx, `
 				SELECT
 					cs.created_at,
 					(cs.expires_at > clock_timestamp()) AS alive,
@@ -235,13 +235,11 @@ func (m *manager) touchWriteClientSessionForHandle(ctx context.Context, q db.Que
 	m.writeSessionTouchMu.Unlock()
 
 	if throttled {
-		type poolProvider interface {
-			Pool() *pgxpool.Pool
-		}
-		if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
+		pp, _ := m.store.(poolProvider)
+		if dbtx := queryDBTX(q, pp); dbtx != nil {
 			var sessionCreatedAt pgtype.Timestamptz
 			var alive bool
-			err := pp.Pool().QueryRow(
+			err := dbtx.QueryRow(
 				ctx,
 				`SELECT created_at, (expires_at > clock_timestamp()) FROM client_sessions WHERE session_id = $1`,
 				int64(sessionID),

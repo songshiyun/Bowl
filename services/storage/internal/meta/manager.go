@@ -182,6 +182,16 @@ type poolProvider interface {
 	Pool() *pgxpool.Pool
 }
 
+func queryDBTX(q db.Querier, pp poolProvider) db.DBTX {
+	if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+		return r.RawDBTX()
+	}
+	if pp != nil && pp.Pool() != nil {
+		return pp.Pool()
+	}
+	return nil
+}
+
 func (m *manager) shouldThrottleSessionTouch(ctx context.Context) (poolProvider, bool) {
 	if m.writeSessionTouchDisabled || m.writeSessionTouchInterval <= 0 {
 		return nil, false
@@ -1050,12 +1060,13 @@ func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, 
 		m.writeSessionTouchMu.Unlock()
 
 		if inWindow {
-			if pp == nil {
+			dbtx := queryDBTX(q, pp)
+			if dbtx == nil {
 				return nil
 			}
 			var sessionCreatedAt pgtype.Timestamptz
 			var alive, hasPendingCleanup bool
-			err := pp.Pool().QueryRow(ctx, `
+			err := dbtx.QueryRow(ctx, `
 				SELECT
 					cs.created_at,
 					(cs.expires_at > clock_timestamp()) AS alive,
