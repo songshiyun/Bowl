@@ -1736,3 +1736,89 @@ func TestRead_SliceRefLockRetryAndExhaustion(t *testing.T) {
 		mockBS.AssertNotCalled(t, "GetBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
+
+// TestRead_BlockNotFoundOptimisticRetry 验证当 GetBlock 遇到 ErrBlockNotFound 时自动重查最新 Chunk 快照完成重试读取。
+func TestRead_BlockNotFoundOptimisticRetry(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Microsecond)
+	ino := uint64(501)
+	fh := uint64(51)
+
+	baseFileRow := db.Inode{
+		Ino:        int64(ino),
+		Generation: 1,
+		Mode:       int32(meta.S_IFREG | 0o644),
+		Size:       1024,
+		Nlink:      1,
+		Uid:        1000,
+		Gid:        1000,
+		Rdev:       0,
+		Atime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	mockStore := dbmock.NewMockStore(t)
+	mockQuerier := dbmock.NewMockQuerier(t)
+	mockBS := metamock.NewMockBlockStore(t)
+
+	setupMockWriteTx(mockStore, mockQuerier)
+
+	oldSlice := meta.EncodeSlice(meta.Slice{Pos: 0, ID: 301, Size: 1024, Off: 0, Len: 1024})
+	newSlice := meta.EncodeSlice(meta.Slice{Pos: 0, ID: 302, Size: 1024, Off: 0, Len: 1024})
+
+	// 第一次查询返回旧切片 301
+	mockQuerier.EXPECT().GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		Ino:       int64(ino),
+		StartIndx: 0,
+		EndIndx:   0,
+	}).Return([]db.GetInodeSizeAndChunksInRangeRow{
+		inodeToRow(baseFileRow, pgtype.Int8{Int64: 0, Valid: true}, oldSlice),
+	}, nil).Once()
+
+	mockQuerier.EXPECT().GetFileHandle(mock.Anything, db.GetFileHandleParams{
+		Fh:  int64(fh),
+		Ino: int64(ino),
+	}).Return(db.FileHandle{
+		Fh:    int64(fh),
+		Ino:   int64(ino),
+		Flags: int32(meta.O_RDONLY),
+	}, nil).Once()
+
+	mockQuerier.EXPECT().LockValidSliceRefsKeyShare(mock.Anything, []int64{301}).
+		Return([]int64{301}, nil).Once()
+
+	// 旧切片 301 的物理块已被删除，返回 ErrBlockNotFound
+	mockBS.EXPECT().GetBlock(mock.Anything, uint64(301), uint32(0), uint32(1024), uint32(0), mock.Anything).
+		Return(fmt.Errorf("%w: old block removed", meta.ErrBlockNotFound)).Once()
+
+	// 自动触发第 2 次查询拿到新合并切片 302
+	mockQuerier.EXPECT().GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		Ino:       int64(ino),
+		StartIndx: 0,
+		EndIndx:   0,
+	}).Return([]db.GetInodeSizeAndChunksInRangeRow{
+		inodeToRow(baseFileRow, pgtype.Int8{Int64: 0, Valid: true}, newSlice),
+	}, nil).Once()
+
+	mockQuerier.EXPECT().LockValidSliceRefsKeyShare(mock.Anything, []int64{302}).
+		Return([]int64{302}, nil).Once()
+
+	expectedData := bytes.Repeat([]byte("Z"), 1024)
+	mockBS.EXPECT().GetBlock(mock.Anything, uint64(302), uint32(0), uint32(1024), uint32(0), mock.Anything).
+		RunAndReturn(func(ctx context.Context, sliceID uint64, blockIdx, blockSize, offset uint32, dst []byte) error {
+			copy(dst, expectedData)
+			return nil
+		}).Once()
+
+	mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
+	resp, err := mgr.Read(ctx, &meta.ReadRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 0,
+		Size:   1024,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, expectedData, resp.Data)
+}

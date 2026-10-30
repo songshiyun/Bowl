@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// ErrBlockNotFound 表示目标物理块文件不存在（如已被并发 Compaction + GC 物理回收）。
+// 包装 ErrIO 以保持对上层 EIO 状态码映射与现有断言的向后兼容。
+var ErrBlockNotFound = fmt.Errorf("%w: block not found", ErrIO)
+
 // PhysicalBlockFile 描述本地物理块存储介质上的单个物理块文件元数据。
 type PhysicalBlockFile struct {
 	SliceID   uint64
@@ -520,6 +524,9 @@ func (s *LocalFSBlockStore) GetBlock(ctx context.Context, sliceID uint64, blockI
 	finalPath := s.blockPath(sliceID, blockIdx, blockSize)
 	f, err := os.Open(finalPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: failed to open block file %s: %v", ErrBlockNotFound, finalPath, err)
+		}
 		return fmt.Errorf("%w: failed to open block file %s: %v", ErrIO, finalPath, err)
 	}
 	defer f.Close()

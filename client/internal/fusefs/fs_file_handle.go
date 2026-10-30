@@ -122,6 +122,10 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 		return fs.ToStatus(err, cancel)
 	}
 
+	if (input.Flags & uint32(syscall.O_TRUNC)) != 0 {
+		fs.invalidateReadAheadByIno(ino)
+	}
+
 	fh := resp.Msg.GetFh()
 	if fs.sessions != nil && sessionID != nil {
 		fs.sessions.BindHandle(fh, *sessionID)
@@ -200,6 +204,7 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 // 无论服务端调用成功与否，必定在退出时解绑客户端内存中的句柄会话映射；
 // 携带 lock_owner 与 release_flags 触发服务端清理 BSD flock 锁并在孤儿节点无句柄引用时执行最终物理回收。
 func (fs *RawFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
+	defer fs.removeReadAheadByFh(input.Fh)
 	if fs.sessions != nil {
 		defer fs.sessions.UnbindHandle(input.Fh)
 	}

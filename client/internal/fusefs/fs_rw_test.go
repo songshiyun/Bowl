@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -25,6 +27,10 @@ type rwMockStorageServer struct {
 
 	readFn         func(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error)
 	writeFn        func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
+	setAttrFn      func(context.Context, *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error)
+	fallocateFn    func(context.Context, *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error)
+	openFn         func(context.Context, *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error)
+	releaseFn      func(context.Context, *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
 }
 
@@ -40,6 +46,36 @@ func (m *rwMockStorageServer) Write(ctx context.Context, req *connect.Request[st
 		return m.writeFn(ctx, req)
 	}
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (m *rwMockStorageServer) SetAttr(ctx context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+	if m.setAttrFn != nil {
+		return m.setAttrFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.SetAttrResponse{
+		Inode: &storagev1.Inode{Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}},
+	}), nil
+}
+
+func (m *rwMockStorageServer) Fallocate(ctx context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
+	if m.fallocateFn != nil {
+		return m.fallocateFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.FallocateResponse{}), nil
+}
+
+func (m *rwMockStorageServer) Open(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
+	if m.openFn != nil {
+		return m.openFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.OpenResponse{Fh: 77777}), nil
+}
+
+func (m *rwMockStorageServer) Release(ctx context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
+	if m.releaseFn != nil {
+		return m.releaseFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.ReleaseResponse{}), nil
 }
 
 func (m *rwMockStorageServer) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
@@ -665,5 +701,291 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		written, status := fs.Write(nil, input, []byte("data"))
 		require.Equal(t, uint32(0), written)
 		require.Equal(t, fuse.EBADF, status)
+	})
+}
+
+func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+	)
+
+	t.Run("连续顺序读取 16 MiB (1 MiB 步长) 触发 4 MiB 对齐拉取与异步预读且命中内存缓存", func(t *testing.T) {
+		const totalSize = 16 * 1024 * 1024 // 16 MiB
+		const stepSize = 1 * 1024 * 1024   // 1 MiB
+		fileData := make([]byte, totalSize)
+		for i := range fileData {
+			fileData[i] = byte((i*13 + 7) % 251)
+		}
+
+		var rpcCalls atomic.Int32
+		mockSrv := &rwMockStorageServer{
+			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+				rpcCalls.Add(1)
+				off := int(req.Msg.GetOffset())
+				sz := int(req.Msg.GetSize())
+				if off >= len(fileData) {
+					return connect.NewResponse(&storagev1.ReadResponse{Data: nil}), nil
+				}
+				end := min(off+sz, len(fileData))
+				return connect.NewResponse(&storagev1.ReadResponse{
+					Data: fileData[off:end],
+				}), nil
+			},
+		}
+
+		client := setupRWTestRPCServer(t, mockSrv)
+		mgr := setupTestSessionManager(t, client)
+		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+
+		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		t.Cleanup(fs.OnUnmount)
+
+		got := make([]byte, 0, totalSize)
+		for off := uint64(0); off < totalSize; off += stepSize {
+			res, status := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   off,
+				Size:     stepSize,
+			}, nil)
+			require.Equal(t, fuse.OK, status)
+			chunk, code := res.Bytes(nil)
+			require.Equal(t, fuse.OK, code)
+			require.Len(t, chunk, stepSize)
+			got = append(got, chunk...)
+		}
+
+		require.True(t, bytes.Equal(fileData, got), "顺序预读拼装出的 16 MiB 字节流必须与源文件完全一致")
+		// 16 次 1 MiB 顺序读：第 1 次 1 MiB 直通 + 后续按 4 MiB 窗口拉取/异步预取，总 RPC 次数远少于 16 次（<= 6 次）
+		require.LessOrEqual(t, int(rpcCalls.Load()), 6, "4 MiB 预读窗口应大幅减少跨机 Read RPC 次数")
+	})
+
+	t.Run("非连续随机读保持按请求尺寸直通读取不产生多余读放大", func(t *testing.T) {
+		const reqSize = 64 * 1024
+		var mu sync.Mutex
+		var observedSizes []uint32
+
+		mockSrv := &rwMockStorageServer{
+			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+				mu.Lock()
+				observedSizes = append(observedSizes, req.Msg.GetSize())
+				mu.Unlock()
+				return connect.NewResponse(&storagev1.ReadResponse{
+					Data: bytes.Repeat([]byte{0xAB}, int(req.Msg.GetSize())),
+				}), nil
+			},
+		}
+
+		client := setupRWTestRPCServer(t, mockSrv)
+		mgr := setupTestSessionManager(t, client)
+		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+
+		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		t.Cleanup(fs.OnUnmount)
+
+		randomOffsets := []uint64{0, 1024 * 1024, 512 * 1024, 8 * 1024 * 1024, 256 * 1024}
+		for _, off := range randomOffsets {
+			res, status := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   off,
+				Size:     reqSize,
+			}, nil)
+			require.Equal(t, fuse.OK, status)
+			require.Equal(t, reqSize, res.Size())
+		}
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, observedSizes, len(randomOffsets))
+		for i, sz := range observedSizes {
+			require.Equal(t, uint32(reqSize), sz, "随机读取 #%d 必须严格按请求尺寸直通而不放大为 4 MiB", i)
+		}
+	})
+
+	t.Run("Write / SetAttr / Fallocate / Open(O_TRUNC) / Release 立即同步失效预读缓冲", func(t *testing.T) {
+		const fileSize = 8 * 1024 * 1024
+		const readStep = 512 * 1024
+
+		var version atomic.Int32
+		version.Store(1)
+		var rpcCalls atomic.Int32
+
+		mockSrv := &rwMockStorageServer{
+			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+				rpcCalls.Add(1)
+				v := byte(version.Load())
+				sz := int(req.Msg.GetSize())
+				return connect.NewResponse(&storagev1.ReadResponse{
+					Data: bytes.Repeat([]byte{v}, sz),
+				}), nil
+			},
+			writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+				version.Add(1)
+				return connect.NewResponse(&storagev1.WriteResponse{
+					Size: uint32(len(req.Msg.GetData())),
+				}), nil
+			},
+			setAttrFn: func(ctx context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+				version.Add(1)
+				return connect.NewResponse(&storagev1.SetAttrResponse{
+					Inode: &storagev1.Inode{Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Size: fileSize, Mode: syscall.S_IFREG | 0o644}},
+				}), nil
+			},
+			fallocateFn: func(ctx context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
+				version.Add(1)
+				return connect.NewResponse(&storagev1.FallocateResponse{}), nil
+			},
+			openFn: func(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
+				version.Add(1)
+				return connect.NewResponse(&storagev1.OpenResponse{Fh: testFH + 1}), nil
+			},
+		}
+
+		client := setupRWTestRPCServer(t, mockSrv)
+		mgr := setupTestSessionManager(t, client)
+		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+
+		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		t.Cleanup(fs.OnUnmount)
+
+		// 辅助函数：通过两次连续顺序读填充 4 MiB 预读缓冲，并验证第 3 次顺序读命中缓存（版本号仍为 expectedVer）
+		populateAndVerifyCacheHit := func(expectedVer byte) {
+			res1, st1 := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   0,
+				Size:     readStep,
+			}, nil)
+			require.Equal(t, fuse.OK, st1)
+			b1, _ := res1.Bytes(nil)
+			require.Equal(t, expectedVer, b1[0])
+
+			res2, st2 := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   readStep,
+				Size:     readStep,
+			}, nil)
+			require.Equal(t, fuse.OK, st2)
+			b2, _ := res2.Bytes(nil)
+			require.Equal(t, expectedVer, b2[0])
+
+			callsBefore := rpcCalls.Load()
+			res3, st3 := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   2 * readStep,
+				Size:     readStep,
+			}, nil)
+			require.Equal(t, fuse.OK, st3)
+			b3, _ := res3.Bytes(nil)
+			require.Equal(t, expectedVer, b3[0])
+			require.Equal(t, callsBefore, rpcCalls.Load(), "第 3 次连续读取必须直接命中客户端预读缓冲而不发起同步 RPC")
+		}
+
+		// 1. 填充预读缓冲（version = 1），然后执行 Write 触发失效
+		populateAndVerifyCacheHit(1)
+		_, wSt := fs.Write(nil, &fuse.WriteIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   0,
+		}, []byte("update"))
+		require.Equal(t, fuse.OK, wSt)
+
+		// Write 后继续读取 3 * readStep：必须重新向服务端拉取最新数据（version = 2），绝不能返回旧缓存 version = 1
+		resAfterWrite, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   3 * readStep,
+			Size:     readStep,
+		}, nil)
+		require.Equal(t, fuse.OK, st)
+		bAfterWrite, _ := resAfterWrite.Bytes(nil)
+		require.Equal(t, byte(2), bAfterWrite[0], "Write 后必须同步失效预读缓存并读到最新数据")
+
+		// 2. 重新填充预读缓冲（version = 2），然后执行 SetAttr (FATTR_SIZE) 触发失效
+		populateAndVerifyCacheHit(2)
+		var attrOut fuse.AttrOut
+		saSt := fs.SetAttr(nil, &fuse.SetAttrIn{
+			SetAttrInCommon: fuse.SetAttrInCommon{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Valid:    fuse.FATTR_SIZE,
+				Size:     fileSize,
+			},
+		}, &attrOut)
+		require.Equal(t, fuse.OK, saSt)
+
+		resAfterSetAttr, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   3 * readStep,
+			Size:     readStep,
+		}, nil)
+		require.Equal(t, fuse.OK, st)
+		bAfterSetAttr, _ := resAfterSetAttr.Bytes(nil)
+		require.Equal(t, byte(3), bAfterSetAttr[0], "SetAttr 后必须同步失效预读缓存并读到最新数据")
+
+		// 3. 重新填充预读缓冲（version = 3），然后执行 Fallocate 触发失效
+		populateAndVerifyCacheHit(3)
+		faSt := fs.Fallocate(nil, &fuse.FallocateIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   0,
+			Length:   4096,
+			Mode:     0,
+		})
+		require.Equal(t, fuse.OK, faSt)
+
+		resAfterFalloc, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   3 * readStep,
+			Size:     readStep,
+		}, nil)
+		require.Equal(t, fuse.OK, st)
+		bAfterFalloc, _ := resAfterFalloc.Bytes(nil)
+		require.Equal(t, byte(4), bAfterFalloc[0], "Fallocate 后必须同步失效预读缓存并读到最新数据")
+
+		// 4. 重新填充预读缓冲（version = 4），然后执行 Open(O_TRUNC) 触发失效
+		populateAndVerifyCacheHit(4)
+		var openOut fuse.OpenOut
+		opSt := fs.Open(nil, &fuse.OpenIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Flags:    uint32(syscall.O_RDWR | syscall.O_TRUNC),
+		}, &openOut)
+		require.Equal(t, fuse.OK, opSt)
+
+		resAfterOpenTrunc, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   3 * readStep,
+			Size:     readStep,
+		}, nil)
+		require.Equal(t, fuse.OK, st)
+		bAfterOpenTrunc, _ := resAfterOpenTrunc.Bytes(nil)
+		require.Equal(t, byte(5), bAfterOpenTrunc[0], "Open(O_TRUNC) 后必须同步失效预读缓存并读到最新数据")
+
+		// 5. Release 句柄时清除该句柄关联的预读缓冲
+		populateAndVerifyCacheHit(5)
+		fs.Release(nil, &fuse.ReleaseIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+		})
+		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+		version.Store(6)
+
+		resAfterRelease, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   3 * readStep,
+			Size:     readStep,
+		}, nil)
+		require.Equal(t, fuse.OK, st)
+		bAfterRelease, _ := resAfterRelease.Bytes(nil)
+		require.Equal(t, byte(6), bAfterRelease[0], "Release 后重绑句柄读取必须不命中旧预读缓存")
 	})
 }
