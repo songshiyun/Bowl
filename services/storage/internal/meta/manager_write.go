@@ -55,8 +55,8 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		return m.writeZeroBytes(ctx, req)
 	}
 
-	// 阶段 1：行锁外申请 slice_id 与落盘物理块
-	sliceID, err := m.store.NextSliceID(ctx)
+	// 阶段 1：行锁外从内存号段分配器领取 slice_id 与落盘物理块
+	sliceID, err := m.allocSliceID(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("next slice id: %w", err)
 	}
@@ -87,7 +87,12 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	var committedStats []chunkAppendStat
 	var everReachedCommit bool
 	var resp *WriteResponse
+	var lastTouchRollback func()
 	txErr := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+		if lastTouchRollback != nil {
+			lastTouchRollback()
+			lastTouchRollback = nil
+		}
 		everReachedCommit = false
 		committedStats = nil
 		inode, err := q.GetInodeForUpdate(ctx, int64(req.Ino))
@@ -124,9 +129,11 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		}
 
 		if req.SessionID != nil {
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt); err != nil {
+			rollbackTouch, err := m.touchWriteClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt)
+			if err != nil {
 				return err
 			}
+			lastTouchRollback = rollbackTouch
 		}
 
 		actualOffset := req.Offset
@@ -260,6 +267,10 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	})
 
 	if txErr != nil {
+		if lastTouchRollback != nil {
+			lastTouchRollback()
+			lastTouchRollback = nil
+		}
 		// 当 everReachedCommit 为 false 时，事务未进入提交阶段，安全清理在途写入物理块；
 		// 若已进入 COMMIT 阶段（everReachedCommit 为 true），提交结果未知或在途，
 		// 必须保守保留物理块，杜绝误删即将提交完成的数据，未引用的残留块由后台 GC 回收。
@@ -296,7 +307,12 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 // writeZeroBytes 处理 0 字节写入探针。
 func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*WriteResponse, error) {
 	var resp *WriteResponse
+	var lastTouchRollback func()
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+		if lastTouchRollback != nil {
+			lastTouchRollback()
+			lastTouchRollback = nil
+		}
 		inode, err := q.GetInodeForUpdate(ctx, int64(req.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -331,9 +347,11 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 		}
 
 		if req.SessionID != nil {
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt); err != nil {
+			rollbackTouch, err := m.touchWriteClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt)
+			if err != nil {
 				return err
 			}
+			lastTouchRollback = rollbackTouch
 		}
 
 		resp = &WriteResponse{
@@ -344,6 +362,10 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 	})
 
 	if err != nil {
+		if lastTouchRollback != nil {
+			lastTouchRollback()
+			lastTouchRollback = nil
+		}
 		switch {
 		case errors.Is(err, ErrInvalidArgument):
 			return nil, ErrInvalidArgument
