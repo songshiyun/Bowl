@@ -26,6 +26,27 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*I
 		return nil, ErrInvalidArgument
 	}
 
+	// 常规目录项单语句无事务外框直查（STARSRC-535）
+	if len(name) > 0 && !isDotOrDotDot(name) {
+		row, err := m.store.LookupEntryWithParent(ctx, db.LookupEntryWithParentParams{
+			Ino:  int64(parentIno),
+			Name: name,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("failed to lookup entry with parent: %w", err)
+		}
+		if (uint32(row.ParentMode) & S_IFMT) != S_IFDIR {
+			return nil, ErrNotDir
+		}
+		if row.ParentNlink == 0 || !row.ChildFound || !row.ChildIno.Valid {
+			return nil, ErrNotFound
+		}
+		return m.lookupRowToInode(row), nil
+	}
+
 	var result *Inode
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
 		parent, err := q.GetInode(ctx, int64(parentIno))
@@ -95,24 +116,7 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*I
 		}
 
 		// 处理空名称 ""（STARSRC-335）：父目录校验合法后对空名称返回 ErrNotFound (ENOENT)
-		if len(name) == 0 {
-			return ErrNotFound
-		}
-
-		// 常规目录项查找
-		target, err := q.GetInodeByEntry(ctx, db.GetInodeByEntryParams{
-			ParentIno: int64(parentIno),
-			Name:      name,
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get inode by entry %s in parent %d: %w", name, parentIno, err)
-		}
-
-		result = m.newInode(target)
-		return nil
+		return ErrNotFound
 	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))
 
 	if err != nil {
@@ -126,6 +130,35 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*I
 		}
 	}
 	return result, nil
+}
+
+func lookupRowToDBInode(row db.LookupEntryWithParentRow) db.Inode {
+	return db.Inode{
+		Ino:           row.ChildIno.Int64,
+		Generation:    row.ChildGeneration.Int64,
+		Mode:          row.ChildMode.Int32,
+		Size:          row.ChildSize.Int64,
+		Nlink:         row.ChildNlink.Int32,
+		Uid:           row.ChildUid.Int32,
+		Gid:           row.ChildGid.Int32,
+		Rdev:          row.ChildRdev.Int64,
+		Atime:         row.ChildAtime,
+		Mtime:         row.ChildMtime,
+		Ctime:         row.ChildCtime,
+		SymlinkTarget: row.ChildSymlinkTarget,
+		Flags:         row.ChildFlags.Int32,
+		ParentIno:     row.ChildParentIno.Int64,
+		RootIno:       row.ChildRootIno.Int64,
+	}
+}
+
+func lookupRowToInode(row db.LookupEntryWithParentRow) *Inode {
+	target := lookupRowToDBInode(row)
+	return convertDBInodeToEntity(target, DefaultEntryTimeoutSeconds, DefaultAttrTimeoutSeconds)
+}
+
+func (m *manager) lookupRowToInode(row db.LookupEntryWithParentRow) *Inode {
+	return m.newInode(lookupRowToDBInode(row))
 }
 
 // GetAttr 执行单节点单语句直查与属性推导，支持所有文件类型与孤儿节点。

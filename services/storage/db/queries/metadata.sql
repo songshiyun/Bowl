@@ -696,3 +696,29 @@ WHERE cs.expires_at > clock_timestamp()
     )
   )
 ORDER BY cs.session_id ASC;
+
+-- name: LookupEntryWithParent :one
+SELECT
+    p.mode AS parent_mode,
+    p.nlink AS parent_nlink,
+    (c.ino IS NOT NULL)::boolean AS child_found,
+    c.ino AS child_ino,
+    c.generation AS child_generation,
+    c.mode AS child_mode,
+    c.size AS child_size,
+    c.nlink AS child_nlink,
+    c.uid AS child_uid,
+    c.gid AS child_gid,
+    c.rdev AS child_rdev,
+    c.atime AS child_atime,
+    c.mtime AS child_mtime,
+    c.ctime AS child_ctime,
+    c.symlink_target AS child_symlink_target,
+    c.flags AS child_flags,
+    c.parent_ino AS child_parent_ino,
+    c.root_ino AS child_root_ino
+FROM inodes p
+LEFT JOIN entries e ON e.parent_ino = p.ino AND e.name = $2
+LEFT JOIN inodes c ON c.ino = e.ino
+WHERE p.ino = $1;
+

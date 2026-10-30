@@ -4784,6 +4784,72 @@ func (_c *MockQuerier_LockValidSliceRefsKeyShare_Call) RunAndReturn(run func(ctx
 	return _c
 }
 
+// LookupEntryWithParent provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) LookupEntryWithParent(ctx context.Context, arg db.LookupEntryWithParentParams) (db.LookupEntryWithParentRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LookupEntryWithParent")
+	}
+
+	var r0 db.LookupEntryWithParentRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.LookupEntryWithParentParams) (db.LookupEntryWithParentRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.LookupEntryWithParentParams) db.LookupEntryWithParentRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.LookupEntryWithParentRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.LookupEntryWithParentParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_LookupEntryWithParent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LookupEntryWithParent'
+type MockQuerier_LookupEntryWithParent_Call struct {
+	*mock.Call
+}
+
+// LookupEntryWithParent is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.LookupEntryWithParentParams
+func (_e *MockQuerier_Expecter) LookupEntryWithParent(ctx any, arg any) *MockQuerier_LookupEntryWithParent_Call {
+	return &MockQuerier_LookupEntryWithParent_Call{Call: _e.mock.On("LookupEntryWithParent", ctx, arg)}
+}
+
+func (_c *MockQuerier_LookupEntryWithParent_Call) Run(run func(ctx context.Context, arg db.LookupEntryWithParentParams)) *MockQuerier_LookupEntryWithParent_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.LookupEntryWithParentParams
+		if args[1] != nil {
+			arg1 = args[1].(db.LookupEntryWithParentParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_LookupEntryWithParent_Call) Return(lookupEntryWithParentRow db.LookupEntryWithParentRow, err error) *MockQuerier_LookupEntryWithParent_Call {
+	_c.Call.Return(lookupEntryWithParentRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_LookupEntryWithParent_Call) RunAndReturn(run func(ctx context.Context, arg db.LookupEntryWithParentParams) (db.LookupEntryWithParentRow, error)) *MockQuerier_LookupEntryWithParent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NextSliceID provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) NextSliceID(ctx context.Context) (int64, error) {
 	ret := _mock.Called(ctx)
