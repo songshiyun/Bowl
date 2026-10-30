@@ -3,17 +3,20 @@ package meta_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -213,7 +216,17 @@ func TestWrite_ZeroLengthData(t *testing.T) {
 			}, nil).
 			Once()
 
-		setupRenewClientSessionMocks(mockQuerier, sessionID)
+		mockQuerier.EXPECT().
+			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
+				return arg.SessionID == int64(sessionID)
+			})).
+			Return(db.ClientSession{
+				SessionID: int64(sessionID),
+				ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				UpdatedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true},
+			}, nil).
+			Once()
 
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,
@@ -226,6 +239,8 @@ func TestWrite_ZeroLengthData(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Equal(t, uint32(0), resp.Size)
+		mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
+		mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
 	})
 
 	t.Run("0 字节写目标为目录返回 ErrIsDir", func(t *testing.T) {
@@ -1434,4 +1449,560 @@ func TestWrite_HighSparseChunkIndxBeyondInt32_PostgresIntegration(t *testing.T) 
 	})
 	require.NoError(t, err)
 	assert.Equal(t, wrapPayload, readWrap.Data, "indx=1<<32 的数据必须精确可读")
+}
+
+func TestWrite_SliceIDBatchPreallocation(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Microsecond)
+	ino := uint64(701)
+	fh := uint64(71)
+
+	t.Run("配置步长为 8 时连续写入 20 次仅触发 3 次底层 NextSliceID 且分配 ID 严格单调递增", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockBS := metamock.NewMockBlockStore(t)
+
+		var nextSliceCalls atomic.Int64
+		mockStore.EXPECT().
+			NextSliceID(mock.Anything).
+			RunAndReturn(func(ctx context.Context) (int64, error) {
+				callIdx := nextSliceCalls.Add(1)
+				// 第 1 次返回 1001，第 2 次返回 1009，第 3 次返回 1017
+				return 1000 + (callIdx-1)*8 + 1, nil
+			}).
+			Times(3)
+
+		var allocatedIDs []uint64
+		mockBS.EXPECT().
+			PutBlock(mock.Anything, mock.Anything, uint32(0), mock.Anything).
+			RunAndReturn(func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+				allocatedIDs = append(allocatedIDs, sliceID)
+				return nil
+			}).
+			Times(20)
+
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.Anything).
+			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+				mockQuerier := dbmock.NewMockQuerier(t)
+				mockQuerier.EXPECT().
+					GetInodeForUpdate(mock.Anything, int64(ino)).
+					Return(db.Inode{
+						Ino:   int64(ino),
+						Mode:  int32(meta.S_IFREG | 0o644),
+						Size:  0,
+						Nlink: 1,
+						Atime: pgtype.Timestamptz{Time: now, Valid: true},
+						Mtime: pgtype.Timestamptz{Time: now, Valid: true},
+						Ctime: pgtype.Timestamptz{Time: now, Valid: true},
+					}, nil).
+					Once()
+				mockQuerier.EXPECT().
+					GetFileHandle(mock.Anything, db.GetFileHandleParams{
+						Fh:  int64(fh),
+						Ino: int64(ino),
+					}).
+					Return(db.FileHandle{
+						Fh:    int64(fh),
+						Ino:   int64(ino),
+						Flags: int32(meta.O_WRONLY),
+					}, nil).
+					Once()
+				mockQuerier.EXPECT().
+					AppendChunkSlice(mock.Anything, mock.Anything).
+					Return(int64(24), nil).
+					Once()
+				mockQuerier.EXPECT().
+					InsertSliceRef(mock.Anything, mock.Anything).
+					Return(nil).
+					Once()
+				mockQuerier.EXPECT().
+					UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
+					Return(db.Inode{
+						Ino:   int64(ino),
+						Mode:  int32(meta.S_IFREG | 0o644),
+						Size:  16,
+						Nlink: 1,
+					}, nil).
+					Once()
+				return fn(mockQuerier)
+			}).
+			Times(20)
+
+		mgr := meta.New(
+			mockStore,
+			meta.WithBlockStore(mockBS),
+			meta.WithSliceIDBatchSize(8),
+		)
+
+		payload := []byte("batch-alloc-test")
+		for i := 0; i < 20; i++ {
+			resp, err := mgr.Write(ctx, &meta.WriteRequest{
+				Ino:    ino,
+				Fh:     fh,
+				Offset: uint64(i * len(payload)),
+				Data:   payload,
+			})
+			require.NoError(t, err)
+			require.NotNil(t, resp)
+		}
+
+		assert.Equal(t, int64(3), nextSliceCalls.Load(), "步长为 8 时连续 20 次写入应仅触发 3 次底层批次拉取")
+		require.Len(t, allocatedIDs, 20)
+		for i := 0; i < 20; i++ {
+			assert.Equal(t, uint64(1001+i), allocatedIDs[i], "第 %d 次分配的 slice_id 必须严格单调递增", i)
+		}
+	})
+
+	t.Run("PostgreSQL 集成验证：内存号段预取真实推进 slice_id_seq 且跨实例写入零主键冲突", func(t *testing.T) {
+		pool, pgCtx := setupMetaTestDB(t)
+		if pool == nil {
+			return
+		}
+		acquireTestSliceGCAdvisoryLock(t, pool)
+
+		baseStore := db.NewStore(pool)
+		var nextSliceCalls atomic.Int64
+		countingStore := &sliceIDCountingStore{
+			Store: baseStore,
+			pool:  pool,
+			onNextSliceID: func() {
+				nextSliceCalls.Add(1)
+			},
+		}
+
+		dataDir := t.TempDir()
+		bs := meta.NewLocalFSBlockStore(dataDir)
+		mgr1 := meta.New(countingStore, meta.WithBlockStore(bs), meta.WithSliceIDBatchSize(8))
+		mgr2 := meta.New(baseStore, meta.WithBlockStore(bs), meta.WithSliceIDBatchSize(4))
+
+		fileRow, err := baseStore.CreateInode(pgCtx, db.CreateInodeParams{
+			Mode:  int32(meta.S_IFREG | 0o644),
+			Nlink: 1,
+			Uid:   1000,
+			Gid:   1000,
+		})
+		require.NoError(t, err)
+		targetIno := uint64(fileRow.Ino)
+
+		openRes, err := mgr1.Open(pgCtx, meta.OpenParams{
+			Ino:   targetIno,
+			Flags: meta.O_RDWR,
+		})
+		require.NoError(t, err)
+		targetFh := openRes.Fh
+		t.Cleanup(func() {
+			cleanupWriteTestInoAndSlices(t, baseStore, mgr1, fileRow.Ino, targetFh)
+		})
+
+		// mgr1 (batchSize=8) 连续写入 20 次，其间穿插 mgr2 写入，验证序列推进无冲突
+		for i := 0; i < 20; i++ {
+			data := fmt.Appendf(nil, "pg-batch-m1-%02d", i)
+			_, wErr := mgr1.Write(pgCtx, &meta.WriteRequest{
+				Ino:    targetIno,
+				Fh:     targetFh,
+				Offset: uint64(i * 64),
+				Data:   data,
+			})
+			require.NoError(t, wErr)
+
+			if i%5 == 0 {
+				data2 := fmt.Appendf(nil, "pg-batch-m2-%02d", i)
+				_, wErr2 := mgr2.Write(pgCtx, &meta.WriteRequest{
+					Ino:    targetIno,
+					Fh:     targetFh,
+					Offset: uint64(2000 + i*64),
+					Data:   data2,
+				})
+				require.NoError(t, wErr2)
+			}
+		}
+
+		assert.Equal(t, int64(3), nextSliceCalls.Load(), "PostgreSQL 下步长为 8 的 mgr1 写入 20 次仅调用 3 次 NextSliceID")
+	})
+}
+
+type sliceIDCountingStore struct {
+	db.Store
+	pool          *pgxpool.Pool
+	onNextSliceID func()
+}
+
+func (s *sliceIDCountingStore) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
+func (s *sliceIDCountingStore) NextSliceID(ctx context.Context) (int64, error) {
+	if s.onNextSliceID != nil {
+		s.onNextSliceID()
+	}
+	return s.Store.NextSliceID(ctx)
+}
+
+func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Microsecond)
+	ino := uint64(801)
+	fh := uint64(81)
+	sessionID := uint64(88001)
+
+	baseFileRow := db.Inode{
+		Ino:        int64(ino),
+		Generation: 1,
+		Mode:       int32(meta.S_IFREG | 0o644),
+		Size:       1024,
+		Nlink:      1,
+		Uid:        1000,
+		Gid:        1000,
+		Atime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	t.Run("同一活跃 ClientSession 在节流窗口内连续与并发多次 Write 仅首次触发 UpsertClientSession 且零全表扫描", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockBS := metamock.NewMockBlockStore(t)
+
+		mockStore.EXPECT().
+			NextSliceID(mock.Anything).
+			Return(int64(2001), nil).
+			Once()
+
+		mockBS.EXPECT().
+			PutBlock(mock.Anything, mock.Anything, uint32(0), mock.Anything).
+			Return(nil)
+
+		var upsertCalls atomic.Int64
+		sessCreatedAt := now.Add(-10 * time.Minute)
+		handleCreatedAt := now.Add(-5 * time.Minute)
+
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.Anything).
+			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+				mockQuerier := dbmock.NewMockQuerier(t)
+				mockQuerier.EXPECT().
+					GetInodeForUpdate(mock.Anything, int64(ino)).
+					Return(baseFileRow, nil).
+					Once()
+				mockQuerier.EXPECT().
+					GetFileHandle(mock.Anything, db.GetFileHandleParams{
+						Fh:        int64(fh),
+						Ino:       int64(ino),
+						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+					}).
+					Return(db.FileHandle{
+						Fh:        int64(fh),
+						Ino:       int64(ino),
+						Flags:     int32(meta.O_RDWR),
+						CreatedAt: pgtype.Timestamptz{Time: handleCreatedAt, Valid: true},
+						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+					}, nil).
+					Once()
+				mockQuerier.EXPECT().
+					UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
+						return arg.SessionID == int64(sessionID)
+					})).
+					RunAndReturn(func(ctx context.Context, arg db.UpsertClientSessionParams) (db.ClientSession, error) {
+						upsertCalls.Add(1)
+						return db.ClientSession{
+							SessionID: int64(sessionID),
+							ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
+							CreatedAt: pgtype.Timestamptz{Time: sessCreatedAt, Valid: true},
+							UpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+						}, nil
+					}).
+					Maybe()
+				mockQuerier.EXPECT().
+					AppendChunkSlice(mock.Anything, mock.Anything).
+					Return(int64(24), nil).
+					Maybe()
+				mockQuerier.EXPECT().
+					InsertSliceRef(mock.Anything, mock.Anything).
+					Return(nil).
+					Maybe()
+				mockQuerier.EXPECT().
+					UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
+					Return(baseFileRow, nil).
+					Maybe()
+				return fn(mockQuerier)
+			})
+
+		mgr := meta.New(
+			mockStore,
+			meta.WithBlockStore(mockBS),
+			meta.WithWriteSessionTouchInterval(80*time.Millisecond),
+		)
+
+		// 1. 在 80ms 节流窗口内并发执行 12 次非零写入 + 4 次零字节写入
+		const totalInWindow = 16
+		var wg sync.WaitGroup
+		errs := make([]error, totalInWindow)
+		for i := 0; i < totalInWindow; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				var data []byte
+				if idx < 12 {
+					data = fmt.Appendf(nil, "throttled-write-%d", idx)
+				}
+				_, errs[idx] = mgr.Write(ctx, &meta.WriteRequest{
+					Ino:       ino,
+					Fh:        fh,
+					Offset:    uint64(idx * 32),
+					Data:      data,
+					SessionID: &sessionID,
+				})
+			}(i)
+		}
+		wg.Wait()
+		for i, err := range errs {
+			require.NoError(t, err, "窗口内第 %d 次并发写入应成功", i)
+		}
+
+		// 核心断言：节流窗口内 16 次并发 Write 仅触发 1 次 UpsertClientSession，且未触发任何 DeleteExpiredClientSessions / DeleteUnreferencedOrphanInodes
+		assert.Equal(t, int64(1), upsertCalls.Load(), "节流窗口内同一活跃会话多次并发 Write 必须仅首次触发 1 次 UpsertClientSession")
+
+		// 2. 等待跨过 80ms 节流窗口后再次写入，应触发第 2 次 UpsertClientSession
+		time.Sleep(100 * time.Millisecond)
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        fh,
+			Offset:    0,
+			Data:      []byte("after-throttle-window"),
+			SessionID: &sessionID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2), upsertCalls.Load(), "跨越节流窗口后的首次 Write 应再次续期会话")
+	})
+
+	t.Run("已超期会话与已退役重建会话（handle.CreatedAt < session.CreatedAt）在首次及节流窗口内均 100% 返回 ErrBadFileHandle", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockBS := metamock.NewMockBlockStore(t)
+		payload := []byte("intercepted-write")
+
+		mockStore.EXPECT().
+			NextSliceID(mock.Anything).
+			Return(int64(3001), nil).
+			Once()
+
+		mockBS.EXPECT().
+			PutBlock(mock.Anything, mock.Anything, uint32(0), payload).
+			Return(nil).
+			Times(3)
+
+		// 3 次被拒的写入均须在事务外回滚清理物理块
+		mockBS.EXPECT().
+			DeleteBlock(mock.Anything, mock.Anything, uint32(0), uint32(len(payload))).
+			Return(nil).
+			Times(3)
+
+		recreatedSessionTime := now.Add(-1 * time.Minute)
+		staleHandleTime := now.Add(-5 * time.Minute) // handle.CreatedAt < session.CreatedAt
+
+		var step int
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.Anything).
+			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+				step++
+				mockQuerier := dbmock.NewMockQuerier(t)
+				switch step {
+				case 1:
+					// 场景 A：首次 Write 遇到已退役重建会话（handle.CreatedAt < session.CreatedAt）
+					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
+					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
+						Fh:        int64(fh),
+						Ino:       int64(ino),
+						Flags:     int32(meta.O_WRONLY),
+						CreatedAt: pgtype.Timestamptz{Time: staleHandleTime, Valid: true},
+						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+					}, nil).Once()
+					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
+						SessionID: int64(sessionID),
+						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
+						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+					}, nil).Once()
+				case 2:
+					// 场景 B：合法新句柄（createdAt >= recreatedSessionTime）写入成功，激活节流窗口
+					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
+					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
+						Fh:        int64(fh + 1),
+						Ino:       int64(ino),
+						Flags:     int32(meta.O_WRONLY),
+						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
+						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+					}, nil).Once()
+					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
+						SessionID: int64(sessionID),
+						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
+						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+					}, nil).Once()
+					mockQuerier.EXPECT().AppendChunkSlice(mock.Anything, mock.Anything).Return(int64(24), nil).Once()
+					mockQuerier.EXPECT().InsertSliceRef(mock.Anything, mock.Anything).Return(nil).Once()
+					mockQuerier.EXPECT().UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).Return(baseFileRow, nil).Once()
+				case 3:
+					// 场景 C：处于节流窗口内（不调用 UpsertClientSession），旧代际句柄（staleHandleTime < recreatedSessionTime）依然被 100% 拦截
+					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
+					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
+						Fh:        int64(fh),
+						Ino:       int64(ino),
+						Flags:     int32(meta.O_WRONLY),
+						CreatedAt: pgtype.Timestamptz{Time: staleHandleTime, Valid: true},
+						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+					}, nil).Once()
+				case 4:
+					// 场景 D：已超期会话（UpsertClientSession 返回 CreatedAt == UpdatedAt）被拦截并触发异步清理
+					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
+					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
+						Fh:        int64(fh + 2),
+						Ino:       int64(ino),
+						Flags:     int32(meta.O_WRONLY),
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						SessionID: pgtype.Int8{Int64: int64(sessionID + 1), Valid: true},
+					}, nil).Once()
+					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
+						SessionID: int64(sessionID + 1),
+						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}, // CreatedAt == UpdatedAt 表示原会话已过期
+						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+					}, nil).Once()
+				case 5:
+					// cleanExpiredSessionByID 异步清理
+					mockQuerier.EXPECT().DeleteExpiredClientSessions(mock.Anything).Return(int64(1), nil).Once()
+				}
+				return fn(mockQuerier)
+			})
+
+		// 允许第 2 次合法写入的 PutBlock
+		mockBS.EXPECT().
+			PutBlock(mock.Anything, mock.Anything, uint32(0), []byte("valid-write")).
+			Return(nil).
+			Once()
+
+		mgr := meta.New(
+			mockStore,
+			meta.WithBlockStore(mockBS),
+			meta.WithWriteSessionTouchInterval(5*time.Second),
+		)
+
+		// Step 1: 首次使用退役旧代际句柄 -> ErrBadFileHandle
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        fh,
+			Offset:    0,
+			Data:      payload,
+			SessionID: &sessionID,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle)
+
+		// Step 2: 合法新代际句柄写入 -> 成功并进入 5s 节流窗口
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        fh + 1,
+			Offset:    0,
+			Data:      []byte("valid-write"),
+			SessionID: &sessionID,
+		})
+		require.NoError(t, err)
+
+		// Step 3: 节流窗口内再次使用退役旧代际句柄 -> 无需调 UpsertClientSession 依然 100% 返回 ErrBadFileHandle
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        fh,
+			Offset:    0,
+			Data:      payload,
+			SessionID: &sessionID,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle)
+
+		// Step 4: 已超期会话（sessionID + 1）写入 -> 100% 返回 ErrBadFileHandle
+		expiredSess := sessionID + 1
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        fh + 2,
+			Offset:    0,
+			Data:      payload,
+			SessionID: &expiredSess,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle)
+	})
+
+	t.Run("PostgreSQL 集成验证：节流窗口内会话过期或退役重建均被无锁校验 100% 实时拦截", func(t *testing.T) {
+		pool, pgCtx := setupMetaTestDB(t)
+		if pool == nil {
+			return
+		}
+		acquireTestSliceGCAdvisoryLock(t, pool)
+
+		store := db.NewStore(pool)
+		dataDir := t.TempDir()
+		bs := meta.NewLocalFSBlockStore(dataDir)
+		mgr := meta.New(store, meta.WithBlockStore(bs), meta.WithWriteSessionTouchInterval(10*time.Second))
+
+		disk, err := mgr.CreateDisk(pgCtx, meta.CreateDiskParams{
+			Name:     fmt.Sprintf("write-session-throttle-%d", time.Now().UnixNano()),
+			MaxBytes: 10 * 1024 * 1024,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+		})
+
+		sess := uint64(970532)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sess))
+		})
+
+		createRes, err := mgr.Create(pgCtx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("throttle_session_check.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR,
+			SessionID: &sess,
+		})
+		require.NoError(t, err)
+		targetIno := createRes.Inode.Ino
+		targetFh := createRes.Fh
+		t.Cleanup(func() {
+			cleanupWriteTestInoAndSlices(t, store, mgr, int64(targetIno), targetFh)
+		})
+
+		// 1. 第 1 次写入成功，进入 10s 节流窗口
+		_, err = mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:       targetIno,
+			Fh:        targetFh,
+			Offset:    0,
+			Data:      []byte("first-ok"),
+			SessionID: &sess,
+		})
+		require.NoError(t, err)
+
+		// 2. 在 10s 节流窗口内，模拟该会话在数据库中已重建为更新的 created_at（使 targetFh.created_at < session.created_at）
+		_, err = pool.Exec(pgCtx, "UPDATE client_sessions SET created_at = clock_timestamp() + interval '5 seconds' WHERE session_id = $1", int64(sess))
+		require.NoError(t, err)
+
+		_, err = mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:       targetIno,
+			Fh:        targetFh,
+			Offset:    8,
+			Data:      []byte("stale-handle-in-window"),
+			SessionID: &sess,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle, "节流窗口内已退役重建会话的旧句柄必须 100% 返回 ErrBadFileHandle")
+
+		// 3. 恢复 created_at 但令会话过期，同样在窗口内必须 100% 拦截返回 ErrBadFileHandle
+		_, err = pool.Exec(pgCtx, "UPDATE client_sessions SET created_at = clock_timestamp() - interval '1 hour', expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sess))
+		require.NoError(t, err)
+
+		_, err = mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:       targetIno,
+			Fh:        targetFh,
+			Offset:    8,
+			Data:      []byte("expired-in-window"),
+			SessionID: &sess,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle, "节流窗口内已过期会话必须 100% 返回 ErrBadFileHandle")
+	})
 }

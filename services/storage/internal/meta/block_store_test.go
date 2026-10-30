@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -767,5 +769,200 @@ func TestLocalFSBlockStore_EnsureDirSynced_RootAndAboveParentRetry(t *testing.T)
 
 		err := store.PutBlock(ctx, 1, 0, []byte("nested-base"))
 		require.ErrorIs(t, err, meta.ErrIO)
+	})
+}
+
+func TestLocalFSBlockStore_DirSyncedCacheFastPathAndSelfHeal(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("目标散列子目录首次创建并同步后，后续 StageBlock 与 PutBlock 直接命中内存缓存零重复目录 Stat", func(t *testing.T) {
+		dataDir := t.TempDir()
+		var statCalls atomic.Int64
+		var syncMu sync.Mutex
+		var syncedDirs []string
+
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithStatHook(func(name string) (os.FileInfo, error) {
+				statCalls.Add(1)
+				return os.Stat(name)
+			}),
+			meta.WithOpenDirHook(func(dir string) (meta.DirHandle, error) {
+				f, err := os.Open(dir)
+				if err != nil {
+					return nil, err
+				}
+				return &spyDirHandle{
+					file: f,
+					dir:  filepath.Clean(dir),
+					onSync: func(cleaned string, file *os.File) error {
+						syncMu.Lock()
+						syncedDirs = append(syncedDirs, cleaned)
+						syncMu.Unlock()
+						return file.Sync()
+					},
+				}, nil
+			}),
+		)
+
+		var stagedStore meta.StagedBlockStore = store
+
+		// 1. 首次写入 sliceID=7（散列目录 chunks/07/0）：创建目录并同步祖先目录
+		payload1 := []byte("first-block-in-bucket-07")
+		dir1, err := stagedStore.StageBlock(ctx, 7, 0, payload1)
+		require.NoError(t, err)
+		expectedShardDir := filepath.Join(dataDir, "chunks", "07", "0")
+		assert.Equal(t, expectedShardDir, dir1)
+		assert.Greater(t, statCalls.Load(), int64(0), "首次创建散列子目录应触发目录 Stat")
+		require.NoError(t, stagedStore.SyncDirs(ctx, []string{dir1}))
+
+		// 2. 重置 Stat 与目录 Sync 计数，连续 10 次向同一散列目录（sliceID = 7 + i*256）执行 StageBlock
+		statCalls.Store(0)
+		syncMu.Lock()
+		syncedDirs = nil
+		syncMu.Unlock()
+
+		var batchDirs []string
+		for i := 1; i <= 10; i++ {
+			sid := uint64(7 + i*256)
+			data := fmt.Appendf(nil, "cached-dir-stage-payload-%d", i)
+			parentDir, sErr := stagedStore.StageBlock(ctx, sid, 0, data)
+			require.NoError(t, sErr)
+			assert.Equal(t, expectedShardDir, parentDir)
+			batchDirs = append(batchDirs, parentDir)
+		}
+
+		// 核心断言：缓存命中快速放行后，10 次 StageBlock 产生 0 次目录 Stat 与 0 次祖先目录 Sync
+		assert.Equal(t, int64(0), statCalls.Load(), "已缓存散列目录后续 StageBlock 必须直接命中内存缓存返回，不得重复执行 os.Stat")
+		syncMu.Lock()
+		assert.Empty(t, syncedDirs, "StageBlock 阶段仅完成临时文件 Sync 与 Rename，不触发目录 Sync")
+		syncMu.Unlock()
+
+		// 批次调用 SyncDirs：10 个相同父目录去重后仅执行 1 次目录 Sync
+		require.NoError(t, stagedStore.SyncDirs(ctx, batchDirs))
+		syncMu.Lock()
+		assert.Equal(t, []string{filepath.Clean(expectedShardDir)}, syncedDirs, "SyncDirs 对同一父目录必须去重仅执行 1 次 Sync")
+		syncMu.Unlock()
+
+		// 3. 再次调用 PutBlock 写入同一散列目录：同样 0 次目录 Stat，且仅在 Rename 后对叶子目录执行 1 次 Sync
+		statCalls.Store(0)
+		syncMu.Lock()
+		syncedDirs = nil
+		syncMu.Unlock()
+
+		require.NoError(t, store.PutBlock(ctx, 7+11*256, 0, []byte("put-block-cached-dir")))
+		assert.Equal(t, int64(0), statCalls.Load(), "已缓存散列目录后续 PutBlock 不得重复执行目录 Stat")
+		syncMu.Lock()
+		assert.Equal(t, []string{filepath.Clean(expectedShardDir)}, syncedDirs)
+		syncMu.Unlock()
+	})
+
+	t.Run("已缓存散列子目录被外部误删后，后续写入自动剔除失效缓存并重建目录自愈成功", func(t *testing.T) {
+		dataDir := t.TempDir()
+		store := meta.NewLocalFSBlockStore(dataDir)
+
+		require.NoError(t, store.PutBlock(ctx, 9, 0, []byte("initial-block")))
+
+		shardDir := filepath.Join(dataDir, "chunks", "09", "0")
+		require.NoError(t, os.RemoveAll(shardDir))
+
+		healedData := []byte("self-healed-after-external-rmdir")
+		require.NoError(t, store.PutBlock(ctx, 265, 0, healedData))
+
+		got := make([]byte, len(healedData))
+		require.NoError(t, store.GetBlock(ctx, 265, 0, uint32(len(healedData)), 0, got))
+		assert.Equal(t, healedData, got)
+	})
+}
+
+func TestLocalFSBlockStore_StageBlockAndSyncDirs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("多块 StageBlock 与跨散列目录去重 SyncDirs 完整发布与清理验证", func(t *testing.T) {
+		dataDir := t.TempDir()
+		var syncedDirs []string
+		var failSyncForDir string
+
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithOpenDirHook(func(dir string) (meta.DirHandle, error) {
+				f, err := os.Open(dir)
+				if err != nil {
+					return nil, err
+				}
+				return &spyDirHandle{
+					file: f,
+					dir:  filepath.Clean(dir),
+					onSync: func(cleaned string, file *os.File) error {
+						syncedDirs = append(syncedDirs, cleaned)
+						if failSyncForDir != "" && cleaned == filepath.Clean(failSyncForDir) {
+							return errors.New("injected syncDirs failure")
+						}
+						return file.Sync()
+					},
+				}, nil
+			}),
+		)
+
+		// 预热两个散列目录 chunks/0A/0 (sliceID%256==10) 与 chunks/0B/0 (sliceID%256==11)
+		require.NoError(t, store.PutBlock(ctx, 10, 0, []byte("warmup-a")))
+		require.NoError(t, store.PutBlock(ctx, 11, 0, []byte("warmup-b")))
+
+		syncedDirs = nil
+		dirA := filepath.Join(dataDir, "chunks", "0A", "0")
+		dirB := filepath.Join(dataDir, "chunks", "0B", "0")
+
+		// 在两个已缓存目录下阶段化写入 5 个新块
+		stageSpecs := []struct {
+			sliceID uint64
+			data    []byte
+			expDir  string
+		}{
+			{sliceID: 266, data: []byte("block-a-1"), expDir: dirA},
+			{sliceID: 522, data: []byte("block-a-2"), expDir: dirA},
+			{sliceID: 267, data: []byte("block-b-1"), expDir: dirB},
+			{sliceID: 778, data: []byte("block-a-3"), expDir: dirA},
+			{sliceID: 523, data: []byte("block-b-2"), expDir: dirB},
+		}
+
+		dirs := []string{""}
+		for _, spec := range stageSpecs {
+			d, err := store.StageBlock(ctx, spec.sliceID, 0, spec.data)
+			require.NoError(t, err)
+			assert.Equal(t, spec.expDir, d)
+			dirs = append(dirs, d)
+		}
+		assert.Empty(t, syncedDirs, "已缓存目录下 StageBlock 不应提前触发目录 Sync")
+
+		// 批量去重同步目录：dirA 与 dirB 按首次出现顺序各同步 1 次
+		require.NoError(t, store.SyncDirs(ctx, dirs))
+		assert.Equal(t, []string{filepath.Clean(dirA), filepath.Clean(dirB)}, syncedDirs)
+
+		// 验证所有块内容可读且无残留 .tmp_* 文件
+		for _, spec := range stageSpecs {
+			got := make([]byte, len(spec.data))
+			require.NoError(t, store.GetBlock(ctx, spec.sliceID, 0, uint32(len(spec.data)), 0, got))
+			assert.Equal(t, spec.data, got)
+		}
+		for _, checkDir := range []string{dirA, dirB} {
+			entries, err := os.ReadDir(checkDir)
+			require.NoError(t, err)
+			for _, e := range entries {
+				assert.False(t, strings.HasPrefix(e.Name(), ".tmp_"), "目录 %s 下不应残留临时文件 %s", checkDir, e.Name())
+			}
+		}
+
+		// 验证 SyncDirs 失败时返回 ErrIO
+		failSyncForDir = dirB
+		err := store.SyncDirs(ctx, []string{dirA, dirB})
+		require.ErrorIs(t, err, meta.ErrIO)
+
+		// 验证 Context 取消时 StageBlock 与 SyncDirs 立即返回 context.Canceled
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err = store.StageBlock(canceledCtx, 1034, 0, []byte("canceled"))
+		require.ErrorIs(t, err, context.Canceled)
+		err = store.SyncDirs(canceledCtx, []string{dirA})
+		require.ErrorIs(t, err, context.Canceled)
 	})
 }

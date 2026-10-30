@@ -42,12 +42,13 @@ const (
 	DefaultDirSize   uint64 = 4096
 )
 
-// 数据层核心常量（ADR-0019）。
+// 数据层核心常量（ADR-0019 / ADR-0022）。
 const (
-	ChunkSize             = 1 << 26 // 64 MiB (67,108,864 字节)
-	BlockSize             = 1 << 22 // 4 MiB (4,194,304 字节)
-	SliceBytes            = 24      // 单个 Slice 二进制元数据描述符字节大小
-	CompactSliceThreshold = 64      // 单个 Chunk 累积 Slice 数量触发 Compaction 的阈值
+	ChunkSize               = 1 << 26 // 64 MiB (67,108,864 字节)
+	BlockSize               = 1 << 22 // 4 MiB (4,194,304 字节)
+	SliceBytes              = 24      // 单个 Slice 二进制元数据描述符字节大小
+	CompactSliceThreshold   = 64      // 单个 Chunk 累积 Slice 数量触发 Compaction 的阈值
+	DefaultSliceIDBatchSize = 64      // 服务端内存预取 slice_id 号段的默认步长
 )
 
 // 磁盘与 StatFS 常量。
@@ -136,8 +137,9 @@ const (
 
 	OffsetMax uint64 = math.MaxInt64
 
-	DefaultSessionLeaseTTL     = 60 * time.Second
-	DefaultSessionProbeTimeout = 1500 * time.Millisecond
+	DefaultSessionLeaseTTL           = 60 * time.Second
+	DefaultSessionProbeTimeout       = 1500 * time.Millisecond
+	DefaultWriteSessionTouchInterval = 2 * time.Second
 
 	WaiterStatusPending   int16 = 1
 	WaiterStatusGranted   int16 = 2
