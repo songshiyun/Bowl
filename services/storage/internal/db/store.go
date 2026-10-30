@@ -360,6 +360,11 @@ type txQueries struct {
 
 var _ Querier = (*txQueries)(nil)
 
+// RawDBTX 返回当前事务底层的 DBTX 实例。
+func (q *txQueries) RawDBTX() DBTX {
+	return q.db
+}
+
 // DeleteExpiredClientSessions 在事务内按 session_id ASC 有序加锁清扫过期会话，避免并发操作产生行锁顺序反转。
 func (q *txQueries) DeleteExpiredClientSessions(ctx context.Context) (int64, error) {
 	res, err := q.db.Exec(ctx, deleteExpiredClientSessionsOrdered)
@@ -453,6 +458,14 @@ func (s *SQLStore) Close() {
 
 // Pool 返回底层 pgxpool.Pool 实例。
 func (s *SQLStore) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
+// RawDBTX 返回底层 DBTX 实例。
+func (s *SQLStore) RawDBTX() DBTX {
+	if s.pool == nil {
+		return nil
+	}
 	return s.pool
 }
 

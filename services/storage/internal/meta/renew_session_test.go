@@ -2106,7 +2106,7 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		mockQuerier.EXPECT().DeleteUnreferencedOrphanInodes(mock.Anything).Return(nil, nil).Once()
 
 		// 1. Flush (触发首次慢路径)
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(200)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(validFh, nil).Once()
 		require.NoError(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
@@ -2150,17 +2150,17 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		// 5. 窗口内持旧代际句柄（handle.CreatedAt < session.CreatedAt）调用 Flush 必须立即返回 ErrBadFileHandle
 		staleFh := validFh
 		staleFh.CreatedAt = pgtype.Timestamptz{Time: sessionCreatedAt.Time.Add(-time.Second), Valid: true}
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(200)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(staleFh, nil).Once()
 		require.ErrorIs(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}), meta.ErrBadFileHandle)
 
 		// 6. Release (窗口内跳过续期)
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(200)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
 		// 7. ReleaseDir (窗口内跳过续期)
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(201)).Return(dirInode, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(201)).Return(dirInode, nil).Once()
 		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
 		require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{Ino: 201, Fh: 21, SessionID: &sessID}))
 	})

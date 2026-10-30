@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,6 +14,100 @@ import (
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
+
+var managerPosixLockInodes sync.Map
+
+// RecordPosixLockActivity 记录指定 Inode 曾申请过 POSIX 记录锁（lk_flags == 0）。
+func (m *manager) RecordPosixLockActivity(ino uint64) {
+	if m == nil || ino == 0 {
+		return
+	}
+	v, ok := managerPosixLockInodes.Load(m)
+	if !ok {
+		actual, _ := managerPosixLockInodes.LoadOrStore(m, &sync.Map{})
+		v = actual
+	}
+	v.(*sync.Map).Store(ino, true)
+}
+
+func (m *manager) hasPosixLockActivity(ino uint64) bool {
+	if m == nil || ino == 0 {
+		return false
+	}
+	v, ok := managerPosixLockInodes.Load(m)
+	if !ok {
+		return false
+	}
+	_, exists := v.(*sync.Map).Load(ino)
+	return exists
+}
+
+// RecordPosixLockActivityForTest 仅供单测标记指定 Inode 已存在 POSIX 记录锁活动。
+func RecordPosixLockActivityForTest(mgr Manager, ino uint64) {
+	if m, ok := mgr.(*manager); ok {
+		m.RecordPosixLockActivity(ino)
+	}
+}
+
+func (m *manager) tryThrottledSessionTouchReadOnly(ctx context.Context, sessionID uint64, handleCreatedAt pgtype.Timestamptz) (bool, error) {
+	pp, throttle := m.shouldThrottleSessionTouch(ctx)
+	if !throttle || pp == nil || pp.Pool() == nil {
+		return false, nil
+	}
+	interval := m.writeSessionTouchInterval
+	if interval <= 0 {
+		interval = DefaultWriteSessionTouchInterval
+	}
+	now := time.Now()
+	m.writeSessionTouchMu.Lock()
+	if m.writeSessionTouches == nil {
+		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
+	}
+	prev, hadPrev := m.writeSessionTouches[sessionID]
+	inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
+	m.writeSessionTouchMu.Unlock()
+	if !inWindow {
+		return false, nil
+	}
+
+	var sessionCreatedAt pgtype.Timestamptz
+	var alive, hasPendingCleanup bool
+	err := pp.Pool().QueryRow(ctx, `
+		SELECT
+			cs.created_at,
+			(cs.expires_at > clock_timestamp()) AS alive,
+			(
+				EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
+				OR EXISTS (
+					SELECT 1 FROM inodes i
+					WHERE i.nlink = 0
+					  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
+				)
+			) AS has_pending_cleanup
+		FROM client_sessions cs
+		WHERE cs.session_id = $1
+	`, int64(sessionID)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			m.clearWriteSessionTouch(sessionID)
+			return true, errExpiredSessionBadHandle
+		}
+		return true, fmt.Errorf("check active client session %d: %w", sessionID, err)
+	}
+	if !alive {
+		m.clearWriteSessionTouch(sessionID)
+		return true, errExpiredSessionBadHandle
+	}
+	if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
+		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+		return true, ErrBadFileHandle
+	}
+	if !hasPendingCleanup {
+		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+		return true, nil
+	}
+	return false, nil
+}
 
 func (m *manager) lookupHandleCreatedAt(ctx context.Context, fh, ino, sessionID uint64) pgtype.Timestamptz {
 	pp, ok := m.store.(poolProvider)
@@ -79,11 +174,11 @@ func (m *manager) checkFileHandleReadOnly(ctx context.Context, ino uint64, fh ui
 }
 
 // Flush 冲刷会话句柄并校验合法性（不销毁文件句柄）。
-// 遵循 ADR-0012：
+// 遵循 ADR-0012 / ADR-0023：
 //  1. 当未传入 LockOwner 与 SessionID（LockOwner == nil && SessionID == nil）时，保持只读事务校验 (ino, fh) 合法性；
-//  2. 当传入 LockOwner 或 SessionID 时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino)、校验 (ino, fh) 有效后，
-//     若携带 SessionID 则续期会话并触发孤儿节点兜底回收；若携带 LockOwner 则原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0），
-//     无论这些锁最初是通过哪个 FileHandle 申请或合并的；Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
+//  2. 当目标 Inode 未持有任何 POSIX 记录锁时，免除 GetInodeForUpdate 排他锁与 DeletePosixFileLocks* 写 SQL，仅校验节点、句柄归属与（节流后的）会话有效性；
+//  3. 当目标 Inode 持有 POSIX 记录锁且传入 LockOwner 时，在 READ COMMITTED 写事务中执行 GetInodeForUpdate(ino) 并原子删除该 (session_id, ino, *lock_owner)（若未传 session_id 则按 (ino, *lock_owner)）持有的全部 POSIX 记录锁（lk_flags == 0）；
+//     Flush 不销毁 FileHandle，且绝不清理 BSD flock 锁。
 func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -94,6 +189,129 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 
 	if params.LockOwner == nil && params.SessionID == nil {
 		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, nil, "flush")
+	}
+
+	needsPosixUnlock := false
+	pp, hasPool := m.store.(poolProvider)
+	hasActivePool := hasPool && pp != nil && pp.Pool() != nil
+
+	if params.LockOwner != nil {
+		if m.hasPosixLockActivity(params.Ino) {
+			needsPosixUnlock = true
+		} else if hasActivePool {
+			var hasLock bool
+			if err := pp.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM file_locks WHERE ino = $1 AND lk_flags = 0)`, int64(params.Ino)).Scan(&hasLock); err != nil {
+				return fmt.Errorf("flush check posix locks: %w", err)
+			}
+			if hasLock {
+				m.RecordPosixLockActivity(params.Ino)
+				needsPosixUnlock = true
+			}
+		}
+	}
+
+	if !needsPosixUnlock {
+		if hasActivePool {
+			inode, err := m.store.GetInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("flush get inode %d: %w", params.Ino, err)
+			}
+			if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+				return ErrIsDir
+			}
+
+			handle, err := m.store.GetFileHandle(ctx, db.GetFileHandleParams{
+				Fh:        int64(params.Fh),
+				Ino:       int64(params.Ino),
+				SessionID: toPgSessionID(params.SessionID),
+			})
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, ErrBadFileHandle)
+					return ErrBadFileHandle
+				}
+				return fmt.Errorf("flush get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+			}
+
+			if params.SessionID != nil {
+				handled, touchErr := m.tryThrottledSessionTouchReadOnly(ctx, *params.SessionID, handle.CreatedAt)
+				if handled {
+					if touchErr != nil {
+						if errors.Is(touchErr, ErrBadFileHandle) {
+							m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, touchErr)
+							return ErrBadFileHandle
+						}
+						return fmt.Errorf("flush tx: %w", touchErr)
+					}
+					return nil
+				}
+
+				err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+					return m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handle.CreatedAt)
+				})
+				if err != nil {
+					if errors.Is(err, ErrBadFileHandle) {
+						m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
+						return ErrBadFileHandle
+					}
+					return fmt.Errorf("flush tx: %w", err)
+				}
+			}
+			return nil
+		}
+
+		err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+			inode, err := q.GetInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode %d: %w", params.Ino, err)
+			}
+
+			if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+				return ErrIsDir
+			}
+
+			handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
+				Fh:        int64(params.Fh),
+				Ino:       int64(params.Ino),
+				SessionID: toPgSessionID(params.SessionID),
+			})
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrBadFileHandle
+				}
+				return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+			}
+
+			if params.SessionID != nil {
+				if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handle.CreatedAt); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrInvalidArgument):
+				return ErrInvalidArgument
+			case errors.Is(err, ErrNotFound):
+				return ErrNotFound
+			case errors.Is(err, ErrIsDir):
+				return ErrIsDir
+			case errors.Is(err, ErrBadFileHandle):
+				m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
+				return ErrBadFileHandle
+			default:
+				return fmt.Errorf("flush tx: %w", err)
+			}
+		}
+		return nil
 	}
 
 	var lastUndo *inFlightTxUndo
@@ -208,11 +426,11 @@ func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
 }
 
 // Release 关闭并销毁文件句柄，按标志位清理 BSD flock 句柄锁，且在孤儿节点无活跃句柄时执行最终物理回收。
-// 遵循 ADR-0012：
+// 遵循 ADR-0012 / ADR-0023：
 // 1. 静态校验 ino、fh、release_flags（允许 0、FuseReleaseFlush、FuseReleaseFlockUnlock 及其组合）与可选 session_id 范围；
-// 2. 在 READ COMMITTED 写事务中锁定目标 Inode 并优先续期会话（清理其他超期孤儿节点并确保租约有效）；
-// 3. 删除 file_handles(fh)；仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
-// 4. 若 nlink == 0 且无剩余活跃句柄，执行孤儿节点物理回收（数据库 ON DELETE CASCADE 自动清理残留锁）。
+// 2. 对正常未解链节点（nlink > 0）且未置位 FuseReleaseFlockUnlock 时，先通过 GetInode 无锁校验节点存在与类型，免除 GetInodeForUpdate 排他锁；
+// 3. 优先核验/续期会话并删除 file_handles(fh)；仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，锁定 Inode 并原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
+// 4. 若 nlink == 0（含并发 Unlink/Rename 导致 nlink 归零）且无剩余活跃句柄，在同一事务内对 Inode 加排他锁并执行孤儿节点物理回收与配额退还。
 func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -239,12 +457,41 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		currentUndo := newInFlightTxUndo(m, params.Ino)
 		lastUndo = currentUndo
 
-		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
+		var (
+			inode       db.Inode
+			err         error
+			lockedInode bool
+		)
+		if (params.ReleaseFlags & FuseReleaseFlockUnlock) != 0 {
+			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
 			}
-			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+			lockedInode = true
+		} else {
+			inode, err = q.GetInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode %d: %w", params.Ino, err)
+			}
+			if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+				return ErrIsDir
+			}
+			if inode.Nlink == 0 {
+				inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+				}
+				lockedInode = true
+			}
 		}
 
 		if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
@@ -294,6 +541,22 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			m.markInFlightGrantsFlushedOrReleased(params.Ino, params.SessionID, params.Fh, currentUndo)
 		}
 
+		if !lockedInode {
+			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r.RawDBTX() != nil {
+				var curNlink int32
+				if err := r.RawDBTX().QueryRow(ctx, `SELECT nlink FROM inodes WHERE ino = $1`, int64(params.Ino)).Scan(&curNlink); err == nil && curNlink == 0 {
+					inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+					if err != nil {
+						if errors.Is(err, pgx.ErrNoRows) {
+							return nil
+						}
+						return fmt.Errorf("get inode %d for update on orphan check: %w", params.Ino, err)
+					}
+					lockedInode = true
+				}
+			}
+		}
+
 		if inode.Nlink == 0 {
 			if err := m.reclaimOrphanIfNoHandles(ctx, q, inode); err != nil {
 				return err
@@ -329,7 +592,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		}
 	}
 
-	if params.SessionID != nil || (params.ReleaseFlags&FuseReleaseFlockUnlock) != 0 {
+	if (params.ReleaseFlags&FuseReleaseFlockUnlock) != 0 || m.hasPosixLockActivity(params.Ino) || params.SessionID != nil {
 		m.notifyLockWaiters(params.Ino)
 	}
 	return nil
@@ -378,16 +641,31 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 	}
 
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		lockedInode := false
+		inode, err := q.GetInode(ctx, int64(params.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+			return fmt.Errorf("get inode %d: %w", params.Ino, err)
 		}
 
 		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
 			return ErrNotDir
+		}
+
+		if inode.Nlink == 0 {
+			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+			}
+			lockedInode = true
+			if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
+				return ErrNotDir
+			}
 		}
 
 		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
@@ -409,6 +687,22 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 				return ErrBadFileHandle
 			}
 			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+		}
+
+		if !lockedInode {
+			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r.RawDBTX() != nil {
+				var curNlink int32
+				if err := r.RawDBTX().QueryRow(ctx, `SELECT nlink FROM inodes WHERE ino = $1`, int64(params.Ino)).Scan(&curNlink); err == nil && curNlink == 0 {
+					inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+					if err != nil {
+						if errors.Is(err, pgx.ErrNoRows) {
+							return nil
+						}
+						return fmt.Errorf("get inode %d for update on orphan check: %w", params.Ino, err)
+					}
+					lockedInode = true
+				}
+			}
 		}
 
 		if inode.Nlink == 0 {

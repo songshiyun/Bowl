@@ -545,6 +545,9 @@ func (m *manager) SetLk(ctx context.Context, params SetLkParams) error {
 	if params.Lk.Type != F_RDLCK && params.Lk.Type != F_WRLCK && params.Lk.Type != F_UNLCK {
 		return ErrInvalidArgument
 	}
+	if params.LkFlags == 0 && params.Lk.Type != F_UNLCK {
+		m.RecordPosixLockActivity(params.Ino)
+	}
 
 	var flockConflictAfterDelete bool
 	var shouldNotify bool
@@ -1088,6 +1091,9 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 	}
 	if params.Lk.Type != F_RDLCK && params.Lk.Type != F_WRLCK && params.Lk.Type != F_UNLCK {
 		return ErrInvalidArgument
+	}
+	if params.LkFlags == 0 && params.Lk.Type != F_UNLCK {
+		m.RecordPosixLockActivity(params.Ino)
 	}
 
 	setLkParams := SetLkParams{

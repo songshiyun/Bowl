@@ -95,10 +95,41 @@ func TestFlush_PositivePath(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("常规文件合法句柄冲刷成功 (携带 lock_owner 但未传 session_id: 写事务按 (ino, lock_owner) 清理 POSIX 锁)", func(t *testing.T) {
+	t.Run("常规文件合法句柄冲刷成功 (携带 lock_owner 但节点无 POSIX 锁活动: 免除 GetInodeForUpdate 与 DeletePosixFileLocks)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
+
+		setupMockWriteTx(mockStore, mockQuerier)
+
+		lockOwner := uint64(0x8000000000000042)
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(baseInode, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			GetFileHandle(mock.Anything, db.GetFileHandleParams{
+				Fh:  int64(fh),
+				Ino: int64(ino),
+			}).
+			Return(baseHandle, nil).
+			Once()
+
+		err := mgr.Flush(ctx, meta.FlushParams{
+			Ino:       ino,
+			Fh:        fh,
+			LockOwner: &lockOwner,
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("常规文件合法句柄冲刷成功 (携带 lock_owner 但未传 session_id 且存在 POSIX 锁活动: 写事务按 (ino, lock_owner) 清理 POSIX 锁)", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore)
+		meta.RecordPosixLockActivityForTest(mgr, ino)
 
 		setupMockWriteTx(mockStore, mockQuerier)
 
@@ -133,11 +164,12 @@ func TestFlush_PositivePath(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("常规文件合法句柄冲刷成功 (同时携带 lock_owner 与 session_id: 按配置的 WithSessionLeaseTTL 续期会话并按 (session_id, ino, lock_owner) 清理 POSIX 锁)", func(t *testing.T) {
+	t.Run("常规文件合法句柄冲刷成功 (同时携带 lock_owner 与 session_id 且存在 POSIX 锁活动: 按配置的 WithSessionLeaseTTL 续期会话并按 (session_id, ino, lock_owner) 清理 POSIX 锁)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		customTTL := 30 * time.Second
 		mgr := meta.New(mockStore, meta.WithSessionLeaseTTL(customTTL))
+		meta.RecordPosixLockActivityForTest(mgr, ino)
 
 		setupMockWriteTx(mockStore, mockQuerier)
 
@@ -424,7 +456,7 @@ func TestFlush_InvariantsAndErrors(t *testing.T) {
 
 		lockOwner := uint64(1001)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, pgx.ErrNoRows).
 			Once()
 
@@ -446,7 +478,7 @@ func TestFlush_InvariantsAndErrors(t *testing.T) {
 
 		lockOwner := uint64(1001)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{
 				Ino:  int64(ino),
 				Mode: int32(meta.S_IFDIR | 0o755),
@@ -471,7 +503,7 @@ func TestFlush_InvariantsAndErrors(t *testing.T) {
 
 		lockOwner := uint64(1001)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{
 				Ino:  int64(ino),
 				Mode: int32(meta.S_IFREG | 0o644),
@@ -669,6 +701,82 @@ func TestFlush_PostgresLockCleanupSemantics(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, posixLocksAfterLegacy)
+}
+
+func TestFlush_PostgresLocklessNonBlockingWhenNoPosixLocks(t *testing.T) {
+	dsn := getStorageTestDSN()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Skipf("skipping postgres test: %v", err)
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		t.Skipf("skipping postgres test (ping failed): %v", err)
+	}
+
+	store := db.NewStore(pool)
+	mgr := meta.New(store)
+
+	rootDir, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFDIR | 0o755),
+		Nlink: 2,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	defer func() {
+		_ = store.DeleteInode(context.Background(), rootDir.Ino)
+	}()
+
+	sessID := uint64(925370)
+	defer func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
+	}()
+	_, err = mgr.RenewSession(ctx, sessID)
+	require.NoError(t, err)
+
+	createRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: uint64(rootDir.Ino),
+		Name:      []byte("flush_lockless_test.txt"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+	fileIno := createRes.Inode.Ino
+	fh := createRes.Fh
+	defer func() {
+		_ = store.DeleteInode(context.Background(), int64(fileIno))
+	}()
+
+	// 开启外部事务并持有 inodes 行的 SELECT ... FOR UPDATE 排他锁
+	extTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() {
+		_ = extTx.Rollback(context.Background())
+	}()
+
+	var lockedIno int64
+	require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(fileIno)).Scan(&lockedIno))
+
+	// 当目标 Inode 从未申请过 POSIX 记录锁时，携带 lock_owner 与 session_id 的 Flush 必须无锁立即完成，不被 FOR UPDATE 阻塞！
+	flushCtx, flushCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer flushCancel()
+
+	lockOwner := uint64(0x77770001)
+	require.NoError(t, mgr.Flush(flushCtx, meta.FlushParams{
+		Ino:       fileIno,
+		Fh:        fh,
+		LockOwner: &lockOwner,
+		SessionID: &sessID,
+	}))
 }
 
 func TestFsync_PositivePath(t *testing.T) {

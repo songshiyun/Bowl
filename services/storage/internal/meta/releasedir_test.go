@@ -88,7 +88,7 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("正常目录释放 (nlink > 0): 销毁句柄且保留 Inode 行", func(t *testing.T) {
+	t.Run("正常目录释放 (nlink > 0): 销毁句柄且保留 Inode 行 (免除 GetInodeForUpdate)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -96,7 +96,7 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDir, nil).
 			Once()
 
@@ -124,6 +124,11 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -159,6 +164,11 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -200,6 +210,11 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
 		orphanDir.RootIno = 10
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -252,6 +267,11 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 		orphanDir.RootIno = 10
 
 		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanDir, nil).
 			Once()
@@ -287,6 +307,11 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
 		orphanDir.RootIno = 10
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -363,7 +388,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, pgx.ErrNoRows).
 			Once()
 
@@ -386,7 +411,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		fileInode.Mode = int32(meta.S_IFREG | 0o644)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(fileInode, nil).
 			Once()
 
@@ -406,7 +431,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDir, nil).
 			Once()
 
@@ -426,7 +451,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		assert.True(t, errors.Is(err, meta.ErrBadFileHandle))
 	})
 
-	t.Run("底层 GetInodeForUpdate 数据库错误返回包装错误", func(t *testing.T) {
+	t.Run("底层 GetInode 数据库错误返回包装错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -434,7 +459,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, errors.New("db error")).
 			Once()
 
@@ -454,7 +479,7 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDir, nil).
 			Once()
 
@@ -483,6 +508,11 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -519,6 +549,11 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -561,6 +596,11 @@ func TestReleaseDir_NegativeAndErrorPaths(t *testing.T) {
 		orphanDir := baseDir
 		orphanDir.Nlink = 0
 		orphanDir.RootIno = 10
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDir, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
