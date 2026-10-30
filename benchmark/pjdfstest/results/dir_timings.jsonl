@@ -1,0 +1,17 @@
+{"directory": "chflags", "rc": 0, "duration_sec": 0.228}
+{"directory": "chmod", "rc": 0, "duration_sec": 15.141}
+{"directory": "chown", "rc": 0, "duration_sec": 84.244}
+{"directory": "ftruncate", "rc": 0, "duration_sec": 3.953}
+{"directory": "granular", "rc": 0, "duration_sec": 0.126}
+{"directory": "link", "rc": 0, "duration_sec": 13.187}
+{"directory": "mkdir", "rc": 0, "duration_sec": 2.867}
+{"directory": "mkfifo", "rc": 0, "duration_sec": 2.937}
+{"directory": "mknod", "rc": 0, "duration_sec": 5.346}
+{"directory": "open", "rc": 0, "duration_sec": 5.906}
+{"directory": "posix_fallocate", "rc": 0, "duration_sec": 0.063}
+{"directory": "rename", "rc": 0, "duration_sec": 38.615}
+{"directory": "rmdir", "rc": 0, "duration_sec": 3.144}
+{"directory": "symlink", "rc": 0, "duration_sec": 2.823}
+{"directory": "truncate", "rc": 0, "duration_sec": 3.874}
+{"directory": "unlink", "rc": 0, "duration_sec": 20.437}
+{"directory": "utimensat", "rc": 0, "duration_sec": 1.801}
