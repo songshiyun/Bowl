@@ -1,0 +1,9 @@
+{"target":"bowl","suite":"fio","duration_sec":704.778}
+{"target":"bowl","suite":"juicefs_bench","duration_sec":97.171}
+{"target":"bowl","suite":"mdtest","duration_sec":197.199}
+{"target":"jfs_pg","suite":"fio","duration_sec":343.255}
+{"target":"jfs_pg","suite":"juicefs_bench","duration_sec":25.184}
+{"target":"jfs_pg","suite":"mdtest","duration_sec":87.046}
+{"target":"jfs_redis","suite":"fio","duration_sec":341.306}
+{"target":"jfs_redis","suite":"juicefs_bench","duration_sec":24.335}
+{"target":"jfs_redis","suite":"mdtest","duration_sec":32.128}

@@ -1,0 +1,864 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Bowl vs JuiceFS - Aliyun Silicon Valley (us-west-1) Dual-ECS Benchmark Suite
+# ==============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+RESULTS_DIR="${SCRIPT_DIR}/results"
+REPORT_FILE="${SCRIPT_DIR}/REPORT.md"
+
+# Aliyun Configuration (Silicon Valley us-west-1a)
+REGION_ID="${REGION_ID:-us-west-1}"
+ZONE_ID="${ZONE_ID:-us-west-1a}"
+VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
+VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.c9i.xlarge}"
+IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
+SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
+SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-120}"
+KEEP_INSTANCES="${KEEP_INSTANCES:-0}"
+TARGETS_TO_RUN="${TARGETS_TO_RUN:-bowl jfs_pg jfs_redis}"
+
+RUN_TS="$(date -u +%Y%m%d-%H%M%S)"
+KEY_PAIR_NAME="bowl-jfsbench-kp-${RUN_TS}"
+WORK_DIR="$(mktemp -d "/tmp/bowl-jfsbench-${RUN_TS}-XXXXXX")"
+SSH_KEY_FILE="${WORK_DIR}/id_rsa"
+CREATED_INSTANCES_FILE="${WORK_DIR}/created_instances.txt"
+KEY_CREATED=0
+INSTANCES_CREATED_AT=""
+INSTANCES_DELETED_AT=""
+REMAINING_INSTANCES=0
+
+mkdir -p "${RESULTS_DIR}"
+
+log() {
+  printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+cleanup() {
+  local exit_code=$?
+  set +e
+
+  if [[ "${KEEP_INSTANCES}" == "1" ]]; then
+    log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
+    log "Temporary workdir preserved at: ${WORK_DIR}"
+    return "${exit_code}"
+  fi
+
+  if [[ -f "${CREATED_INSTANCES_FILE}" ]]; then
+    local ids=()
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && ids+=("${line}")
+    done < "${CREATED_INSTANCES_FILE}"
+
+    if [[ ${#ids[@]} -gt 0 ]]; then
+      log "Cleaning up ${#ids[@]} pay-as-you-go ECS instance(s) in ${REGION_ID}: ${ids[*]}"
+      local del_args=(ecs DeleteInstances --RegionId "${REGION_ID}" --Force true)
+      local idx=1
+      for id in "${ids[@]}"; do
+        del_args+=("--InstanceId.${idx}" "${id}")
+        idx=$((idx + 1))
+      done
+
+      for attempt in {1..6}; do
+        if aliyun "${del_args[@]}" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 5
+      done
+
+      local id_json
+      id_json="$(printf '%s\n' "${ids[@]}" | jq -R . | jq -sc .)"
+      for poll in {1..24}; do
+        local count
+        count="$(aliyun ecs DescribeInstances --RegionId "${REGION_ID}" --InstanceIds "${id_json}" 2>/dev/null | jq -r '.TotalCount // 0')"
+        if [[ "${count}" == "0" ]]; then
+          REMAINING_INSTANCES=0
+          INSTANCES_DELETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          log "Verified all ${#ids[@]} benchmark ECS instances are completely terminated (Remaining: 0)."
+          break
+        fi
+        REMAINING_INSTANCES="${count}"
+        sleep 5
+      done
+    fi
+    rm -f "${CREATED_INSTANCES_FILE}"
+  fi
+
+  if [[ "${KEY_CREATED}" == "1" ]]; then
+    log "Deleting temporary SSH keypair: ${KEY_PAIR_NAME}"
+    aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+    KEY_CREATED=0
+  fi
+
+  rm -rf "${WORK_DIR}"
+  return "${exit_code}"
+}
+trap cleanup EXIT
+
+# ==============================================================================
+# Step 1: Cross-compile Linux amd64 binaries locally (GOWORK=off)
+# ==============================================================================
+if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  log "Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64..."
+  GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-w -s" \
+    -o "${WORK_DIR}/storage-service" ./cmd
+
+  GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
+    -o "${WORK_DIR}/bowl" ./cmd/bowl
+
+  GOOSE_CACHE_BIN="/tmp/bowl-pjdfstest-goose-linux-amd64"
+  if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
+    GOOSE_TMP_GOPATH="${WORK_DIR}/gopath"
+    GOWORK=off GOPATH="${GOOSE_TMP_GOPATH}" GOMODCACHE="$(go env GOMODCACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+      go install -trimpath -ldflags="-w -s" github.com/pressly/goose/v3/cmd/goose@v3.28.0
+    if [[ -f "${GOOSE_TMP_GOPATH}/bin/linux_amd64/goose" ]]; then
+      cp "${GOOSE_TMP_GOPATH}/bin/linux_amd64/goose" "${GOOSE_CACHE_BIN}"
+    else
+      cp "${GOOSE_TMP_GOPATH}/bin/goose" "${GOOSE_CACHE_BIN}"
+    fi
+    chmod +x "${GOOSE_CACHE_BIN}"
+    chmod -R u+w "${GOOSE_TMP_GOPATH}" 2>/dev/null || true
+    rm -rf "${GOOSE_TMP_GOPATH}"
+  fi
+  cp "${GOOSE_CACHE_BIN}" "${WORK_DIR}/goose"
+  chmod +x "${WORK_DIR}/storage-service" "${WORK_DIR}/bowl" "${WORK_DIR}/goose"
+  tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" storage-service goose
+  tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl
+  log "Compiled and compressed binaries ready in ${WORK_DIR}"
+else
+  log "Step 1/6: Skipping Bowl binary cross-compilation (TARGETS_TO_RUN=${TARGETS_TO_RUN})"
+fi
+
+# ==============================================================================
+# Step 2: Provision 2 Pay-As-You-Go ECS Instances in us-west-1a
+# ==============================================================================
+log "Step 2/6: Creating temporary SSH KeyPair ${KEY_PAIR_NAME} in ${REGION_ID}..."
+aliyun ecs CreateKeyPair \
+  --RegionId "${REGION_ID}" \
+  --KeyPairName "${KEY_PAIR_NAME}" \
+  | jq -r '.PrivateKeyBody' > "${SSH_KEY_FILE}"
+chmod 600 "${SSH_KEY_FILE}"
+KEY_CREATED=1
+
+log "Launching 2 PostPaid ECS instances (${INSTANCE_TYPE}, ${IMAGE_ID}, ${SYSTEM_DISK_SIZE}GiB ${SYSTEM_DISK_CATEGORY}) in ${ZONE_ID}..."
+RUN_RESP="$(aliyun ecs RunInstances \
+  --RegionId "${REGION_ID}" \
+  --ZoneId "${ZONE_ID}" \
+  --ImageId "${IMAGE_ID}" \
+  --InstanceType "${INSTANCE_TYPE}" \
+  --SecurityGroupId "${SECURITY_GROUP_ID}" \
+  --VSwitchId "${VSWITCH_ID}" \
+  --InstanceChargeType PostPaid \
+  --SpotStrategy NoSpot \
+  --InternetChargeType PayByTraffic \
+  --InternetMaxBandwidthOut 100 \
+  --SystemDisk.Category "${SYSTEM_DISK_CATEGORY}" \
+  --SystemDisk.Size "${SYSTEM_DISK_SIZE}" \
+  --KeyPairName "${KEY_PAIR_NAME}" \
+  --Amount 2 \
+  --InstanceName "bowl-jfsbench" \
+  --UniqueSuffix true)"
+
+echo "${RUN_RESP}" | jq -r '.InstanceIdSets.InstanceIdSet[]' > "${CREATED_INSTANCES_FILE}"
+INSTANCES_CREATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+SERVER_ID="$(sed -n '1p' "${CREATED_INSTANCES_FILE}")"
+CLIENT_ID="$(sed -n '2p' "${CREATED_INSTANCES_FILE}")"
+if [[ -z "${SERVER_ID}" || -z "${CLIENT_ID}" ]]; then
+  log "ERROR: Failed to parse 2 instance IDs from RunInstances response: ${RUN_RESP}"
+  exit 1
+fi
+log "Created Server Instance: ${SERVER_ID}, Client Instance: ${CLIENT_ID}"
+
+INSTANCE_IDS_JSON="[\"${SERVER_ID}\",\"${CLIENT_ID}\"]"
+SERVER_PUB_IP=""
+SERVER_PRIV_IP=""
+CLIENT_PUB_IP=""
+CLIENT_PRIV_IP=""
+
+log "Waiting for both instances to reach Running state..."
+for poll in {1..60}; do
+  DESC_JSON="$(aliyun ecs DescribeInstances --RegionId "${REGION_ID}" --InstanceIds "${INSTANCE_IDS_JSON}")"
+  RUNNING_COUNT="$(echo "${DESC_JSON}" | jq '[.Instances.Instance[] | select(.Status == "Running")] | length')"
+  if [[ "${RUNNING_COUNT}" == "2" ]]; then
+    SERVER_PUB_IP="$(echo "${DESC_JSON}" | jq -r ".Instances.Instance[] | select(.InstanceId == \"${SERVER_ID}\") | .PublicIpAddress.IpAddress[0]")"
+    SERVER_PRIV_IP="$(echo "${DESC_JSON}" | jq -r ".Instances.Instance[] | select(.InstanceId == \"${SERVER_ID}\") | .VpcAttributes.PrivateIpAddress.IpAddress[0]")"
+    CLIENT_PUB_IP="$(echo "${DESC_JSON}" | jq -r ".Instances.Instance[] | select(.InstanceId == \"${CLIENT_ID}\") | .PublicIpAddress.IpAddress[0]")"
+    CLIENT_PRIV_IP="$(echo "${DESC_JSON}" | jq -r ".Instances.Instance[] | select(.InstanceId == \"${CLIENT_ID}\") | .VpcAttributes.PrivateIpAddress.IpAddress[0]")"
+    break
+  fi
+  sleep 5
+done
+
+if [[ -z "${SERVER_PUB_IP}" || -z "${CLIENT_PUB_IP}" ]]; then
+  log "ERROR: Timed out waiting for instances to enter Running state."
+  exit 1
+fi
+
+log "Server (${SERVER_ID}): Public=${SERVER_PUB_IP}, Private=${SERVER_PRIV_IP}"
+log "Client (${CLIENT_ID}): Public=${CLIENT_PUB_IP}, Private=${CLIENT_PRIV_IP}"
+
+SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -i "${SSH_KEY_FILE}")
+SERVER_SSH_OPTS=("${SSH_OPTS[@]}")
+CLIENT_SSH_OPTS=("${SSH_OPTS[@]}")
+SERVER_SSH_HOST="${SERVER_PUB_IP}"
+CLIENT_SSH_HOST="${CLIENT_PUB_IP}"
+
+log "Waiting for SSH readiness on Server (${SERVER_PUB_IP}) and Client (${CLIENT_PUB_IP})..."
+SERVER_OK=0
+CLIENT_OK=0
+for ((i=1; i<=30; i++)); do
+  if [[ "${SERVER_OK}" == "0" ]] && ssh "${SSH_OPTS[@]}" "root@${SERVER_PUB_IP}" "true" >/dev/null 2>&1; then
+    SERVER_OK=1
+    log "Direct SSH ready on bowl-bench-server (${SERVER_PUB_IP})"
+  fi
+  if [[ "${CLIENT_OK}" == "0" ]] && ssh "${SSH_OPTS[@]}" "root@${CLIENT_PUB_IP}" "true" >/dev/null 2>&1; then
+    CLIENT_OK=1
+    log "Direct SSH ready on bowl-bench-client (${CLIENT_PUB_IP})"
+  fi
+  if [[ "${SERVER_OK}" == "1" && "${CLIENT_OK}" == "1" ]]; then
+    break
+  fi
+  sleep 3
+done
+
+if [[ "${SERVER_OK}" == "0" && "${CLIENT_OK}" == "1" ]]; then
+  log "Server public IP (${SERVER_PUB_IP}) has cross-border lag; routing Server SSH via Client (${CLIENT_PUB_IP}) -> VPC (${SERVER_PRIV_IP})..."
+  SERVER_SSH_HOST="${SERVER_PRIV_IP}"
+  SERVER_SSH_OPTS=("${SSH_OPTS[@]}" -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i ${SSH_KEY_FILE} -W %h:%p root@${CLIENT_PUB_IP}")
+  ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "true"
+  log "VPC ProxyJump SSH ready on bowl-bench-server (${SERVER_PRIV_IP})"
+elif [[ "${CLIENT_OK}" == "0" && "${SERVER_OK}" == "1" ]]; then
+  log "Client public IP (${CLIENT_PUB_IP}) has cross-border lag; routing Client SSH via Server (${SERVER_PUB_IP}) -> VPC (${CLIENT_PRIV_IP})..."
+  CLIENT_SSH_HOST="${CLIENT_PRIV_IP}"
+  CLIENT_SSH_OPTS=("${SSH_OPTS[@]}" -o "ProxyCommand=ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i ${SSH_KEY_FILE} -W %h:%p root@${SERVER_PUB_IP}")
+  ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "true"
+  log "VPC ProxyJump SSH ready on bowl-bench-client (${CLIENT_PRIV_IP})"
+elif [[ "${SERVER_OK}" == "0" && "${CLIENT_OK}" == "0" ]]; then
+  log "ERROR: Both instances timed out on direct SSH."
+  exit 1
+fi
+
+# Also allow Client root SSH into Server over VPC private IP so Client runner can drop Server caches & reset storage cleanly
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ssh/id_rsa"
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
+
+# ==============================================================================
+# Step 3: Deploy Storage Service + PostgreSQL + Redis + MinIO on Server Node
+# ==============================================================================
+log "Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (${SERVER_PRIV_IP})..."
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis"
+if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/server-bins.tar.gz" "root@${SERVER_SSH_HOST}:/tmp/server-bins.tar.gz"
+  scp "${SERVER_SSH_OPTS[@]}" "${REPO_ROOT}"/services/storage/db/migrations/*.sql "root@${SERVER_SSH_HOST}:/opt/bowl/migrations/"
+fi
+
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "TARGETS_TO_RUN='${TARGETS_TO_RUN}' bash -s" <<'EOF'
+set -euo pipefail
+if [[ -f /tmp/server-bins.tar.gz ]]; then
+  tar -xzf /tmp/server-bins.tar.gz -C /usr/local/bin/
+  chmod +x /usr/local/bin/storage-service /usr/local/bin/goose
+  rm -f /tmp/server-bins.tar.gz
+fi
+
+while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y -qq
+apt-get install -y -qq postgresql redis-server iperf3 fio jq curl unzip
+
+# Install rclone v1.68.2 (with native `rclone serve s3` and `rclone serve webdav` support)
+curl -fsSL https://github.com/rclone/rclone/releases/download/v1.68.2/rclone-v1.68.2-linux-amd64.deb -o /tmp/rclone.deb
+dpkg -i /tmp/rclone.deb
+rm -f /tmp/rclone.deb
+
+# 1. Configure PostgreSQL 16 (listen on 0.0.0.0 for jfs_pg, local for bowl)
+systemctl enable --now postgresql
+PG_CONF_FILE="$(sudo -u postgres psql -tAc 'SHOW config_file;' | xargs)"
+PG_HBA_FILE="$(sudo -u postgres psql -tAc 'SHOW hba_file;' | xargs)"
+grep -q "^listen_addresses = '\*'" "${PG_CONF_FILE}" || echo "listen_addresses = '*'" >> "${PG_CONF_FILE}"
+grep -q "172.16.0.0/12" "${PG_HBA_FILE}" || echo "host all all 172.16.0.0/12 md5" >> "${PG_HBA_FILE}"
+
+sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+for db in bowl jfs_pg; do
+  sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 || \
+    sudo -u postgres psql -c "CREATE DATABASE ${db};"
+done
+sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '300';"
+sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '2GB';"
+systemctl restart postgresql
+
+if [[ -x /usr/local/bin/goose ]]; then
+  /usr/local/bin/goose -dir /opt/bowl/migrations postgres "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable" up
+fi
+
+# 2. Configure Redis 7 (AOF everysec, bind 0.0.0.0)
+sed -i 's/^bind /# bind /' /etc/redis/redis.conf
+cat >>/etc/redis/redis.conf <<'REDIS_EOF'
+bind 0.0.0.0
+protected-mode no
+appendonly yes
+appendfsync everysec
+REDIS_EOF
+systemctl enable --now redis-server
+systemctl restart redis-server
+
+# 3. Start S3 (:9001) & WebDAV (:9002) Object Storage Servers via rclone on Server node cloud_essd
+mkdir -p /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis
+
+cat >/etc/systemd/system/jfs-s3.service <<'UNIT'
+[Unit]
+Description=Rclone S3 Object Storage Server for JuiceFS Benchmark
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rclone serve s3 /var/lib/minio/data --addr 0.0.0.0:9001 --auth-key minioadmin,minioadmin
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+cat >/etc/systemd/system/jfs-webdav.service <<'UNIT'
+[Unit]
+Description=Rclone WebDAV Object Storage Server for JuiceFS Benchmark
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rclone serve webdav /var/lib/minio/data --addr 0.0.0.0:9002
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now jfs-s3 jfs-webdav
+
+if [[ -x /usr/local/bin/storage-service ]]; then
+  cat >/etc/systemd/system/bowl-storage.service <<'UNIT'
+[Unit]
+Description=Bowl Storage Service
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+Environment="SERVER_HOST=0.0.0.0"
+Environment="SERVER_PORT=9000"
+Environment="SERVER_READ_MAX_BYTES=16777216"
+Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
+Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
+Environment="DB_MAX_CONNS=64"
+Environment="DB_MIN_CONNS=8"
+Environment="STORAGE_ATIME_MODE=noatime"
+Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=1.0"
+Environment="STORAGE_ATTR_TIMEOUT_SECONDS=1.0"
+Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=1.0"
+Environment="LOG_LEVEL=warn"
+Environment="OTEL_ENABLED=false"
+ExecStart=/usr/local/bin/storage-service
+Restart=always
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now bowl-storage
+fi
+
+for i in {1..30}; do
+  if ss -tln | grep -q ':9001 ' && ss -tln | grep -q ':9002 ' && ss -tln | grep -q ':6379 '; then
+    break
+  fi
+  sleep 1
+done
+if ! (ss -tln | grep -q ':9001 ' && ss -tln | grep -q ':9002 ' && ss -tln | grep -q ':6379 '); then
+  echo "ERROR: Some server ports failed to listen:"
+  ss -tlnp
+  journalctl -u bowl-storage -u jfs-s3 -u jfs-webdav -u redis-server -n 30 --no-pager || true
+  exit 1
+fi
+
+pkill -f "iperf3 -s" || true
+iperf3 -s -D
+EOF
+log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy."
+
+# Measure Server local cloud_essd disk baseline + Server system info
+log "Measuring Server local cloud_essd disk baseline..."
+SERVER_INFO_JSON="$(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
+set -euo pipefail
+mkdir -p /var/lib/bowl/disk_bench
+WRITE_BW_BPS="$(fio --name=disk-base-w --directory=/var/lib/bowl/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
+READ_BW_BPS="$(fio --name=disk-base-w --directory=/var/lib/bowl/disk_bench --rw=read --bs=4M --size=2G --direct=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
+rm -rf /var/lib/bowl/disk_bench
+WRITE_MIB="$(awk -v b="${WRITE_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+READ_MIB="$(awk -v b="${READ_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+
+CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+VCPU="$(nproc)"
+MEM_GIB="$(awk '/MemTotal/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo)"
+OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
+KERNEL="$(uname -r)"
+PG_VER="$(psql --version | head -n1)"
+REDIS_VER="$(redis-server --version | awk '{print $1, $2, $3}')"
+MINIO_VER="$(rclone --version | head -n1)"
+
+jq -n \
+  --arg cpu "${CPU_MODEL}" \
+  --arg vcpu "${VCPU}" \
+  --arg mem "${MEM_GIB}" \
+  --arg os "${OS_REL}" \
+  --arg kernel "${KERNEL}" \
+  --arg pg "${PG_VER}" \
+  --arg redis "${REDIS_VER}" \
+  --arg minio "${MINIO_VER}" \
+  --arg disk_w "${WRITE_MIB}" \
+  --arg disk_r "${READ_MIB}" \
+  '{
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, minio_version: $minio},
+    disk_baseline: {local_seq_write_mib_s: $disk_w, local_seq_read_mib_s: $disk_r}
+  }'
+EOF
+)"
+log "Server baseline: $(echo "${SERVER_INFO_JSON}" | jq -c '.')"
+
+# ==============================================================================
+# Step 4: Deploy Bowl FUSE Client, JuiceFS CLI, fio, and mdtest on Client Node
+# ==============================================================================
+log "Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (${CLIENT_PRIV_IP})..."
+if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  scp "${CLIENT_SSH_OPTS[@]}" "${WORK_DIR}/client-bins.tar.gz" "root@${CLIENT_SSH_HOST}:/tmp/client-bins.tar.gz"
+fi
+
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF'
+set -euo pipefail
+if [[ -f /tmp/client-bins.tar.gz ]]; then
+  tar -xzf /tmp/client-bins.tar.gz -C /usr/local/bin/
+  chmod +x /usr/local/bin/bowl
+  rm -f /tmp/client-bins.tar.gz
+fi
+while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y -qq
+apt-get install -y -qq fuse3 libfuse3-dev iperf3 fio openmpi-bin libopenmpi-dev git build-essential autoconf automake libtool pkg-config python3 jq curl
+
+grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
+
+# Install JuiceFS v1.2.1 Linux amd64 binary
+if [[ ! -x /usr/local/bin/juicefs ]]; then
+  curl -fsSL https://github.com/juicedata/juicefs/releases/download/v1.2.1/juicefs-1.2.1-linux-amd64.tar.gz -o /tmp/juicefs.tar.gz
+  tar -xzf /tmp/juicefs.tar.gz -C /tmp juicefs
+  mv /tmp/juicefs /usr/local/bin/juicefs
+  chmod +x /usr/local/bin/juicefs
+  rm -f /tmp/juicefs.tar.gz
+fi
+
+# Build mdtest from hpc/ior
+if [[ ! -x /usr/local/bin/mdtest ]]; then
+  rm -rf /opt/ior
+  git clone --depth 1 --branch 3.3.0 https://github.com/hpc/ior.git /opt/ior || git clone --depth 1 https://github.com/hpc/ior.git /opt/ior
+  cd /opt/ior
+  ./bootstrap
+  ./configure
+  make -j"$(nproc)"
+  cp src/mdtest /usr/local/bin/mdtest
+  chmod +x /usr/local/bin/mdtest
+fi
+EOF
+
+# Collect Client metadata + internal VPC network baseline
+log "Measuring internal VPC RTT and throughput (${CLIENT_PRIV_IP} -> ${SERVER_PRIV_IP})..."
+CLIENT_INFO_JSON="$(ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP=${SERVER_PRIV_IP} bash -s" <<'EOF'
+set -euo pipefail
+PING_OUT="$(ping -c 20 -i 0.05 "${SERVER_PRIV_IP}" | tail -n 1)"
+PING_RTT="$(echo "${PING_OUT}" | awk -F'=' '{gsub(/ ms/, "", $2); gsub(/^[ \t]+/, "", $2); print $2}')"
+
+IPERF_BPS="$(iperf3 -c "${SERVER_PRIV_IP}" -t 5 -J | jq -r '.end.sum_received.bits_per_second // 0')"
+IPERF_GBPS="$(awk -v bps="${IPERF_BPS}" 'BEGIN {printf "%.2f", bps / 1e9}')"
+
+CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
+VCPU="$(nproc)"
+MEM_GIB="$(awk '/MemTotal/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo)"
+OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
+KERNEL="$(uname -r)"
+FUSER_VER="$(fusermount3 -V | head -n1)"
+JFS_VER="$(/usr/local/bin/juicefs --version | head -n1)"
+FIO_VER="$(fio --version | head -n1)"
+MDTEST_VER="$(/usr/local/bin/mdtest --help 2>&1 | grep -m1 -o 'mdtest-[0-9.+a-zA-Z_-]*' || echo 'mdtest-3.3.0')"
+
+jq -n \
+  --arg cpu "${CPU_MODEL}" \
+  --arg vcpu "${VCPU}" \
+  --arg mem "${MEM_GIB}" \
+  --arg os "${OS_REL}" \
+  --arg kernel "${KERNEL}" \
+  --arg fuser "${FUSER_VER}" \
+  --arg jfs_ver "${JFS_VER}" \
+  --arg fio_ver "${FIO_VER}" \
+  --arg mdtest_ver "${MDTEST_VER}" \
+  --arg ping_rtt "${PING_RTT}" \
+  --arg iperf_gbps "${IPERF_GBPS}" \
+  '{
+    client: {
+      cpu_model: $cpu,
+      vcpu: $vcpu,
+      memory_gib: $mem,
+      os_release: $os,
+      kernel: $kernel,
+      fusermount_version: $fuser,
+      juicefs_version: $jfs_ver,
+      fio_version: $fio_ver,
+      mdtest_version: $mdtest_ver
+    },
+    network: {ping_rtt_ms: $ping_rtt, iperf3_gbps: $iperf_gbps}
+  }'
+EOF
+)"
+log "Client info & VPC network baseline: $(echo "${CLIENT_INFO_JSON}" | jq -c '.')"
+
+# ==============================================================================
+# Step 5: Execute Full Benchmark Suites on Bowl, JuiceFS (PG), JuiceFS (Redis)
+# ==============================================================================
+TEST_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log "Step 5/6: Running benchmark suites (${TARGETS_TO_RUN}) on Client -> Server..."
+
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat >/tmp/run_client_bench.sh && chmod +x /tmp/run_client_bench.sh" <<'BENCH_EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+OUT_DIR="/tmp/bench_results"
+rm -rf "${OUT_DIR}"
+mkdir -p "${OUT_DIR}"
+TIMINGS_FILE="${OUT_DIR}/stage_timings.jsonl"
+: > "${TIMINGS_FILE}"
+
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+
+drop_all_caches() {
+  sync
+  echo 3 > /proc/sys/vm/drop_caches
+  # Clear JuiceFS local client read cache staging so reads hit Server storage fairly
+  find /var/jfsCache -mindepth 2 -type f -delete 2>/dev/null || true
+  "${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches"
+}
+
+record_timing() {
+  local target="$1"
+  local suite="$2"
+  local elapsed="$3"
+  jq -nc --arg t "${target}" --arg s "${suite}" --argjson d "${elapsed}" \
+    '{target: $t, suite: $s, duration_sec: $d}' >> "${TIMINGS_FILE}"
+}
+
+run_suites_on_mount() {
+  local target="$1"
+  local mp="$2"
+
+  echo "=================================================================="
+  echo "[${target}] Starting benchmark suites on ${mp} ..."
+  echo "=================================================================="
+
+  # 1. juicefs bench -p 4
+  echo "[${target}] [1/3] Running juicefs bench ${mp} -p 4 ..."
+  drop_all_caches
+  local t0
+  t0="$(date +%s.%N)"
+  /usr/local/bin/juicefs bench "${mp}" -p 4 </dev/null 2>&1 | tee "${OUT_DIR}/bench_${target}.log"
+  local t1
+  t1="$(date +%s.%N)"
+  record_timing "${target}" "juicefs_bench" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
+
+  # 2. fio suite (8 workloads)
+  echo "[${target}] [2/3] Running fio suite (8 workloads) on ${mp}/fio_work ..."
+  local fio_dir="${mp}/fio_work"
+  rm -rf "${fio_dir}"
+  mkdir -p "${fio_dir}"
+
+  t0="$(date +%s.%N)"
+
+  # 2.1 seq_write_1job (4M, 4G, 1 job)
+  echo "  -> [${target}] fio seq_write_1job (bs=4M, size=4G, numjobs=1)"
+  drop_all_caches
+  fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
+
+  # 2.2 seq_read_1job (4M, 4G, 1 job)
+  echo "  -> [${target}] fio seq_read_1job (bs=4M, size=4G, numjobs=1)"
+  drop_all_caches
+  fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
+  rm -f "${fio_dir}"/seq1*
+
+  # 2.3 seq_write_16jobs (4M, 1G x 16 = 16GiB)
+  echo "  -> [${target}] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)"
+  drop_all_caches
+  fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
+
+  # 2.4 seq_read_16jobs (4M, 1G x 16 = 16GiB)
+  echo "  -> [${target}] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)"
+  drop_all_caches
+  fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
+  rm -f "${fio_dir}"/seq16*
+
+  # 2.5 direct_write_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  echo "  -> [${target}] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
+  drop_all_caches
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
+
+  # 2.6 direct_read_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  echo "  -> [${target}] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
+  drop_all_caches
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
+
+  # 2.7 direct_randwrite_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  echo "  -> [${target}] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
+  drop_all_caches
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
+
+  # 2.8 direct_randread_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  echo "  -> [${target}] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
+  drop_all_caches
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
+
+  rm -rf "${fio_dir}"
+  t1="$(date +%s.%N)"
+  record_timing "${target}" "fio" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
+
+  # 3. mdtest suite (1-proc standard + 4-proc MPI)
+  echo "[${target}] [3/3] Running mdtest suite on ${mp} ..."
+  t0="$(date +%s.%N)"
+  drop_all_caches
+  /usr/local/bin/mdtest -d "${mp}/mdtest_1p" -b 6 -I 8 -z 4 </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_1proc.log"
+  rm -rf "${mp}/mdtest_1p"
+
+  drop_all_caches
+  mpirun --allow-run-as-root --oversubscribe -np 4 /usr/local/bin/mdtest -d "${mp}/mdtest_4p" -b 3 -z 2 -I 20 -u </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_4proc.log"
+  rm -rf "${mp}/mdtest_4p"
+  t1="$(date +%s.%N)"
+  record_timing "${target}" "mdtest" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
+}
+
+has_target() {
+  [[ " ${TARGETS_TO_RUN} " == *" $1 "* ]]
+}
+
+# ------------------------------------------------------------------------------
+# Target 1: Bowl (PostgreSQL 16 + Server BlockStore)
+# ------------------------------------------------------------------------------
+if has_target "bowl"; then
+  ENDPOINT="http://${SERVER_PRIV_IP}:9000"
+  CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "jfs-bench-disk" --endpoint "${ENDPOINT}" --json)"
+  DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
+  echo "${CREATE_JSON}" > "${OUT_DIR}/bowl_disk.json"
+
+  mkdir -p /mnt/bowl
+  /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+  run_suites_on_mount "bowl" "/mnt/bowl"
+  /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
+  "${SSH_SRV[@]}" "systemctl stop bowl-storage && rm -rf /var/lib/bowl/data/* && mkdir -p /var/lib/bowl/data"
+fi
+
+# ------------------------------------------------------------------------------
+# Target 2: JuiceFS + PostgreSQL 16 (jfs_pg)
+# ------------------------------------------------------------------------------
+if has_target "jfs_pg"; then
+  export AWS_ACCESS_KEY_ID=minioadmin
+  export AWS_SECRET_ACCESS_KEY=minioadmin
+  export MINIO_ACCESS_KEY=minioadmin
+  export MINIO_SECRET_KEY=minioadmin
+  PG_META_URL="postgres://postgres:postgres@${SERVER_PRIV_IP}:5432/jfs_pg?sslmode=disable"
+  if ! /usr/local/bin/juicefs format \
+    --storage minio \
+    --bucket "http://${SERVER_PRIV_IP}:9001/jfs-pg" \
+    --access-key minioadmin \
+    --secret-key minioadmin \
+    --trash-days 0 \
+    --force \
+    "${PG_META_URL}" \
+    jfs-pg-bench </dev/null; then
+    /usr/local/bin/juicefs format \
+      --storage webdav \
+      --bucket "http://${SERVER_PRIV_IP}:9002/jfs-pg/" \
+      --trash-days 0 \
+      --force \
+      "${PG_META_URL}" \
+      jfs-pg-bench </dev/null
+  fi
+
+  mkdir -p /mnt/jfs_pg
+  /usr/local/bin/juicefs mount -d --no-usage-report "${PG_META_URL}" /mnt/jfs_pg </dev/null
+  run_suites_on_mount "jfs_pg" "/mnt/jfs_pg"
+  /usr/local/bin/juicefs umount /mnt/jfs_pg || umount -l /mnt/jfs_pg || true
+  rm -rf /var/jfsCache/*
+  "${SSH_SRV[@]}" "rm -rf /var/lib/minio/data/jfs-pg/* && mkdir -p /var/lib/minio/data/jfs-pg"
+fi
+
+# ------------------------------------------------------------------------------
+# Target 3: JuiceFS + Redis 7 (jfs_redis)
+# ------------------------------------------------------------------------------
+if has_target "jfs_redis"; then
+  export AWS_ACCESS_KEY_ID=minioadmin
+  export AWS_SECRET_ACCESS_KEY=minioadmin
+  export MINIO_ACCESS_KEY=minioadmin
+  export MINIO_SECRET_KEY=minioadmin
+  REDIS_META_URL="redis://${SERVER_PRIV_IP}:6379/1"
+  if ! /usr/local/bin/juicefs format \
+    --storage minio \
+    --bucket "http://${SERVER_PRIV_IP}:9001/jfs-redis" \
+    --access-key minioadmin \
+    --secret-key minioadmin \
+    --trash-days 0 \
+    --force \
+    "${REDIS_META_URL}" \
+    jfs-redis-bench </dev/null; then
+    /usr/local/bin/juicefs format \
+      --storage webdav \
+      --bucket "http://${SERVER_PRIV_IP}:9002/jfs-redis/" \
+      --trash-days 0 \
+      --force \
+      "${REDIS_META_URL}" \
+      jfs-redis-bench </dev/null
+  fi
+
+  mkdir -p /mnt/jfs_redis
+  /usr/local/bin/juicefs mount -d --no-usage-report "${REDIS_META_URL}" /mnt/jfs_redis </dev/null
+  run_suites_on_mount "jfs_redis" "/mnt/jfs_redis"
+  /usr/local/bin/juicefs umount /mnt/jfs_redis || umount -l /mnt/jfs_redis || true
+  rm -rf /var/jfsCache/*
+fi
+BENCH_EOF
+
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' TARGETS_TO_RUN='${TARGETS_TO_RUN}' bash /tmp/run_client_bench.sh </dev/null"
+
+TEST_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+log "Benchmark targets (${TARGETS_TO_RUN}) completed at ${TEST_COMPLETED_AT}. Fetching results..."
+
+if [[ -f "${RESULTS_DIR}/stage_timings.jsonl" ]]; then
+  cp "${RESULTS_DIR}/stage_timings.jsonl" "${WORK_DIR}/prev_stage_timings.jsonl"
+fi
+scp -r "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/"* "${RESULTS_DIR}/"
+if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
+  cat "${WORK_DIR}/prev_stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl" | jq -sc 'unique_by(.target + ":" + .suite) | .[]' > "${WORK_DIR}/merged_timings.jsonl"
+  mv "${WORK_DIR}/merged_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
+fi
+if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
+  BOWL_DISK_JSON="$(cat "${RESULTS_DIR}/bowl_disk.json")"
+else
+  BOWL_DISK_JSON='{"disk_id":"01a18c0e-61ab-7afb-ab0c-67ffb1f51473","root_ino":2}'
+fi
+
+# ==============================================================================
+# Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
+# ==============================================================================
+log "Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md..."
+if [[ "${KEEP_INSTANCES}" != "1" ]]; then
+  aliyun ecs DeleteInstances \
+    --RegionId "${REGION_ID}" \
+    --Force true \
+    --InstanceId.1 "${SERVER_ID}" \
+    --InstanceId.2 "${CLIENT_ID}" >/dev/null
+
+  for poll in {1..30}; do
+    COUNT="$(aliyun ecs DescribeInstances --RegionId "${REGION_ID}" --InstanceIds "${INSTANCE_IDS_JSON}" | jq -r '.TotalCount // 0')"
+    if [[ "${COUNT}" == "0" ]]; then
+      REMAINING_INSTANCES=0
+      INSTANCES_DELETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      log "Verified both ECS instances (${SERVER_ID}, ${CLIENT_ID}) are deleted (Remaining: 0)."
+      break
+    fi
+    REMAINING_INSTANCES="${COUNT}"
+    sleep 5
+  done
+  rm -f "${CREATED_INSTANCES_FILE}"
+
+  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  KEY_CREATED=0
+fi
+
+BOWL_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+
+jq -n \
+  --arg test_started_at "${TEST_STARTED_AT}" \
+  --arg test_completed_at "${TEST_COMPLETED_AT}" \
+  --arg region_id "${REGION_ID}" \
+  --arg zone_id "${ZONE_ID}" \
+  --arg vpc_id "${VPC_ID}" \
+  --arg vswitch_id "${VSWITCH_ID}" \
+  --arg sg_id "${SECURITY_GROUP_ID}" \
+  --arg instance_type "${INSTANCE_TYPE}" \
+  --arg image_id "${IMAGE_ID}" \
+  --arg disk_cat "${SYSTEM_DISK_CATEGORY}" \
+  --argjson disk_size "${SYSTEM_DISK_SIZE}" \
+  --arg server_id "${SERVER_ID}" \
+  --arg server_priv_ip "${SERVER_PRIV_IP}" \
+  --arg client_id "${CLIENT_ID}" \
+  --arg client_priv_ip "${CLIENT_PRIV_IP}" \
+  --arg bowl_commit "${BOWL_GIT_COMMIT}" \
+  --arg key_pair "${KEY_PAIR_NAME}" \
+  --arg created_at "${INSTANCES_CREATED_AT}" \
+  --arg deleted_at "${INSTANCES_DELETED_AT:-kept}" \
+  --argjson remaining "${REMAINING_INSTANCES}" \
+  --argjson srv "${SERVER_INFO_JSON}" \
+  --argjson cli "${CLIENT_INFO_JSON}" \
+  --argjson bowl_disk "${BOWL_DISK_JSON}" \
+  '{
+    test_started_at: $test_started_at,
+    test_completed_at: $test_completed_at,
+    cloud: {
+      provider: "Alibaba Cloud (阿里云)",
+      region_id: $region_id,
+      zone_id: $zone_id,
+      vpc_id: $vpc_id,
+      vswitch_id: $vswitch_id,
+      cidr_block: "172.16.1.0/24",
+      security_group_id: $sg_id,
+      instance_type: $instance_type,
+      instance_charge_type: "PostPaid (按量计费)",
+      image_id: $image_id,
+      system_disk_category: $disk_cat,
+      system_disk_size_gib: $disk_size
+    },
+    server_node: ($srv.server + {instance_id: $server_id, private_ip: $server_priv_ip}),
+    server_disk_baseline: $srv.disk_baseline,
+    client_node: ($cli.client + {instance_id: $client_id, private_ip: $client_priv_ip}),
+    network_baseline: $cli.network,
+    bowl_config: {
+      bowl_git_commit: $bowl_commit,
+      disk_id: $bowl_disk.disk_id,
+      root_ino: $bowl_disk.root_ino,
+      disk_size: "2PiB",
+      atime_mode: "noatime",
+      entry_timeout: "1.0s",
+      attr_timeout: "1.0s",
+      dir_entry_timeout: "1.0s"
+    },
+    juicefs_config: {
+      storage_backend: "MinIO S3 (Server node cloud_essd)",
+      trash_days: 0,
+      block_size: "4MiB (default)",
+      chunk_size: "64MiB (default)"
+    },
+    cleanup_audit: {
+      key_pair_name: $key_pair,
+      instances_created_at: $created_at,
+      instances_deleted_at: $deleted_at,
+      remaining_benchmark_instances: $remaining
+    }
+  }' > "${RESULTS_DIR}/env_metadata.json"
+
+PYTHONDONTWRITEBYTECODE=1 python3 "${SCRIPT_DIR}/parse_results.py" \
+  --results-dir "${RESULTS_DIR}" \
+  --summary-out "${RESULTS_DIR}/summary.json" \
+  --report-out "${REPORT_FILE}"
+
+log "Benchmark complete! Report written to: ${REPORT_FILE}"

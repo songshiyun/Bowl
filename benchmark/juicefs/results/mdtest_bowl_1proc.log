@@ -1,0 +1,24 @@
+-- started at 10/30/2026 17:18:39 --
+
+mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
+Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
+Path: /mnt/bowl
+FS: 2048.0 TiB   Used FS: 0.0%   Inodes: 0.0 Mi   Used Inodes: 100.0%
+
+Nodemap: 1
+1 tasks, 12440 files/directories
+
+SUMMARY rate: (of 1 iterations)
+   Operation                      Max            Min           Mean        Std Dev
+   ---------                      ---            ---           ----        -------
+   Directory creation        :        506.057        506.057        506.057          0.000
+   Directory stat            :       2135.339       2135.339       2135.339          0.000
+   Directory removal         :        433.704        433.704        433.704          0.000
+   File creation             :        272.299        272.299        272.299          0.000
+   File stat                 :       2038.657       2038.657       2038.657          0.000
+   File read                 :        289.207        289.207        289.207          0.000
+   File removal              :        438.616        438.616        438.616          0.000
+   Tree creation             :        565.175        565.175        565.175          0.000
+   Tree removal              :        471.388        471.388        471.388          0.000
+-- finished at 10/30/2026 17:21:47 --
+
