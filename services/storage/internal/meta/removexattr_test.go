@@ -520,7 +520,16 @@ func TestRemoveXattr_OrphanReclamationCascade(t *testing.T) {
 		orphanIno := uint64(300)
 		fh := uint64(10)
 
-		// 1. GetInodeForUpdate 获取排他锁
+		// 1. GetInode 检出孤儿节点后 GetInodeForUpdate 获取排他锁
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(orphanIno)).
+			Return(db.Inode{
+				Ino:   int64(orphanIno),
+				Mode:  int32(meta.S_IFREG | 0o644),
+				Nlink: 0, // 孤儿节点
+			}, nil).
+			Once()
+
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(orphanIno)).
 			Return(db.Inode{

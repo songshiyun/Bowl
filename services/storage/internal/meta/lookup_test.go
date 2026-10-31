@@ -58,55 +58,38 @@ func TestLookup_PositivePath(t *testing.T) {
 
 	t.Run("successfully lookup entry with correct attribute mappings", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(2)
 		targetName := []byte("file.txt")
 		targetIno := uint64(10)
 
-		parentRow := db.Inode{
-			Ino:        int64(parentIno),
-			Generation: 1,
-			Mode:       int32(meta.S_IFDIR | 0o755),
-			Size:       4096,
-			Nlink:      2,
-			Uid:        1000,
-			Gid:        1000,
-			Rdev:       0,
-			Atime:      pgtype.Timestamptz{Time: now, Valid: true},
-			Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
-			Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+		row := db.LookupEntryWithParentRow{
+			ParentMode:      int32(meta.S_IFDIR | 0o755),
+			ParentNlink:     2,
+			ChildFound:      true,
+			ChildIno:        pgtype.Int8{Int64: int64(targetIno), Valid: true},
+			ChildGeneration: pgtype.Int8{Int64: 3, Valid: true},
+			ChildMode:       pgtype.Int4{Int32: int32(0o100644), Valid: true},
+			ChildSize:       pgtype.Int8{Int64: 1024, Valid: true},
+			ChildNlink:      pgtype.Int4{Int32: 1, Valid: true},
+			ChildUid:        pgtype.Int4{Int32: 1001, Valid: true},
+			ChildGid:        pgtype.Int4{Int32: 1001, Valid: true},
+			ChildRdev:       pgtype.Int8{Int64: 42, Valid: true},
+			ChildAtime:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+			ChildMtime:      pgtype.Timestamptz{Time: now.Add(-30 * time.Minute), Valid: true},
+			ChildCtime:      pgtype.Timestamptz{Time: now.Add(-10 * time.Minute), Valid: true},
+			ChildFlags:      pgtype.Int4{Int32: 7, Valid: true},
+			ChildParentIno:  pgtype.Int8{Int64: int64(parentIno), Valid: true},
+			ChildRootIno:    pgtype.Int8{Int64: 1, Valid: true},
 		}
 
-		targetRow := db.Inode{
-			Ino:        int64(targetIno),
-			Generation: 3,
-			Mode:       int32(0o100644), // regular file
-			Size:       1024,
-			Nlink:      1,
-			Uid:        1001,
-			Gid:        1001,
-			Rdev:       42,
-			Atime:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
-			Mtime:      pgtype.Timestamptz{Time: now.Add(-30 * time.Minute), Valid: true},
-			Ctime:      pgtype.Timestamptz{Time: now.Add(-10 * time.Minute), Valid: true},
-		}
-
-		// Configure mock expectations
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(parentRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-				ParentIno: int64(parentIno),
-				Name:      targetName,
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: targetName,
 			}).
-			Return(targetRow, nil).
+			Return(row, nil).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, targetName)
@@ -123,52 +106,45 @@ func TestLookup_PositivePath(t *testing.T) {
 		assert.Equal(t, uint32(0), inode.Attr.Rdev)
 		assert.Equal(t, meta.DefaultBlockSize, inode.Attr.Blksize)
 		assert.Equal(t, uint64(2), inode.Attr.Blocks) // (1024 + 511) / 512 = 2
-		assert.Equal(t, targetRow.Atime.Time, inode.Attr.Atime)
-		assert.Equal(t, targetRow.Mtime.Time, inode.Attr.Mtime)
-		assert.Equal(t, targetRow.Ctime.Time, inode.Attr.Ctime)
+		assert.Equal(t, row.ChildAtime.Time, inode.Attr.Atime)
+		assert.Equal(t, row.ChildMtime.Time, inode.Attr.Mtime)
+		assert.Equal(t, row.ChildCtime.Time, inode.Attr.Ctime)
+		assert.Equal(t, uint32(7), inode.Attr.Flags)
+		assert.Equal(t, parentIno, inode.Attr.ParentIno)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("successfully lookup non-UTF8 raw bytes entry", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(2)
 		rawTargetName := []byte{0xff, 0xfe, 0x80, 0x81, 'b', 'i', 'n'}
 		targetIno := uint64(11)
 
-		parentRow := db.Inode{
-			Ino:   int64(parentIno),
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
+		row := db.LookupEntryWithParentRow{
+			ParentMode:  int32(meta.S_IFDIR | 0o755),
+			ParentNlink: 2,
+			ChildFound:  true,
+			ChildIno:    pgtype.Int8{Int64: int64(targetIno), Valid: true},
+			ChildMode:   pgtype.Int4{Int32: int32(0o100644), Valid: true},
+			ChildSize:   pgtype.Int8{Int64: 512, Valid: true},
+			ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
 		}
 
-		targetRow := db.Inode{
-			Ino:   int64(targetIno),
-			Mode:  int32(0o100644),
-			Size:  512,
-			Nlink: 1,
-		}
-
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(parentRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-				ParentIno: int64(parentIno),
-				Name:      rawTargetName,
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: rawTargetName,
 			}).
-			Return(targetRow, nil).
+			Return(row, nil).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, rawTargetName)
 		require.NoError(t, err)
 		require.NotNil(t, inode)
 		assert.Equal(t, targetIno, inode.Ino)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 }
 
@@ -220,38 +196,27 @@ func TestLookup_DynamicBlockCalculations(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
-			mockQuerier := dbmock.NewMockQuerier(t)
 			mgr := meta.New(mockStore)
 
 			parentIno := uint64(2)
 			entryName := []byte("test_file")
 
-			parentRow := db.Inode{
-				Ino:   int64(parentIno),
-				Mode:  int32(meta.S_IFDIR | 0o755),
-				Nlink: 2,
+			row := db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 100, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(0o100644), Valid: true},
+				ChildSize:   pgtype.Int8{Int64: tc.size, Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
 			}
 
-			targetRow := db.Inode{
-				Ino:   100,
-				Mode:  int32(0o100644),
-				Size:  tc.size,
-				Nlink: 1,
-			}
-
-			setupMockTx(mockStore, mockQuerier)
-
-			mockQuerier.EXPECT().
-				GetInode(mock.Anything, int64(parentIno)).
-				Return(parentRow, nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-					ParentIno: int64(parentIno),
-					Name:      entryName,
+			mockStore.EXPECT().
+				LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+					Ino:  int64(parentIno),
+					Name: entryName,
 				}).
-				Return(targetRow, nil).
+				Return(row, nil).
 				Once()
 
 			inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -259,6 +224,7 @@ func TestLookup_DynamicBlockCalculations(t *testing.T) {
 			require.NotNil(t, inode)
 			assert.Equal(t, meta.DefaultBlockSize, inode.Attr.Blksize)
 			assert.Equal(t, tc.expectedBlocks, inode.Attr.Blocks)
+			mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -271,77 +237,77 @@ func TestLookup_InputValidation(t *testing.T) {
 		parentIno uint64
 		entryName []byte
 		wantErr   error
-		expectTx  bool
+		expectDB  bool
 	}{
 		{
 			name:      "parentIno 0 invalid",
 			parentIno: 0,
 			entryName: []byte("file.txt"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with slash invalid",
 			parentIno: 2,
 			entryName: []byte("dir/file.txt"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with leading slash invalid",
 			parentIno: 2,
 			entryName: []byte("/file.txt"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with trailing slash invalid",
 			parentIno: 2,
 			entryName: []byte("file.txt/"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with embedded NUL byte invalid",
 			parentIno: 2,
 			entryName: []byte("a\x00b"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with single NUL byte invalid",
 			parentIno: 2,
 			entryName: []byte("\x00"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with leading NUL byte invalid",
 			parentIno: 2,
 			entryName: []byte("\x00file.txt"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with trailing NUL byte invalid",
 			parentIno: 2,
 			entryName: []byte("file.txt\x00"),
 			wantErr:   meta.ErrInvalidArgument,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with 256 chars invalid",
 			parentIno: 2,
 			entryName: []byte(strings.Repeat("a", 256)),
 			wantErr:   meta.ErrNameTooLong,
-			expectTx:  false,
+			expectDB:  false,
 		},
 		{
 			name:      "name with exactly 255 chars valid",
 			parentIno: 2,
 			entryName: []byte(strings.Repeat("a", 255)),
 			wantErr:   nil,
-			expectTx:  true,
+			expectDB:  true,
 		},
 	}
 
@@ -350,32 +316,24 @@ func TestLookup_InputValidation(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
 			mgr := meta.New(mockStore)
 
-			if !tc.expectTx {
+			if !tc.expectDB {
 				inode, err := mgr.Lookup(ctx, tc.parentIno, tc.entryName)
 				assert.Nil(t, inode)
 				assert.ErrorIs(t, err, tc.wantErr)
 				mockStore.AssertNotCalled(t, "ExecTxWithOptions")
+				mockStore.AssertNotCalled(t, "LookupEntryWithParent", mock.Anything, mock.Anything)
 			} else {
-				mockQuerier := dbmock.NewMockQuerier(t)
-				setupMockTx(mockStore, mockQuerier)
-
-				mockQuerier.EXPECT().
-					GetInode(mock.Anything, int64(tc.parentIno)).
-					Return(db.Inode{
-						Ino:   int64(tc.parentIno),
-						Mode:  int32(meta.S_IFDIR | 0o755),
-						Nlink: 2,
-					}, nil).
-					Once()
-
-				mockQuerier.EXPECT().
-					GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-						ParentIno: int64(tc.parentIno),
-						Name:      tc.entryName,
+				mockStore.EXPECT().
+					LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+						Ino:  int64(tc.parentIno),
+						Name: tc.entryName,
 					}).
-					Return(db.Inode{
-						Ino:  100,
-						Mode: int32(0o100644),
+					Return(db.LookupEntryWithParentRow{
+						ParentMode:  int32(meta.S_IFDIR | 0o755),
+						ParentNlink: 2,
+						ChildFound:  true,
+						ChildIno:    pgtype.Int8{Int64: 100, Valid: true},
+						ChildMode:   pgtype.Int4{Int32: int32(0o100644), Valid: true},
 					}, nil).
 					Once()
 
@@ -383,6 +341,7 @@ func TestLookup_InputValidation(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, inode)
 				assert.Equal(t, uint64(100), inode.Ino)
+				mockStore.AssertNotCalled(t, "ExecTxWithOptions")
 			}
 		})
 	}
@@ -393,17 +352,17 @@ func TestLookup_NegativeCases(t *testing.T) {
 
 	t.Run("parent inode not found returns ErrNotFound", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(999)
 		entryName := []byte("file.txt")
 
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(db.Inode{}, pgx.ErrNoRows).
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: entryName,
+			}).
+			Return(db.LookupEntryWithParentRow{}, pgx.ErrNoRows).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -411,7 +370,7 @@ func TestLookup_NegativeCases(t *testing.T) {
 		assert.ErrorIs(t, err, meta.ErrNotFound)
 		assert.NotErrorIs(t, err, meta.ErrNotDir)
 		assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
-		mockQuerier.AssertNotCalled(t, "GetInodeByEntry", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("parent inode is not a directory returns ErrNotDir and does not call GetInodeByEntry", func(t *testing.T) {
@@ -431,22 +390,19 @@ func TestLookup_NegativeCases(t *testing.T) {
 		for _, tc := range nonDirModes {
 			t.Run(tc.name, func(t *testing.T) {
 				mockStore := dbmock.NewMockStore(t)
-				mockQuerier := dbmock.NewMockQuerier(t)
 				mgr := meta.New(mockStore)
 
 				parentIno := uint64(2)
 				entryName := []byte("file.txt")
 
-				parentRow := db.Inode{
-					Ino:  int64(parentIno),
-					Mode: int32(tc.mode),
-				}
-
-				setupMockTx(mockStore, mockQuerier)
-
-				mockQuerier.EXPECT().
-					GetInode(mock.Anything, int64(parentIno)).
-					Return(parentRow, nil).
+				mockStore.EXPECT().
+					LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+						Ino:  int64(parentIno),
+						Name: entryName,
+					}).
+					Return(db.LookupEntryWithParentRow{
+						ParentMode: int32(tc.mode),
+					}, nil).
 					Once()
 
 				inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -454,25 +410,25 @@ func TestLookup_NegativeCases(t *testing.T) {
 				assert.ErrorIs(t, err, meta.ErrNotDir)
 				assert.NotErrorIs(t, err, meta.ErrNotFound)
 				assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
-				mockQuerier.AssertNotCalled(t, "GetInodeByEntry", mock.Anything, mock.Anything)
+				mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 			})
 		}
 	})
 
 	t.Run("parent DB error returns wrapped error and is not ErrNotFound or ErrNotDir", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(2)
 		entryName := []byte("file.txt")
 		dbErr := errors.New("db query connection failure")
 
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(db.Inode{}, dbErr).
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: entryName,
+			}).
+			Return(db.LookupEntryWithParentRow{}, dbErr).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -481,36 +437,26 @@ func TestLookup_NegativeCases(t *testing.T) {
 		assert.NotErrorIs(t, err, meta.ErrNotFound)
 		assert.NotErrorIs(t, err, meta.ErrNotDir)
 		assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
-		mockQuerier.AssertNotCalled(t, "GetInodeByEntry", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("child entry not found returns ErrNotFound", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(2)
 		entryName := []byte("nonexistent.txt")
 
-		parentRow := db.Inode{
-			Ino:   int64(parentIno),
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
-		}
-
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(parentRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-				ParentIno: int64(parentIno),
-				Name:      entryName,
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: entryName,
 			}).
-			Return(db.Inode{}, pgx.ErrNoRows).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  false,
+			}, nil).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -518,36 +464,23 @@ func TestLookup_NegativeCases(t *testing.T) {
 		assert.ErrorIs(t, err, meta.ErrNotFound)
 		assert.NotErrorIs(t, err, meta.ErrNotDir)
 		assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("child entry DB error returns wrapped error and is not ErrNotFound or ErrNotDir", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		parentIno := uint64(2)
 		entryName := []byte("file.txt")
 		dbErr := errors.New("db query entry read timeout")
 
-		parentRow := db.Inode{
-			Ino:   int64(parentIno),
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
-		}
-
-		setupMockTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(parentIno)).
-			Return(parentRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{
-				ParentIno: int64(parentIno),
-				Name:      entryName,
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  int64(parentIno),
+				Name: entryName,
 			}).
-			Return(db.Inode{}, dbErr).
+			Return(db.LookupEntryWithParentRow{}, dbErr).
 			Once()
 
 		inode, err := mgr.Lookup(ctx, parentIno, entryName)
@@ -556,15 +489,16 @@ func TestLookup_NegativeCases(t *testing.T) {
 		assert.NotErrorIs(t, err, meta.ErrNotFound)
 		assert.NotErrorIs(t, err, meta.ErrNotDir)
 		assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("transaction execution failure wraps underlying error", func(t *testing.T) {
-		t.Run("tx begin or pool failure", func(t *testing.T) {
+		t.Run("tx begin or pool failure on special entry", func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
 			mgr := meta.New(mockStore)
 
 			parentIno := uint64(2)
-			entryName := []byte("file.txt")
+			entryName := []byte(".")
 			txErr := errors.New("connection pool closed")
 
 			mockStore.EXPECT().
@@ -580,12 +514,12 @@ func TestLookup_NegativeCases(t *testing.T) {
 			assert.NotErrorIs(t, err, meta.ErrInvalidArgument)
 		})
 
-		t.Run("tx commit failure", func(t *testing.T) {
+		t.Run("tx commit failure on special entry", func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
 			mgr := meta.New(mockStore)
 
 			parentIno := uint64(2)
-			entryName := []byte("file.txt")
+			entryName := []byte(".")
 			commitErr := errors.New("tx commit failed")
 
 			mockStore.EXPECT().
@@ -626,7 +560,7 @@ func TestLookup_NegativeCases(t *testing.T) {
 				mgr := meta.New(mockStore)
 
 				parentIno := uint64(2)
-				entryName := []byte("file.txt")
+				entryName := []byte(".")
 
 				mockStore.EXPECT().
 					ExecTxWithOptions(mock.Anything, mock.Anything, matchReadOnlyOpt(), matchRepeatableReadOpt()).
@@ -661,12 +595,7 @@ func TestLookup_TransactionOptionsContract(t *testing.T) {
 		Return(db.Inode{Ino: 1, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}, nil).
 		Once()
 
-	mockQuerier.EXPECT().
-		GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("child")}).
-		Return(db.Inode{Ino: 2, Mode: int32(0o100644)}, nil).
-		Once()
-
-	inode, err := mgr.Lookup(ctx, 1, []byte("child"))
+	inode, err := mgr.Lookup(ctx, 1, []byte("."))
 	require.NoError(t, err)
 	require.NotNil(t, inode)
 
@@ -881,24 +810,28 @@ func TestLookup_SpecialEntries_DotAndDotDot(t *testing.T) {
 func TestLookup_OrphanParentIntercept(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("parent.Nlink == 0 时查找常规文件返回 ErrNotFound 且不查 entries (STARSRC-323)", func(t *testing.T) {
+	t.Run("parent.Nlink == 0 时查找常规文件返回 ErrNotFound 且不打开事务 (STARSRC-323, STARSRC-535)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		orphanParent := db.Inode{
-			Ino:   10,
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 0,
-		}
-
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(10)).Return(orphanParent, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{
+				Ino:  10,
+				Name: []byte("file.txt"),
+			}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 0,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 20, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: 0o100644, Valid: true},
+			}, nil).
+			Once()
 
 		inode, err := mgr.Lookup(ctx, 10, []byte("file.txt"))
 		assert.Nil(t, inode)
 		assert.ErrorIs(t, err, meta.ErrNotFound)
-		mockQuerier.AssertNotCalled(t, "GetInodeByEntry", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
 
 	t.Run("parent.Nlink == 0 时查找 '.' 返回 ErrNotFound", func(t *testing.T) {
@@ -1001,33 +934,34 @@ func TestLookup_CacheTimeouts(t *testing.T) {
 
 	t.Run("配置 WithDirEntryTimeout/WithEntryTimeout/WithAttrTimeout 独立生效", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore,
 			meta.WithEntryTimeout(3.0),
 			meta.WithDirEntryTimeout(6.0),
 			meta.WithAttrTimeout(4.5),
 		)
 
-		parentRow := db.Inode{
-			Ino:   1,
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
+		dirChildRow := db.LookupEntryWithParentRow{
+			ParentMode:  int32(meta.S_IFDIR | 0o755),
+			ParentNlink: 2,
+			ChildFound:  true,
+			ChildIno:    pgtype.Int8{Int64: 2, Valid: true},
+			ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFDIR | 0o755), Valid: true},
+			ChildNlink:  pgtype.Int4{Int32: 2, Valid: true},
 		}
-		dirChildRow := db.Inode{
-			Ino:   2,
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
-		}
-		fileChildRow := db.Inode{
-			Ino:   3,
-			Mode:  0o100644,
-			Nlink: 1,
+		fileChildRow := db.LookupEntryWithParentRow{
+			ParentMode:  int32(meta.S_IFDIR | 0o755),
+			ParentNlink: 2,
+			ChildFound:  true,
+			ChildIno:    pgtype.Int8{Int64: 3, Valid: true},
+			ChildMode:   pgtype.Int4{Int32: 0o100644, Valid: true},
+			ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
 		}
 
 		// 查找目录子项
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("sub")}).Return(dirChildRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("sub")}).
+			Return(dirChildRow, nil).
+			Once()
 
 		dirInode, err := mgr.Lookup(ctx, 1, []byte("sub"))
 		require.NoError(t, err)
@@ -1036,14 +970,175 @@ func TestLookup_CacheTimeouts(t *testing.T) {
 		assert.Equal(t, 4.5, dirInode.AttrTimeoutSeconds)
 
 		// 查找普通文件子项
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("file")}).Return(fileChildRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("file")}).
+			Return(fileChildRow, nil).
+			Once()
 
 		fileInode, err := mgr.Lookup(ctx, 1, []byte("file"))
 		require.NoError(t, err)
 		require.NotNil(t, fileInode)
 		assert.Equal(t, 3.0, fileInode.EntryTimeoutSeconds)
 		assert.Equal(t, 4.5, fileInode.AttrTimeoutSeconds)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions", mock.Anything, mock.Anything)
 	})
+}
+
+func TestLookup_RegularEntrySingleStatementAndErrorPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("1. parent missing -> ErrNotFound without tx", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 404, Name: []byte("child")}).
+			Return(db.LookupEntryWithParentRow{}, pgx.ErrNoRows).
+			Once()
+
+		inode, err := mgr.Lookup(ctx, 404, []byte("child"))
+		assert.Nil(t, inode)
+		assert.ErrorIs(t, err, meta.ErrNotFound)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions")
+		mockStore.AssertNotCalled(t, "ExecTx")
+	})
+
+	t.Run("2. parent not dir even when parent_nlink == 0 -> ErrNotDir (ENOTDIR takes precedence over orphan ENOENT)", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 2, Name: []byte("child")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFREG | 0o644),
+				ParentNlink: 0,
+				ChildFound:  false,
+			}, nil).
+			Once()
+
+		inode, err := mgr.Lookup(ctx, 2, []byte("child"))
+		assert.Nil(t, inode)
+		assert.ErrorIs(t, err, meta.ErrNotDir)
+		assert.NotErrorIs(t, err, meta.ErrNotFound)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions")
+		mockStore.AssertNotCalled(t, "ExecTx")
+	})
+
+	t.Run("3. parent is dir with parent_nlink == 0 -> ErrNotFound", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 2, Name: []byte("child")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 0,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 3, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: 0o100644, Valid: true},
+			}, nil).
+			Once()
+
+		inode, err := mgr.Lookup(ctx, 2, []byte("child"))
+		assert.Nil(t, inode)
+		assert.ErrorIs(t, err, meta.ErrNotFound)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions")
+		mockStore.AssertNotCalled(t, "ExecTx")
+	})
+
+	t.Run("4. parent is valid dir but child entry missing (ChildFound=false or ChildIno.Valid=false) -> ErrNotFound", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 2, Name: []byte("missing.txt")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  false,
+				ChildIno:    pgtype.Int8{Valid: false},
+			}, nil).
+			Once()
+
+		inode, err := mgr.Lookup(ctx, 2, []byte("missing.txt"))
+		assert.Nil(t, inode)
+		assert.ErrorIs(t, err, meta.ErrNotFound)
+		mockStore.AssertNotCalled(t, "ExecTxWithOptions")
+		mockStore.AssertNotCalled(t, "ExecTx")
+	})
+}
+
+func TestLookup_Integration_PostgreSQL(t *testing.T) {
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	mgr := meta.New(store)
+
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("lookup_pg_disk_%d", time.Now().UnixNano()),
+		MaxBytes: 1024 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	rootIno := disk.RootIno
+
+	var createdInos []int64
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cleanupTestInos(cleanupCtx, store, createdInos...)
+		_ = mgr.DeleteDisk(cleanupCtx, disk.DiskID)
+	})
+
+	parentDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+		ParentIno: rootIno,
+		Name:      []byte("sub_dir"),
+		Mode:      0o755,
+		UID:       1000,
+		GID:       1000,
+	})
+	require.NoError(t, err)
+	createdInos = append(createdInos, int64(parentDir.Ino))
+
+	childFile, err := mgr.Mknod(ctx, meta.MknodParams{
+		ParentIno: parentDir.Ino,
+		Name:      []byte("hello.txt"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1001,
+		GID:       1002,
+	})
+	require.NoError(t, err)
+	createdInos = append(createdInos, int64(childFile.Ino))
+
+	// 1. Lookup existing regular file entry and directory entry
+	foundDir, err := mgr.Lookup(ctx, rootIno, []byte("sub_dir"))
+	require.NoError(t, err)
+	require.NotNil(t, foundDir)
+	assert.Equal(t, parentDir.Ino, foundDir.Ino)
+	assert.Equal(t, rootIno, foundDir.Attr.ParentIno)
+
+	found, err := mgr.Lookup(ctx, parentDir.Ino, []byte("hello.txt"))
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Equal(t, childFile.Ino, found.Ino)
+	assert.Equal(t, uint32(meta.S_IFREG|0o644), found.Attr.Mode)
+	assert.Equal(t, uint32(1001), found.Attr.UID)
+	assert.Equal(t, uint32(1002), found.Attr.GID)
+
+	// 2. Lookup missing child entry in valid parent directory -> ErrNotFound
+	missing, err := mgr.Lookup(ctx, parentDir.Ino, []byte("missing.txt"))
+	assert.Nil(t, missing)
+	assert.ErrorIs(t, err, meta.ErrNotFound)
+
+	// 3. Lookup under non-directory inode -> ErrNotDir
+	notDir, err := mgr.Lookup(ctx, childFile.Ino, []byte("any.txt"))
+	assert.Nil(t, notDir)
+	assert.ErrorIs(t, err, meta.ErrNotDir)
+
+	// 4. Lookup under non-existent parent inode -> ErrNotFound
+	noParent, err := mgr.Lookup(ctx, 999999999, []byte("any.txt"))
+	assert.Nil(t, noParent)
+	assert.ErrorIs(t, err, meta.ErrNotFound)
 }

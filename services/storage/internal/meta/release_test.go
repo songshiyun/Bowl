@@ -132,7 +132,7 @@ func TestRelease_InputValidation(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(10)).
+			GetInode(mock.Anything, int64(10)).
 			Return(db.Inode{Ino: 10, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}, nil).
 			Once()
 
@@ -173,7 +173,7 @@ func TestRelease_PositivePath(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("正常节点释放 (nlink > 0): 销毁句柄且保留 Inode 行", func(t *testing.T) {
+	t.Run("正常节点释放 (nlink > 0): 销毁句柄且保留 Inode 行 (免除 GetInodeForUpdate)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -181,7 +181,7 @@ func TestRelease_PositivePath(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseInode, nil).
 			Once()
 
@@ -312,6 +312,11 @@ func TestRelease_PositivePath(t *testing.T) {
 		orphanInode.Nlink = 0
 
 		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanInode, nil).
 			Once()
@@ -345,6 +350,11 @@ func TestRelease_PositivePath(t *testing.T) {
 
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -392,6 +402,11 @@ func TestRelease_PositivePath(t *testing.T) {
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 8192
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -450,6 +465,11 @@ func TestRelease_PositivePath(t *testing.T) {
 		orphanInode.Size = 8192
 
 		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanInode, nil).
 			Once()
@@ -486,6 +506,11 @@ func TestRelease_PositivePath(t *testing.T) {
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 4096
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -567,7 +592,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, pgx.ErrNoRows).
 			Once()
 
@@ -590,7 +615,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		dirInode.Mode = int32(meta.S_IFDIR | 0o755)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(dirInode, nil).
 			Once()
 
@@ -610,7 +635,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseInode, nil).
 			Once()
 
@@ -638,7 +663,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseInode, nil).
 			Once()
 
@@ -658,7 +683,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		assert.True(t, errors.Is(err, meta.ErrBadFileHandle))
 	})
 
-	t.Run("GetInodeForUpdate 底层数据库错误", func(t *testing.T) {
+	t.Run("GetInode 底层数据库错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -667,7 +692,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 		dbErr := errors.New("db query failed")
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, dbErr).
 			Once()
 
@@ -688,7 +713,7 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseInode, nil).
 			Once()
 
@@ -719,6 +744,11 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -757,6 +787,11 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -807,6 +842,11 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 8192
+
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -1398,5 +1438,71 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		// 确认物理删除
 		_, err = mgr.GetAttr(ctx, dir2.Ino)
 		assert.True(t, errors.Is(err, meta.ErrNotFound), "物理回收后目录 Inode 应不可见")
+	})
+
+	t.Run("正常节点 (nlink > 0) Release 与 ReleaseDir 免除 Inode 排他锁：外部事务持有 FOR UPDATE 时不阻塞", func(t *testing.T) {
+		diskName := fmt.Sprintf("test_release_lockless_non_orphan_%d", time.Now().UnixNano())
+		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
+			Name:     diskName,
+			MaxBytes: 10 * 1024 * 1024,
+		})
+		require.NoError(t, err)
+		defer func() {
+			_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+		}()
+
+		sessID := uint64(775371)
+		defer func() {
+			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
+		}()
+		_, err = mgr.RenewSession(ctx, sessID)
+		require.NoError(t, err)
+
+		createRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("lockless_release.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		subDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("lockless_dir"),
+			Mode:      0o755,
+		})
+		require.NoError(t, err)
+		openDirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+			Ino:       subDir.Ino,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		// 外部事务持有目标文件与目录 Inode 的 FOR UPDATE 排他锁
+		extTx, err := pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = extTx.Rollback(context.Background())
+		}()
+
+		var lockedFileIno, lockedDirIno int64
+		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(createRes.Inode.Ino)).Scan(&lockedFileIno))
+		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(subDir.Ino)).Scan(&lockedDirIno))
+
+		opCtx, opCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+		defer opCancel()
+
+		require.NoError(t, mgr.Release(opCtx, meta.ReleaseParams{
+			Ino:       createRes.Inode.Ino,
+			Fh:        createRes.Fh,
+			SessionID: &sessID,
+		}))
+		require.NoError(t, mgr.ReleaseDir(opCtx, meta.ReleaseDirParams{
+			Ino:       subDir.Ino,
+			Fh:        openDirRes.Fh,
+			SessionID: &sessID,
+		}))
 	})
 }

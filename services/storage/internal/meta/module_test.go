@@ -35,22 +35,34 @@ func TestMetaModule_DefaultInjection(t *testing.T) {
 	mockQuerier := dbmock.NewMockQuerier(t)
 
 	t.Run("默认缓存超时: 普通文件与目录均为 1.0 秒", func(t *testing.T) {
-		parentRow := db.Inode{Ino: 1, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
-		regRow := db.Inode{Ino: 10, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}
-		dirRow := db.Inode{Ino: 20, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
-
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("file.txt")}).Return(regRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("file.txt")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 10, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFREG | 0o644), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
+			}, nil).
+			Once()
 
 		regInode, err := mgr.Lookup(ctx, 1, []byte("file.txt"))
 		require.NoError(t, err)
 		assert.Equal(t, 1.0, regInode.EntryTimeoutSeconds)
 		assert.Equal(t, 1.0, regInode.AttrTimeoutSeconds)
 
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("sub")}).Return(dirRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("sub")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 20, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFDIR | 0o755), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 2, Valid: true},
+			}, nil).
+			Once()
 
 		dirInode, err := mgr.Lookup(ctx, 1, []byte("sub"))
 		require.NoError(t, err)
@@ -127,22 +139,37 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 
 		// 1. 自定义缓存超时: 普通文件 entryTimeout=3.5, attrTimeout=2.5; 目录 dirEntryTimeout=6.5
-		parentRow := db.Inode{Ino: 1, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
 		regRow := db.Inode{Ino: 50, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}
 		dirRow := db.Inode{Ino: 60, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
 
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("doc.txt")}).Return(regRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("doc.txt")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 50, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFREG | 0o644), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
+			}, nil).
+			Once()
 
 		regInode, err := mgr.Lookup(ctx, 1, []byte("doc.txt"))
 		require.NoError(t, err)
 		assert.Equal(t, 3.5, regInode.EntryTimeoutSeconds)
 		assert.Equal(t, 2.5, regInode.AttrTimeoutSeconds)
 
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("subfolder")}).Return(dirRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("subfolder")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 60, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFDIR | 0o755), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 2, Valid: true},
+			}, nil).
+			Once()
 
 		dirInode, err := mgr.Lookup(ctx, 1, []byte("subfolder"))
 		require.NoError(t, err)
@@ -267,13 +294,17 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 		require.NotNil(t, mgr)
 
 		ctx := context.Background()
-		mockQuerier := dbmock.NewMockQuerier(t)
-		parentRow := db.Inode{Ino: 1, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
-		regRow := db.Inode{Ino: 90, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}
-
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("ptr_file.txt")}).Return(regRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("ptr_file.txt")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 90, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFREG | 0o644), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 1, Valid: true},
+			}, nil).
+			Once()
 
 		regInode, err := mgr.Lookup(ctx, 1, []byte("ptr_file.txt"))
 		require.NoError(t, err)
@@ -323,13 +354,17 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 		require.NotNil(t, mgr)
 
 		ctx := context.Background()
-		mockQuerier := dbmock.NewMockQuerier(t)
-		parentRow := db.Inode{Ino: 1, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
-		dirRow := db.Inode{Ino: 110, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
-
-		setupMockTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentRow, nil).Once()
-		mockQuerier.EXPECT().GetInodeByEntry(mock.Anything, db.GetInodeByEntryParams{ParentIno: 1, Name: []byte("integ_dir")}).Return(dirRow, nil).Once()
+		mockStore.EXPECT().
+			LookupEntryWithParent(mock.Anything, db.LookupEntryWithParentParams{Ino: 1, Name: []byte("integ_dir")}).
+			Return(db.LookupEntryWithParentRow{
+				ParentMode:  int32(meta.S_IFDIR | 0o755),
+				ParentNlink: 2,
+				ChildFound:  true,
+				ChildIno:    pgtype.Int8{Int64: 110, Valid: true},
+				ChildMode:   pgtype.Int4{Int32: int32(meta.S_IFDIR | 0o755), Valid: true},
+				ChildNlink:  pgtype.Int4{Int32: 2, Valid: true},
+			}, nil).
+			Once()
 
 		dirInode, err := mgr.Lookup(ctx, 1, []byte("integ_dir"))
 		require.NoError(t, err)

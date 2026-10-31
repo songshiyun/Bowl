@@ -131,50 +131,81 @@ type writeSessionTouchState struct {
 }
 
 type manager struct {
-	store                     db.Store
-	blockStore                BlockStore
-	entryTimeout              float64
-	attrTimeout               float64
-	dirEntryTimeout           float64
-	openKeepCache             bool
-	openDirCache              bool
-	atimeMode                 AtimeMode
-	sessionLeaseTTL           time.Duration
-	sessionProbeTimeout       time.Duration
-	gcInterval                time.Duration
-	gcBatchLimit              int32
-	gcOrphanGracePeriod       time.Duration
-	compactSliceThreshold     int
-	sliceIDBatchSize          int
-	sliceIDMu                 sync.Mutex
-	sliceIDQueue              []int64
-	lastAllocatedSliceID      int64
-	writeSessionTouchInterval time.Duration
-	writeSessionTouchDisabled bool
-	writeSessionTouchMu       sync.Mutex
-	writeSessionTouches       map[uint64]writeSessionTouchState
-	writeGroupMaxBatchSize    int
-	writeInFlightStage1       atomic.Int64
-	writeGroupMu              sync.Mutex
-	writeLeaderActive         bool
-	writePendingQueue         []*writeBatchTask
-	writeCoalesceCh           chan struct{}
-	inFlightCompactsMu        sync.Mutex
-	inFlightCompacts          map[chunkKey]bool
-	lockNotifyMu              sync.Mutex
-	lockNotifyChans           map[uint64]*lockNotifyEntry
-	crossDirRenameMu          sync.Mutex
-	dirCursorMu               sync.Mutex
-	dirCursors                map[dirCursorKey]dirCursorAnchor
-	dirMutationSeq            map[uint64]uint64
-	inFlightDirMutations      map[uint64]int
-	activeDirReads            map[uint64]*inFlightDirRead
-	nextDirReadID             uint64
-	inFlightGrantMu           sync.Mutex
-	inFlightGrants            map[inFlightGrantKey]*inFlightGrant
-	nextInFlightGrantID       uint64
-	watchHubMu                sync.Mutex
-	watchHub                  *SessionWatchHub
+	store                       db.Store
+	blockStore                  BlockStore
+	entryTimeout                float64
+	attrTimeout                 float64
+	dirEntryTimeout             float64
+	openKeepCache               bool
+	openDirCache                bool
+	atimeMode                   AtimeMode
+	sessionLeaseTTL             time.Duration
+	sessionProbeTimeout         time.Duration
+	gcInterval                  time.Duration
+	gcBatchLimit                int32
+	gcOrphanGracePeriod         time.Duration
+	compactSliceThreshold       int
+	sliceIDBatchSize            int
+	sliceIDMu                   sync.Mutex
+	sliceIDQueue                []int64
+	lastAllocatedSliceID        int64
+	writeSessionTouchInterval   time.Duration
+	writeSessionTouchDisabled   bool
+	writeSessionTouchConfigured bool
+	writeSessionTouchMu         sync.Mutex
+	writeSessionTouches         map[uint64]writeSessionTouchState
+	writeGroupMaxBatchSize      int
+	writeInFlightStage1         atomic.Int64
+	writeGroupMu                sync.Mutex
+	writeLeaderActive           bool
+	writePendingQueue           []*writeBatchTask
+	writeCoalesceCh             chan struct{}
+	inFlightCompactsMu          sync.Mutex
+	inFlightCompacts            map[chunkKey]bool
+	lockNotifyMu                sync.Mutex
+	lockNotifyChans             map[uint64]*lockNotifyEntry
+	crossDirRenameMu            sync.Mutex
+	dirCursorMu                 sync.Mutex
+	dirCursors                  map[dirCursorKey]dirCursorAnchor
+	dirMutationSeq              map[uint64]uint64
+	inFlightDirMutations        map[uint64]int
+	activeDirReads              map[uint64]*inFlightDirRead
+	nextDirReadID               uint64
+	inFlightGrantMu             sync.Mutex
+	inFlightGrants              map[inFlightGrantKey]*inFlightGrant
+	nextInFlightGrantID         uint64
+	watchHubMu                  sync.Mutex
+	watchHub                    *SessionWatchHub
+}
+
+type poolProvider interface {
+	Pool() *pgxpool.Pool
+}
+
+func queryDBTX(q db.Querier, pp poolProvider) db.DBTX {
+	if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+		return r.RawDBTX()
+	}
+	if pp != nil && pp.Pool() != nil {
+		return pp.Pool()
+	}
+	return nil
+}
+
+func (m *manager) shouldThrottleSessionTouch(ctx context.Context) (poolProvider, bool) {
+	if m.writeSessionTouchDisabled || m.writeSessionTouchInterval <= 0 {
+		return nil, false
+	}
+	if _, hasLockSync := db.LockSyncInoFromContext(ctx); hasLockSync {
+		return nil, false
+	}
+	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
+		return pp, true
+	}
+	if m.writeSessionTouchConfigured {
+		return nil, true
+	}
+	return nil, false
 }
 
 var _ Manager = (*manager)(nil)
@@ -313,15 +344,17 @@ func WithSliceIDBatchSize(batchSize int) Option {
 	}
 }
 
-// WithWriteSessionTouchInterval 配置 Write 热路径对同一活跃客户端会话执行租约续期的最小节流时间窗口（d >= 0 时生效，默认 DefaultWriteSessionTouchInterval）。
+// WithWriteSessionTouchInterval 配置对同一活跃客户端会话执行租约续期的最小节流时间窗口（d >= 0 时生效，默认 DefaultWriteSessionTouchInterval）。
 func WithWriteSessionTouchInterval(d time.Duration) Option {
 	return func(m *manager) {
 		if d == 0 {
 			m.writeSessionTouchInterval = 0
 			m.writeSessionTouchDisabled = true
+			m.writeSessionTouchConfigured = false
 		} else if d > 0 {
 			m.writeSessionTouchInterval = d
 			m.writeSessionTouchDisabled = false
+			m.writeSessionTouchConfigured = true
 		}
 	}
 }
@@ -366,6 +399,9 @@ func New(store db.Store, opts ...Option) Manager {
 		if opt != nil {
 			opt(m)
 		}
+	}
+	if !m.writeSessionTouchConfigured && !m.writeSessionTouchDisabled && m.sessionLeaseTTL > 0 && m.writeSessionTouchInterval > m.sessionLeaseTTL/3 {
+		m.writeSessionTouchInterval = m.sessionLeaseTTL / 3
 	}
 	return m
 }
@@ -1003,12 +1039,58 @@ func toPgSessionID(sessionID *uint64) pgtype.Int8 {
 	}
 }
 
-// renewOptionalClientSession 若传入了有效的客户端会话标识，则在当前事务中执行会话租约续期并清理相关孤儿节点。
+// renewOptionalClientSession 若传入了有效的客户端会话标识，则在当前事务中按内存时间窗口节流执行会话租约续期并清理相关孤儿节点。
 func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, sessionID *uint64) error {
 	if sessionID == nil {
 		return nil
 	}
-	_, err := m.renewClientSession(ctx, q, *sessionID)
+	sid := *sessionID
+	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle {
+		interval := m.writeSessionTouchInterval
+		if interval <= 0 {
+			interval = DefaultWriteSessionTouchInterval
+		}
+		now := time.Now()
+		m.writeSessionTouchMu.Lock()
+		if m.writeSessionTouches == nil {
+			m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
+		}
+		prev, hadPrev := m.writeSessionTouches[sid]
+		inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
+		m.writeSessionTouchMu.Unlock()
+
+		if inWindow {
+			dbtx := queryDBTX(q, pp)
+			if dbtx == nil {
+				return nil
+			}
+			var sessionCreatedAt pgtype.Timestamptz
+			var alive, hasPendingCleanup bool
+			err := dbtx.QueryRow(ctx, `
+				SELECT
+					cs.created_at,
+					(cs.expires_at > clock_timestamp()) AS alive,
+					(
+						EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
+						OR EXISTS (
+							SELECT 1 FROM inodes i
+							WHERE i.nlink = 0
+							  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
+						)
+					) AS has_pending_cleanup
+				FROM client_sessions cs
+				WHERE cs.session_id = $1
+			`, int64(sid)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
+			if err == nil && alive && !hasPendingCleanup {
+				m.recordWriteSessionTouch(sid, time.Time{}, sessionCreatedAt)
+				return nil
+			}
+			if err != nil || !alive {
+				m.clearWriteSessionTouch(sid)
+			}
+		}
+	}
+	_, err := m.renewClientSession(ctx, q, sid)
 	return err
 }
 
@@ -1087,7 +1169,7 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 		if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 			return err
 		}
-		m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
+		m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
 		res.ExpiresAt = session.ExpiresAt.Time
 		res.SessionRecreated = session.CreatedAt.Time.Equal(session.UpdatedAt.Time)
 		return nil

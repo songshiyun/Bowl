@@ -1765,6 +1765,84 @@ func (q *Queries) ListPendingFileLockWaitersByInoAndFlags(ctx context.Context, a
 	return items, nil
 }
 
+const lookupEntryWithParent = `-- name: LookupEntryWithParent :one
+SELECT
+    p.mode AS parent_mode,
+    p.nlink AS parent_nlink,
+    (c.ino IS NOT NULL)::boolean AS child_found,
+    c.ino AS child_ino,
+    c.generation AS child_generation,
+    c.mode AS child_mode,
+    c.size AS child_size,
+    c.nlink AS child_nlink,
+    c.uid AS child_uid,
+    c.gid AS child_gid,
+    c.rdev AS child_rdev,
+    c.atime AS child_atime,
+    c.mtime AS child_mtime,
+    c.ctime AS child_ctime,
+    c.symlink_target AS child_symlink_target,
+    c.flags AS child_flags,
+    c.parent_ino AS child_parent_ino,
+    c.root_ino AS child_root_ino
+FROM inodes p
+LEFT JOIN entries e ON e.parent_ino = p.ino AND e.name = $2
+LEFT JOIN inodes c ON c.ino = e.ino
+WHERE p.ino = $1
+`
+
+type LookupEntryWithParentParams struct {
+	Ino  int64  `json:"ino"`
+	Name []byte `json:"name"`
+}
+
+type LookupEntryWithParentRow struct {
+	ParentMode         int32              `json:"parent_mode"`
+	ParentNlink        int32              `json:"parent_nlink"`
+	ChildFound         bool               `json:"child_found"`
+	ChildIno           pgtype.Int8        `json:"child_ino"`
+	ChildGeneration    pgtype.Int8        `json:"child_generation"`
+	ChildMode          pgtype.Int4        `json:"child_mode"`
+	ChildSize          pgtype.Int8        `json:"child_size"`
+	ChildNlink         pgtype.Int4        `json:"child_nlink"`
+	ChildUid           pgtype.Int4        `json:"child_uid"`
+	ChildGid           pgtype.Int4        `json:"child_gid"`
+	ChildRdev          pgtype.Int8        `json:"child_rdev"`
+	ChildAtime         pgtype.Timestamptz `json:"child_atime"`
+	ChildMtime         pgtype.Timestamptz `json:"child_mtime"`
+	ChildCtime         pgtype.Timestamptz `json:"child_ctime"`
+	ChildSymlinkTarget []byte             `json:"child_symlink_target"`
+	ChildFlags         pgtype.Int4        `json:"child_flags"`
+	ChildParentIno     pgtype.Int8        `json:"child_parent_ino"`
+	ChildRootIno       pgtype.Int8        `json:"child_root_ino"`
+}
+
+func (q *Queries) LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error) {
+	row := q.db.QueryRow(ctx, lookupEntryWithParent, arg.Ino, arg.Name)
+	var i LookupEntryWithParentRow
+	err := row.Scan(
+		&i.ParentMode,
+		&i.ParentNlink,
+		&i.ChildFound,
+		&i.ChildIno,
+		&i.ChildGeneration,
+		&i.ChildMode,
+		&i.ChildSize,
+		&i.ChildNlink,
+		&i.ChildUid,
+		&i.ChildGid,
+		&i.ChildRdev,
+		&i.ChildAtime,
+		&i.ChildMtime,
+		&i.ChildCtime,
+		&i.ChildSymlinkTarget,
+		&i.ChildFlags,
+		&i.ChildParentIno,
+		&i.ChildRootIno,
+	)
+	return i, err
+}
+
 const touchInodeAtime = `-- name: TouchInodeAtime :exec
 UPDATE inodes
 SET atime = clock_timestamp()

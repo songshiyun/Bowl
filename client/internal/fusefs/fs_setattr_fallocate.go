@@ -111,6 +111,9 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return fuse.OK
 	}
 
+	fs.invalidateReadAheadByIno(ino)
+	defer fs.invalidateReadAheadByIno(ino)
+
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -155,6 +158,9 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		Mode:      input.Mode,
 		SessionId: &sid,
 	}
+
+	fs.invalidateReadAheadByIno(ino)
+	defer fs.invalidateReadAheadByIno(ino)
 
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	if err != nil {

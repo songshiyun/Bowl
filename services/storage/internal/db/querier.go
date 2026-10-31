@@ -86,6 +86,7 @@ type Querier interface {
 	ListParentEntryCountsByIno(ctx context.Context, ino int64) ([]ListParentEntryCountsByInoRow, error)
 	ListPendingFileLockWaitersByInoAndFlags(ctx context.Context, arg ListPendingFileLockWaitersByInoAndFlagsParams) ([]FileLockWaiter, error)
 	LockValidSliceRefsKeyShare(ctx context.Context, sliceIds []int64) ([]int64, error)
+	LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error)
 	NextSliceID(ctx context.Context) (int64, error)
 	TouchInodeAtime(ctx context.Context, ino int64) error
 	TouchInodeCtime(ctx context.Context, ino int64) error

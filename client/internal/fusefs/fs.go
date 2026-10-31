@@ -64,6 +64,9 @@ type RawFS struct {
 	releaseLoopDone chan struct{}
 	releaseStarted  bool
 	releaseClosed   bool
+
+	readAheadMu      sync.Mutex
+	readAheadHandles map[uint64]*handleReadAhead
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
@@ -73,13 +76,14 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	return &RawFS{
-		RawFileSystem: fuse.NewDefaultRawFileSystem(),
-		client:        client,
-		sessions:      sessions,
-		cfg:           cfg,
-		releaseWake:   make(chan struct{}, 1),
-		releaseCtx:    releaseCtx,
-		releaseCancel: releaseCancel,
+		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
+		client:           client,
+		sessions:         sessions,
+		cfg:              cfg,
+		releaseWake:      make(chan struct{}, 1),
+		releaseCtx:       releaseCtx,
+		releaseCancel:    releaseCancel,
+		readAheadHandles: make(map[uint64]*handleReadAhead),
 	}
 }
 
@@ -152,6 +156,7 @@ func (fs *RawFS) NextRequestID() uint64 {
 
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
+	fs.clearAllReadAhead()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {
 		fs.cfg.OnUnmount()

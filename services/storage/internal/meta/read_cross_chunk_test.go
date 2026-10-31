@@ -1270,3 +1270,374 @@ func TestRead_InFlightProtectedAgainstConcurrentCompactAndGC(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, remainingBlockFiles, 1, "全部旧物理块回收后，dataDir/chunks 下仅能剩 1 个合并后的新物理块文件")
 }
+
+// TestRead_LocklessFastPath_NoDBRowLockAndReleasesConnBeforeGetBlock 验证服务端免数据库行锁快路径：
+// 在默认 noatime（或会话处于节流窗口内）时，Read 在进入 GetBlock 读盘前已释放数据库连接且不对 slice_refs 持有任何数据库行锁。
+func TestRead_LocklessFastPath_NoDBRowLockAndReleasesConnBeforeGetBlock(t *testing.T) {
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	dataDir := t.TempDir()
+	realBS := meta.NewLocalFSBlockStore(dataDir)
+
+	enteredGetBlockCh := make(chan struct{})
+	proceedCh := make(chan struct{})
+	var blockedOnce sync.Once
+	var proceedOnce sync.Once
+	t.Cleanup(func() {
+		proceedOnce.Do(func() { close(proceedCh) })
+	})
+
+	barrierBS := &readBarrierBlockStore{
+		BlockStore: realBS,
+		onBeforeGetBlock: func(bCtx context.Context, sliceID uint64, blockIdx uint32) {
+			blockedOnce.Do(func() {
+				close(enteredGetBlockCh)
+				select {
+				case <-proceedCh:
+				case <-bCtx.Done():
+				case <-ctx.Done():
+				}
+			})
+		},
+	}
+
+	mgr := meta.New(store, meta.WithBlockStore(barrierBS))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		chunkRow, _ := store.GetChunk(cleanupCtx, db.GetChunkParams{Ino: fileRow.Ino, Indx: 0})
+		_ = meta.DeleteAllChunksByInos(cleanupCtx, store, []int64{fileRow.Ino})
+		if len(chunkRow.Slices) > 0 {
+			if sls, dErr := meta.DecodeSlices(chunkRow.Slices); dErr == nil {
+				for _, s := range sls {
+					if s.ID > 0 {
+						_ = store.DeleteSliceRef(cleanupCtx, int64(s.ID))
+					}
+				}
+			}
+		}
+		_ = store.DeleteInode(cleanupCtx, fileRow.Ino)
+	})
+
+	sessionID := uint64(953801)
+	_, err = mgr.RenewSession(ctx, sessionID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = mgr.CloseSession(context.Background(), sessionID)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{
+		Ino:       ino,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessionID,
+	})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh, SessionID: &sessionID})
+	})
+
+	payload := bytes.Repeat([]byte{0x5A}, 64*1024)
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:       ino,
+		Fh:        fh,
+		Offset:    0,
+		Data:      payload,
+		SessionID: &sessionID,
+	})
+	require.NoError(t, err)
+
+	chunkRow, err := store.GetChunk(ctx, db.GetChunkParams{Ino: fileRow.Ino, Indx: 0})
+	require.NoError(t, err)
+	sls, err := meta.DecodeSlices(chunkRow.Slices)
+	require.NoError(t, err)
+	require.Len(t, sls, 1)
+	targetSliceID := int64(sls[0].ID)
+
+	type readRes struct {
+		resp *meta.ReadResponse
+		err  error
+	}
+	resCh := make(chan readRes, 1)
+	go func() {
+		resp, rErr := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:       ino,
+			Fh:        fh,
+			Offset:    0,
+			Size:      uint32(len(payload)),
+			SessionID: &sessionID,
+		})
+		resCh <- readRes{resp: resp, err: rErr}
+	}()
+
+	select {
+	case <-enteredGetBlockCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("超时等待 Read 进入 GetBlock")
+	}
+
+	// 验证在 GetBlock 阻塞期间，slice_refs 上的目标行完全没有被 FOR KEY SHARE 锁定：
+	// 若被 FOR KEY SHARE 锁定，则 FOR UPDATE SKIP LOCKED 将跳过该行（返回 pgx.ErrNoRows）。
+	var lockedSliceID int64
+	err = pool.QueryRow(ctx, `SELECT slice_id FROM slice_refs WHERE slice_id = $1 FOR UPDATE SKIP LOCKED`, targetSliceID).Scan(&lockedSliceID)
+	require.NoError(t, err, "Read 在 GetBlock 期间绝不能持有 slice_refs 数据库行锁")
+	assert.Equal(t, targetSliceID, lockedSliceID)
+
+	proceedOnce.Do(func() { close(proceedCh) })
+
+	var out readRes
+	select {
+	case out = <-resCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("超时等待 Read 完成")
+	}
+	require.NoError(t, out.err)
+	require.NotNil(t, out.resp)
+	assert.Equal(t, payload, out.resp.Data)
+}
+
+// TestRead_LocklessOptimisticRetryOnConcurrentCompactionBlockRemoval 验证免锁 Read 在 GetBlock 期间
+// 若旧物理块文件已被并发 Compaction + 跨节点 GC 物理删除（报 ErrBlockNotFound / os.ErrNotExist），
+// 自动重新查询最新合并后的 Chunk 视图并透明完成重试读取。
+func TestRead_LocklessOptimisticRetryOnConcurrentCompactionBlockRemoval(t *testing.T) {
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+	acquireTestSliceGCAdvisoryLock(t, pool)
+
+	store := db.NewStore(pool)
+	dataDir := t.TempDir()
+	realBS := meta.NewLocalFSBlockStore(dataDir)
+
+	var (
+		interceptedOnce sync.Once
+		enteredCh       = make(chan struct{})
+		proceedCh       = make(chan struct{})
+		proceedOnce     sync.Once
+	)
+	t.Cleanup(func() {
+		proceedOnce.Do(func() { close(proceedCh) })
+	})
+
+	barrierBS := &readBarrierBlockStore{
+		BlockStore: realBS,
+		onBeforeGetBlock: func(bCtx context.Context, sliceID uint64, blockIdx uint32) {
+			interceptedOnce.Do(func() {
+				close(enteredCh)
+				select {
+				case <-proceedCh:
+				case <-bCtx.Done():
+				case <-ctx.Done():
+				}
+			})
+		},
+	}
+
+	mgrRead := meta.New(store, meta.WithBlockStore(barrierBS))
+	// 第二个 Manager 实例模拟另一台存储节点或独立后台实例执行 Compaction + GC 物理删除旧块
+	mgrOther := meta.New(store, meta.WithBlockStore(realBS))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		chunkRow, _ := store.GetChunk(cleanupCtx, db.GetChunkParams{Ino: fileRow.Ino, Indx: 0})
+		_ = meta.DeleteAllChunksByInos(cleanupCtx, store, []int64{fileRow.Ino})
+		if len(chunkRow.Slices) > 0 {
+			if sls, dErr := meta.DecodeSlices(chunkRow.Slices); dErr == nil {
+				for _, s := range sls {
+					if s.ID > 0 {
+						_ = store.DeleteSliceRef(cleanupCtx, int64(s.ID))
+					}
+				}
+			}
+		}
+		_ = store.DeleteInode(cleanupCtx, fileRow.Ino)
+	})
+
+	openRes, err := mgrRead.Open(ctx, meta.OpenParams{
+		Ino:   ino,
+		Flags: meta.O_RDWR,
+	})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgrRead.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	// 写入两段重叠切片
+	part1 := bytes.Repeat([]byte{0x41}, 64*1024)
+	_, err = mgrRead.Write(ctx, &meta.WriteRequest{Ino: ino, Fh: fh, Offset: 0, Data: part1})
+	require.NoError(t, err)
+
+	part2 := bytes.Repeat([]byte{0x42}, 64*1024)
+	_, err = mgrRead.Write(ctx, &meta.WriteRequest{Ino: ino, Fh: fh, Offset: 32 * 1024, Data: part2})
+	require.NoError(t, err)
+
+	expected := make([]byte, 96*1024)
+	copy(expected[0:32*1024], part1[:32*1024])
+	copy(expected[32*1024:96*1024], part2)
+
+	type readResult struct {
+		resp *meta.ReadResponse
+		err  error
+	}
+	resCh := make(chan readResult, 1)
+	go func() {
+		resp, rErr := mgrRead.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Size:   96 * 1024,
+		})
+		resCh <- readResult{resp: resp, err: rErr}
+	}()
+
+	select {
+	case <-enteredCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("超时等待 Read 进入第一次 GetBlock")
+	}
+
+	// 在 mgrOther 上执行 CompactChunk + CollectGarbage，将旧物理块文件从磁盘上彻底删除！
+	require.NoError(t, mgrOther.CompactChunk(ctx, ino, 0))
+	_, err = mgrOther.CollectGarbage(ctx, 500)
+	require.NoError(t, err)
+
+	// 放行 mgrRead：其第一次 GetBlock 会因为旧块已被物理删除而遭遇 ErrBlockNotFound，
+	// 随后自动重新查询最新合并后的 Chunk 视图并成功读取新块！
+	proceedOnce.Do(func() { close(proceedCh) })
+
+	var rRes readResult
+	select {
+	case rRes = <-resCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("超时等待 Read 乐观重试完成")
+	}
+	require.NoError(t, rRes.err, "并发 Compaction 删块后 Read 必须自动重查 Chunk 视图并透明重试成功")
+	require.NotNil(t, rRes.resp)
+	assert.Equal(t, expected, rRes.resp.Data)
+}
+
+// TestRead_MultiBlockBoundedConcurrentRead 验证单次 Read 命中多个物理 Block 时并发调用 GetBlock 并准确拼装返回。
+func TestRead_MultiBlockBoundedConcurrentRead(t *testing.T) {
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	dataDir := t.TempDir()
+	realBS := meta.NewLocalFSBlockStore(dataDir)
+
+	var inFlight atomic.Int32
+	var maxObserved atomic.Int32
+	allArrivedCh := make(chan struct{})
+	var arrivedOnce sync.Once
+
+	barrierBS := &readBarrierBlockStore{
+		BlockStore: realBS,
+		onBeforeGetBlock: func(bCtx context.Context, sliceID uint64, blockIdx uint32) {
+			cur := inFlight.Add(1)
+			defer inFlight.Add(-1)
+			for {
+				prev := maxObserved.Load()
+				if cur <= prev || maxObserved.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			if cur >= 4 {
+				arrivedOnce.Do(func() { close(allArrivedCh) })
+			}
+			select {
+			case <-allArrivedCh:
+			case <-time.After(3 * time.Second):
+			case <-bCtx.Done():
+			}
+		},
+	}
+
+	mgr := meta.New(store, meta.WithBlockStore(barrierBS))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		chunkRow, _ := store.GetChunk(cleanupCtx, db.GetChunkParams{Ino: fileRow.Ino, Indx: 0})
+		_ = meta.DeleteAllChunksByInos(cleanupCtx, store, []int64{fileRow.Ino})
+		if len(chunkRow.Slices) > 0 {
+			if sls, dErr := meta.DecodeSlices(chunkRow.Slices); dErr == nil {
+				for _, s := range sls {
+					if s.ID > 0 {
+						_ = store.DeleteSliceRef(cleanupCtx, int64(s.ID))
+					}
+				}
+			}
+		}
+		_ = store.DeleteInode(cleanupCtx, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	// 写入 4 个不相邻的 64 KiB 片段（中间穿插 64 KiB 稀疏空洞），总逻辑跨度 512 KiB
+	expected := make([]byte, 512*1024)
+	for i := 0; i < 4; i++ {
+		seg := bytes.Repeat([]byte{byte(0x10 + i)}, 64*1024)
+		off := uint64(i * 128 * 1024)
+		_, wErr := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: off,
+			Data:   seg,
+		})
+		require.NoError(t, wErr)
+		copy(expected[off:off+64*1024], seg)
+	}
+	// 扩展文件大小至 512 KiB 以包含末尾空洞，并额外测试超过 512 KiB 的 EOF 截断
+	_, err = mgr.SetAttr(ctx, ino, meta.SetAttrInput{Size: ptrOf(uint64(512 * 1024))})
+	require.NoError(t, err)
+
+	resp, err := mgr.Read(ctx, &meta.ReadRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 0,
+		Size:   1024 * 1024, // 请求 1 MiB，应自动按 EOF 截断为 512 KiB
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, expected, resp.Data)
+	assert.GreaterOrEqual(t, maxObserved.Load(), int32(4), "多物理块读取必须并发执行 GetBlock")
+}
