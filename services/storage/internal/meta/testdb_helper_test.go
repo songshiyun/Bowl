@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,6 +124,22 @@ func setupMetaTestDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 		pool.Close()
 	})
 	return pool, ctx
+}
+
+// setupMetaTestDBWithTracer 在统一 DSN 校验之后建立带观测器的测试连接池。
+func setupMetaTestDBWithTracer(t *testing.T, tracer pgx.QueryTracer) (*pgxpool.Pool, context.Context) {
+	t.Helper()
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return nil, nil
+	}
+	cfg := pool.Config()
+	cfg.ConnConfig.Tracer = tracer
+	observed, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(observed.Close)
+	require.NoError(t, observed.Ping(ctx))
+	return observed, ctx
 }
 
 // setupIsolatedMetaTestDB 为需要验证全表扫描或空表分页的用例创建独立的临时数据库，

@@ -15,6 +15,7 @@ import (
 	"github.com/starsrc/bowl/pkg/validator"
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
+	"github.com/starsrc/bowl/services/storage/internal/readbuf"
 )
 
 type responseControllerKey struct{}
@@ -126,7 +127,13 @@ func New(p Params) (*Server, error) {
 		srv,
 		handlerOpts...,
 	)
+	readBuffers := readbuf.NewPool()
 	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == storagev1connect.StorageServiceReadProcedure {
+			ctx, release := readBuffers.WithScope(r.Context())
+			defer release()
+			r = r.WithContext(ctx)
+		}
 		handler.ServeHTTP(w, r.WithContext(withResponseController(r.Context(), w)))
 	}))
 

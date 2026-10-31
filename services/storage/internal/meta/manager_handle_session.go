@@ -196,49 +196,35 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 	pp, hasPool := m.store.(poolProvider)
 	hasActivePool := hasPool && pp != nil && pp.Pool() != nil
 
-	if params.LockOwner != nil {
-		if m.hasPosixLockActivity(params.Ino) {
+	if params.LockOwner != nil && m.hasPosixLockActivity(params.Ino) {
+		needsPosixUnlock = true
+	}
+	var snapshot flushSnapshot
+	if hasActivePool && !needsPosixUnlock {
+		var err error
+		snapshot, err = queryFlushSnapshot(ctx, pp.Pool(), params)
+		if err != nil {
+			return err
+		}
+		if snapshot.hasPosixLocks {
+			m.RecordPosixLockActivity(params.Ino)
 			needsPosixUnlock = true
-		} else if hasActivePool {
-			var hasLock bool
-			if err := pp.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM file_locks WHERE ino = $1 AND lk_flags = 0)`, int64(params.Ino)).Scan(&hasLock); err != nil {
-				return fmt.Errorf("flush check posix locks: %w", err)
-			}
-			if hasLock {
-				m.RecordPosixLockActivity(params.Ino)
-				needsPosixUnlock = true
-			}
 		}
 	}
 
 	if !needsPosixUnlock {
 		if hasActivePool {
-			inode, err := m.store.GetInode(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("flush get inode %d: %w", params.Ino, err)
-			}
-			if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
+			if (uint32(snapshot.mode) & S_IFMT) == S_IFDIR {
 				return ErrIsDir
 			}
 
-			handle, err := m.store.GetFileHandle(ctx, db.GetFileHandleParams{
-				Fh:        int64(params.Fh),
-				Ino:       int64(params.Ino),
-				SessionID: toPgSessionID(params.SessionID),
-			})
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, ErrBadFileHandle)
-					return ErrBadFileHandle
-				}
-				return fmt.Errorf("flush get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
+			if !snapshot.hasHandle {
+				m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, ErrBadFileHandle)
+				return ErrBadFileHandle
 			}
 
 			if params.SessionID != nil {
-				handled, touchErr := m.tryThrottledSessionTouchReadOnly(ctx, *params.SessionID, handle.CreatedAt)
+				handled, touchErr := m.tryThrottledSessionTouchReadOnly(ctx, *params.SessionID, snapshot.handleCreatedAt)
 				if handled {
 					if touchErr != nil {
 						if errors.Is(touchErr, ErrBadFileHandle) {
@@ -250,8 +236,8 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 					return nil
 				}
 
-				err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-					return m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handle.CreatedAt)
+				err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+					return m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, snapshot.handleCreatedAt)
 				})
 				if err != nil {
 					if errors.Is(err, ErrBadFileHandle) {

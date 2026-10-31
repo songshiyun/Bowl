@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
+	"github.com/starsrc/bowl/services/storage/internal/readbuf"
 )
 
 const (
@@ -406,6 +407,7 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 
 	bs := m.getBlockStore()
 	currentRows := rows
+	buffer := readbuf.NewBuffer(ctx)
 
 	for attempt := 0; attempt < maxReadLockRetries; attempt++ {
 		if attempt > 0 {
@@ -437,7 +439,7 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 			return nil, fmt.Errorf("read tx: %w", err)
 		}
 
-		finalBuf := make([]byte, readLen)
+		finalBuf := buffer.Bytes(readLen)
 		tasks, err := buildBlockReadTasks(plans, finalBuf)
 		if err != nil {
 			if errors.Is(err, ErrInvalidArgument) {

@@ -103,6 +103,8 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 			// 明文 HTTP/2 (h2c) 并发多路复用传输
 			h2cTransport := &http2.Transport{
 				AllowHTTP: true,
+				// 协商 256 KiB 接收帧，降低大响应的帧处理开销。
+				MaxReadFrameSize: 256 * 1024,
 				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 					var d net.Dialer
 					return d.DialContext(ctx, network, addr)
@@ -147,6 +149,15 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 		})
 		interceptors = append(interceptors, authInterceptor)
 	}
+
+	// Connect 一元响应默认不协商压缩，避免大块读取受 gzip 的 CPU 开销限制。
+	// 保留压缩编解码器和请求压缩；调用方后续传入的拦截器仍可覆盖响应协商。
+	interceptors = append(interceptors, connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			req.Header().Set("Accept-Encoding", "identity")
+			return next(ctx, req)
+		}
+	}))
 
 	var clientOpts []connect.ClientOption
 	if len(interceptors) > 0 {

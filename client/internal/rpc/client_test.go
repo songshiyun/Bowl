@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -120,6 +122,83 @@ type testStorageHandler struct {
 	lastProtoMaj  int
 	lastAuthToken string
 	callCount     int
+	readData      []byte
+}
+
+func (h *testStorageHandler) Read(_ context.Context, _ *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	return connect.NewResponse(&storagev1.ReadResponse{Data: h.readData}), nil
+}
+
+func TestNewClient_LargeReadUsesIdentityEncoding(t *testing.T) {
+	for _, encrypted := range []bool{false, true} {
+		name := "明文 HTTP2"
+		if encrypted {
+			name = "TLS HTTP2"
+		}
+		t.Run(name, func(t *testing.T) {
+			payload := bytes.Repeat([]byte{0x3c, 0x81, 0x04, 0xff}, 256*1024)
+			handler := &testStorageHandler{readData: payload}
+			acceptedEncoding := make(chan string, 1)
+			_, service := storagev1connect.NewStorageServiceHandler(handler)
+			wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				acceptedEncoding <- r.Header.Get("Accept-Encoding")
+				service.ServeHTTP(w, r)
+			})
+			server := httptest.NewUnstartedServer(h2c.NewHandler(wrapped, &http2.Server{}))
+			cfg := ClientConfig{}
+			if encrypted {
+				server.EnableHTTP2 = true
+				server.StartTLS()
+				cfg.TLSConfig = server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+			} else {
+				server.Start()
+			}
+			defer server.Close()
+			cfg.Endpoint = server.URL
+			client, err := NewClientFromConfig(cfg)
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			response, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+				Ino: 2, Fh: 1, Size: uint32(len(payload)),
+			}))
+			require.NoError(t, err)
+			require.Equal(t, payload, response.Msg.GetData())
+			require.Equal(t, "identity", <-acceptedEncoding, "大块读取应避免默认 gzip 压缩开销")
+			require.Empty(t, response.Header().Get("Content-Encoding"))
+		})
+	}
+}
+
+func TestNewClient_ExplicitCompressionOverridesDefault(t *testing.T) {
+	payload := bytes.Repeat([]byte("显式压缩读取"), 8192)
+	_, service := storagev1connect.NewStorageServiceHandler(&testStorageHandler{readData: payload})
+	requestHeaders := make(chan http.Header, 1)
+	wrapped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestHeaders <- r.Header.Clone()
+		service.ServeHTTP(w, r)
+	})
+	server := httptest.NewServer(h2c.NewHandler(wrapped, &http2.Server{}))
+	defer server.Close()
+	explicitResponseCompression := connect.WithInterceptors(connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, request connect.AnyRequest) (connect.AnyResponse, error) {
+			request.Header().Set("Accept-Encoding", "gzip")
+			return next(ctx, request)
+		}
+	}))
+	client, err := NewClientFromConfig(ClientConfig{Endpoint: server.URL},
+		connect.WithSendGzip(), connect.WithCompressMinBytes(0), explicitResponseCompression)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request := connect.NewRequest(&storagev1.ReadRequest{Ino: 2, Fh: 1, Size: uint32(len(payload))})
+	response, err := client.Read(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, payload, response.Msg.GetData())
+	headers := <-requestHeaders
+	require.Equal(t, "gzip", headers.Get("Content-Encoding"), "保留显式请求压缩")
+	require.Equal(t, "gzip", headers.Get("Accept-Encoding"), "保留显式响应压缩")
+	require.Equal(t, "gzip", response.Header().Get("Content-Encoding"))
 }
 
 func (h *testStorageHandler) GetDisk(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
