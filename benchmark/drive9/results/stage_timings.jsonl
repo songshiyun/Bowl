@@ -1,0 +1,11 @@
+{"stage":"cross_compile_binaries","duration_sec":8,"timestamp":"2026-10-31T03:07:14Z"}
+{"stage":"provision_ecs_instances","duration_sec":34,"timestamp":"2026-10-31T03:07:48Z"}
+{"stage":"deploy_server_node","duration_sec":131,"timestamp":"2026-10-31T03:09:59Z"}
+{"stage":"setup_client_and_mounts","duration_sec":52,"timestamp":"2026-10-31T03:10:51Z"}
+{"stage":"bowl_juicefs_bench","duration_sec":64,"timestamp":"2026-10-31T03:12:15Z"}
+{"stage":"drive9_default_juicefs_bench","duration_sec":70,"timestamp":"2026-10-31T03:13:25Z"}
+{"stage":"drive9_sync_juicefs_bench","duration_sec":98,"timestamp":"2026-10-31T03:15:03Z"}
+{"stage":"drive9_fuse_bench_cold_and_hot","duration_sec":1088,"timestamp":"2026-10-31T03:33:11Z"}
+{"stage":"bowl_fuse_perf_baseline","duration_sec":13,"timestamp":"2026-10-31T03:33:24Z"}
+{"stage":"drive9_default_fuse_perf_baseline","duration_sec":5,"timestamp":"2026-10-31T03:33:29Z"}
+{"stage":"drive9_sync_fuse_perf_baseline","duration_sec":5,"timestamp":"2026-10-31T03:33:34Z"}

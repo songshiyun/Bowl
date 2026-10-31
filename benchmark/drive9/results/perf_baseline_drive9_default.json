@@ -1,0 +1,144 @@
+{
+  "correctness": {
+    "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
+    "small_file_manifest_sha256": "2fbfe9ae1bf9d1b054bea0cf45d9fb9be4e28396547b71b5ea2588fd4adf853e",
+    "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
+    "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
+  },
+  "generated_at_unix": 1793417607.26283,
+  "params": {
+    "large_bytes": 16777216,
+    "large_mb": 16,
+    "read_passes": 2,
+    "small_bytes": 1024,
+    "small_files": 64,
+    "sqlite_rows": 256
+  },
+  "schema": "drive9-fuse-performance/v1",
+  "workloads": {
+    "large_file_reads": [
+      {
+        "bytes": 16777216,
+        "bytes_per_second": 722639704.2033998,
+        "files": 1,
+        "files_per_second": 43.072682869637,
+        "mib_per_second": 689.162925914192,
+        "pass": 1,
+        "rows": 0,
+        "seconds": 0.023216570999920805
+      },
+      {
+        "bytes": 16777216,
+        "bytes_per_second": 759261289.0506169,
+        "files": 1,
+        "files_per_second": 45.2554994255672,
+        "mib_per_second": 724.0879908090752,
+        "pass": 2,
+        "rows": 0,
+        "seconds": 0.02209676200004651
+      }
+    ],
+    "large_file_write": {
+      "bytes": 16777216,
+      "bytes_per_second": 61872995.18095935,
+      "files": 1,
+      "files_per_second": 3.687917898950538,
+      "mib_per_second": 59.00668638320861,
+      "rows": 0,
+      "seconds": 0.2711557110001195
+    },
+    "small_file_read": {
+      "bytes": 65536,
+      "bytes_per_second": 93506.65481993821,
+      "files": 64,
+      "files_per_second": 91.3150925975959,
+      "mib_per_second": 0.08917489511483975,
+      "rows": 0,
+      "seconds": 0.7008699020000222
+    },
+    "small_file_write": {
+      "bytes": 65536,
+      "bytes_per_second": 987093.9454783096,
+      "files": 64,
+      "files_per_second": 963.9589311311618,
+      "mib_per_second": 0.9413661436827752,
+      "rows": 0,
+      "seconds": 0.06639287000007243
+    },
+    "sqlite_insert_transaction": {
+      "bytes": 0,
+      "bytes_per_second": 0.0,
+      "files": 0,
+      "mib_per_second": 0.0,
+      "rows": 256,
+      "rows_per_second": 3096.8435228827857,
+      "seconds": 0.08266481600003317
+    },
+    "sqlite_read_aggregate": {
+      "bytes": 131072,
+      "bytes_per_second": 304035183.808611,
+      "files": 0,
+      "integrity_check": "ok",
+      "journal_mode": "delete",
+      "max_version": 2,
+      "mib_per_second": 289.95054608212564,
+      "payload_verified_rows": 256,
+      "rows": 256,
+      "rows_per_second": 593818.7183761933,
+      "seconds": 0.00043110799992973625
+    },
+    "sqlite_update_transaction": {
+      "bytes": 0,
+      "bytes_per_second": 0.0,
+      "files": 0,
+      "mib_per_second": 0.0,
+      "rows": 86,
+      "rows_per_second": 763.443702081411,
+      "seconds": 0.11264746799997738
+    },
+    "sqlite_wal_checkpoint_truncate": {
+      "bytes": 0,
+      "bytes_per_second": 0.0,
+      "checkpoint_busy": 0,
+      "checkpoint_log_frames": 0,
+      "checkpointed_frames": 0,
+      "files": 0,
+      "integrity_check": "ok",
+      "mib_per_second": 0.0,
+      "rows": 256,
+      "rows_per_second": 29931.175833683537,
+      "seconds": 0.008552954999913709
+    },
+    "sqlite_wal_insert_transaction": {
+      "bytes": 0,
+      "bytes_per_second": 0.0,
+      "files": 0,
+      "mib_per_second": 0.0,
+      "rows": 256,
+      "rows_per_second": 5675.9630812315445,
+      "seconds": 0.04510247799998979
+    },
+    "sqlite_wal_read_aggregate": {
+      "bytes": 131072,
+      "bytes_per_second": 535602057.9455293,
+      "files": 0,
+      "integrity_check": "ok",
+      "journal_mode": "wal",
+      "max_version": 2,
+      "mib_per_second": 510.78992647698334,
+      "payload_verified_rows": 256,
+      "rows": 256,
+      "rows_per_second": 1046097.7694248619,
+      "seconds": 0.00024471899996569846
+    },
+    "sqlite_wal_update_transaction": {
+      "bytes": 0,
+      "bytes_per_second": 0.0,
+      "files": 0,
+      "mib_per_second": 0.0,
+      "rows": 86,
+      "rows_per_second": 2780.471224561068,
+      "seconds": 0.030930009000030623
+    }
+  }
+}

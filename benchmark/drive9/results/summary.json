@@ -1,0 +1,4225 @@
+{
+  "env_metadata": {
+    "cloud": {
+      "provider": "Aliyun ECS",
+      "region": "us-west-1",
+      "zone_id": "us-west-1a",
+      "vpc_id": "vpc-rj9gjwyzzh4v0cn576fhu",
+      "vswitch_id": "vsw-rj9rsvsgpihtsgxej6me5",
+      "security_group_id": "sg-rj97ly79h6cp3mnfpo2q",
+      "instance_type": "ecs.c9i.xlarge",
+      "image_id": "ubuntu_24_04_x64_20G_alibase_20261016.vhd",
+      "system_disk_category": "cloud_essd",
+      "system_disk_size_gib": 120
+    },
+    "server_node": {
+      "instance_id": "i-rj919o5nf211olqico6j",
+      "public_ip": "43.110.146.155",
+      "private_ip": "172.16.1.222",
+      "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+      "vcpu": 4,
+      "memory_gib": "7.4Gi",
+      "kernel": "6.8.0-147-generic",
+      "os_release": "Ubuntu 24.04.5 LTS",
+      "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+      "tidb_version": "v8.5.5",
+      "disk_seq_write_mib_s": 198.45,
+      "disk_seq_read_mib_s": 184.19
+    },
+    "client_node": {
+      "instance_id": "i-rj919o5nf211olqico6k",
+      "public_ip": "43.110.149.71",
+      "private_ip": "172.16.1.223",
+      "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+      "vcpu": 4,
+      "memory_gib": "7.4Gi",
+      "kernel": "6.8.0-147-generic",
+      "os_release": "Ubuntu 24.04.5 LTS",
+      "fusermount_version": "fusermount3 version: 3.14.0",
+      "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
+      "go_version": "go version go1.22.2 linux/amd64",
+      "sqlite_version": "3.45.1"
+    },
+    "network_baseline": {
+      "ping_rtt_ms": "rtt min/avg/max/mdev = 0.039/0.068/0.145/0.031 ms",
+      "iperf3_gbps": 15.71
+    },
+    "server_disk_baseline": {
+      "local_seq_write_mib_s": 198.45,
+      "local_seq_read_mib_s": 184.19
+    },
+    "bowl_config": {
+      "git_commit": "1619a96",
+      "atime_mode": "noatime",
+      "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)"
+    },
+    "drive9_config": {
+      "git_commit": "b529a36f",
+      "default_mode": "--profile=coding-agent --durability=interactive --write-cache-size-mb=0",
+      "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
+    },
+    "cleanup_audit": {
+      "key_pair_name": "bowl-d9-bench-kp-20261031110706",
+      "server_instance_ids": "i-rj919o5nf211olqico6j",
+      "client_instance_ids": "i-rj919o5nf211olqico6k",
+      "instances_created_at": "2026-10-31T03:07:19Z",
+      "instances_deleted_at": "2026-10-31T03:34:12Z",
+      "remaining_benchmark_instances": 0
+    }
+  },
+  "juicefs_bench": {
+    "bowl": {
+      "Write big file": {
+        "value": 179.17,
+        "value_unit": "MiB/s",
+        "cost": 22.86,
+        "cost_unit": "s/file"
+      },
+      "Read big file": {
+        "value": 118.45,
+        "value_unit": "MiB/s",
+        "cost": 34.58,
+        "cost_unit": "s/file"
+      },
+      "Write small file": {
+        "value": 317.4,
+        "value_unit": "files/s",
+        "cost": 12.6,
+        "cost_unit": "ms/file"
+      },
+      "Read small file": {
+        "value": 467.1,
+        "value_unit": "files/s",
+        "cost": 8.56,
+        "cost_unit": "ms/file"
+      },
+      "Stat file": {
+        "value": 5541.5,
+        "value_unit": "files/s",
+        "cost": 0.72,
+        "cost_unit": "ms/file"
+      }
+    },
+    "drive9_default": {
+      "Write big file": {
+        "value": 198.44,
+        "value_unit": "MiB/s",
+        "cost": 20.64,
+        "cost_unit": "s/file"
+      },
+      "Read big file": {
+        "value": 224.78,
+        "value_unit": "MiB/s",
+        "cost": 18.22,
+        "cost_unit": "s/file"
+      },
+      "Write small file": {
+        "value": 2268.5,
+        "value_unit": "files/s",
+        "cost": 1.76,
+        "cost_unit": "ms/file"
+      },
+      "Read small file": {
+        "value": 7833.9,
+        "value_unit": "files/s",
+        "cost": 0.51,
+        "cost_unit": "ms/file"
+      },
+      "Stat file": {
+        "value": 17978.6,
+        "value_unit": "files/s",
+        "cost": 0.22,
+        "cost_unit": "ms/file"
+      }
+    },
+    "drive9_sync": {
+      "Write big file": {
+        "value": 58.01,
+        "value_unit": "MiB/s",
+        "cost": 70.61,
+        "cost_unit": "s/file"
+      },
+      "Read big file": {
+        "value": 383.07,
+        "value_unit": "MiB/s",
+        "cost": 10.69,
+        "cost_unit": "s/file"
+      },
+      "Write small file": {
+        "value": 98.6,
+        "value_unit": "files/s",
+        "cost": 40.58,
+        "cost_unit": "ms/file"
+      },
+      "Read small file": {
+        "value": 137.6,
+        "value_unit": "files/s",
+        "cost": 29.06,
+        "cost_unit": "ms/file"
+      },
+      "Stat file": {
+        "value": 483.5,
+        "value_unit": "files/s",
+        "cost": 8.27,
+        "cost_unit": "ms/file"
+      }
+    }
+  },
+  "drive9_fuse_bench_cold": {
+    "cache_prepare": {
+      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches",
+      "method": "command",
+      "requested": true
+    },
+    "cache_state": "cold",
+    "environment": "lan",
+    "host": "iZrj919o5nf211olqico6kZ",
+    "mount_params": {
+      "client_host": "iZrj919o5nf211olqico6kZ",
+      "network_note": "",
+      "server_host": "172.16.1.222",
+      "server_url": "http://172.16.1.222:9009",
+      "targets": {
+        "bowl": {
+          "mount": "bowl:01a18ff0-2dca-78d9-aa0d-e1ede8f0f0a4 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+          "path": "/mnt/bowl"
+        },
+        "drive9_default": {
+          "mount": "drive9 /mnt/drive9_default fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+          "path": "/mnt/drive9_default"
+        },
+        "drive9_sync": {
+          "mount": "drive9 /mnt/drive9_sync fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+          "path": "/mnt/drive9_sync"
+        }
+      }
+    },
+    "params": {
+      "dir_large_count": 500,
+      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches",
+      "git_clone_mode": "no-local",
+      "large_mib": 256,
+      "macro_files": 200,
+      "macro_total_mib": 20,
+      "random_reads": 1000,
+      "runs": 3,
+      "small_count": 200,
+      "stat_count": 500
+    },
+    "results": {
+      "bowl:macro_find_files": {
+        "median": 0.09573454999997466,
+        "metric": "latency",
+        "p95": 0.1086607703000368,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.1100970170000437,
+          0.08690798999998606,
+          0.09573454999997466
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.1100970170000437,
+          0.08690798999998606,
+          0.09573454999997466
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_clone": {
+        "median": 5.152809762000061,
+        "metric": "latency",
+        "p95": 5.431066611299968,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5.461984038999958,
+          5.097299360999955,
+          5.152809762000061
+        ],
+        "sample_count": 3,
+        "seconds": [
+          5.461984038999958,
+          5.097299360999955,
+          5.152809762000061
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_diff_dirty": {
+        "median": 0.1472717870000224,
+        "metric": "latency",
+        "p95": 0.148543807400074,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.13278139100009412,
+          0.14868514300007973,
+          0.1472717870000224
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.13278139100009412,
+          0.14868514300007973,
+          0.1472717870000224
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_status_dirty": {
+        "median": 0.3614379950000739,
+        "metric": "latency",
+        "p95": 0.3685145050999722,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.317352231999962,
+          0.3693007839999609,
+          0.3614379950000739
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.317352231999962,
+          0.3693007839999609,
+          0.3614379950000739
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_go_build": {
+        "median": 0.583950108999943,
+        "metric": "latency",
+        "p95": 2.0990689878999884,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          2.267415529999994,
+          0.583950108999943,
+          0.5510822199998984
+        ],
+        "sample_count": 3,
+        "seconds": [
+          2.267415529999994,
+          0.583950108999943,
+          0.5510822199998984
+        ],
+        "unit": "seconds"
+      },
+      "bowl:mkdir": {
+        "median": 423.7204863745144,
+        "metric": "throughput",
+        "p95": 454.940134060975,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          423.7204863745144,
+          407.2038614295207,
+          458.4089838039151
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.1800231899999858,
+          1.2278861949999964,
+          1.090729060000001
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:random_read_4k": {
+        "median": 5.524157809951509,
+        "metric": "throughput",
+        "p95": 5.646739249440736,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5.160570321514072,
+          5.524157809951509,
+          5.660359409383983
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.7569415309999954,
+          0.7071213629999988,
+          0.6901063550000117
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:readdir_large": {
+        "median": 8240.397580067365,
+        "metric": "throughput",
+        "p95": 8255.370914033125,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          4100.375654277005,
+          8257.034617807098,
+          8240.397580067365
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.12194004699995276,
+          0.060554426999942734,
+          0.06067668399998638
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:readdir_small": {
+        "median": 2738.558951089145,
+        "metric": "throughput",
+        "p95": 4032.09662082589,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          4175.823028574418,
+          2422.6519899187015,
+          2738.558951089145
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.0047894750000523345,
+          0.00825541599999724,
+          0.007303111000055651
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:rename": {
+        "median": 345.5007594099729,
+        "metric": "throughput",
+        "p95": 366.5165545118877,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          345.5007594099729,
+          368.8516428565449,
+          338.62792290593444
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.4471748220000222,
+          1.355558555000016,
+          1.4765468710000391
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:sequential_read": {
+        "median": 141.13255376958966,
+        "metric": "throughput",
+        "p95": 246.56228614480094,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          141.13255376958966,
+          258.27670085315776,
+          91.05175938059301
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.8138975960000039,
+          0.9911850320000326,
+          2.811587625999948
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:sequential_write": {
+        "median": 226.0925332814619,
+        "metric": "throughput",
+        "p95": 226.21460858871654,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          226.0925332814619,
+          226.22817251174484,
+          210.8577505331711
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.1322797629999855,
+          1.1316008840000222,
+          1.2140886420000356
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:small_write_4k_fsync": {
+        "median": 131.80672682207543,
+        "metric": "throughput",
+        "p95": 133.81823617337952,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          131.80672682207543,
+          134.0417372124133,
+          126.79699128973142
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.517373238999994,
+          1.4920725750000088,
+          1.577324492999992
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:stat": {
+        "median": 2562.098464406266,
+        "metric": "throughput",
+        "p95": 2610.0141706496984,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          2615.3381380100795,
+          2562.098464406266,
+          2546.1435948697886
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.19117986799994924,
+          0.19515253099996244,
+          0.19637541300005523
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:unlink": {
+        "median": 373.06948164364616,
+        "metric": "throughput",
+        "p95": 393.12879833260746,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          373.06948164364616,
+          395.35761129804763,
+          371.81851977688075
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.3402329179999697,
+          1.2646778149999136,
+          1.344742053999994
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:macro_find_files": {
+        "median": 0.01593390699997599,
+        "metric": "latency",
+        "p95": 0.018830294199995025,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.01570590500000435,
+          0.01915211499999714,
+          0.01593390699997599
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.01570590500000435,
+          0.01915211499999714,
+          0.01593390699997599
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_clone": {
+        "median": 1.9078536069999927,
+        "metric": "latency",
+        "p95": 1.9343534518000751,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          1.9372978790000843,
+          1.8694908209999994,
+          1.9078536069999927
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.9372978790000843,
+          1.8694908209999994,
+          1.9078536069999927
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_diff_dirty": {
+        "median": 0.7815135079999891,
+        "metric": "latency",
+        "p95": 0.7894525907000116,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.7903347110000141,
+          0.7776138460000084,
+          0.7815135079999891
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.7903347110000141,
+          0.7776138460000084,
+          0.7815135079999891
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_status_dirty": {
+        "median": 2.0809511039999506,
+        "metric": "latency",
+        "p95": 2.120923474500091,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          1.9950431770000705,
+          2.0809511039999506,
+          2.125364849000107
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.9950431770000705,
+          2.0809511039999506,
+          2.125364849000107
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_go_build": {
+        "median": 0.3610875050000004,
+        "metric": "latency",
+        "p95": 0.37907002430006287,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.3610875050000004,
+          0.3810680820000698,
+          0.356871981999916
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.3610875050000004,
+          0.3810680820000698,
+          0.356871981999916
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:mkdir": {
+        "median": 248.0818717768865,
+        "metric": "throughput",
+        "p95": 252.14596853436214,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          245.19640311822928,
+          252.59753484074832,
+          248.0818717768865
+        ],
+        "sample_count": 3,
+        "seconds": [
+          2.0391816260000724,
+          1.9794334109999454,
+          2.0154636710000204
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:random_read_4k": {
+        "median": 2.8252774104358847,
+        "metric": "throughput",
+        "p95": 2.8605971552888265,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          2.8252774104358847,
+          2.8057565405807328,
+          2.8645215713835976
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.3826075929999888,
+          1.3922269959999767,
+          1.3636657650000643
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:readdir_large": {
+        "median": 41769.859103486706,
+        "metric": "throughput",
+        "p95": 43318.05685342271,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          43490.07882563782,
+          40887.00597874128,
+          41769.859103486706
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.011496875000034379,
+          0.012228823999976157,
+          0.011970354000027328
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:readdir_small": {
+        "median": 6643.90906336748,
+        "metric": "throughput",
+        "p95": 6830.575754050509,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          6851.316497459735,
+          6322.543281120504,
+          6643.90906336748
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.0029191470000569097,
+          0.0031632839999247153,
+          0.003010276000054546
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:rename": {
+        "median": 96.24791896238527,
+        "metric": "throughput",
+        "p95": 96.68217322009845,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          96.24791896238527,
+          96.73042369317768,
+          94.11354319459096
+        ],
+        "sample_count": 3,
+        "seconds": [
+          5.194917515000043,
+          5.169004547999975,
+          5.312731654000004
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:sequential_read": {
+        "median": 184.43555631246628,
+        "metric": "throughput",
+        "p95": 184.6995617846205,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          184.72889572597097,
+          180.91626579186078,
+          184.43555631246628
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.385814595999932,
+          1.4150192569999263,
+          1.3880186940000385
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:sequential_write": {
+        "median": 325.5216553828178,
+        "metric": "throughput",
+        "p95": 432.0224415983216,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          443.85586228893317,
+          247.0153003756944,
+          325.5216553828178
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.5767638139999463,
+          1.0363730489999625,
+          0.7864300139999614
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:small_write_4k_fsync": {
+        "median": 1035.916617248069,
+        "metric": "throughput",
+        "p95": 1057.4744495615441,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          1035.916617248069,
+          993.3124247694846,
+          1059.8697642630414
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.1930657320000364,
+          0.20134651999990183,
+          0.18870243000003484
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:stat": {
+        "median": 20714.042886516538,
+        "metric": "throughput",
+        "p95": 20892.442729871163,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          20322.94211818026,
+          20714.042886516538,
+          20912.264934688345
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.024602737000009256,
+          0.024138214000004155,
+          0.023909413999945173
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:unlink": {
+        "median": 98.11201447397359,
+        "metric": "throughput",
+        "p95": 98.20632719433048,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          98.21680638548125,
+          98.11201447397359,
+          97.27166897819092
+        ],
+        "sample_count": 3,
+        "seconds": [
+          5.0907784360000505,
+          5.096215817000029,
+          5.140242840000042
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:macro_find_files": {
+        "median": 0.04308420400002433,
+        "metric": "latency",
+        "p95": 0.04804300600003444,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.04308420400002433,
+          0.0416102660000206,
+          0.04859398400003556
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.04308420400002433,
+          0.0416102660000206,
+          0.04859398400003556
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_clone": {
+        "median": 6.289581596999938,
+        "metric": "latency",
+        "p95": 6.344489368499945,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          6.195083973999999,
+          6.289581596999938,
+          6.350590231999945
+        ],
+        "sample_count": 3,
+        "seconds": [
+          6.195083973999999,
+          6.289581596999938,
+          6.350590231999945
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_diff_dirty": {
+        "median": 0.07392471399998612,
+        "metric": "latency",
+        "p95": 0.1139978106999365,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.03854703900003642,
+          0.118450376999931,
+          0.07392471399998612
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.03854703900003642,
+          0.118450376999931,
+          0.07392471399998612
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_status_dirty": {
+        "median": 0.3047245750000229,
+        "metric": "latency",
+        "p95": 0.30752304310001366,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.3078339840000126,
+          0.28934895899999447,
+          0.3047245750000229
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.3078339840000126,
+          0.28934895899999447,
+          0.3047245750000229
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_go_build": {
+        "median": 0.34186024000007365,
+        "metric": "latency",
+        "p95": 0.3458113597000875,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.3168636900001047,
+          0.346250373000089,
+          0.34186024000007365
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.3168636900001047,
+          0.346250373000089,
+          0.34186024000007365
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:mkdir": {
+        "median": 248.03897718220955,
+        "metric": "throughput",
+        "p95": 248.3186734373931,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          248.03897718220955,
+          248.34975079908017,
+          247.65661981712086
+        ],
+        "sample_count": 3,
+        "seconds": [
+          2.0158122149999826,
+          2.0132897189999994,
+          2.01892442999997
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:random_read_4k": {
+        "median": 5.111111842386246,
+        "metric": "throughput",
+        "p95": 5.112136273455342,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5.112250099129686,
+          5.111111842386246,
+          5.1015754127201385
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.7640960290000294,
+          0.7642661950000047,
+          0.765694845999974
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:readdir_large": {
+        "median": 104847.3223774604,
+        "metric": "throughput",
+        "p95": 118442.87902574165,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          104847.3223774604,
+          119953.49643110624,
+          49063.00936613009
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.004768839000007574,
+          0.0041682819999095955,
+          0.010190976999979284
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:readdir_small": {
+        "median": 13949.25817763724,
+        "metric": "throughput",
+        "p95": 14633.110922059153,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          12600.068165917193,
+          14709.094560328254,
+          13949.25817763724
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.0015872930000568886,
+          0.0013597029999345978,
+          0.0014337680000835462
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:rename": {
+        "median": 61.497702034739355,
+        "metric": "throughput",
+        "p95": 62.03252123948899,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          62.091945595572284,
+          61.497702034739355,
+          60.47993273400638
+        ],
+        "sample_count": 3,
+        "seconds": [
+          8.05257421400006,
+          8.130385095000065,
+          8.267204961999937
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:sequential_read": {
+        "median": 82.2678612930608,
+        "metric": "throughput",
+        "p95": 83.19327605950033,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          81.24503148747097,
+          82.2678612930608,
+          83.29609992243806
+        ],
+        "sample_count": 3,
+        "seconds": [
+          3.150961915000039,
+          3.1117862550000837,
+          3.073373186000026
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:sequential_write": {
+        "median": 191.0888543287433,
+        "metric": "throughput",
+        "p95": 262.48524619270904,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          270.41817862203857,
+          191.0888543287433,
+          182.49061280763655
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.9466819180000812,
+          1.3396909040000082,
+          1.4028118819999236
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:small_write_4k_fsync": {
+        "median": 143.7383995969459,
+        "metric": "throughput",
+        "p95": 147.25048816283777,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          147.64072022571466,
+          143.7383995969459,
+          143.327744353941
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.354639829000007,
+          1.3914166330000626,
+          1.3954032479999796
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:stat": {
+        "median": 35844.35206646525,
+        "metric": "throughput",
+        "p95": 42499.73941937505,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          21773.469088836657,
+          35844.35206646525,
+          43239.2269030317
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.022963727000046674,
+          0.013949198999966939,
+          0.011563574000092558
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:unlink": {
+        "median": 51.043126943428426,
+        "metric": "throughput",
+        "p95": 51.323255242313195,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          51.35438060885595,
+          48.30876351263591,
+          51.043126943428426
+        ],
+        "sample_count": 3,
+        "seconds": [
+          9.736267754999972,
+          10.350088961999973,
+          9.795638118999932
+        ],
+        "unit": "ops/s"
+      }
+    },
+    "schema_version": "drive9-bench/v1",
+    "targets": {
+      "bowl": {
+        "errors": {},
+        "mount": "bowl:01a18ff0-2dca-78d9-aa0d-e1ede8f0f0a4 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+        "path": "/mnt/bowl",
+        "results": {
+          "macro_find_files": {
+            "median": 0.09573454999997466,
+            "metric": "latency",
+            "p95": 0.1086607703000368,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.1100970170000437,
+              0.08690798999998606,
+              0.09573454999997466
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.1100970170000437,
+              0.08690798999998606,
+              0.09573454999997466
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 5.152809762000061,
+            "metric": "latency",
+            "p95": 5.431066611299968,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5.461984038999958,
+              5.097299360999955,
+              5.152809762000061
+            ],
+            "sample_count": 3,
+            "seconds": [
+              5.461984038999958,
+              5.097299360999955,
+              5.152809762000061
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.1472717870000224,
+            "metric": "latency",
+            "p95": 0.148543807400074,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.13278139100009412,
+              0.14868514300007973,
+              0.1472717870000224
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.13278139100009412,
+              0.14868514300007973,
+              0.1472717870000224
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 0.3614379950000739,
+            "metric": "latency",
+            "p95": 0.3685145050999722,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.317352231999962,
+              0.3693007839999609,
+              0.3614379950000739
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.317352231999962,
+              0.3693007839999609,
+              0.3614379950000739
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.583950108999943,
+            "metric": "latency",
+            "p95": 2.0990689878999884,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              2.267415529999994,
+              0.583950108999943,
+              0.5510822199998984
+            ],
+            "sample_count": 3,
+            "seconds": [
+              2.267415529999994,
+              0.583950108999943,
+              0.5510822199998984
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 423.7204863745144,
+            "metric": "throughput",
+            "p95": 454.940134060975,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              423.7204863745144,
+              407.2038614295207,
+              458.4089838039151
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.1800231899999858,
+              1.2278861949999964,
+              1.090729060000001
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 5.524157809951509,
+            "metric": "throughput",
+            "p95": 5.646739249440736,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5.160570321514072,
+              5.524157809951509,
+              5.660359409383983
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.7569415309999954,
+              0.7071213629999988,
+              0.6901063550000117
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 8240.397580067365,
+            "metric": "throughput",
+            "p95": 8255.370914033125,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              4100.375654277005,
+              8257.034617807098,
+              8240.397580067365
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.12194004699995276,
+              0.060554426999942734,
+              0.06067668399998638
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 2738.558951089145,
+            "metric": "throughput",
+            "p95": 4032.09662082589,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              4175.823028574418,
+              2422.6519899187015,
+              2738.558951089145
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.0047894750000523345,
+              0.00825541599999724,
+              0.007303111000055651
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 345.5007594099729,
+            "metric": "throughput",
+            "p95": 366.5165545118877,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              345.5007594099729,
+              368.8516428565449,
+              338.62792290593444
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.4471748220000222,
+              1.355558555000016,
+              1.4765468710000391
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 141.13255376958966,
+            "metric": "throughput",
+            "p95": 246.56228614480094,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              141.13255376958966,
+              258.27670085315776,
+              91.05175938059301
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.8138975960000039,
+              0.9911850320000326,
+              2.811587625999948
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 226.0925332814619,
+            "metric": "throughput",
+            "p95": 226.21460858871654,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              226.0925332814619,
+              226.22817251174484,
+              210.8577505331711
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.1322797629999855,
+              1.1316008840000222,
+              1.2140886420000356
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 131.80672682207543,
+            "metric": "throughput",
+            "p95": 133.81823617337952,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              131.80672682207543,
+              134.0417372124133,
+              126.79699128973142
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.517373238999994,
+              1.4920725750000088,
+              1.577324492999992
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 2562.098464406266,
+            "metric": "throughput",
+            "p95": 2610.0141706496984,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              2615.3381380100795,
+              2562.098464406266,
+              2546.1435948697886
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.19117986799994924,
+              0.19515253099996244,
+              0.19637541300005523
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 373.06948164364616,
+            "metric": "throughput",
+            "p95": 393.12879833260746,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              373.06948164364616,
+              395.35761129804763,
+              371.81851977688075
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.3402329179999697,
+              1.2646778149999136,
+              1.344742053999994
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/bowl/drive9-bench-1793416506-8970-bowl"
+      },
+      "drive9_default": {
+        "errors": {},
+        "mount": "drive9 /mnt/drive9_default fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+        "path": "/mnt/drive9_default",
+        "results": {
+          "macro_find_files": {
+            "median": 0.01593390699997599,
+            "metric": "latency",
+            "p95": 0.018830294199995025,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.01570590500000435,
+              0.01915211499999714,
+              0.01593390699997599
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.01570590500000435,
+              0.01915211499999714,
+              0.01593390699997599
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 1.9078536069999927,
+            "metric": "latency",
+            "p95": 1.9343534518000751,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              1.9372978790000843,
+              1.8694908209999994,
+              1.9078536069999927
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.9372978790000843,
+              1.8694908209999994,
+              1.9078536069999927
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.7815135079999891,
+            "metric": "latency",
+            "p95": 0.7894525907000116,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.7903347110000141,
+              0.7776138460000084,
+              0.7815135079999891
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.7903347110000141,
+              0.7776138460000084,
+              0.7815135079999891
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 2.0809511039999506,
+            "metric": "latency",
+            "p95": 2.120923474500091,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              1.9950431770000705,
+              2.0809511039999506,
+              2.125364849000107
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.9950431770000705,
+              2.0809511039999506,
+              2.125364849000107
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.3610875050000004,
+            "metric": "latency",
+            "p95": 0.37907002430006287,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.3610875050000004,
+              0.3810680820000698,
+              0.356871981999916
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.3610875050000004,
+              0.3810680820000698,
+              0.356871981999916
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 248.0818717768865,
+            "metric": "throughput",
+            "p95": 252.14596853436214,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              245.19640311822928,
+              252.59753484074832,
+              248.0818717768865
+            ],
+            "sample_count": 3,
+            "seconds": [
+              2.0391816260000724,
+              1.9794334109999454,
+              2.0154636710000204
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 2.8252774104358847,
+            "metric": "throughput",
+            "p95": 2.8605971552888265,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              2.8252774104358847,
+              2.8057565405807328,
+              2.8645215713835976
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.3826075929999888,
+              1.3922269959999767,
+              1.3636657650000643
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 41769.859103486706,
+            "metric": "throughput",
+            "p95": 43318.05685342271,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              43490.07882563782,
+              40887.00597874128,
+              41769.859103486706
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.011496875000034379,
+              0.012228823999976157,
+              0.011970354000027328
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 6643.90906336748,
+            "metric": "throughput",
+            "p95": 6830.575754050509,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              6851.316497459735,
+              6322.543281120504,
+              6643.90906336748
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.0029191470000569097,
+              0.0031632839999247153,
+              0.003010276000054546
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 96.24791896238527,
+            "metric": "throughput",
+            "p95": 96.68217322009845,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              96.24791896238527,
+              96.73042369317768,
+              94.11354319459096
+            ],
+            "sample_count": 3,
+            "seconds": [
+              5.194917515000043,
+              5.169004547999975,
+              5.312731654000004
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 184.43555631246628,
+            "metric": "throughput",
+            "p95": 184.6995617846205,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              184.72889572597097,
+              180.91626579186078,
+              184.43555631246628
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.385814595999932,
+              1.4150192569999263,
+              1.3880186940000385
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 325.5216553828178,
+            "metric": "throughput",
+            "p95": 432.0224415983216,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              443.85586228893317,
+              247.0153003756944,
+              325.5216553828178
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.5767638139999463,
+              1.0363730489999625,
+              0.7864300139999614
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 1035.916617248069,
+            "metric": "throughput",
+            "p95": 1057.4744495615441,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              1035.916617248069,
+              993.3124247694846,
+              1059.8697642630414
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.1930657320000364,
+              0.20134651999990183,
+              0.18870243000003484
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 20714.042886516538,
+            "metric": "throughput",
+            "p95": 20892.442729871163,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              20322.94211818026,
+              20714.042886516538,
+              20912.264934688345
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.024602737000009256,
+              0.024138214000004155,
+              0.023909413999945173
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 98.11201447397359,
+            "metric": "throughput",
+            "p95": 98.20632719433048,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              98.21680638548125,
+              98.11201447397359,
+              97.27166897819092
+            ],
+            "sample_count": 3,
+            "seconds": [
+              5.0907784360000505,
+              5.096215817000029,
+              5.140242840000042
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/drive9_default/drive9-bench-1793416628-8970-drive9_default"
+      },
+      "drive9_sync": {
+        "errors": {},
+        "mount": "drive9 /mnt/drive9_sync fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+        "path": "/mnt/drive9_sync",
+        "results": {
+          "macro_find_files": {
+            "median": 0.04308420400002433,
+            "metric": "latency",
+            "p95": 0.04804300600003444,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.04308420400002433,
+              0.0416102660000206,
+              0.04859398400003556
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.04308420400002433,
+              0.0416102660000206,
+              0.04859398400003556
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 6.289581596999938,
+            "metric": "latency",
+            "p95": 6.344489368499945,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              6.195083973999999,
+              6.289581596999938,
+              6.350590231999945
+            ],
+            "sample_count": 3,
+            "seconds": [
+              6.195083973999999,
+              6.289581596999938,
+              6.350590231999945
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.07392471399998612,
+            "metric": "latency",
+            "p95": 0.1139978106999365,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.03854703900003642,
+              0.118450376999931,
+              0.07392471399998612
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.03854703900003642,
+              0.118450376999931,
+              0.07392471399998612
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 0.3047245750000229,
+            "metric": "latency",
+            "p95": 0.30752304310001366,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.3078339840000126,
+              0.28934895899999447,
+              0.3047245750000229
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.3078339840000126,
+              0.28934895899999447,
+              0.3047245750000229
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.34186024000007365,
+            "metric": "latency",
+            "p95": 0.3458113597000875,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.3168636900001047,
+              0.346250373000089,
+              0.34186024000007365
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.3168636900001047,
+              0.346250373000089,
+              0.34186024000007365
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 248.03897718220955,
+            "metric": "throughput",
+            "p95": 248.3186734373931,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              248.03897718220955,
+              248.34975079908017,
+              247.65661981712086
+            ],
+            "sample_count": 3,
+            "seconds": [
+              2.0158122149999826,
+              2.0132897189999994,
+              2.01892442999997
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 5.111111842386246,
+            "metric": "throughput",
+            "p95": 5.112136273455342,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5.112250099129686,
+              5.111111842386246,
+              5.1015754127201385
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.7640960290000294,
+              0.7642661950000047,
+              0.765694845999974
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 104847.3223774604,
+            "metric": "throughput",
+            "p95": 118442.87902574165,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              104847.3223774604,
+              119953.49643110624,
+              49063.00936613009
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.004768839000007574,
+              0.0041682819999095955,
+              0.010190976999979284
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 13949.25817763724,
+            "metric": "throughput",
+            "p95": 14633.110922059153,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              12600.068165917193,
+              14709.094560328254,
+              13949.25817763724
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.0015872930000568886,
+              0.0013597029999345978,
+              0.0014337680000835462
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 61.497702034739355,
+            "metric": "throughput",
+            "p95": 62.03252123948899,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              62.091945595572284,
+              61.497702034739355,
+              60.47993273400638
+            ],
+            "sample_count": 3,
+            "seconds": [
+              8.05257421400006,
+              8.130385095000065,
+              8.267204961999937
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 82.2678612930608,
+            "metric": "throughput",
+            "p95": 83.19327605950033,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              81.24503148747097,
+              82.2678612930608,
+              83.29609992243806
+            ],
+            "sample_count": 3,
+            "seconds": [
+              3.150961915000039,
+              3.1117862550000837,
+              3.073373186000026
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 191.0888543287433,
+            "metric": "throughput",
+            "p95": 262.48524619270904,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              270.41817862203857,
+              191.0888543287433,
+              182.49061280763655
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.9466819180000812,
+              1.3396909040000082,
+              1.4028118819999236
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 143.7383995969459,
+            "metric": "throughput",
+            "p95": 147.25048816283777,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              147.64072022571466,
+              143.7383995969459,
+              143.327744353941
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.354639829000007,
+              1.3914166330000626,
+              1.3954032479999796
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 35844.35206646525,
+            "metric": "throughput",
+            "p95": 42499.73941937505,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              21773.469088836657,
+              35844.35206646525,
+              43239.2269030317
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.022963727000046674,
+              0.013949198999966939,
+              0.011563574000092558
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 51.043126943428426,
+            "metric": "throughput",
+            "p95": 51.323255242313195,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              51.35438060885595,
+              48.30876351263591,
+              51.043126943428426
+            ],
+            "sample_count": 3,
+            "seconds": [
+              9.736267754999972,
+              10.350088961999973,
+              9.795638118999932
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/drive9_sync/drive9-bench-1793416774-8970-drive9_sync"
+      }
+    },
+    "timestamp": "2026-10-31T03:23:49Z",
+    "version": "b529a36f"
+  },
+  "drive9_fuse_bench_hot": {
+    "cache_prepare": {
+      "drop_caches_command": "",
+      "method": "none",
+      "requested": false
+    },
+    "cache_state": "hot",
+    "environment": "lan",
+    "host": "iZrj919o5nf211olqico6kZ",
+    "mount_params": {
+      "client_host": "iZrj919o5nf211olqico6kZ",
+      "network_note": "",
+      "server_host": "172.16.1.222",
+      "server_url": "http://172.16.1.222:9009",
+      "targets": {
+        "bowl": {
+          "mount": "bowl:01a18ff0-2dca-78d9-aa0d-e1ede8f0f0a4 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+          "path": "/mnt/bowl"
+        },
+        "drive9_default": {
+          "mount": "drive9 /mnt/drive9_default fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+          "path": "/mnt/drive9_default"
+        },
+        "drive9_sync": {
+          "mount": "drive9 /mnt/drive9_sync fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+          "path": "/mnt/drive9_sync"
+        }
+      }
+    },
+    "params": {
+      "dir_large_count": 500,
+      "drop_caches_command": "",
+      "git_clone_mode": "no-local",
+      "large_mib": 256,
+      "macro_files": 200,
+      "macro_total_mib": 20,
+      "random_reads": 1000,
+      "runs": 3,
+      "small_count": 200,
+      "stat_count": 500
+    },
+    "results": {
+      "bowl:macro_find_files": {
+        "median": 0.08970917099986764,
+        "metric": "latency",
+        "p95": 0.09302990280004905,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.09339887300006922,
+          0.08970917099986764,
+          0.07746642400002202
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.09339887300006922,
+          0.08970917099986764,
+          0.07746642400002202
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_clone": {
+        "median": 5.176551792000055,
+        "metric": "latency",
+        "p95": 5.38441987169997,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5.176551792000055,
+          5.080633690000013,
+          5.4075163249999605
+        ],
+        "sample_count": 3,
+        "seconds": [
+          5.176551792000055,
+          5.080633690000013,
+          5.4075163249999605
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_diff_dirty": {
+        "median": 0.04062496899996404,
+        "metric": "latency",
+        "p95": 0.04263320289985586,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.04062496899996404,
+          0.04285633999984384,
+          0.03248219300007804
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.04062496899996404,
+          0.04285633999984384,
+          0.03248219300007804
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_git_status_dirty": {
+        "median": 0.1447908790000838,
+        "metric": "latency",
+        "p95": 0.2152804027000002,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.2231125719999909,
+          0.1447908790000838,
+          0.13526792899983775
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.2231125719999909,
+          0.1447908790000838,
+          0.13526792899983775
+        ],
+        "unit": "seconds"
+      },
+      "bowl:macro_go_build": {
+        "median": 0.39528559900008986,
+        "metric": "latency",
+        "p95": 0.4004693173000078,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.40104528599999867,
+          0.3819868079999651,
+          0.39528559900008986
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.40104528599999867,
+          0.3819868079999651,
+          0.39528559900008986
+        ],
+        "unit": "seconds"
+      },
+      "bowl:mkdir": {
+        "median": 492.5057066365124,
+        "metric": "throughput",
+        "p95": 512.7752783615631,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          492.5057066365124,
+          486.11796429406473,
+          515.0274529976798
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.0152166630000465,
+          1.028556928000171,
+          0.9708220349998555
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:random_read_4k": {
+        "median": 5.191913463960279,
+        "metric": "throughput",
+        "p95": 5.530643693702696,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5.568280385896298,
+          5.191913463960279,
+          5.159733085043382
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.701518194000073,
+          0.7523719389999997,
+          0.7570643549998977
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:readdir_large": {
+        "median": 7373.05769697495,
+        "metric": "throughput",
+        "p95": 8333.691240691647,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          8440.428301104614,
+          6691.2229194812535,
+          7373.05769697495
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.05923869999992348,
+          0.07472475600002326,
+          0.06781447000003027
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:readdir_small": {
+        "median": 5283.015080063399,
+        "metric": "throughput",
+        "p95": 6869.721443469771,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          5283.015080063399,
+          4357.981130491047,
+          7046.022150514923
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.003785717000027944,
+          0.00458928099988043,
+          0.0028384810000261496
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:rename": {
+        "median": 509.9071408513273,
+        "metric": "throughput",
+        "p95": 513.081308005757,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          513.4339932451381,
+          509.9071408513273,
+          506.19309945384094
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.9738350140000875,
+          0.9805706960000862,
+          0.9877653419998751
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:sequential_read": {
+        "median": 185.53644900720602,
+        "metric": "throughput",
+        "p95": 215.78649286904295,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          185.53644900720602,
+          219.14760885369148,
+          94.73604439037447
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.3797827939999934,
+          1.1681624149999834,
+          2.7022449759999745
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:sequential_write": {
+        "median": 222.59988727785768,
+        "metric": "throughput",
+        "p95": 228.2299756984891,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          222.59988727785768,
+          228.85554107855927,
+          183.7609871546525
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.1500455059999695,
+          1.1186095770000293,
+          1.393113979000077
+        ],
+        "unit": "MiB/s"
+      },
+      "bowl:small_write_4k_fsync": {
+        "median": 132.4161820447876,
+        "metric": "throughput",
+        "p95": 133.35693747920922,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          128.30866515523545,
+          132.4161820447876,
+          133.46146586081161
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.5587411790000942,
+          1.5103894170000558,
+          1.4985598929999924
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:stat": {
+        "median": 81730.14210819629,
+        "metric": "throughput",
+        "p95": 93123.68241480217,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          94389.63133775837,
+          72236.32837207078,
+          81730.14210819629
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.005297191999943607,
+          0.0069217249999837804,
+          0.006117694000067786
+        ],
+        "unit": "ops/s"
+      },
+      "bowl:unlink": {
+        "median": 474.1421217150805,
+        "metric": "throughput",
+        "p95": 484.78305594647225,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          474.1421217150805,
+          463.85360483357744,
+          485.96538197218246
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.0545361340000454,
+          1.077926300000172,
+          1.0288798720000614
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:macro_find_files": {
+        "median": 0.00458545900005447,
+        "metric": "latency",
+        "p95": 0.004711750600131381,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.003959836999911204,
+          0.00458545900005447,
+          0.004725783000139927
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.003959836999911204,
+          0.00458545900005447,
+          0.004725783000139927
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_clone": {
+        "median": 1.856811122000181,
+        "metric": "latency",
+        "p95": 1.86119626850018,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          1.8616835070001798,
+          1.856811122000181,
+          1.8512582969999585
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.8616835070001798,
+          1.856811122000181,
+          1.8512582969999585
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_diff_dirty": {
+        "median": 0.012950705000093876,
+        "metric": "latency",
+        "p95": 0.012985258699950463,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.012950705000093876,
+          0.012989097999934529,
+          0.012503287000072305
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.012950705000093876,
+          0.012989097999934529,
+          0.012503287000072305
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_git_status_dirty": {
+        "median": 0.21661594900001546,
+        "metric": "latency",
+        "p95": 0.21851294199987023,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.2187237189998541,
+          0.21661594900001546,
+          0.15229423200003112
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.2187237189998541,
+          0.21661594900001546,
+          0.15229423200003112
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:macro_go_build": {
+        "median": 0.11342100000001665,
+        "metric": "latency",
+        "p95": 0.11733313980012099,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.11342100000001665,
+          0.05767362200003845,
+          0.11776782200013258
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.11342100000001665,
+          0.05767362200003845,
+          0.11776782200013258
+        ],
+        "unit": "seconds"
+      },
+      "drive9_default:mkdir": {
+        "median": 244.32913865013893,
+        "metric": "throughput",
+        "p95": 248.4407605990329,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          244.32913865013893,
+          231.6427897988679,
+          248.89760748224333
+        ],
+        "sample_count": 3,
+        "seconds": [
+          2.046419852999861,
+          2.1584958480000296,
+          2.0088582010000664
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:random_read_4k": {
+        "median": 172.64227336427197,
+        "metric": "throughput",
+        "p95": 180.34307054468402,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          181.19871467584093,
+          172.64227336427197,
+          162.44373936620175
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.021557823999955872,
+          0.022626266000088435,
+          0.02404678699986107
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:readdir_large": {
+        "median": 77357.67232547083,
+        "metric": "throughput",
+        "p95": 83386.33691421915,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          77357.67232547083,
+          84056.18853519119,
+          50365.81192849417
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.006463483000061387,
+          0.005948402000058195,
+          0.009927369000024555
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:readdir_small": {
+        "median": 125187.78160373078,
+        "metric": "throughput",
+        "p95": 156840.9051244982,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          125187.78160373078,
+          160357.91884902792,
+          119040.53335484666
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.00015976000008777191,
+          0.00012472100002014486,
+          0.00016800999992483412
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:rename": {
+        "median": 92.91422250368724,
+        "metric": "throughput",
+        "p95": 95.972318654602,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          96.31210711581475,
+          92.91422250368724,
+          92.67403049755794
+        ],
+        "sample_count": 3,
+        "seconds": [
+          5.191455311000027,
+          5.381307474000096,
+          5.395254714999965
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:sequential_read": {
+        "median": 2339.8685160205864,
+        "metric": "throughput",
+        "p95": 2378.70149047632,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          2205.5661580224482,
+          2339.8685160205864,
+          2383.016265415846
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.11606997099988803,
+          0.10940785700017841,
+          0.10742687900005876
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:sequential_write": {
+        "median": 247.53964233511792,
+        "metric": "throughput",
+        "p95": 427.78937293566685,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          447.8171207801723,
+          247.53964233511792,
+          245.52477226169032
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.5716619309998805,
+          1.0341777890000685,
+          1.0426646470000378
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_default:small_write_4k_fsync": {
+        "median": 996.018059241428,
+        "metric": "throughput",
+        "p95": 1034.3443009584366,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          915.5449474814961,
+          996.018059241428,
+          1038.6027722603264
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.21844913300014923,
+          0.20079957200005083,
+          0.19256640300000072
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:stat": {
+        "median": 676560.6902405794,
+        "metric": "throughput",
+        "p95": 679421.5426975467,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          622416.9696291211,
+          676560.6902405794,
+          679739.4151927652
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.0008033199999317731,
+          0.0007390319999558415,
+          0.0007355759998972644
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_default:unlink": {
+        "median": 99.2762078843708,
+        "metric": "throughput",
+        "p95": 99.93636250944012,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          100.0097130233367,
+          99.2762078843708,
+          99.23939954942524
+        ],
+        "sample_count": 3,
+        "seconds": [
+          4.999514395999995,
+          5.036453453000149,
+          5.0383214959999805
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:macro_find_files": {
+        "median": 0.006162136000057217,
+        "metric": "latency",
+        "p95": 0.006721926999966854,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.0038694990000749385,
+          0.006784125999956814,
+          0.006162136000057217
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.0038694990000749385,
+          0.006784125999956814,
+          0.006162136000057217
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_clone": {
+        "median": 6.2699877360000755,
+        "metric": "latency",
+        "p95": 6.306162849900102,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          6.235251756000025,
+          6.2699877360000755,
+          6.310182307000105
+        ],
+        "sample_count": 3,
+        "seconds": [
+          6.235251756000025,
+          6.2699877360000755,
+          6.310182307000105
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_diff_dirty": {
+        "median": 0.01189936800005853,
+        "metric": "latency",
+        "p95": 0.011944377899840219,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.011746646999881705,
+          0.01189936800005853,
+          0.011949378999815963
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.011746646999881705,
+          0.01189936800005853,
+          0.011949378999815963
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_git_status_dirty": {
+        "median": 0.04836837000016203,
+        "metric": "latency",
+        "p95": 0.05732434200001535,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.04488584300020193,
+          0.04836837000016203,
+          0.05831944999999905
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.04488584300020193,
+          0.04836837000016203,
+          0.05831944999999905
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:macro_go_build": {
+        "median": 0.15515244099992742,
+        "metric": "latency",
+        "p95": 0.1951973109999244,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          0.14753295800005617,
+          0.15515244099992742,
+          0.19964674099992408
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.14753295800005617,
+          0.15515244099992742,
+          0.19964674099992408
+        ],
+        "unit": "seconds"
+      },
+      "drive9_sync:mkdir": {
+        "median": 239.3284988756475,
+        "metric": "throughput",
+        "p95": 245.9867060511873,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          246.7265068484695,
+          237.37284053838317,
+          239.3284988756475
+        ],
+        "sample_count": 3,
+        "seconds": [
+          2.0265353989998403,
+          2.1063909370000147,
+          2.0891786909999155
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:random_read_4k": {
+        "median": 4.8393853500280155,
+        "metric": "throughput",
+        "p95": 4.8660081212448185,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          4.792612666039898,
+          4.868966206935575,
+          4.8393853500280155
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.8150564779998604,
+          0.80227502799994,
+          0.8071789530001752
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:readdir_large": {
+        "median": 225341.55017259036,
+        "metric": "throughput",
+        "p95": 247411.147304808,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          103706.77035294918,
+          225341.55017259036,
+          249863.3247639433
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.00482128599992393,
+          0.002218854000147985,
+          0.0020010939999792754
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:readdir_small": {
+        "median": 233642.1299747305,
+        "metric": "throughput",
+        "p95": 236695.01763280566,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          203204.53541368962,
+          237034.2273725918,
+          233642.1299747305
+        ],
+        "sample_count": 3,
+        "seconds": [
+          9.842300005402649e-05,
+          8.437600013166957e-05,
+          8.560100013710326e-05
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:rename": {
+        "median": 58.865453789623885,
+        "metric": "throughput",
+        "p95": 59.08675661973976,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          59.11134582308597,
+          58.865453789623885,
+          58.210072651715905
+        ],
+        "sample_count": 3,
+        "seconds": [
+          8.458613030000151,
+          8.493946241999993,
+          8.589578696999979
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:sequential_read": {
+        "median": 893.0713996318483,
+        "metric": "throughput",
+        "p95": 906.8699388457992,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          842.0663535984305,
+          908.4031098695715,
+          893.0713996318483
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.30401404700000967,
+          0.2818132140000671,
+          0.2866512129999137
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:sequential_write": {
+        "median": 186.4719961378577,
+        "metric": "throughput",
+        "p95": 273.75498225336435,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          283.45309182175396,
+          186.4719961378577,
+          185.05878778417366
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.9031476719999318,
+          1.3728602969999883,
+          1.3833441959998254
+        ],
+        "unit": "MiB/s"
+      },
+      "drive9_sync:small_write_4k_fsync": {
+        "median": 143.00006376015577,
+        "metric": "throughput",
+        "p95": 143.55002849124142,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          143.61113568358428,
+          143.00006376015577,
+          142.1638840276882
+        ],
+        "sample_count": 3,
+        "seconds": [
+          1.392649664999908,
+          1.3986007749999771,
+          1.4068270669999947
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:stat": {
+        "median": 228492.04391625337,
+        "metric": "throughput",
+        "p95": 369587.7049704699,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          228492.04391625337,
+          385265.0006431606,
+          74247.70370357769
+        ],
+        "sample_count": 3,
+        "seconds": [
+          0.002188259999911679,
+          0.001297808000117584,
+          0.006734215000051336
+        ],
+        "unit": "ops/s"
+      },
+      "drive9_sync:unlink": {
+        "median": 51.708201149624124,
+        "metric": "throughput",
+        "p95": 51.857063741459946,
+        "p95_method": "linear_interpolation",
+        "p95_reliable": false,
+        "runs": [
+          51.8736040294417,
+          51.42903992479099,
+          51.708201149624124
+        ],
+        "sample_count": 3,
+        "seconds": [
+          9.638813600000049,
+          9.722133656999858,
+          9.669645992000142
+        ],
+        "unit": "ops/s"
+      }
+    },
+    "schema_version": "drive9-bench/v1",
+    "targets": {
+      "bowl": {
+        "errors": {},
+        "mount": "bowl:01a18ff0-2dca-78d9-aa0d-e1ede8f0f0a4 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+        "path": "/mnt/bowl",
+        "results": {
+          "macro_find_files": {
+            "median": 0.08970917099986764,
+            "metric": "latency",
+            "p95": 0.09302990280004905,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.09339887300006922,
+              0.08970917099986764,
+              0.07746642400002202
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.09339887300006922,
+              0.08970917099986764,
+              0.07746642400002202
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 5.176551792000055,
+            "metric": "latency",
+            "p95": 5.38441987169997,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5.176551792000055,
+              5.080633690000013,
+              5.4075163249999605
+            ],
+            "sample_count": 3,
+            "seconds": [
+              5.176551792000055,
+              5.080633690000013,
+              5.4075163249999605
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.04062496899996404,
+            "metric": "latency",
+            "p95": 0.04263320289985586,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.04062496899996404,
+              0.04285633999984384,
+              0.03248219300007804
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.04062496899996404,
+              0.04285633999984384,
+              0.03248219300007804
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 0.1447908790000838,
+            "metric": "latency",
+            "p95": 0.2152804027000002,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.2231125719999909,
+              0.1447908790000838,
+              0.13526792899983775
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.2231125719999909,
+              0.1447908790000838,
+              0.13526792899983775
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.39528559900008986,
+            "metric": "latency",
+            "p95": 0.4004693173000078,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.40104528599999867,
+              0.3819868079999651,
+              0.39528559900008986
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.40104528599999867,
+              0.3819868079999651,
+              0.39528559900008986
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 492.5057066365124,
+            "metric": "throughput",
+            "p95": 512.7752783615631,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              492.5057066365124,
+              486.11796429406473,
+              515.0274529976798
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.0152166630000465,
+              1.028556928000171,
+              0.9708220349998555
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 5.191913463960279,
+            "metric": "throughput",
+            "p95": 5.530643693702696,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5.568280385896298,
+              5.191913463960279,
+              5.159733085043382
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.701518194000073,
+              0.7523719389999997,
+              0.7570643549998977
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 7373.05769697495,
+            "metric": "throughput",
+            "p95": 8333.691240691647,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              8440.428301104614,
+              6691.2229194812535,
+              7373.05769697495
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.05923869999992348,
+              0.07472475600002326,
+              0.06781447000003027
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 5283.015080063399,
+            "metric": "throughput",
+            "p95": 6869.721443469771,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              5283.015080063399,
+              4357.981130491047,
+              7046.022150514923
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.003785717000027944,
+              0.00458928099988043,
+              0.0028384810000261496
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 509.9071408513273,
+            "metric": "throughput",
+            "p95": 513.081308005757,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              513.4339932451381,
+              509.9071408513273,
+              506.19309945384094
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.9738350140000875,
+              0.9805706960000862,
+              0.9877653419998751
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 185.53644900720602,
+            "metric": "throughput",
+            "p95": 215.78649286904295,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              185.53644900720602,
+              219.14760885369148,
+              94.73604439037447
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.3797827939999934,
+              1.1681624149999834,
+              2.7022449759999745
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 222.59988727785768,
+            "metric": "throughput",
+            "p95": 228.2299756984891,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              222.59988727785768,
+              228.85554107855927,
+              183.7609871546525
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.1500455059999695,
+              1.1186095770000293,
+              1.393113979000077
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 132.4161820447876,
+            "metric": "throughput",
+            "p95": 133.35693747920922,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              128.30866515523545,
+              132.4161820447876,
+              133.46146586081161
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.5587411790000942,
+              1.5103894170000558,
+              1.4985598929999924
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 81730.14210819629,
+            "metric": "throughput",
+            "p95": 93123.68241480217,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              94389.63133775837,
+              72236.32837207078,
+              81730.14210819629
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.005297191999943607,
+              0.0069217249999837804,
+              0.006117694000067786
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 474.1421217150805,
+            "metric": "throughput",
+            "p95": 484.78305594647225,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              474.1421217150805,
+              463.85360483357744,
+              485.96538197218246
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.0545361340000454,
+              1.077926300000172,
+              1.0288798720000614
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/bowl/drive9-bench-1793417029-10251-bowl"
+      },
+      "drive9_default": {
+        "errors": {},
+        "mount": "drive9 /mnt/drive9_default fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+        "path": "/mnt/drive9_default",
+        "results": {
+          "macro_find_files": {
+            "median": 0.00458545900005447,
+            "metric": "latency",
+            "p95": 0.004711750600131381,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.003959836999911204,
+              0.00458545900005447,
+              0.004725783000139927
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.003959836999911204,
+              0.00458545900005447,
+              0.004725783000139927
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 1.856811122000181,
+            "metric": "latency",
+            "p95": 1.86119626850018,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              1.8616835070001798,
+              1.856811122000181,
+              1.8512582969999585
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.8616835070001798,
+              1.856811122000181,
+              1.8512582969999585
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.012950705000093876,
+            "metric": "latency",
+            "p95": 0.012985258699950463,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.012950705000093876,
+              0.012989097999934529,
+              0.012503287000072305
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.012950705000093876,
+              0.012989097999934529,
+              0.012503287000072305
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 0.21661594900001546,
+            "metric": "latency",
+            "p95": 0.21851294199987023,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.2187237189998541,
+              0.21661594900001546,
+              0.15229423200003112
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.2187237189998541,
+              0.21661594900001546,
+              0.15229423200003112
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.11342100000001665,
+            "metric": "latency",
+            "p95": 0.11733313980012099,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.11342100000001665,
+              0.05767362200003845,
+              0.11776782200013258
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.11342100000001665,
+              0.05767362200003845,
+              0.11776782200013258
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 244.32913865013893,
+            "metric": "throughput",
+            "p95": 248.4407605990329,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              244.32913865013893,
+              231.6427897988679,
+              248.89760748224333
+            ],
+            "sample_count": 3,
+            "seconds": [
+              2.046419852999861,
+              2.1584958480000296,
+              2.0088582010000664
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 172.64227336427197,
+            "metric": "throughput",
+            "p95": 180.34307054468402,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              181.19871467584093,
+              172.64227336427197,
+              162.44373936620175
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.021557823999955872,
+              0.022626266000088435,
+              0.02404678699986107
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 77357.67232547083,
+            "metric": "throughput",
+            "p95": 83386.33691421915,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              77357.67232547083,
+              84056.18853519119,
+              50365.81192849417
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.006463483000061387,
+              0.005948402000058195,
+              0.009927369000024555
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 125187.78160373078,
+            "metric": "throughput",
+            "p95": 156840.9051244982,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              125187.78160373078,
+              160357.91884902792,
+              119040.53335484666
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.00015976000008777191,
+              0.00012472100002014486,
+              0.00016800999992483412
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 92.91422250368724,
+            "metric": "throughput",
+            "p95": 95.972318654602,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              96.31210711581475,
+              92.91422250368724,
+              92.67403049755794
+            ],
+            "sample_count": 3,
+            "seconds": [
+              5.191455311000027,
+              5.381307474000096,
+              5.395254714999965
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 2339.8685160205864,
+            "metric": "throughput",
+            "p95": 2378.70149047632,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              2205.5661580224482,
+              2339.8685160205864,
+              2383.016265415846
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.11606997099988803,
+              0.10940785700017841,
+              0.10742687900005876
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 247.53964233511792,
+            "metric": "throughput",
+            "p95": 427.78937293566685,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              447.8171207801723,
+              247.53964233511792,
+              245.52477226169032
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.5716619309998805,
+              1.0341777890000685,
+              1.0426646470000378
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 996.018059241428,
+            "metric": "throughput",
+            "p95": 1034.3443009584366,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              915.5449474814961,
+              996.018059241428,
+              1038.6027722603264
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.21844913300014923,
+              0.20079957200005083,
+              0.19256640300000072
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 676560.6902405794,
+            "metric": "throughput",
+            "p95": 679421.5426975467,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              622416.9696291211,
+              676560.6902405794,
+              679739.4151927652
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.0008033199999317731,
+              0.0007390319999558415,
+              0.0007355759998972644
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 99.2762078843708,
+            "metric": "throughput",
+            "p95": 99.93636250944012,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              100.0097130233367,
+              99.2762078843708,
+              99.23939954942524
+            ],
+            "sample_count": 3,
+            "seconds": [
+              4.999514395999995,
+              5.036453453000149,
+              5.0383214959999805
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/drive9_default/drive9-bench-1793417159-10251-drive9_default"
+      },
+      "drive9_sync": {
+        "errors": {},
+        "mount": "drive9 /mnt/drive9_sync fuse.drive9 rw,nosuid,nodev,relatime,user_id=0,group_id=0,max_read=1048576 0 0",
+        "path": "/mnt/drive9_sync",
+        "results": {
+          "macro_find_files": {
+            "median": 0.006162136000057217,
+            "metric": "latency",
+            "p95": 0.006721926999966854,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.0038694990000749385,
+              0.006784125999956814,
+              0.006162136000057217
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.0038694990000749385,
+              0.006784125999956814,
+              0.006162136000057217
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_clone": {
+            "median": 6.2699877360000755,
+            "metric": "latency",
+            "p95": 6.306162849900102,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              6.235251756000025,
+              6.2699877360000755,
+              6.310182307000105
+            ],
+            "sample_count": 3,
+            "seconds": [
+              6.235251756000025,
+              6.2699877360000755,
+              6.310182307000105
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_diff_dirty": {
+            "median": 0.01189936800005853,
+            "metric": "latency",
+            "p95": 0.011944377899840219,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.011746646999881705,
+              0.01189936800005853,
+              0.011949378999815963
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.011746646999881705,
+              0.01189936800005853,
+              0.011949378999815963
+            ],
+            "unit": "seconds"
+          },
+          "macro_git_status_dirty": {
+            "median": 0.04836837000016203,
+            "metric": "latency",
+            "p95": 0.05732434200001535,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.04488584300020193,
+              0.04836837000016203,
+              0.05831944999999905
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.04488584300020193,
+              0.04836837000016203,
+              0.05831944999999905
+            ],
+            "unit": "seconds"
+          },
+          "macro_go_build": {
+            "median": 0.15515244099992742,
+            "metric": "latency",
+            "p95": 0.1951973109999244,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              0.14753295800005617,
+              0.15515244099992742,
+              0.19964674099992408
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.14753295800005617,
+              0.15515244099992742,
+              0.19964674099992408
+            ],
+            "unit": "seconds"
+          },
+          "mkdir": {
+            "median": 239.3284988756475,
+            "metric": "throughput",
+            "p95": 245.9867060511873,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              246.7265068484695,
+              237.37284053838317,
+              239.3284988756475
+            ],
+            "sample_count": 3,
+            "seconds": [
+              2.0265353989998403,
+              2.1063909370000147,
+              2.0891786909999155
+            ],
+            "unit": "ops/s"
+          },
+          "random_read_4k": {
+            "median": 4.8393853500280155,
+            "metric": "throughput",
+            "p95": 4.8660081212448185,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              4.792612666039898,
+              4.868966206935575,
+              4.8393853500280155
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.8150564779998604,
+              0.80227502799994,
+              0.8071789530001752
+            ],
+            "unit": "MiB/s"
+          },
+          "readdir_large": {
+            "median": 225341.55017259036,
+            "metric": "throughput",
+            "p95": 247411.147304808,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              103706.77035294918,
+              225341.55017259036,
+              249863.3247639433
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.00482128599992393,
+              0.002218854000147985,
+              0.0020010939999792754
+            ],
+            "unit": "ops/s"
+          },
+          "readdir_small": {
+            "median": 233642.1299747305,
+            "metric": "throughput",
+            "p95": 236695.01763280566,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              203204.53541368962,
+              237034.2273725918,
+              233642.1299747305
+            ],
+            "sample_count": 3,
+            "seconds": [
+              9.842300005402649e-05,
+              8.437600013166957e-05,
+              8.560100013710326e-05
+            ],
+            "unit": "ops/s"
+          },
+          "rename": {
+            "median": 58.865453789623885,
+            "metric": "throughput",
+            "p95": 59.08675661973976,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              59.11134582308597,
+              58.865453789623885,
+              58.210072651715905
+            ],
+            "sample_count": 3,
+            "seconds": [
+              8.458613030000151,
+              8.493946241999993,
+              8.589578696999979
+            ],
+            "unit": "ops/s"
+          },
+          "sequential_read": {
+            "median": 893.0713996318483,
+            "metric": "throughput",
+            "p95": 906.8699388457992,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              842.0663535984305,
+              908.4031098695715,
+              893.0713996318483
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.30401404700000967,
+              0.2818132140000671,
+              0.2866512129999137
+            ],
+            "unit": "MiB/s"
+          },
+          "sequential_write": {
+            "median": 186.4719961378577,
+            "metric": "throughput",
+            "p95": 273.75498225336435,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              283.45309182175396,
+              186.4719961378577,
+              185.05878778417366
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.9031476719999318,
+              1.3728602969999883,
+              1.3833441959998254
+            ],
+            "unit": "MiB/s"
+          },
+          "small_write_4k_fsync": {
+            "median": 143.00006376015577,
+            "metric": "throughput",
+            "p95": 143.55002849124142,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              143.61113568358428,
+              143.00006376015577,
+              142.1638840276882
+            ],
+            "sample_count": 3,
+            "seconds": [
+              1.392649664999908,
+              1.3986007749999771,
+              1.4068270669999947
+            ],
+            "unit": "ops/s"
+          },
+          "stat": {
+            "median": 228492.04391625337,
+            "metric": "throughput",
+            "p95": 369587.7049704699,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              228492.04391625337,
+              385265.0006431606,
+              74247.70370357769
+            ],
+            "sample_count": 3,
+            "seconds": [
+              0.002188259999911679,
+              0.001297808000117584,
+              0.006734215000051336
+            ],
+            "unit": "ops/s"
+          },
+          "unlink": {
+            "median": 51.708201149624124,
+            "metric": "throughput",
+            "p95": 51.857063741459946,
+            "p95_method": "linear_interpolation",
+            "p95_reliable": false,
+            "runs": [
+              51.8736040294417,
+              51.42903992479099,
+              51.708201149624124
+            ],
+            "sample_count": 3,
+            "seconds": [
+              9.638813600000049,
+              9.722133656999858,
+              9.669645992000142
+            ],
+            "unit": "ops/s"
+          }
+        },
+        "workdir": "/mnt/drive9_sync/drive9-bench-1793417313-10251-drive9_sync"
+      }
+    },
+    "timestamp": "2026-10-31T03:33:11Z",
+    "version": "b529a36f"
+  },
+  "fuse_perf_baseline": {
+    "bowl": {
+      "correctness": {
+        "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
+        "small_file_manifest_sha256": "2fbfe9ae1bf9d1b054bea0cf45d9fb9be4e28396547b71b5ea2588fd4adf853e",
+        "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
+        "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
+      },
+      "generated_at_unix": 1793417594.3700857,
+      "params": {
+        "large_bytes": 16777216,
+        "large_mb": 16,
+        "read_passes": 2,
+        "small_bytes": 1024,
+        "small_files": 64,
+        "sqlite_rows": 256
+      },
+      "schema": "drive9-fuse-performance/v1",
+      "workloads": {
+        "large_file_reads": [
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 4567047.113616256,
+            "files": 1,
+            "files_per_second": 0.27221722087957,
+            "mib_per_second": 4.35547553407312,
+            "pass": 1,
+            "rows": 0,
+            "seconds": 3.6735368790000393
+          },
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 4672909.0766132055,
+            "files": 1,
+            "files_per_second": 0.27852708557922873,
+            "mib_per_second": 4.45643336926766,
+            "pass": 2,
+            "rows": 0,
+            "seconds": 3.5903150960000403
+          }
+        ],
+        "large_file_write": {
+          "bytes": 16777216,
+          "bytes_per_second": 49568295.16396151,
+          "files": 1,
+          "files_per_second": 2.9545006253696386,
+          "mib_per_second": 47.27201000591422,
+          "rows": 0,
+          "seconds": 0.3384666740000739
+        },
+        "small_file_read": {
+          "bytes": 65536,
+          "bytes_per_second": 287205.8337983901,
+          "files": 64,
+          "files_per_second": 280.47444706874035,
+          "mib_per_second": 0.27390082721556674,
+          "rows": 0,
+          "seconds": 0.22818477999999232
+        },
+        "small_file_write": {
+          "bytes": 65536,
+          "bytes_per_second": 141677.46590914327,
+          "files": 64,
+          "files_per_second": 138.35690030189772,
+          "mib_per_second": 0.135114160451072,
+          "rows": 0,
+          "seconds": 0.4625717970000096
+        },
+        "sqlite_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 1772.0083523875912,
+          "seconds": 0.14446884500011947
+        },
+        "sqlite_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 13582389.400799224,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "delete",
+          "max_version": 2,
+          "mib_per_second": 12.953175926970696,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 26528.104298435985,
+          "seconds": 0.009650143000044409
+        },
+        "sqlite_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 175.74406132415052,
+          "seconds": 0.489347971999905
+        },
+        "sqlite_wal_checkpoint_truncate": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "checkpoint_busy": 0,
+          "checkpoint_log_frames": 0,
+          "checkpointed_frames": 0,
+          "files": 0,
+          "integrity_check": "ok",
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 2034.5409258298603,
+          "seconds": 0.12582691099987642
+        },
+        "sqlite_wal_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 909.1722761358334,
+          "seconds": 0.28157479799983776
+        },
+        "sqlite_wal_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 25976517.44405564,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "wal",
+          "max_version": 2,
+          "mib_per_second": 24.77313751607479,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 50735.38563292117,
+          "seconds": 0.005045787999961249
+        },
+        "sqlite_wal_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 311.5377332982548,
+          "seconds": 0.2760500279998723
+        }
+      }
+    },
+    "drive9_default": {
+      "correctness": {
+        "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
+        "small_file_manifest_sha256": "2fbfe9ae1bf9d1b054bea0cf45d9fb9be4e28396547b71b5ea2588fd4adf853e",
+        "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
+        "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
+      },
+      "generated_at_unix": 1793417607.26283,
+      "params": {
+        "large_bytes": 16777216,
+        "large_mb": 16,
+        "read_passes": 2,
+        "small_bytes": 1024,
+        "small_files": 64,
+        "sqlite_rows": 256
+      },
+      "schema": "drive9-fuse-performance/v1",
+      "workloads": {
+        "large_file_reads": [
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 722639704.2033998,
+            "files": 1,
+            "files_per_second": 43.072682869637,
+            "mib_per_second": 689.162925914192,
+            "pass": 1,
+            "rows": 0,
+            "seconds": 0.023216570999920805
+          },
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 759261289.0506169,
+            "files": 1,
+            "files_per_second": 45.2554994255672,
+            "mib_per_second": 724.0879908090752,
+            "pass": 2,
+            "rows": 0,
+            "seconds": 0.02209676200004651
+          }
+        ],
+        "large_file_write": {
+          "bytes": 16777216,
+          "bytes_per_second": 61872995.18095935,
+          "files": 1,
+          "files_per_second": 3.687917898950538,
+          "mib_per_second": 59.00668638320861,
+          "rows": 0,
+          "seconds": 0.2711557110001195
+        },
+        "small_file_read": {
+          "bytes": 65536,
+          "bytes_per_second": 93506.65481993821,
+          "files": 64,
+          "files_per_second": 91.3150925975959,
+          "mib_per_second": 0.08917489511483975,
+          "rows": 0,
+          "seconds": 0.7008699020000222
+        },
+        "small_file_write": {
+          "bytes": 65536,
+          "bytes_per_second": 987093.9454783096,
+          "files": 64,
+          "files_per_second": 963.9589311311618,
+          "mib_per_second": 0.9413661436827752,
+          "rows": 0,
+          "seconds": 0.06639287000007243
+        },
+        "sqlite_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 3096.8435228827857,
+          "seconds": 0.08266481600003317
+        },
+        "sqlite_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 304035183.808611,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "delete",
+          "max_version": 2,
+          "mib_per_second": 289.95054608212564,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 593818.7183761933,
+          "seconds": 0.00043110799992973625
+        },
+        "sqlite_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 763.443702081411,
+          "seconds": 0.11264746799997738
+        },
+        "sqlite_wal_checkpoint_truncate": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "checkpoint_busy": 0,
+          "checkpoint_log_frames": 0,
+          "checkpointed_frames": 0,
+          "files": 0,
+          "integrity_check": "ok",
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 29931.175833683537,
+          "seconds": 0.008552954999913709
+        },
+        "sqlite_wal_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 5675.9630812315445,
+          "seconds": 0.04510247799998979
+        },
+        "sqlite_wal_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 535602057.9455293,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "wal",
+          "max_version": 2,
+          "mib_per_second": 510.78992647698334,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 1046097.7694248619,
+          "seconds": 0.00024471899996569846
+        },
+        "sqlite_wal_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 2780.471224561068,
+          "seconds": 0.030930009000030623
+        }
+      }
+    },
+    "drive9_sync": {
+      "correctness": {
+        "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
+        "small_file_manifest_sha256": "2fbfe9ae1bf9d1b054bea0cf45d9fb9be4e28396547b71b5ea2588fd4adf853e",
+        "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
+        "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
+      },
+      "generated_at_unix": 1793417612.2140732,
+      "params": {
+        "large_bytes": 16777216,
+        "large_mb": 16,
+        "read_passes": 2,
+        "small_bytes": 1024,
+        "small_files": 64,
+        "sqlite_rows": 256
+      },
+      "schema": "drive9-fuse-performance/v1",
+      "workloads": {
+        "large_file_reads": [
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 109112167.79585041,
+            "files": 1,
+            "files_per_second": 6.50359200214448,
+            "mib_per_second": 104.05747203431169,
+            "pass": 1,
+            "rows": 0,
+            "seconds": 0.1537611830001424
+          },
+          {
+            "bytes": 16777216,
+            "bytes_per_second": 65373877.890147105,
+            "files": 1,
+            "files_per_second": 3.8965867692319813,
+            "mib_per_second": 62.3453883077117,
+            "pass": 2,
+            "rows": 0,
+            "seconds": 0.2566348600000765
+          }
+        ],
+        "large_file_write": {
+          "bytes": 16777216,
+          "bytes_per_second": 51706725.27653559,
+          "files": 1,
+          "files_per_second": 3.0819609926066156,
+          "mib_per_second": 49.31137588170585,
+          "rows": 0,
+          "seconds": 0.3244687399999293
+        },
+        "small_file_read": {
+          "bytes": 65536,
+          "bytes_per_second": 355336.55665388703,
+          "files": 64,
+          "files_per_second": 347.00835610731156,
+          "mib_per_second": 0.33887534776104644,
+          "rows": 0,
+          "seconds": 0.1844335990001582
+        },
+        "small_file_write": {
+          "bytes": 65536,
+          "bytes_per_second": 158032.34490654652,
+          "files": 64,
+          "files_per_second": 154.32846182279934,
+          "mib_per_second": 0.15071138849882748,
+          "rows": 0,
+          "seconds": 0.41469991500002834
+        },
+        "sqlite_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 3977.7384623896405,
+          "seconds": 0.06435817800002042
+        },
+        "sqlite_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 35178406.84747706,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "delete",
+          "max_version": 2,
+          "mib_per_second": 33.54874310252863,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 68707.82587397864,
+          "seconds": 0.0037259220000578352
+        },
+        "sqlite_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 906.2297616369254,
+          "seconds": 0.09489867100000993
+        },
+        "sqlite_wal_checkpoint_truncate": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "checkpoint_busy": 0,
+          "checkpoint_log_frames": 0,
+          "checkpointed_frames": 0,
+          "files": 0,
+          "integrity_check": "ok",
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 5744.5585118215795,
+          "seconds": 0.044563912000057826
+        },
+        "sqlite_wal_insert_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 256,
+          "rows_per_second": 7229.848519974177,
+          "seconds": 0.035408764000067094
+        },
+        "sqlite_wal_read_aggregate": {
+          "bytes": 131072,
+          "bytes_per_second": 528673878.64726114,
+          "files": 0,
+          "integrity_check": "ok",
+          "journal_mode": "wal",
+          "max_version": 2,
+          "mib_per_second": 504.18269982076754,
+          "payload_verified_rows": 256,
+          "rows": 256,
+          "rows_per_second": 1032566.1692329319,
+          "seconds": 0.00024792599992906617
+        },
+        "sqlite_wal_update_transaction": {
+          "bytes": 0,
+          "bytes_per_second": 0.0,
+          "files": 0,
+          "mib_per_second": 0.0,
+          "rows": 86,
+          "rows_per_second": 2813.9120071297234,
+          "seconds": 0.030562434000103167
+        }
+      }
+    }
+  },
+  "stage_timings": [
+    {
+      "stage": "cross_compile_binaries",
+      "duration_sec": 8,
+      "timestamp": "2026-10-31T03:07:14Z"
+    },
+    {
+      "stage": "provision_ecs_instances",
+      "duration_sec": 34,
+      "timestamp": "2026-10-31T03:07:48Z"
+    },
+    {
+      "stage": "deploy_server_node",
+      "duration_sec": 131,
+      "timestamp": "2026-10-31T03:09:59Z"
+    },
+    {
+      "stage": "setup_client_and_mounts",
+      "duration_sec": 52,
+      "timestamp": "2026-10-31T03:10:51Z"
+    },
+    {
+      "stage": "bowl_juicefs_bench",
+      "duration_sec": 64,
+      "timestamp": "2026-10-31T03:12:15Z"
+    },
+    {
+      "stage": "drive9_default_juicefs_bench",
+      "duration_sec": 70,
+      "timestamp": "2026-10-31T03:13:25Z"
+    },
+    {
+      "stage": "drive9_sync_juicefs_bench",
+      "duration_sec": 98,
+      "timestamp": "2026-10-31T03:15:03Z"
+    },
+    {
+      "stage": "drive9_fuse_bench_cold_and_hot",
+      "duration_sec": 1088,
+      "timestamp": "2026-10-31T03:33:11Z"
+    },
+    {
+      "stage": "bowl_fuse_perf_baseline",
+      "duration_sec": 13,
+      "timestamp": "2026-10-31T03:33:24Z"
+    },
+    {
+      "stage": "drive9_default_fuse_perf_baseline",
+      "duration_sec": 5,
+      "timestamp": "2026-10-31T03:33:29Z"
+    },
+    {
+      "stage": "drive9_sync_fuse_perf_baseline",
+      "duration_sec": 5,
+      "timestamp": "2026-10-31T03:33:34Z"
+    }
+  ]
+}
