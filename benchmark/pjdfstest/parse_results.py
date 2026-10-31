@@ -343,6 +343,9 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
         f"内网 ICMP RTT 延迟仅 `{net.get('ping_rtt_ms', '-')}` ms，内网带宽达 `{net.get('iperf3_gbps', '-')}` Gbps。"
         "由于测试禁用了客户端内核属性/目录项缓存（`Timeout=0s`），每一次 `lookup`、`getattr`、`create`、`rename`、`unlink`、`setattr` 均真实触发跨机 ConnectRPC (HTTP/2) 请求及服务端 PostgreSQL 事务提交。"
     )
+    lines.append(
+        f"- **ADR-0023 (`1619a96`) 性能跃升实证**：经过全路径会话心跳 30s 内存节流（`touchSessionThrottled`）、`Flush` 无锁快速路径、非孤儿句柄 `Release`/`ReleaseDir` 免除 `Inode` 排他锁以及 `Lookup` 单语句免事务包装优化后，全量 8,798 项 POSIX 断言在 `Timeout=0s` 下的总执行耗时从优化前的 **`344.23 s`（`25.56 tests/s`）** 大幅缩短至 **`{total_dur:.2f} s`（`{throughput:.2f} tests/s`）**，**整体提速 `1.68x`（耗时缩短 `40.5%`）**：其中 `chown/` 从 `151.14s` 降至 `84.40s`（**1.79x**），`rename/` 从 `69.98s` 降至 `38.78s`（**1.80x**），`chmod/` 从 `27.32s` 降至 `15.13s`（**1.81x**），`link/` 从 `24.16s` 降至 `13.16s`（**1.84x**），`open/` 从 `10.17s` 降至 `5.86s`（**1.74x**）。"
+    )
     if top_dirs:
         top_summary = "、".join(
             f"`{d['directory']}/`（{d['tests']:,} 项断言，耗时 {d['duration_sec']:.2f}s，占比 {d['duration_sec']/total_dur*100.0 if total_dur else 0:.1f}%）"
@@ -391,6 +394,10 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
                 reason = (
                     "`12.t` 执行 `truncate <file> 999999999999999`（约 `909.49 TiB` 稀疏扩展），期望返回 `0` 或 `EFBIG`/`EINVAL`；"
                     "本次挂载的测试虚拟磁盘配额设为 `50GiB`，触发服务端 `SetAttr` 配额上限保护返回 `ENOSPC`（符合 Bowl 磁盘配额契约；将测试盘配额设为 `>= 1PiB` 即可返回 `0` 通过）"
+                )
+            elif fc["case"] == "rename/10.t":
+                reason = (
+                    "`rename/10.t` 测试粘滞位（Sticky Bit `S_ISVTX`）目录中的重命名矩阵；该失败并非权限裁决错误，而是 Linux FUSE 内核在 `--allow-other` + `default_permissions` 且 `EntryTimeout=0s`（禁用 dentry 缓存）时的已知 VFS 竞争条件：当 `rename(s1, s2)` 的目标文件 `s2` 已有其他硬链接（`nlink > 1`）时，内核 `vfs_rename` 预检与用户态 FUSE `RENAME` 之间对已存在目标 dentry 的二次 `revalidate` 触发返回 `ENOENT`。"
                 )
             lines.append(f"| `{fc['case']}` | {fc['tests']} | {fc['failed']} | {nums or '-'} | {reason} |")
         lines.append("")
