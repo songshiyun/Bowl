@@ -1,12 +1,12 @@
-2026/10/30 21:51:00.760188 juicefs[5668] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
+2026/10/31 10:20:41.808972 juicefs[5667] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
 +------------------+----------------+---------------+
 |       ITEM       |      VALUE     |      COST     |
 +------------------+----------------+---------------+
-|   Write big file |   178.96 MiB/s |  22.89 s/file |
-|    Read big file |    87.43 MiB/s |  46.85 s/file |
-| Write small file |  260.9 files/s | 15.33 ms/file |
-|  Read small file |  219.3 files/s | 18.24 ms/file |
-|        Stat file | 4638.0 files/s |  0.86 ms/file |
+|   Write big file |   178.89 MiB/s |  22.90 s/file |
+|    Read big file |   127.02 MiB/s |  32.25 s/file |
+| Write small file |  309.1 files/s | 12.94 ms/file |
+|  Read small file |  478.7 files/s |  8.36 ms/file |
+|        Stat file | 4996.6 files/s |  0.80 ms/file |
 +------------------+----------------+---------------+

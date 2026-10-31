@@ -1,10 +1,10 @@
 {
-  "disk_id": "01a18d13-fc97-7a61-8ec8-8590bed35311",
+  "disk_id": "01a18fc2-57c5-7e9e-9cf0-f0a92c7a28e6",
   "name": "jfs-bench-disk",
   "root_ino": 2,
   "max_bytes": 2251799813685248,
   "used_bytes": 0,
   "used_inodes": 1,
-  "created_at": "2026-10-30T13:50:59Z",
-  "updated_at": "2026-10-30T13:50:59Z"
+  "created_at": "2026-10-31T02:20:40Z",
+  "updated_at": "2026-10-31T02:20:40Z"
 }
