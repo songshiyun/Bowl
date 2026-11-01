@@ -1,39 +1,44 @@
-# 0024. 服务端 Write 页缓存原子发布、有界世代异步刷盘与 Fsync 强持久化屏障设计
+# 0024. 服务端写入先落系统缓存、Fsync 按需刷盘与内存实时统计磁盘配额
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)
+已采纳 (accepted) — 演进 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)
 
 ## 背景
-在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 与 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md) 后，阿里云双机内网基准测试（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)）显示 `juicefs bench (-p 4)` 的大文件并发写（`1 GiB × 4`，单次写入 `1 MiB`）中，JuiceFS 吞吐为 `302.28 ~ 302.49 MiB/s`，而 Bowl 为 `178.59 MiB/s`（约为 JuiceFS 的 `0.59x`）。
+在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 与 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md) 后，系统在写入速度和磁盘配额统计上还有两个明显问题：
 
-根因溯源表明：
-1. **每次 `Write(1 MiB)` 强制穿透物理磁盘（等效 `O_SYNC`），卡死在单块云盘 `180 MiB/s` 物理同步写极限**：
-   - 服务端挂载的单块 `120 GiB cloud_essd (PL1)` 硬件顺序同步写上限为 `180 MiB/s`（本地 `fio --direct=1 --end_fsync=1` 实测 `168.59 ~ 191.13 MiB/s`，磁盘利用率 `96.29%`）。
-   - [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 要求每次 `Write` 在 `StageBlock` 与 `executeWriteBatch` 中同步阻塞执行 `tmpFile.Sync()`、`SyncDirs()` 以及 PostgreSQL WAL `fdatasync`（写 `4 GiB` 触发 4,096 次文件级 `fsync` 与 4,096 次目录级 `fsync`）。
-   - 反观 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md) 与 [ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md) 中的 `Fsync` 与 `FsyncDir`，仅执行只读句柄校验，未承担物理介质落盘屏障职责。
-2. **权衡备选方案**：
-   - **方案 A（维持每次 `Write` 同步 `fsync`）**：吞吐量被永久锁死在单块云盘的同步写 IOPS 与带宽上限，违背标准 POSIX 将普通 `write(2)`（页缓存可见）与 `fsync(2)`（非易失介质持久化）解耦的契约设计。
-   - **方案 B（在 Go 进程堆内存中缓存脏数据块）**：不仅造成 Go GC 压力与 OOM 风险、与 Linux 内核 OS Page Cache 双重缓存浪费内存，还会破坏跨进程/崩溃重启时的内核页缓存接管能力。
-   - **方案 C（OS Page Cache 原子发布 + 有界后台世代刷盘 + `Fsync` / `FsyncDir` 强持久化屏障）**：Go 进程堆内存零块驻留，普通 `Write` 完成 `.tmp` 写入与 `os.Rename` 原子发布至内核 OS Page Cache 并提交元数据（配置 `SET LOCAL synchronous_commit = off`），后台按 `64 MiB / 200ms` 有界窗口异步刷盘，并将强持久化屏障收拢至 `Fsync` 与 `FsyncDir`。
+1. **每次 `Write(1 MiB)` 都强制同步刷入物理硬盘，速度被单块云盘 `180 MiB/s` 的硬件上限卡死**：
+   - 在阿里云双机内网测试（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)）中，`juicefs bench (-p 4)` 并发写入 4 个 `1 GiB` 大文件（每次写 `1 MiB`）时，JuiceFS 达到 `302.28 ~ 302.49 MiB/s`，而 Bowl 只有 `178.59 MiB/s`。
+   - 原因是服务端挂载的单块 `120 GiB cloud_essd (PL1)` 云盘，其同步落盘的硬件极限就是 `180 MiB/s` 左右（本地 `fio --direct=1 --end_fsync=1` 实测为 `168.59 ~ 191.13 MiB/s`，磁盘利用率 `96.29%`）。
+   - 按照 POSIX 标准，普通 `write(2)` 只需要保证后续读取立即可见（写入操作系统页缓存 Page Cache 即可），只有调用 `fsync(2)` / `fdatasync(2)` 时才需要阻塞等待物理硬盘落盘；未调用 `fsync` 的脏页由操作系统内核在后台自行回写。但之前 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 和 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 在每次 `Write` 请求处理过程中都强制执行 `tmpFile.Sync()`、`SyncDirs()` 和 PostgreSQL WAL `fdatasync`（写 `4 GiB` 数据要触发 4,096 次文件 `fsync` 和 4,096 次目录 `fsync`），等于把所有普通 `Write` 都当成 `O_SYNC` 执行。
+   - 与此同时，[ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md) 和 [ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md) 里的 `Fsync` 与 `FsyncDir` 反而只检查了文件句柄是否有效，没有真正去触发硬盘刷盘。
+2. **`disks` 表重复保存 `used_bytes` 和 `used_inodes`，既造成数据库行锁排队，又容易在崩溃时账目不一致**：
+   - [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 在 `disks` 表里额外维护了 `used_bytes`（已用字节数）和 `used_inodes`（已用节点数）两个字段。如果每次写文件都在事务里锁住 `disks` 表去更新这两个数字，同一个 `Disk` 下的并发写入和建删文件就会全部排队；如果改成先在内存里累加、再由后台协程定期写回 `disks` 表，一旦进程在写回前崩溃（如 `SIGKILL`、OOM 或断电），`inodes` 表里的文件变化已经提交了，内存里没来得及写回的增量就会丢失，重启后从 `disks` 表读出来的已用空间就彻底不准了。
+   - 实际上，`inodes` 表本身已经记录了每个节点的 `root_ino`、`mode` 和 `size`，只要查 `inodes` 表就能算出真实的已用空间和节点数，`disks` 表根本不需要重复存这两个字段，也不需要后台协程定期去刷 `disks` 表。
 
 ## 决策
-1. **标准 POSIX 持久化语义对齐与 `Write` 热路径免阻塞发布（演进 ADR-0019 / ADR-0022）**：
-   - 在启用延迟同步（`WithDeferredSync`）的 `LocalFSBlockStore` 中，`StageBlock` 完成同目录唯一临时文件 `.tmp_<slice_id>_<block_idx>_*` 的 `Write(data)`、`Close()` 与 `os.Rename(tmpPath, finalPath)` 原子发布至服务端 OS Page Cache，跳过热路径阻塞式 `tmpFile.Sync()` 与阶段 2 的 `SyncDirs()`。
-   - **POSIX 实时可见性 100% 守恒**：`Write` 返回 `OK` 时，目标 `Block` 文件已在服务端目录树中就绪且 PostgreSQL 事务已提交；同机或跨机客户端立即发起 `Read`、`GetAttr`、`Lookup` 均直接从服务端 OS Page Cache 与数据库读到最新数据及最新 `size`/`mtime`/`ctime`（含 `S_ISUID`/`S_ISGID` 剥离）。
-   - **异常回滚零物理 I/O**：若批次内某任务因 `ErrBadFileHandle` 或 `ErrNoSpace` 被隔离剔除，其 `cleanupBlocks()` 直接从 OS Page Cache 删除目标文件并从待刷账本移除，不触发阻塞式目录 `fsync`。
-2. **Go 进程零块驻留与有界世代异步刷盘器（Bounded Background Syncer）**：
-   - `StorageService` Go 进程不在堆内存中驻留任何 `Block` 字节载荷，仅在 `LocalFSBlockStore` 中维护轻量级世代账本：`writeGen`（当前写入世代）、`flushedGen`（已落盘世代）、`unflushedBytes`（当前世代累计未刷盘字节数）以及当前世代的 `dirtyFiles` 与去重 `dirtyDirs`。
-   - **双阈值有界触发**：每当累计未刷盘写入达到 `64 MiB`（`STORAGE_BLOCK_SYNC_THRESHOLD_BYTES`，默认 `67108864`）或每隔 `200 ms`（`STORAGE_BLOCK_SYNC_INTERVAL`，默认 `200ms`），后台刷盘协程自动切分当前世代并推進 `writeGen++`，在锁外优先通过 Linux `unix.Syncfs(fd)`（或在自定义钩子/非 Linux 环境下并发同步 `dirtyFiles` 与 `dirtyDirs`）完成物理落盘，随后更新 `flushedGen` 并广播唤醒等待队列。
-3. **`Fsync` 与 `FsyncDir` 强持久化屏障（演进 ADR-0009 / ADR-0013）**：
-   - `Fsync` 与 `FsyncDir` 在完成原有的 `Inode` 类型与活跃 `FileHandle` 归属校验后，调用 `StagedBlockStore.SyncPending(ctx)`：快照当前 `targetGen := writeGen`，若 `flushedGen < targetGen` 则立即触发并阻塞等待世代 `<= targetGen` 的全部脏块与目录项完成物理落盘（并发 `Fsync` 共享同一世代批次 Singleflight 合并等待）。
-   - 若底层物理同步失败，向上层返回 `ErrIO`（映射为 `EIO`）。
-4. **PostgreSQL 异步提交协同与「物理块先落盘、WAL 后落盘」顺序不变量**：
-   - 为杜绝整机断电时「PostgreSQL 元数据已落盘但物理 `Block` 仍在内存」的悬空引用（Dangling Slice），当启用延迟同步时，`Write` 的数据库事务内执行 `SET LOCAL synchronous_commit = off`，使 WAL 写入缓冲区即返回而不阻塞等待 WAL `fdatasync`。
-   - 在后台刷盘器完成物理块同步后，以及在 `Fsync` / `FsyncDir` 完成 `BlockStore.SyncPending(ctx)` 屏障后，触发 PostgreSQL WAL 刷盘屏障（`SELECT pg_current_wal_flush_lsn()`），严格保证「物理 `Block` 先于或同于元数据 WAL 落盘」的崩溃一致性顺序。
+
+1. **`Write` 写入操作系统文件缓存即返回，不再每次阻塞等待硬盘 `fsync`（演进 ADR-0019 / ADR-0022）**：
+   - `StorageService` 的 Go 进程不在自身堆内存里缓存任何 `Block` 数据内容。`LocalFSBlockStore` 写块文件时，把数据写入同目录的临时文件 `.tmp_<slice_id>_<block_idx>_*`，执行 `Close()` 并通过 `os.Rename(tmpPath, finalPath)` 替换成正式文件名后直接返回。此时文件已经进入服务端操作系统的页缓存（Page Cache），不再在 `Write` 请求里阻塞等待 `tmpFile.Sync()` 和目录 `SyncDirs()`，也不启动任何后台定时或定量刷盘协程，日常脏页回写完全交由操作系统内核自己调度。
+   - **刚写完的数据立即可读**：`Write` 返回成功时，对应的 `Block` 文件已经出现在服务端目录中，PostgreSQL 事务也已提交。无论同机还是跨机客户端，紧接着发起 `Read`、`GetAttr` 或 `Lookup`，都能直接从操作系统缓存和数据库里读到最新写入的内容，以及最新的 `size`、`mtime`、`ctime`（包括自动清除 `S_ISUID` / `S_ISGID` 位）。
+   - **写入失败时直接删除文件**：如果同批次里某个写入任务因为句柄失效（`ErrBadFileHandle`）或空间不足（`ErrNoSpace`）失败，`cleanupBlocks()` 直接把刚才生成的块文件删掉即可，不需要额外做目录 `fsync`。
+
+2. **`Fsync` 与 `FsyncDir` 按需触发并等待硬盘刷盘完成（演进 ADR-0009 / ADR-0013）**：
+   - 客户端调用 `Fsync` 或 `FsyncDir` 时，服务端先按原有规则检查 `Inode` 类型和打开的 `FileHandle` 是否有效，然后触发底层块存储刷盘：若自上次刷盘以来有新写入的数据块，在 Linux 下直接对数据目录调用 `unix.Syncfs(fd)`（非 Linux 环境或自定义测试钩子下则对未刷盘的文件和目录执行 `Sync`，遇到因回滚已被删掉的文件时忽略 `os.ErrNotExist`），将操作系统缓存中的脏数据真正刷入物理硬盘（多个并发的 `Fsync` 合并等待同一次刷盘；若期间无新写入则直接返回）。
+   - 如果硬盘刷盘出错，向上层返回 `ErrIO`（对应客户端 `EIO`）。
+
+3. **配合 PostgreSQL 异步提交，保证「数据块先落盘、数据库日志后落盘」**：
+   - 为了省去每次普通 `Write` 等待 PostgreSQL WAL `fdatasync` 的磁盘开销，同时防止整机突然断电时出现「PostgreSQL 里记录了新切片，但硬盘上的 `Block` 文件还没刷下去」的损坏情况，普通 `Write` 的数据库事务设置 `SET LOCAL synchronous_commit = off`，让事务把 WAL 日志写入内存缓冲区就立即返回。
+   - 当客户端调用 `Fsync` 或 `FsyncDir` 时，服务端先等待底层 `Block` 文件刷入物理硬盘，再调用 `SELECT pg_current_wal_flush_lsn()` 强制把 PostgreSQL 的 WAL 日志刷入硬盘，保证显式同步时的落盘顺序始终是「先刷物理数据块，后刷数据库元数据」。
+
+4. **删掉 `disks` 表里的配额统计列，改为首次访问时查 `inodes` 表汇总、之后在内存里直接加减（演进 ADR-0015）**：
+   - **删掉冗余列并添加覆盖索引**：新增数据库迁移脚本，执行 `ALTER TABLE disks DROP COLUMN used_bytes, DROP COLUMN used_inodes;`（`disks` 表只保留 `disk_id`、`name`、`root_ino`、`max_bytes`、`created_at`、`updated_at`），并把原来的单列索引 `idx_inodes_root_ino` 替换为包含 `mode` 和 `size` 的覆盖索引 `idx_inodes_root_ino_quota ON inodes (root_ino) INCLUDE (mode, size)`。磁盘的已用空间 `used_bytes`（同一 `root_ino` 下所有常规文件 `(mode & 61440) = 32768` 的 `size` 总和）与已用节点数 `used_inodes`（同一 `root_ino` 下的全部 `Inode` 数量，包含还没被清理的 `Orphan Inode`）统一以 `inodes` 表为准。
+   - **首次访问某个 `Disk` 时从索引一次性算出初始值**：当内存里还没有某个 `Disk`（`root_ino`）的配额记录（`!st.loaded`）时，直接通过覆盖索引 `idx_inodes_root_ino_quota` 做一次仅扫索引的汇总查询（Index-Only Scan），算出当前的 `used_bytes` 和 `used_inodes`，连同 `disks` 表里的 `max_bytes` 一起存入内存结构 `diskQuotaState`，并标记为已加载（`st.loaded = true`）。
+   - **运行期间直接在内存中加减配额，取消后台写回数据库**：加载到内存后，彻底删掉原来的 `AddDiskQuotaByRootIno` SQL、`FlushDiskQuotas`、`runQuotaFlushLoop` 和 `WithDiskQuotaFlushInterval` 等后台刷表代码。所有写请求在落库前先在内存里检查 `usedBytes + reservedBytes` 是否超过 `maxBytes` 并预占空间（超出上限直接返回 `ErrNoSpace` / `ENOSPC`），数据库事务提交成功后直接在内存里更新 `st.usedBytes += deltaBytes` 和 `st.usedInodes += deltaInodes`（如果事务回滚就释放预占空间）；`StatFS`、`GetDisk`、`ListDisks` 直接从内存读取当前配额；`UpdateDisk` 在锁住该盘下属 `Inode` 时实时汇总一次 `used_bytes`，检查缩容后的容量不小于当前已用空间，并同步更新内存里的 `max_bytes`。
 
 ## 结果
-- **积极影响**：
-  - 彻底解除普通 `Write(1 MiB)` 每次穿透云盘物理 `fsync` 的 `180 MiB/s` 硬上限，在保持客户端 100% 同步直通、服务端 Go 堆内存零块驻留、`pjdfstest` 全量 POSIX 兼容性与配额/会话安全不变量的前提下，使多流大文件并发写充分利用 OS Page Cache 与批量刷盘带宽。
-  - 将未刷盘脏页严格收敛在 `64 MiB / 200ms` 有界窗口内，并通过 `Fsync` / `FsyncDir` 强屏障与 PG `synchronous_commit = off` + WAL 刷盘屏障闭环崩溃一致性。
-- **代价考量**：
-  - 整机突发断电（非进程重启）时，未调用 `Fsync` 的最近 `< 200ms`（或 `< 64 MiB`）写入会与对应的异步提交 PG 事务一同回滚（符合标准 POSIX 未 `fsync` 写入的掉电语义），且不会产生损坏的悬空 `slice_id` 元数据。
+- **正面效果**：
+  - 回归标准 POSIX 语义：普通 `Write` 写入操作系统页缓存即返回，彻底摆脱了每次 `Write(1 MiB)` 都要等待云盘物理 `fsync` 导致的 `180 MiB/s` 速度限制，也不会因为后台定时强制刷盘而打断内核回写队列；同时不在 Go 内存里囤积文件数据，完全通过 `pjdfstest` POSIX 测试。
+  - `Fsync` / `FsyncDir` 真正承担起物理落盘职责，配合「先刷块文件、再刷 PG WAL」的机制，保证了显式同步后断电不丢数据。
+  - 彻底消除了 `disks` 表的行锁排队、后台刷表协程以及进程崩溃导致的配额失步问题：数据库只修改 `inodes` 表，冷启动首次访问时扫一次索引即可算出已用配额，后续运行期间全部在内存里完成校验和增减。
+- **代价与取舍**：
+  - 当整机发生突发断电（而非服务进程重启）时，还没有调用过 `Fsync` 的写入会和对应的 PostgreSQL 异步提交事务一起回滚（这与标准 Linux 本地文件系统在未调用 `fsync` 时断电的表现一致），且不会留下错误的磁盘配额。

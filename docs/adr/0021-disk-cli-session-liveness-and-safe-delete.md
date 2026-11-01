@@ -1,37 +1,37 @@
-# 0021. Disk 控制面 CLI、会话挂载绑定与基于双向流探活的安全删盘机制
+# 0021. Disk 管理命令行（CLI）、挂载会话绑定磁盘与删除磁盘前的存活检查
 
 ## 状态
 已采纳 (accepted) — 演进 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 与 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)
 
 ## 背景
-在 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md) 交付 Linux FUSE 数据面命令（`bowl mount` / `bowl umount`）后，客户端预留的 `bowl disk` 控制面命名空间需补齐完整的磁盘生命周期管理子命令（创建、列表查询、详情查询、更新/扩缩容、删除）。在设计控制面 CLI 与服务端协同机制时，面临四项核心架构问题：
-1. **容量调整语义与双层水位线校验**：由于 `Disk` 同时支持在线扩容与缩容（只要目标容量不低于当前已用空间 `used_bytes`），若子命令命名为单向 `expand` 会产生语义冲突；同时需在 CLI 与服务端双层保障缩容水位线安全。
-2. **磁盘列表分页扩展性**：`StorageService` 此前仅提供单盘 `GetDisk`，缺乏批量枚举接口；随着商业实例数量增长，需提供稳定、无漂移的分页查询契约。
-3. **活跃挂载下的安全删盘保护（演进 ADR-0015）**：[ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 早期将 `DeleteDisk` 设定为无条件强制级联删除。但在真实使用场景中，若某块 `Disk` 仍处于本地或远端活跃挂载状态，误执行 `bowl disk delete` 会导致整盘数据瞬间不可逆销毁且活跃挂载点变为失效僵尸挂载。然而，当时 `client_sessions` 表未关联 `disk_id`（空闲挂载无打开句柄时服务端无法得知会话挂载在哪块盘上），且 `bowl umount` 退出时未主动通知服务端销毁会话。
-4. **客户端异常死机（`kill -9` / 断电）与活跃挂载的精确区分**：若仅依赖 `client_sessions` 的 60s 租约 TTL 拦截删盘，一旦客户端被 `kill -9` 或宿主机断电，在 60s 租约过期窗口内执行 `DeleteDisk` 会被误拒；而若由服务端按客户端上报的 `IP:Port` 反向发起 TCP 拨号探活，在容器网桥、NAT 或防火墙环境下会因入站连接被拦截而把**活着的客户端误判为死机**并误删磁盘（详见 [`docs/research/session-liveness-and-disk-delete.md`](../research/session-liveness-and-disk-delete.md)）。
+在 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md) 完成客户端挂载与卸载命令（`bowl mount` / `bowl umount`）后，客户端预留的 `bowl disk` 命令还需要补齐创建、列表查询、查看详情、修改名称或容量、删除磁盘这五个管理命令。在设计这套命令行与服务端配合方式时，遇到四个实际问题：
+1. **扩容和缩容用同一个命令更直观，且需要前后端双重检查**：因为 `Disk` 既能调大容量也能调小容量（只要新容量不小于当前已用空间 `used_bytes`），如果命令叫 `expand`（扩容）就会让人误以为不能缩容；同时需要在命令行和服务端两边都检查缩容不能小于已用空间。
+2. **磁盘多了之后需要分页查询**：`StorageService` 之前只有查单个磁盘的 `GetDisk`，没有列表接口；当磁盘数量增多时，需要支持稳定的分页查询。
+3. **防止误删正在挂载使用的磁盘（演进 ADR-0015）**：[ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 当时把 `DeleteDisk` 设计成不管三七二十一直接强制删除。但在实际使用中，如果某块 `Disk` 正在本机或其他机器上挂载使用，一旦误执行 `bowl disk delete`，整块盘的数据会瞬间被清空，还在挂载的目录也会变成报错的死挂载点。然而当时 `client_sessions` 表里没有记录会话挂载的是哪块 `disk_id`（如果挂载后没有打开任何文件，服务端根本不知道这块盘正被挂载着），而且执行 `bowl umount` 卸载时也没有通知服务端注销会话。
+4. **如何区分客户端是“还在正常挂载”还是“已经死机/断电了”**：如果只看数据库里 `client_sessions` 的 60 秒过期时间，一旦客户端进程被 `kill -9` 强杀或者机器直接断电，在接下来的 60 秒内执行 `bowl disk delete` 都会被拦住删不掉；反过来，如果让服务端主动去连客户端上报的 `IP:Port` 检查死活，在容器、NAT 或有防火墙的网络里，服务端的连接会被防火墙拦住，从而**把明明活着的客户端误判成死机**并把正在用的磁盘删掉（详见 [`docs/research/session-liveness-and-disk-delete.md`](../research/session-liveness-and-disk-delete.md)）。
 
 ## 决策
-1. **统一 `bowl disk` 控制面子命令体系与双层容量校验**：
-   - 在纯 Linux 客户端模块 `client/` 中提供 `bowl disk <create|list|get|update|delete>` 五个子命令（`update` 兼容 `resize` 别名），共享 `--endpoint`（`$BOWL_STORAGE_ENDPOINT`）与 `--token`（`$BOWL_TOKEN`）连接标志：
+1. **提供统一的 `bowl disk` 子命令，并在命令行与服务端双重检查容量**：
+   - 在客户端模块 `client/` 中提供 `bowl disk <create|list|get|update|delete>` 五个子命令（`update` 同时支持别名 `resize`），共用 `--endpoint`（`$BOWL_STORAGE_ENDPOINT`）与 `--token`（`$BOWL_TOKEN`）连接参数：
      - `bowl disk create --size <size> [--name <name>] [-q|--quiet] [--json]`
      - `bowl disk list [--limit <n>] [--page-token <token>] [--json]`
      - `bowl disk get <disk-id> [--json]`
      - `bowl disk update <disk-id> [--size <size>] [--name <name>] [--json]`
      - `bowl disk delete <disk-id> [-y|--yes] [--json]`
-   - **容量单位与双层校验**：`--size` 支持不区分大小写的 1024 二进制幂单位（`K/M/G/T`、`KiB/MiB/GiB/TiB`、`KB/MB/GB/TB`）及纯数字字节。执行 `bowl disk update` 调整容量时，CLI 先调用 `GetDisk` 前置校验 `new_max_bytes >= current_used_bytes`（且 `new_max_bytes > 0`），不满足时立即输出含当前已用容量的人类可读报错；通过后再由服务端 `UpdateDisk` 在 `FOR UPDATE` 行锁事务内执行终审兜底。
-2. **新增 `StorageService.ListDisks` 游标分页契约**：
-   - 在 `proto/storage/v1/storage.proto` 中新增 `ListDisks(ListDisksRequest) returns (ListDisksResponse)`，支持 `page_size`（默认 `50`，最大 `1000`）与 `page_token` 游标分页，按创建时间倒序（`created_at DESC, disk_id DESC`）稳定返回 `repeated Disk disks` 与 `next_page_token`。
-3. **`ClientSession` 绑定 `Disk` 与正常卸载 `CloseSession` 即时注销**：
-   - 在 PostgreSQL `client_sessions` 表中新增 `disk_id UUID REFERENCES disks(disk_id) ON DELETE CASCADE` 列与 `(disk_id, expires_at)` 索引；在 `RenewSessionRequest` 中新增 `optional string disk_id`，由 `bowl mount` 在激活与续期会话时传入。
-   - 在 `StorageService` 中新增 `CloseSession(CloseSessionRequest) returns (CloseSessionResponse)`：当 `bowl umount` 触发守护进程退出时，客户端在 `session.Manager.Close()` 中主动调用 `CloseSession` 立即注销云端会话并释放关联句柄、文件锁及孤儿节点，确保正常 `umount` 后可 0 延迟执行 `bowl disk delete`。
-4. **基于 `WatchSession` 双向流断连感知与 `1.5s` 按需 Ping-Pong 验活的安全删盘机制**：
-   - **出站双向流连接反转**：在 `StorageService` 中新增 `WatchSession(stream WatchSessionRequest) returns (stream WatchSessionResponse)` 双向流。客户端在 `bowl mount` 存续期间主动维持该出站流（100% 穿透 NAT、Docker 容器与防火墙），平时零轮询开销；当客户端进程被 `kill -9` 或容器销毁时，宿主机 OS 内核立即发送 TCP `FIN/RST`，服务端流即时感知断开并自动清理该残留会话。
-   - **删盘多重防护与按需 Ping-Pong 探活**：
-     1. **客户端本机防护**：`bowl disk delete <disk-id>` 先扫描本机 `/proc/self/mountinfo`，若目标磁盘在本机处于挂载态则立即报错拒绝并提示先执行 `bowl umount`；未传 `-y / --yes` 时要求终端交互确认。
-     2. **服务端按需 Ping-Pong 验活**：`StorageService.DeleteDisk` 执行时，先清理已超期会话；若目标 `disk_id` 下仍存在未超期的 `client_sessions`，服务端遍历这些会话并通过 `WatchSession` 流下发 `Ping(ping_seq)`，等待最多 `1.5s` 的 `Pong(pong_seq)` 应答：
-        - 若任一会话在 `1.5s` 内回复 `Pong`（确认客户端存活），立即拒绝删除并返回 gRPC `FailedPrecondition`（携带 `ErrorInfo{Reason: "EBUSY", Domain: "bowl.storage"}`）；
-        - 若某会话无活跃 `WatchSession` 流或在 `1.5s` 内未回复 `Pong`（确认客户端已死机/断电半开连接），服务端当场回收该僵尸会话；待全部未超期会话均确认为死会话并清理后，在数据库事务内加锁复核无活跃会话与活跃句柄，原子执行 `Disk` 与下属 `Inode`/`Chunk` 级联删除。
+   - **容量单位支持与缩容检查**：`--size` 支持不区分大小写的容量单位（`K/M/G/T`、`KiB/MiB/GiB/TiB`、`KB/MB/GB/TB`）以及纯数字字节数。执行 `bowl disk update` 改容量时，命令行先调一次 `GetDisk` 检查新容量是否大于等于当前已用空间 `used_bytes`（且大于 `0`），不够时直接打印包含当前已用空间的友好报错；检查通过后再调服务端 `UpdateDisk`，由服务端在数据库行锁保护下做最终校验。
+2. **新增 `StorageService.ListDisks` 分页查询接口**：
+   - 在 `proto/storage/v1/storage.proto` 中新增 `ListDisks(ListDisksRequest) returns (ListDisksResponse)`，支持 `page_size`（默认 `50`，最大 `1000`）和 `page_token` 游标分页，按创建时间倒序（`created_at DESC, disk_id DESC`）返回磁盘列表和下一页游标 `next_page_token`。
+3. **在 `ClientSession` 中记录挂载的 `disk_id`，并在正常卸载 `umount` 时立即调 `CloseSession` 注销**：
+   - 在 PostgreSQL `client_sessions` 表中增加 `disk_id UUID REFERENCES disks(disk_id) ON DELETE CASCADE` 列和 `(disk_id, expires_at)` 索引；在 `RenewSessionRequest` 中增加 `optional string disk_id`，由 `bowl mount` 在建立和续期会话时传入。
+   - 在 `StorageService` 中新增 `CloseSession(CloseSessionRequest) returns (CloseSessionResponse)`：当用户执行 `bowl umount` 退出挂载守护进程时，客户端在退出前主动调用 `CloseSession` 立即删掉服务端的会话记录，并释放关联的文件句柄、文件锁和孤儿节点。这样正常卸载完就能立刻执行 `bowl disk delete`，不用干等会话过期。
+4. **挂载期间保持 `WatchSession` 双向长连接，删盘时通过 `1.5s` 问答探测确认客户端死活**：
+   - **客户端主动连向服务端的双向流**：在 `StorageService` 中新增 `WatchSession(stream WatchSessionRequest) returns (stream WatchSessionResponse)` 双向流接口。客户端在 `bowl mount` 挂载期间主动向服务端建立并保持这条长连接（因为是由客户端向外发起连接，不受 NAT、Docker 容器或防火墙阻拦），平时不发轮询消息；一旦客户端进程被 `kill -9` 强杀或容器被销毁，客户端操作系统内核会立刻发送 TCP `FIN/RST` 断开连接，服务端马上就能感知到并自动清理掉这个会话。
+   - **删除磁盘时的两步保护与 1.5 秒问答探测**：
+     1. **本机挂载检查**：执行 `bowl disk delete <disk-id>` 时，命令行先检查本机的 `/proc/self/mountinfo`，如果发现这块盘正挂载在本机上，直接报错拒绝并提示用户先执行 `bowl umount`；如果没有加 `-y / --yes` 参数，还会在终端询问用户确认。
+     2. **服务端向未过期会话发 `Ping` 确认死活**：服务端执行 `StorageService.DeleteDisk` 时，先清掉已经过期的会话；如果发现这块盘名下还有没过期的 `client_sessions`，服务端就通过这些会话保持的 `WatchSession` 长连接发一个 `Ping(ping_seq)` 消息，最多等 `1.5s` 看对方回不回 `Pong(pong_seq)`：
+        - 只要有任何一个会话在 `1.5s` 内回了 `Pong`（说明客户端还活着、正在挂载中），服务端立刻拒绝删盘并返回 `FailedPrecondition`（错误原因为 `EBUSY`）；
+        - 如果某个会话没有建立 `WatchSession` 连接，或者超过 `1.5s` 都没回 `Pong`（说明客户端机器已经断电或死机），服务端就当场清掉这个死会话；等所有未过期会话都确认已死并清理干净后，服务端在数据库事务里加锁再次确认没有新挂载进来，然后把这块 `Disk` 和它下面的所有 `Inode`、`Chunk` 一并删除。
 
 ## 结果
-- **积极影响**：通过单一 `bowl` CLI 打通了「建盘 → 查询/列表 → 挂载 → 在线扩缩容 → 卸载 → 安全删盘」的完整闭环；借助客户端出站 `WatchSession` 双向流与按需 `Ping-Pong` 探活，在不要求客户端暴露入站端口的前提下，同时实现了活跃挂载防误删（`EBUSY`）、正常 `umount` 0 延迟删盘、`kill -9` 毫秒级感知与断电 1.5s 死会话自动回收。
-- **代价考量**：`StorageService` 需在内存中维护活跃 `WatchSession` 流注册表以派发按需 `Ping-Pong` 探测，且原 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 中“无视活跃会话强制删除磁盘”的旧测试需更新为验证活跃会话拦截（`EBUSY`）与死会话探活回收。
+- **正面效果**：用一个 `bowl` 命令行工具串起了「创建磁盘 → 查看列表/详情 → 挂载 → 在线扩缩容 → 卸载 → 安全删除」的完整流程；通过客户端主动发起的 `WatchSession` 长连接和删盘时的 `Ping-Pong` 问答，不需要客户端暴露任何端口，就同时做到了：正在挂载时防误删（返回 `EBUSY`）、正常 `umount` 后立刻可删、进程被 `kill -9` 后毫秒级感知清理、机器断电后 1.5 秒内自动识别死会话并完成删盘。
+- **代价与取舍**：`StorageService` 需要在内存里记录当前连着的 `WatchSession` 连接以便在删盘时发送 `Ping` 探测；同时原来 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 里“不管有没有客户端挂载都强制删盘”的旧测试需要相应改为测试“有活跃挂载时拦截报错（`EBUSY`）、死机挂载自动清理后允许删盘”。

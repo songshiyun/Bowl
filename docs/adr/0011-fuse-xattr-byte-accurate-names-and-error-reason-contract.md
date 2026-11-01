@@ -1,23 +1,23 @@
-# 0011. FUSE 扩展属性（Xattr）、全量路径名与符号链接字节化及结构化错误原因契约设计
+# 0011. FUSE 扩展属性（Xattr）、文件名与软链目标改为字节流存储及具体错误码传递
 
 ## 状态
 已采纳 (accepted)
 
 ## 背景
-Storage 元数据引擎在完成目录流遍历与 `Fallocate`（ADR-0010）后，需推进 Linux FUSE 扩展属性相关的四项核心操作码：`FUSE_SETXATTR (22)`、`FUSE_GETXATTR (23)`、`FUSE_LISTXATTR (24)` 与 `FUSE_REMOVEXATTR (25)`。在对齐 Linux VFS 与 FUSE 协议语义时，面临六项关键架构权衡：
-1. **非 UTF-8 原始字节序列的无损传输与存储**：Linux VFS 中目录项名称（`dentry`）、扩展属性名称（`xattr name`）及符号链接目标路径（`symlink target`）均为除 `\x00`（目录项另禁 `/`）外的任意字节流，不要求合法 UTF-8。此前 `entries.name`（`VARCHAR(255)`，ADR-0001）、`inodes.symlink_target`（`TEXT`，ADR-0007）及 Protobuf `string` 字段会拒绝非 UTF-8 字节序列；且 `protovalidate` 的 `bytes.pattern` 规则在底层 CEL 中执行 `string(this)` 强转，遇到非 UTF-8 字节会直接抛出运行时异常。
-2. **Xattr 持久化模型、空值语义与单节点名称列表配额**：POSIX `setxattr(2)` 允许 `0` 字节空属性值（不代表删除），单属性值上限为 `XATTR_SIZE_MAX = 65536` 字节；同时 Linux `listxattr(2)` 的单次返回缓冲区上限为 `XATTR_LIST_MAX = 65536` 字节。若不对单 Inode 累计属性名长度设限，属性虽能持续写入，但一旦 `Σ(len(name)+1) > 65536`，后续 `listxattr` 将永久返回 `E2BIG` 导致属性列表不可读。
-3. **RPC 契约边界与 FUSE 双模态 `size` 探测解耦**：Linux FUSE 的 `FUSE_GETXATTR` 与 `FUSE_LISTXATTR` 请求携带 `size` 参数（`size == 0` 探测长度，`size > 0` 读取数据并校验 `ERANGE`），需界定该缓冲区协议细节由服务端 RPC 处理还是由客户端 FUSE 适配层本地完成。
-4. **VFS 与 Storage 的权限校验分工、安全前提及 `user.*` 文件类型边界**：Linux VFS `xattr_permission` 既包含依赖调用方凭证的检查（粘滞位目录属主、`trusted.*` 的 `CAP_SYS_ADMIN` 及常规 DAC 权限检查），也包含不依赖凭证的文件类型检查（`user.*` 的节点类型限制），需明确客户端挂载前提、网络信任边界及内核版本兼容基线。
-5. **POSIX ACL 与 `FUSE_HANDLE_KILLPRIV` / `FUSE_HANDLE_KILLPRIV_V2` 的协商策略**：扩展属性涉及 `system.posix_acl_access`、`system.posix_acl_default` 与 `security.capability`，需明确 Storage 是否解析 ACL 或在元数据变更时联动清理 `security.capability`。
-6. **gRPC 状态码向 POSIX `errno` 的无损还原与名称超长错误区分**：仅靠 gRPC 标准状态码无法一对一还原 `errno`（如 `NotFound` 同时对应 `ENOENT` 与 `ENODATA`；`FailedPrecondition` 同时对应 `ENOTDIR`、`EISDIR`、`ENOTEMPTY`、`EBADF`；`InvalidArgument` 同时对应 `EINVAL`、`ERANGE`、`E2BIG`、`ENAMETOOLONG`），目录项/符号链接超长（`ENAMETOOLONG`）与 Xattr 名称超长（`ERANGE`）遵循不同的内核错误码规范，且 `Unimplemented` 若被客户端误还原为 `ENOSYS` 会导致内核永久禁用对应 FUSE 操作码。
+Storage 元数据引擎在完成目录遍历和 `Fallocate`（ADR-0010）后，需要支持 Linux FUSE 扩展属性的四个接口：`FUSE_SETXATTR (22)`、`FUSE_GETXATTR (23)`、`FUSE_LISTXATTR (24)` 和 `FUSE_REMOVEXATTR (25)`。在对接 Linux 内核 FUSE 协议时，遇到六个实际问题：
+1. **Linux 文件名、扩展属性名和符号链接路径不一定是合法的 UTF-8 字符串**：在 Linux 内核（VFS）里，文件名（`dentry`）、扩展属性名（`xattr name`）和符号链接指向的路径（`symlink target`）可以是除了空字节 `\x00`（文件名还不能含 `/`）之外的任意字节序列，并不要求是合法的 UTF-8 文本。而我们之前在数据库里把 `entries.name` 定为 `VARCHAR(255)`（ADR-0001）、把 `inodes.symlink_target` 定为 `TEXT`（ADR-0007），在 Protobuf 里也用了 `string` 类型，遇到非 UTF-8 字节就会直接报错；而且 `protovalidate` 的 `bytes.pattern` 校验规则底层会强转成 `string(this)`，遇到非 UTF-8 字节也会直接崩溃。
+2. **扩展属性允许 0 字节空值，且单个文件的属性名总长度不能超过 64KB**：POSIX `setxattr(2)` 允许写入长度为 `0` 字节的空属性值（这不等于删除属性），单个属性值最大为 `XATTR_SIZE_MAX = 65536` 字节；同时 Linux `listxattr(2)` 一次最多只能返回 `XATTR_LIST_MAX = 65536` 字节的属性名列表。如果不限制单个文件上所有扩展属性名的累计长度，一旦属性名加起来（算上结尾的 `\0`）超过 `65536` 字节，以后调 `listxattr` 就会永远返回 `E2BIG`，再也列不出这个文件的扩展属性了。
+3. **FUSE 协议里的 `size` 缓冲区检查放在客户端还是服务端**：Linux FUSE 的 `FUSE_GETXATTR` 和 `FUSE_LISTXATTR` 请求里带有一个 `size` 参数（`size == 0` 时只查询需要多大的缓冲区；`size > 0` 时如果实际数据比 `size` 大就要返回 `ERANGE` 错误）。这个跟本地内存缓冲区大小紧密相关的检查，放在客户端本地做比传到服务端 RPC 里做更合适。
+4. **扩展属性的权限检查（如 `user.*`、`trusted.*`）谁来管**：Linux 内核对扩展属性的检查分为两类：一类跟当前操作用户的身份权限有关（比如粘滞位目录、需要管理员 `CAP_SYS_ADMIN` 权限的 `trusted.*`、以及普通的 `rwx` 权限检查），另一类只看文件本身的类型（比如 `user.*` 属性不允许挂在符号链接或设备文件上）。我们需要明确客户端挂载参数怎么配、服务端负责检查哪一部分。
+5. **要不要在服务端解析 POSIX ACL 或自动删除 `security.capability`**：扩展属性里经常存有 `system.posix_acl_access`、`system.posix_acl_default` 和 `security.capability`，需要明确服务端是只把它们当普通字节存起来，还是要去解析里面的权限结构。
+6. **只靠 gRPC 的十几个标准状态码，客户端分不清具体的 POSIX `errno`**：一个 gRPC 状态码往往对应好几个不同的 POSIX 错误码（比如 `NotFound` 既可能是文件不存在 `ENOENT`，也可能是扩展属性不存在 `ENODATA`；`FailedPrecondition` 可能是 `ENOTDIR`、`EISDIR`、`ENOTEMPTY` 或 `EBADF`；`InvalidArgument` 可能是 `EINVAL`、`ERANGE`、`E2BIG` 或 `ENAMETOOLONG`）。而且文件名太长要返回 `ENAMETOOLONG`，扩展属性名太长却要返回 `ERANGE`；另外如果把 gRPC 的 `Unimplemented` 在客户端转成了 `ENOSYS`，Linux 内核会以为整个文件系统永远不支持这个功能，以后再也不调了（应该转成 `EOPNOTSUPP`）。
 
 ## 决策
-1. **全项目名称与符号链接目标统一字节化（`bytes` / `BYTEA`）、`CASE` 约束防护及 `protovalidate` 预编译**：
-   - **数据库迁移、存量边界收敛与非 UTF-8 可逆回滚编码**：
-     - 新建 `inode_xattrs` 表：`ino BIGINT NOT NULL REFERENCES inodes(ino) ON DELETE CASCADE`、`name BYTEA NOT NULL`、`value BYTEA NOT NULL`，主键为 `(ino, name)`；附加约束 `chk_inode_xattrs_name CHECK (octet_length(name) BETWEEN 1 AND 255 AND position('\x00'::bytea IN name) = 0)` 与 `chk_inode_xattrs_value CHECK (octet_length(value) <= 65536)`。
-     - 将 `entries.name` 从 `VARCHAR(255)` 迁移为 `BYTEA NOT NULL`，附加约束 `chk_entries_name CHECK (octet_length(name) BETWEEN 1 AND 255 AND position('\x00'::bytea IN name) = 0 AND position('\x2f'::bytea IN name) = 0)`（更新 ADR-0001 中关于 `VARCHAR(255)` 的定义）；回滚（`Down`）时对非 UTF-8 原始字节采用 Unicode 私用区（PUA `U+E000..U+E0FF`）单字节一字符可逆编码（`Up` 时自动解码还原），确保回滚兼容非 UTF-8 存量数据且不超出 `VARCHAR(255)` 字符上限。
-     - 将 `inodes.symlink_target` 从 `TEXT` 迁移为 `BYTEA`，在添加新 `CHECK` 约束前先将存量 `> 4095` 字节（旧版允许 `4096` 字节）的符号链接目标平滑截断至 `4095` 字节并同步收敛 `size = LEAST(size, 4095)`，随后将最大有效载荷上限调整为 `4095` 字节（对齐 Linux `PATH_MAX - 1`，预留末尾 NUL 字节，更新 ADR-0007 中关于 `TEXT` 与 `4096` 上限的定义）；回滚（`Down`）同样采用 PUA 可逆编码；使用基于 `(mode & 61440) = 40960` 的 `CASE` 完整结构更新 `chk_inodes_symlink_target` 约束，防止 SQL 三值逻辑下的 `NULL` 穿透：
+1. **把所有文件名、扩展属性名和符号链接路径全部改为原始字节类型（`bytes` / `BYTEA`）**：
+   - **数据库表结构与迁移**：
+     - 新建 `inode_xattrs` 表：`ino BIGINT NOT NULL REFERENCES inodes(ino) ON DELETE CASCADE`、`name BYTEA NOT NULL`、`value BYTEA NOT NULL`，主键为 `(ino, name)`；加上检查约束：属性名长度在 `1..255` 字节之间且不含 `\x00`（`chk_inode_xattrs_name`），属性值长度不超过 `65536` 字节（`chk_inode_xattrs_value`）。
+     - 把 `entries.name` 从 `VARCHAR(255)` 改为 `BYTEA NOT NULL`，加上检查约束：长度在 `1..255` 字节之间，且不含 `\x00` 和 `/`（更新 ADR-0001 的定义）；为了保证数据库迁移如果执行回滚（`Down`）遇到非 UTF-8 字节时不报错，回滚脚本把非 UTF-8 字节编码到 Unicode 私用区（`U+E000..U+E0FF`），重新升级（`Up`）时再还原回原始字节。
+     - 把 `inodes.symlink_target` 从 `TEXT` 改为 `BYTEA`，最大长度从 `4096` 改为 `4095` 字节（对齐 Linux `PATH_MAX - 1`，给结尾预留 NUL 字节，更新 ADR-0007 的定义），迁移时先把已有的超长路径截断到 `4095` 字节；并用 `CASE WHEN (mode & 61440) = 40960 ...` 编写检查约束 `chk_inodes_symlink_target`，确保只有符号链接才有 `symlink_target` 且不含 `\x00`：
        ```sql
        ALTER TABLE inodes ADD CONSTRAINT chk_inodes_symlink_target CHECK (
            CASE
@@ -30,37 +30,37 @@ Storage 元数据引擎在完成目录流遍历与 `Fallocate`（ADR-0010）后�
            END
        );
        ```
-   - **时间戳统一采用 `clock_timestamp()`**：
-     - 在 `TouchInodeCtime`、`TouchInodeTimestamps` 等 SQL 语句中，统一使用 `clock_timestamp()` 替代 `NOW()`（`transaction_timestamp()`），确保同一事务或高频操作内 `ctime` / `mtime` 单调推进。
-   - **Protobuf 契约、`protovalidate` CEL 字节规则与违规 `errno` 显式转换**：
-     - 全项目请求与响应中的目录项名称（`Lookup`、`Mknod`、`Mkdir`、`Symlink`、`Link`、`Unlink`、`Rmdir`、`Rename`、`Create`、`DirEntry`、`DirEntryPlus`）、扩展属性名称（`SetXattr`、`GetXattr`、`RemoveXattr`、`ListXattrResponse.names`）及符号链接路径（`SymlinkRequest.target`、`ReadlinkResponse.target`）统一定义为 `bytes`（Go 领域层对应 `[]byte`）。
-     - 弃用会触发 UTF-8 强转的 `bytes.pattern`，改用 `bytes.min_len` / `bytes.max_len` 配合字段级 CEL 原生字节函数 `!this.contains(b'\\x00')`（目录项名称额外叠加 `&& !this.contains(b'/')`），并在 `ListXattrResponse.names` 上配置 `repeated.items` 约束；服务启动阶段通过 `protovalidate.WithMessages(...)` 预编译全部消息校验器，并在 `pkg/validator` 中将字段边界违规按领域层求值顺序显式转换为携带 `google.rpc.ErrorInfo`（`ERANGE`、`E2BIG`、`ENAMETOOLONG`、`EINVAL`）的 gRPC `InvalidArgument` 状态错误。
-   - **`nil` 空字节切片写库防御**：由于 `protobuf-go` 将 0 字节 `bytes` 解码为 `nil` 且 `pgx` 会将 `nil []byte` 序列化为 SQL `NULL`，`meta.Manager` 在写入 `inode_xattrs.value` 前必须将 `nil` 归一化为非空切片 `[]byte{}`，确保 0 字节属性值正常持久化。
-2. **结构化 Xattr RPC 契约与确定性字节序列表**：
-   - `GetXattr` 接收 `(ino, name)` 并返回 `bytes value`；`ListXattr` 接收 `(ino)` 并按 `ORDER BY name ASC`（`BYTEA` 原始字节序升序，作为 Bowl 确定性输出约定）返回 `repeated bytes names`。
-   - FUSE 内核协议中的 `size == 0` 缓冲区长度探测、`\0` 分隔字节流拼接以及 `size < actual_len` 时的 `ERANGE` 判定，均由客户端 FUSE 适配层本地完成，不在元数据 RPC 层耦合 `size` 参数。
-3. **VFS 与 Storage 职责边界、安全前提、求值顺序及 Bowl 内部配额策略**：
-   - **安全前提与职责切分**：
-     - **强制挂载前提与信任边界**：FUSE 客户端挂载时**必须开启 `-o default_permissions`**，由客户端 Linux 内核 VFS 权威执行基于调用方凭证的 DAC 权限检查、粘滞位（Sticky Bit）目录属主检查以及 `trusted.*` 命名空间的 `CAP_SYS_ADMIN` 能力检查；Storage RPC 严格限定为内网受信 FUSE 客户端代理调用的后端服务，不向非受信终端直接暴露。
-     - **Storage 实施策略 A（不依赖凭证的 `user.*` 文件类型限制，对齐 Linux 7.1+ 基线）**：当 `name` 以 `"user."` 开头时，仅允许目标 Inode 为常规文件（`S_IFREG`）、目录（`S_IFDIR`）或套接字（`S_IFSOCK`，对齐 Linux 7.1+ 兼容基线）；对符号链接、字符设备、块设备与 FIFO 执行 `user.*` 的 `SetXattr` / `RemoveXattr` 返回 `ErrPerm`（`EPERM`），执行 `GetXattr` 返回 `ErrNoData`（`ENODATA`）。`ListXattr` 不按调用方过滤，与内核 FUSE 行为一致。所有 Inode 类型及孤儿节点（`nlink == 0`）均支持扩展属性操作。
-   - **求值顺序与并发锁协议**：
-     1. **入参静态校验（不查库）**：
+   - **数据库时间戳统一用 `clock_timestamp()`**：
+     - 在 `TouchInodeCtime`、`TouchInodeTimestamps` 等更新时间的 SQL 里，统一用实时变化的 `clock_timestamp()` 替代事务内固定不变的 `NOW()`，确保同一个事务或连续快速操作时 `ctime` / `mtime` 每次都会往前走。
+   - **Protobuf 字段改为 `bytes` 并用 CEL 字节函数校验**：
+     - 把所有请求和响应里的目录项名称（`Lookup`、`Mknod`、`Mkdir`、`Symlink`、`Link`、`Unlink`、`Rmdir`、`Rename`、`Create`、`DirEntry`、`DirEntryPlus`）、扩展属性名称（`SetXattr`、`GetXattr`、`RemoveXattr`、`ListXattrResponse.names`）和符号链接目标路径（`SymlinkRequest.target`、`ReadlinkResponse.target`）全部改为 `bytes`（Go 代码里对应 `[]byte`）。
+     - 不用会强转 UTF-8 的 `bytes.pattern`，改用 `bytes.min_len` / `bytes.max_len` 搭配 CEL 字节判断 `!this.contains(b'\\x00')`（目录项名称再加一个 `&& !this.contains(b'/')`）；并在 `pkg/validator` 中把参数校验不通过的情况，转成带有具体 POSIX 错误原因（`ERANGE`、`E2BIG`、`ENAMETOOLONG`、`EINVAL`）的 gRPC `InvalidArgument` 错误。
+   - **防止 0 字节空切片被存成数据库 `NULL`**：因为 `protobuf-go` 会把 0 字节的 `bytes` 解码成 `nil`，而 `pgx` 会把 `nil []byte` 当成 SQL 的 `NULL` 插入导致报错，所以 `meta.Manager` 在写入 `inode_xattrs.value` 前如果发现是 `nil`，统一替换成非空的 `[]byte{}`，确保 0 字节的空属性值能正常存进数据库。
+2. **扩展属性 RPC 接口不传缓冲区 `size`，由客户端本地处理**：
+   - `GetXattr` 接收 `(ino, name)` 直接返回完整的 `bytes value`；`ListXattr` 接收 `(ino)` 按字节升序（`ORDER BY name ASC`）返回 `repeated bytes names`。
+   - FUSE 内核协议里的 `size == 0` 查长度、把属性名用 `\0` 拼成一串、以及当缓冲区 `size` 太小时返回 `ERANGE`，全部由客户端 FUSE 适配层在本地内存里完成，服务端 RPC 接口不掺和缓冲区大小的事。
+3. **客户端开启 `default_permissions` 管用户权限，服务端负责检查 `user.*` 的文件类型和 64KB 属性名总长限制**：
+   - **权限检查分工**：
+     - **客户端挂载必须开启 `-o default_permissions`**：让客户端机器的 Linux 内核直接根据调用进程的用户身份检查 `rwx` 权限、粘滞位目录属主以及 `trusted.*` 所需的管理员 `CAP_SYS_ADMIN` 权限；`StorageService` 只在受信任的内网供 FUSE 客户端调用，不直接暴露给公网终端。
+     - **服务端检查 `user.*` 允许的文件类型（对齐 Linux 7.1+ 规则）**：当扩展属性名以 `"user."` 开头时，只允许目标节点是常规文件（`S_IFREG`）、目录（`S_IFDIR`）或套接字（`S_IFSOCK`）；如果对符号链接、字符设备、块设备或命名管道（FIFO）设置或删除 `user.*` 属性，返回 `ErrPerm`（`EPERM`），读取 `user.*` 属性则返回 `ErrNoData`（`ENODATA`）。`ListXattr` 不做过滤。所有类型的节点以及已被删除但还打开着的孤儿节点（`nlink == 0`）都支持扩展属性操作。
+   - **服务端检查顺序与加锁步骤**：
+     1. **先检查输入参数（不用查数据库）**：
         - `ino == 0 || ino > math.MaxInt64` 返回 `ErrInvalidArgument`（`EINVAL`）；
-        - `SetXattr` 中 `flags &^ 0x3 != 0` 返回 `ErrInvalidArgument`（`EINVAL`）（`flags = 3` 允许放行进入领域层）；
-        - 扩展属性名 `len(name) == 0`（空名称）或包含 `\x00`（`bytes.IndexByte(name, 0) >= 0`）返回 `ErrInvalidArgument`（`EINVAL`）；
-        - 扩展属性名 `len(name) > 255` 返回 `ErrRange`（`ERANGE`，且当同时 `len(name) > 255` 且含 `\x00` 时优先返回 `ERANGE`），而目录项名称 `len(name) > 255` 或符号链接目标 `len(target) > 4095` 则返回 `ErrNameTooLong`（`ENAMETOOLONG`）；
-        - `SetXattr` 中属性值 `len(value) > 65536`（超 64KB）返回 `ErrRange`（`ERANGE`，对齐现行已上线的对外 RPC 契约与 JuiceFS 行为）。
-     2. **Inode 锁与存在性校验**：`SetXattr` 与 `RemoveXattr` 在读写事务内调用 `GetInodeForUpdate(ino)` 加行级排他锁；`GetXattr` 与 `ListXattr` 在 `RepeatableRead` 只读事务内调用 `GetInode(ino)`；节点不存在统一返回 `ErrNotFound`（`ENOENT`）。
-     3. **`user.*` 文件类型准入校验**：先于属性存在性查询执行，不满足文件类型要求时按操作类型返回 `ErrPerm` 或 `ErrNoData`。
-     4. **`XATTR_CREATE (0x1)` / `XATTR_REPLACE (0x2)` 独立判定与 Bowl `XATTR_LIST_MAX (65536)` 配额**：`SetXattr` 查询 `(ino, name)` 是否已存在——若已存在且含 `XATTR_CREATE` 返回 `ErrAlreadyExists`（`EEXIST`）；若不存在且含 `XATTR_REPLACE` 返回 `ErrNoData`（`ENODATA`）（因此 `flags == 0x3` 在属性存在时返回 `EEXIST`、不存在时返回 `ENODATA`，而非 `EINVAL`）。仅当 `(ino, name)` 尚不存在（新增属性名）时，在持有 Inode `FOR UPDATE` 行锁下计算该节点现有 `Σ(octet_length(name) + 1)`；若新增后总长超过 `65536` 字节（Bowl 内部配额策略，对齐 ext4 / tmpfs），返回 `ErrNoSpace`（`ENOSPC`）；覆盖已有同名属性时不触发配额拦截。
-     5. **时间戳联动**：`SetXattr` 与 `RemoveXattr` 成功后仅调用 `TouchInodeCtime(ino)` 刷新 `ctime = clock_timestamp()`，不修改 `mtime` / `atime`。
-4. **不协商 `FUSE_POSIX_ACL`、同时禁用 `FUSE_HANDLE_KILLPRIV` 与 `FUSE_HANDLE_KILLPRIV_V2`**：
-   - **不协商 `FUSE_POSIX_ACL`**：`system.posix_acl_access` 与 `system.posix_acl_default` 作为普通扩展属性透传存储；Storage 不解析 ACL 二进制结构、不同步 `Inode.mode`、不剥离 `S_ISGID`、不执行默认 ACL 继承，内核亦不执行 ACL 权限检查。限制说明：当客户端在非初始用户命名空间（non-init user namespace）中挂载时，Linux 内核会对 ACL 相关操作直接返回 `EOPNOTSUPP`（`fuse_no_acl`）。
-   - **同时禁用 `FUSE_HANDLE_KILLPRIV` 与 `FUSE_HANDLE_KILLPRIV_V2`**：写入、截断或 `chown` 时的特权位与能力剥离完全由 Linux 内核负责（内核自行下发 `FUSE_SETATTR` 剥离 `S_ISUID` / `S_ISGID`，并下发 `FUSE_REMOVEXATTR` 删除 `security.capability`）。Storage 无需在 `SetAttr`、`Open(O_TRUNC)` 或 `Fallocate` 中隐式删除 `security.capability`（ADR-0005、ADR-0009、ADR-0010 中已有的 `S_ISUID` / `S_ISGID` 剥离逻辑与内核行为幂等一致，予以保留）。
-5. **基于 `google.rpc.ErrorInfo` 的全项目 `errno` 精确映射契约**：
-   - 全项目统一在 gRPC 错误详情 `google.rpc.ErrorInfo` 中设置 `domain = "bowl.storage"`，并在 `reason` 字段中直接携带标准 POSIX `errno` 名称，FUSE 客户端适配层优先读取 `ErrorInfo.reason` 还原内核错误码，gRPC 状态码仅作为大类回退。
-   - **严禁还原为 `ENOSYS`**：FUSE 客户端必须将 `(Unimplemented, "EOPNOTSUPP")` 还原为 `EOPNOTSUPP`，严禁将 gRPC `Unimplemented` 映射为 `ENOSYS`，防止 Linux 内核因收到 `ENOSYS` 而永久禁用对应 FUSE 操作码。
-   - 领域哨兵错误映射关系固定如下（后续随 ADR-0012 及元数据对齐演进扩展至 22 项）：
+        - `SetXattr` 的 `flags` 含有 `0x3` 以外的未知位时返回 `ErrInvalidArgument`（`EINVAL`）；
+        - 扩展属性名为空（`len(name) == 0`）或包含 `\x00` 时返回 `ErrInvalidArgument`（`EINVAL`）；
+        - 扩展属性名超过 255 字节（`len(name) > 255`）返回 `ErrRange`（`ERANGE`，如果既超长又含 `\x00` 优先返回 `ERANGE`），而文件名超 255 字节或软链路径超 4095 字节则返回 `ErrNameTooLong`（`ENAMETOOLONG`）；
+        - `SetXattr` 的属性值超过 64KB（`len(value) > 65536`）返回 `ErrRange`（`ERANGE`）。
+     2. **锁住或查询 `Inode`**：`SetXattr` 和 `RemoveXattr` 在写事务里调用 `GetInodeForUpdate(ino)` 加行级排他锁；`GetXattr` 和 `ListXattr` 在只读事务里调用 `GetInode(ino)`；节点不存在一律返回 `ErrNotFound`（`ENOENT`）。
+     3. **检查 `user.*` 文件类型**：在查具体属性之前先检查文件类型，不符合要求时直接返回 `ErrPerm` 或 `ErrNoData`。
+     4. **检查 `XATTR_CREATE (0x1)` / `XATTR_REPLACE (0x2)` 标志与单文件 64KB 属性名总长上限**：`SetXattr` 先查 `(ino, name)` 是否已经存在——如果已存在且带了只准新建的 `XATTR_CREATE` 标志，返回 `ErrAlreadyExists`（`EEXIST`）；如果不存在且带了只准替换的 `XATTR_REPLACE` 标志，返回 `ErrNoData`（`ENODATA`）。只有当要插入一个全新的属性名时，才在 `Inode` 行锁保护下算一下这个文件现有所有属性名的总长度 `Σ(octet_length(name) + 1)`；如果加上新属性名后总长超过 `65536` 字节（对齐 ext4 / tmpfs 的限制），就返回 `ErrNoSpace`（`ENOSPC`）；如果是覆盖已有的同名属性，名字长度没变，不做这个拦截。
+     5. **更新时间**：`SetXattr` 和 `RemoveXattr` 成功后只调用 `TouchInodeCtime(ino)` 更新 `ctime`，不改动 `mtime` 和 `atime`。
+4. **服务端不解析 POSIX ACL，也不开启 `FUSE_HANDLE_KILLPRIV`**：
+   - `system.posix_acl_access` 和 `system.posix_acl_default` 只当作普通扩展属性按原样读写，服务端不解析里面的二进制内容，也不去联动修改 `Inode.mode`。
+   - 挂载时不协商开启 `FUSE_HANDLE_KILLPRIV` 和 `FUSE_HANDLE_KILLPRIV_V2`：当写文件、截断文件或改属主需要清除特权位和 `security.capability` 扩展属性时，由 Linux 内核自己发 `FUSE_SETATTR` 和 `FUSE_REMOVEXATTR` 请求过来处理，服务端不需要在 `SetAttr`、`Open(O_TRUNC)` 或 `Fallocate` 里暗自去删 `security.capability`。
+5. **用 `google.rpc.ErrorInfo` 把准确的 POSIX `errno` 名字传给客户端**：
+   - 全项目统一在 gRPC 错误详情 `google.rpc.ErrorInfo` 里设置 `domain = "bowl.storage"`，并在 `reason` 字段里直接填入标准的 POSIX `errno` 名称（如 `"ENOENT"`、`"ENODATA"`）。FUSE 客户端优先读取 `ErrorInfo.reason` 来还原内核错误码。
+   - **禁止把不支持的操作转成 `ENOSYS`**：FUSE 客户端看到 `(Unimplemented, "EOPNOTSUPP")` 时必须转成 `EOPNOTSUPP`，绝不能把 gRPC 的 `Unimplemented` 转成 `ENOSYS`，以免 Linux 内核误把该 FUSE 功能永久关闭。
+   - 业务错误与 gRPC 状态码及 `reason` 的对应表如下：
      - `ErrInvalidArgument` $\rightarrow$ `InvalidArgument` + `reason: "EINVAL"`
      - `ErrNameTooLong` $\rightarrow$ `InvalidArgument` + `reason: "ENAMETOOLONG"`
      - `ErrRange` $\rightarrow$ `InvalidArgument` + `reason: "ERANGE"`
@@ -82,5 +82,5 @@ Storage 元数据引擎在完成目录流遍历与 `Fallocate`（ADR-0010）后�
      - `ErrNotSupported` $\rightarrow$ `Unimplemented` + `reason: "EOPNOTSUPP"`
 
 ## 结果
-- **积极影响**：彻底打通了非 UTF-8 原始字节在目录项、符号链接与扩展属性全链路中的无损存取，通过 `CASE` 约束消除了 `NULL` 穿透风险，通过 Inode 行级排他锁与 `XATTR_LIST_MAX` 配额消除了 `listxattr` 永久 `E2BIG` 死锁隐患，并通过 `google.rpc.ErrorInfo`（`domain = "bowl.storage"`）精确区分了 `ENAMETOOLONG` 与 `ERANGE`、`ENOENT` 与 `ENODATA` 等同大类 POSIX `errno`。
-- **代价考量**：将存量 `entries.name` 与 `inodes.symlink_target` 从字符串类型迁移为 `BYTEA` 并区分 `ErrNameTooLong` 与 `ErrInvalidArgument`，需要在契约层（Protobuf）、查询层（`sqlc`）与领域层（`meta`）同步更新存量签名与测试，在同一迭代内一步到位完成可避免后续二次破坏性变更。
+- **正面效果**：支持了包含非 UTF-8 原始字节的文件名、符号链接和扩展属性；通过限制单个文件的属性名总长不超过 64KB，防止了 `listxattr` 因为列表太长永远报 `E2BIG` 读不出来的问题；通过 `google.rpc.ErrorInfo` 让客户端能准确区分 `ENAMETOOLONG` 与 `ERANGE`、`ENOENT` 与 `ENODATA` 等同属一个 gRPC 大类的不同 POSIX 错误码。
+- **代价与取舍**：把原来的 `entries.name` 和 `inodes.symlink_target` 从字符串改成 `BYTEA` 字节切片，需要同步修改 Protobuf、数据库查询（`sqlc`）和业务代码里的参数类型。

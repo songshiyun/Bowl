@@ -1,54 +1,54 @@
-# 0023. 全路径会话续期内存节流、无锁 Flush/Release 去排他锁、Lookup 单语句直查与 Read 预读流水线设计
+# 0023. 减少会话续期写库频率、关闭普通文件免加行锁、Lookup 合并为单条查询与 Read 顺序预读
 
 ## 状态
 已采纳 (accepted) — 演进 [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md)、[ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)
 
 ## 背景
-在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 的服务端写路径 Group Commit 与无重叠前缀跳过 `Compaction` 优化后，大文件并发写吞吐已达云盘物理极限（`174.70 MiB/s` vs 物理上限 `172.74 MiB/s`）。然而对照同机 `JuiceFS + PostgreSQL 16` 基准测试（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)），剔除评测环境中 `rclone serve s3` 未执行 `fsync`（Server PageCache 缓冲）及 `juicefs bench` 未清理客户端本地块缓存 `/var/jfsCache` 的表观偏差后，Bowl 在 **元数据高并发 IOPS（`mdtest` 创建、读取、属性查询）** 与 **大文件顺序读吞吐（`56.05 ~ 87.43 MiB/s`）** 上仍存在四项真实架构瓶颈与一项关键设计权衡：
+在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 的服务端批量写入提交和 `Compaction` 跳过已规整大块优化后，大文件并发写速度已经达到云盘物理上限（`174.70 MiB/s` vs 物理上限 `172.74 MiB/s`）。但对比同机器的 `JuiceFS + PostgreSQL 16` 测试结果（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)），排除掉测试环境里 `rclone serve s3` 未开启 `fsync` 以及 `juicefs bench` 未清理本地缓存 `/var/jfsCache` 的外部差异后，Bowl 在 **高并发小文件操作（`mdtest` 创建、读取、查属性）** 与 **大文件顺序读速度（`56.05 ~ 87.43 MiB/s`）** 上仍然存在四个明显的性能瓶颈：
 
-1. **非 `Write` 热路径每次请求同步执行重型会话续期与全表孤儿扫描**：
-   - [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 仅在 `Write` 中引入了内存时间窗口节流（`touchWriteClientSessionForHandle`）。而在 `Create`、`TmpFile`、`Open`、`OpenDir`（调用 `renewOptionalClientSession`）以及 `Read`、`Flush`、`Release`、`ReleaseDir`、`SetAttr`、`Fallocate`（调用 `touchActiveClientSessionForHandle`）中，每个请求仍在读写事务内同步执行 `DeleteExpiredClientSessions`、`UpsertClientSession` 与 `reclaimUnreferencedOrphans`（全表扫描 `nlink = 0` 孤儿节点）。
-   - 当单客户端挂载实例运行多进程并发负载（如 4 并发 MPI `mdtest`）时，所有并发进程在同一个 `client_sessions(session_id)` 行级排他写锁上串行化排队，导致 `File creation` 从单进程 `271 ops/s` 到 4 进程仅升至 `429 ops/s`（JuiceFS 为 `3,414 ops/s`）。
-2. **`Flush` 与 `Release` 无条件对 `Inode` 加排他写锁，将纯读生命周期（`Open -> Flush -> Release`）放大为 3 次写事务与 2 次 `Inode` 排他锁**：
-   - 在 `mdtest File read`（打开空文件读取并关闭）中，Bowl 吞吐仅为 `1,092 ops/s`（JuiceFS 为 `24,625 ops/s`，相差 22 倍）。
-   - 根因在于：客户端每次关闭文件描述符均无条件发送 `Flush` RPC，服务端 `Flush` 与随后的 `Release` 无论目标 `Inode` 是否持有 `FileLock`、无论是否为 `Orphan Inode`（`nlink == 0`），一上来均开启读写事务并调用 `GetInodeForUpdate(ino)` 对目标 `Inode` 加排他写锁。
-3. **`FileHandle` 持久化策略权衡（为何选择「档位 A：保留数据库句柄表但消除冗余排他锁」而非「档位 B：纯内存句柄表」）**：
-   - **档位 B（对齐 JuiceFS 纯内存分配 `fh` + 懒孤儿登记）**：虽能完全消除正常 `Open` / `Release` 的 `file_handles` 表写入，但在服务端进程重启瞬间，未发生 `Unlink` 的普通活跃 `FileHandle` 在服务端内存中会全部丢失，破坏 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md) 与 [ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md) 锁定的跨重启句柄持久化与严格 `EBADF` 校验契约。
-   - **档位 A（保留 `file_handles` 表持久化，消除无锁 `Flush` 与非孤儿 `Release` 的 `Inode` 排他锁）**：在不牺牲跨重启句柄持久化与任何安全契约的前提下，省去 99.99% 无 POSIX 锁场景下的 `Flush` 写事务，并在 `Release` / `ReleaseDir` 关闭正常节点（`nlink > 0`）时免除 `inodes` 表 `FOR UPDATE` 排他锁，兼顾系统可靠性与高并发吞吐。
-4. **`Lookup` 显式事务与双 SQL 往返开销，以及创建慢引发的 `stat` 内核缓存过期连锁反应**：
-   - [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md) 为 `Lookup` 开启 `RepeatableRead` 只读事务并串行执行 `GetInode(parent_ino)` 与 `GetInodeByEntry(parent_ino, name)`，每次 `Lookup` 产生 **4 次 PostgreSQL 网络往返**（`BEGIN` + `SELECT parent` + `SELECT child` + `COMMIT`），导致冷 `Stat file` 延迟（`0.86 ms`）为 JuiceFS 单语句查询（`0.43 ms`）的 2 倍。
-   - 同时，由于 `mdtest` 创建 1,040 个文件耗时 `2.42s` 超出 FUSE 内核 `1.0s` 缓存有效期（JuiceFS 仅耗时 `0.30s < 1.0s`），导致紧随其后的 `File stat` 阶段在 Bowl 中被迫发起跨机 `Lookup` RPC，吞吐跌至 `7,791 ops/s`（JuiceFS 100% 命中内核缓存达 `158,666 ops/s`）。
-5. **数据面 `Read` 走写事务加 `FOR KEY SHARE` 锁、多 `Block` 串行读盘与客户端 `1 MiB` 停等**：
-   - 服务端 `Read`（[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)）每次均开启读写事务、更新会话并调用 `LockValidSliceRefsKeyShare` 对 `slice_refs` 加数据库行锁，且在磁盘 I/O 期间长持数据库连接；当单次读取跨越多个 `Block` 时使用串行 `for` 循环调用 `GetBlock`。
-   - 客户端 `Read`（[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)）按内核单次最大 `1 MiB` 串行停等请求，缺乏跨 `1 MiB` 请求的异步顺序预读（Read-Ahead），导致单流顺序读仅 `56.05 MiB/s`（不足云盘物理上限的三分之一）。
+1. **除 `Write` 外的其他接口每次请求都要写数据库续期会话并扫描全表孤儿节点**：
+   - [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 只在 `Write` 接口里加了按时间间隔续期会话的限制。而在 `Create`、`TmpFile`、`Open`、`OpenDir`（调用 `renewOptionalClientSession`）以及 `Read`、`Flush`、`Release`、`ReleaseDir`、`SetAttr`、`Fallocate`（调用 `touchActiveClientSessionForHandle`）中，每次请求依然会在数据库事务里执行 `DeleteExpiredClientSessions`、`UpsertClientSession` 和 `reclaimUnreferencedOrphans`（扫描所有 `nlink = 0` 的孤儿节点）。
+   - 当同一个客户端挂载点上有多个进程同时操作文件（例如 4 进程并发运行 `mdtest`）时，所有请求都会去抢同一条 `client_sessions(session_id)` 记录的数据库排他锁，导致文件创建速度从单进程的 `271 ops/s` 到 4 进程时只涨到 `429 ops/s`（JuiceFS 为 `3,414 ops/s`）。
+2. **`Flush` 与 `Release` 每次都无条件锁住 `Inode` 行，导致单纯打开读一下文件并关闭（`Open -> Flush -> Release`）也要触发 3 次写事务和 2 次 `Inode` 排他锁**：
+   - 在 `mdtest File read`（打开空文件读取并关闭）测试中，Bowl 只有 `1,092 ops/s`（JuiceFS 为 `24,625 ops/s`，慢了 22 倍）。
+   - 原因是：客户端每次关闭文件描述符都会发送 `Flush` RPC，而服务端的 `Flush` 和随后的 `Release` 不管这个文件有没有加过 `FileLock`、也不管它是不是已被删除的 `Orphan Inode`（`nlink == 0`），一上来全都开启数据库写事务并调用 `GetInodeForUpdate(ino)` 锁住 `Inode` 行。
+3. **文件句柄（`FileHandle`）存放在数据库还是只放内存的取舍**：
+   - **如果学 JuiceFS 只在内存里分配 `fh`**，虽然平时 `Open` / `Release` 不用写 `file_handles` 表，但一旦服务端进程重启，所有正在打开的普通文件句柄都会丢失，客户端再拿着原来的 `fh` 来读写就会全部报错，破坏了 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md) 和 [ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md) 支持服务端重启后继续使用已打开句柄的设计。
+   - **因此我们选择保留数据库里的 `file_handles` 表，只去掉 `Flush` 和 `Release` 中不必要的写事务与 `Inode` 行锁**：这样既保证了服务端重启后文件句柄不丢，又能省掉 99.99% 未加锁场景下的 `Flush` 写事务，并且在关闭正常文件（`nlink > 0`）时不再锁 `inodes` 表。
+4. **`Lookup` 开启事务分两条 SQL 查询，且创建文件太慢导致紧接着的 `stat` 缓存全部过期**：
+   - [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md) 的 `Lookup` 每次都会开启一个只读事务，先后执行 `GetInode(parent_ino)` 和 `GetInodeByEntry(parent_ino, name)`，算上 `BEGIN` 和 `COMMIT` 一共要跟 PostgreSQL 交互 **4 次**，导致单次 `Stat file` 耗时（`0.86 ms`）比 JuiceFS 的单条 SQL 查询（`0.43 ms`）慢一倍。
+   - 同时，因为 `mdtest` 创建 1,040 个文件花了 `2.42s`，超过了 FUSE 内核 `1.0s` 的目录项缓存有效期（JuiceFS 创建只花了 `0.30s`），等到下一阶段执行 `File stat` 时，内核缓存早已过期，所有请求都不得不重新发网络 RPC 去调 `Lookup`，导致吞吐量掉到 `7,791 ops/s`（而 JuiceFS 全部命中内核缓存，达到 `158,666 ops/s`）。
+5. **服务端 `Read` 走写事务加数据库锁、多个 `Block` 挨个串行读盘，且客户端每次只读 `1 MiB` 不做预读**：
+   - 服务端 `Read`（[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)）每次都开启读写事务、更新会话并对 `slice_refs` 表加 `FOR KEY SHARE` 行锁，而且在读硬盘文件期间一直占着数据库连接不放；遇到跨多个 `Block` 的读取时，也是用 `for` 循环一个接一个串行读文件。
+   - 客户端 `Read`（[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)）每次只按内核请求的 `1 MiB` 大小发一次请求、等结果回来再发下一次，没有提前预读后续数据块，导致单流顺序读只有 `56.05 MiB/s`（不到云盘硬件速度的三分之一）。
 
 ## 决策
 
-1. **全路径 `ClientSession` 续期内存节流与过期/孤儿清理冷却（演进 ADR-0012 / ADR-0013 / ADR-0022）**：
-   - 将 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 的内存时间窗口节流机制推广至全量携带 `session_id` 的元数据与数据面路径：`Create`、`TmpFile`、`Open`、`OpenDir`、`Read`、`Flush`、`Release`、`ReleaseDir`、`SetAttr`、`Fallocate`。
-   - **节流窗口内的零写锁安全核验**：当同一 `session_id` 距上次数据库续期未满节流窗口（默认 `5s`，远小于 `30s` 租约 TTL）时，跳过 `UpsertClientSession`、`DeleteExpiredClientSessions` 与 `reclaimUnreferencedOrphans` 三条写 SQL；仅通过无锁只读查询核验 `expires_at > clock_timestamp()` 及句柄代际不变量 `handle.CreatedAt >= session.CreatedAt`。一旦发现会话已超期，立即清除内存节流状态、触发过期会话与孤儿清理并返回 `ErrBadFileHandle`（`EBADF`），100% 守恒防过期会话越权与防同名 `session_id` 重建后旧句柄复活的安全契约。
-   - **显式保活与慢路径清理兜底**：`RenewSession`、`RenewSessionWithDisk`、`CloseSession` 以及跨越 `5s` 节流窗口首次触发数据库 `UpsertClientSession` 的慢路径，继续执行过期会话清理与 `FOR UPDATE SKIP LOCKED` 孤儿节点回收。
+1. **所有带 `session_id` 的接口统一在内存里控制续期频率，每 `5s` 才写库续期一次（演进 ADR-0012 / ADR-0013 / ADR-0022）**：
+   - 把 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 在内存里记录上次续期时间的做法，推广到所有带 `session_id` 的接口：`Create`、`TmpFile`、`Open`、`OpenDir`、`Read`、`Flush`、`Release`、`ReleaseDir`、`SetAttr`、`Fallocate`。
+   - **5 秒内免写库、只做只读检查**：只要同一个 `session_id` 距离上次写数据库续期还不到 `5s`（远小于 `30s` 的会话过期时间），就跳过 `UpsertClientSession`、`DeleteExpiredClientSessions` 和 `reclaimUnreferencedOrphans` 这三条写 SQL，只用无锁只读查询确认会话还没过期（`expires_at > clock_timestamp()`）且句柄不是旧会话留下的（`handle.CreatedAt >= session.CreatedAt`）。如果检查发现会话其实已经过期了，就立刻清掉内存记录、触发过期清理并返回 `ErrBadFileHandle`（`EBADF`），防止过期会话继续操作或同名 `session_id` 重建后旧句柄被误用。
+   - **专门的续期接口和超过 5 秒的请求照常清理**：`RenewSession`、`RenewSessionWithDisk`、`CloseSession`，以及距离上次续期超过 `5s` 的请求，仍然照常更新数据库里的会话过期时间并顺带清理孤儿节点。
 
-2. **保留 `file_handles` 表持久化（档位 A），实行无锁 `Flush` 免写事务与 `Release` / `ReleaseDir` 非孤儿免锁 `Inode`（演进 ADR-0009 / ADR-0012）**：
-   - **无 POSIX 锁时 `Flush` 免除 `Inode` 排他锁与删锁事务**：跟踪活跃 POSIX 记录锁状态（客户端与服务端追踪 `Inode` 是否调用过 `SetLk` / `SetLkw`）。当目标 `Inode` 未持有任何 POSIX 记录锁时，客户端在确认本地会话与句柄绑定有效后可直接短路返回，或由服务端在不调用 `GetInodeForUpdate` 排他锁的前提下仅做只读存在性与会话核验后直接返回，消除无锁文件关闭时的空删锁写事务。
-   - **`Release` 与 `ReleaseDir` 按 `nlink` 分流加锁**：
-     - 关闭句柄时，不再无条件前置调用 `GetInodeForUpdate` 排他锁死 `Inode`。
-     - 对于常规未解链节点（`inode.Nlink > 0`）且无需清理 BSD `flock`（未置位 `FuseReleaseFlockUnlock` 或未加过 `flock`）的场景，校验会话后直接按 `(fh, ino, session_id)` 删除 `file_handles` 行即提交事务，**全程 0 次 `inodes` 表排他锁**。
-     - 仅当检测到目标节点处于 `Orphan Inode` 状态（`nlink == 0`，含删除句柄瞬间并发变为 `0` 的重检）或需清理 `flock` 时，才在同一事务内调用 `GetInodeForUpdate(ino)` 加排他锁并执行 `reclaimOrphanIfNoHandles` 物理回收与配额退还。
+2. **保留 `file_handles` 数据库表，没加过锁的文件 `Flush` 不写库，关闭正常文件 `Release` 不锁 `Inode`（演进 ADR-0009 / ADR-0012）**：
+   - **没加过 POSIX 文件锁时，`Flush` 不再开写事务去删锁**：客户端和服务端各自记录哪些 `Inode` 调用过 `SetLk` / `SetLkw` 加锁。如果目标文件从来没加过 POSIX 记录锁，客户端检查完本地会话和句柄有效后可以直接返回成功，或者由服务端只做一次只读查询确认节点和句柄有效就返回，不再调用 `GetInodeForUpdate` 锁表和执行空的删锁事务。
+   - **`Release` 与 `ReleaseDir` 只在节点已被删除（`nlink == 0`）或需要释放 `flock` 时才锁 `Inode`**：
+     - 关闭文件或目录句柄时，不再一上来就调用 `GetInodeForUpdate` 锁住 `Inode` 行。
+     - 如果文件没有被删除（`inode.Nlink > 0`），也不需要释放 BSD `flock` 锁（没有带 `FuseReleaseFlockUnlock` 标志或没加过 `flock`），检查完会话有效后直接按 `(fh, ino, session_id)` 删掉 `file_handles` 表里对应的那一行就提交事务，**全程不对 `inodes` 表加排他锁**。
+     - 只有发现该节点已经被删除（`nlink == 0`，包括删掉句柄那一刻刚好变成 `0` 的情况）或者需要清理 `flock` 时，才在同一个事务里调用 `GetInodeForUpdate(ino)` 加排他锁，去执行孤儿节点回收和退还配额。
 
-3. **`Lookup` 常规目录项单语句无事务外框直查（演进 ADR-0003）**：
-   - 对特殊目录项（`"."`、`".."`）及空名称（`""`）维持 [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md) 的原有解析分支不变。
-   - 对常规目录项（`len(name) > 0` 且非 `"."`/`".."`），对齐 [ADR-0004](0004-fuse-getattr-direct-query-and-unlinked-inode-support.md) `GetAttr` 的无事务外框直查模式，利用 PostgreSQL 单条 SQL 语句天然具备的语句级原子快照，通过单条 `LEFT JOIN` SQL（`LookupEntryWithParent`）一次性返回父节点属性（`parent_mode`、`parent_nlink`）与目标子项 `Inode` 完整属性，在应用层严格按原序判定父节点不存在（`ErrNotFound`）、父节点非目录（`ErrNotDir`）、孤儿父目录或子项不存在（`ErrNotFound`），将单次 `Lookup` 的数据库网络往返从 **4 次降至 1 次**。
+3. **普通文件名的 `Lookup` 合并成一条 `LEFT JOIN` SQL 直接查询，不再开启显式事务（演进 ADR-0003）**：
+   - 查找特殊目录项（`"."`、`".."`）和空名称（`""`）时，保持 [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md) 原有的处理逻辑不变。
+   - 查找普通文件名（`len(name) > 0` 且不是 `"."`/`".."`）时，不再开启 `RepeatableRead` 事务分两步查，而是直接执行一条 `LEFT JOIN` SQL（`LookupEntryWithParent`），一次性查出父目录属性（`parent_mode`、`parent_nlink`）和目标子项的完整 `Inode` 属性。由于 PostgreSQL 单条 SQL 本身就读取同一个时间点的快照，代码拿到结果后按原顺序判断父节点不存在（`ErrNotFound`）、父节点不是目录（`ErrNotDir`）、父目录已被删除或子项不存在（`ErrNotFound`）即可，把单次 `Lookup` 的数据库网络交互从 **4 次减少到 1 次**。
 
-4. **服务端 `Read` 免数据库行锁只读快路径、多 `Block` 并发读取与客户端顺序预读（演进 ADR-0019 / ADR-0020）**：
-   - **服务端 `Read` 免写事务与进程内/乐观保护**：当无需刷新 `atime`（如默认 `noatime` 或未达 `relatime`/`strictatime` 刷新阈值）且会话处于节流窗口内时，`Read` 不再开启读写事务及调用 `LockValidSliceRefsKeyShare`（消除数据库 `FOR KEY SHARE` 页锁修改与读盘期间的长连接占用）；在微秒级只读查询获取 `Inode`、`FileHandle` 与 `chunks` 切片视图后立即归还数据库连接。在物理块读取阶段，通过进程内活跃读引用保护结合乐观重试兜底（若并发 `Compaction` 刚好替换并清理了旧物理块导致 `GetBlock` 返回 `ErrBlockNotFound`，自动重新拉取最新合并后的 `chunks` 视图重试读取），确保 0 数据库锁且 100% 并发读取安全。
-   - **服务端多 `Block` 有界并发读取**：当单次 `Read` 裁剪出的 `readSegment` 跨越多个物理 `Block` 时，使用有界并发协程池同时调用 `BlockStore.GetBlock` 填充目标缓冲区，消除串行磁盘 I/O 停等。
-   - **客户端顺序流式预读（Read-Ahead）与写操作即时失效**：在客户端 `RawFS` 中按句柄检测连续顺序读取模式；命中顺序流时按 `4 MiB` 物理 `Block` 粒度对齐拉取并异步预读下一窗口，使后续 `1 MiB` 内核 `FUSE_READ` 直接命中内存缓冲。一旦该 `Inode` 发生本地 `Write`、`SetAttr`（含截断）、`Fallocate` 或句柄 `Release`，立即清空对应预读缓冲，严守 POSIX 读写立即可见性契约。
+4. **服务端 `Read` 查完元数据立即释放数据库连接、多块并发读盘，配合客户端顺序预读（演进 ADR-0019 / ADR-0020）**：
+   - **服务端 `Read` 不加数据库行锁、读硬盘前先还回数据库连接**：在不需要更新 `atime`（例如默认的 `noatime` 模式，或还没到 `relatime` 更新间隔）且会话还在 5 秒免续期窗口内时，`Read` 不再开启读写事务，也不再调用 `LockValidSliceRefsKeyShare` 给数据库加锁；只做一次快速的只读查询拿到 `Inode`、`FileHandle` 和 `chunks` 切片列表，随后**立刻把数据库连接归还给连接池**。接着去读硬盘上的 `Block` 文件时，用进程内的引用计数保护正在读的块；万一遇到后台 `Compaction` 刚好把旧块合并删掉导致返回 `ErrBlockNotFound`，就重新查一次最新的 `chunks` 切片列表再读一遍。这样既不用给数据库加锁，又不会在读盘时占着数据库连接。
+   - **服务端并发读取多个 `Block`**：当一次 `Read` 请求需要跨越多个物理 `Block` 文件时，使用限制了并发数的协程池同时调用 `BlockStore.GetBlock` 读取各个块，不再排队串行读。
+   - **客户端顺序预读（Read-Ahead）与写入时立即清空缓存**：客户端 `RawFS` 记录每个打开句柄的读取位置；一旦发现是在连续顺序往下读，就按 `4 MiB`（一个完整 `Block` 的大小）对齐拉取数据，并在后台提前异步拉取下一个 `4 MiB` 窗口放到内存里，让后续内核发来的 `1 MiB` `FUSE_READ` 请求直接从内存拿到数据。一旦这个文件发生了本地 `Write`、`SetAttr`（如截断）、`Fallocate` 或关闭句柄 `Release`，立刻清空该文件的预读缓存，保证不会读到旧数据。
 
 ## 结果
-- **积极影响**：
-  - 在 100% 保持 Protobuf 契约、数据库 Schema、跨重启句柄持久化与全量 POSIX 安全测试（`pjdfstest` 及会话/孤儿/死锁边界测试）守恒的前提下，彻底消除了多进程并发时的 `client_sessions` 单行锁排队。
-  - 将常规文件 `Open -> Flush -> Release` 的 `Inode` 排他写锁从 **2 次降至 0 次**，将 `Lookup` 数据库往返从 **4 次降至 1 次**，大幅缩短 `mdtest` 文件创建与读取耗时，并使紧随其后的 `stat` 阶段重新落入内核缓存有效期内。
-  - 服务端 `Read` 实现纯只读快速归还连接与多块并发读盘，配合客户端顺序预读流水线，使单流与并发大文件读取吞吐逼近云盘物理带宽上限。
-- **代价考量**：
-  - 服务端需维护轻量级的活跃 POSIX 锁状态标记与进程内读块引用/乐观重试逻辑；客户端需维护有界顺序预读缓冲区并在写/截断/关闭路径严格执行同步失效。
+- **正面效果**：
+  - 在不改动 Protobuf 接口、数据库表结构、服务端重启后句柄依然有效以及全部 POSIX 测试用例的前提下，彻底消除了多进程并发时在 `client_sessions` 表同一行上的加锁排队。
+  - 普通文件走完 `Open -> Flush -> Release` 全流程对 `Inode` 加的排他锁从 **2 次降到 0 次**，`Lookup` 的数据库往返从 **4 次降到 1 次**，大幅加快了 `mdtest` 创建和读取文件的速度，也让创建完紧接着执行的 `stat` 操作能赶在 1 秒缓存过期前直接命中内核缓存。
+  - 服务端 `Read` 查完切片立即释放数据库连接并并发读取多个数据块，配合客户端的顺序预读，让大文件顺序读速度大幅提升并接近云盘硬件上限。
+- **代价与取舍**：
+  - 服务端需要额外在内存里记录哪些文件加过 POSIX 锁，以及处理读盘时遇到后台合并删掉旧块的重试；客户端需要维护预读缓存，并在发生写入、截断或关闭文件时及时清空缓存。

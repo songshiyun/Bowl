@@ -1,55 +1,55 @@
-# 0012. FUSE 文件锁（GetLk/SetLk/SetLkw）、双命名空间隔离、会话租约与有界死锁检测设计
+# 0012. FUSE 文件锁（GetLk/SetLk/SetLkw）、两种锁互不干扰、客户端会话租约与死锁检查
 
 ## 状态
 已采纳 (accepted)
 
 ## 背景
-Storage 元数据引擎在完成扩展属性（Xattr）与结构化错误原因契约（ADR-0011）后，需推进 Linux FUSE 文件锁相关的三项核心操作码：`FUSE_GETLK (31)`、`FUSE_SETLK (32)` 与 `FUSE_SETLKW (33)`，并联动补齐 `FUSE_FLUSH` 与 `FUSE_RELEASE` 的锁清理闭环。在对齐 POSIX `fcntl(2)`、BSD `flock(2)` 及 Linux 内核 FUSE 协议语义时，面临六项关键架构权衡：
-1. **POSIX 记录锁与 BSD `flock` 的命名空间隔离及模式转换差异**：Linux FUSE 通过 `fuse_lk_in.lk_flags`（`0` vs `FUSE_LK_FLOCK = 0x1`）复用同一套锁操作码。在 Linux VFS 原生语义中，POSIX 字节区间锁与 BSD `flock` 整文件锁处于完全正交的冲突域（互不阻塞）；POSIX 锁要求校验打开句柄的读/写模式位（`EBADF`）且在升级冲突时保留原读锁，而 BSD `flock` 允许对只读句柄加排他锁（`LOCK_EX`）且遵循“先释放旧锁、再申请新锁”的非原子转换语义（升级冲突时原锁已丢失）。此外，标准 Linux FUSE ABI 缺少传递 OFD（Open File Description）锁专用生命周期的独立通道，不宜对标准连接作出虚假的完整 OFD 兼容承诺。
-2. **文件锁与 `FileHandle`（`fh`）、`Flush` 及 `Release` 的归属解耦**：POSIX 规范强制要求同一进程关闭文件的**任意一个**文件描述符（触发 `FUSE_FLUSH` 并携带 `lock_owner`）时，必须立即释放该进程（`lock_owner`）在该 Inode 上持有的全部 POSIX 记录锁，即便这些锁是通过其他 `fh` 申请或跨多个 `fh` 合并而成的；而 BSD `flock` 绑定于打开文件表项（`fh`），仅在句柄最后引用关闭（`FUSE_RELEASE` 且 `release_flags` 携带 `FUSE_RELEASE_FLOCK_UNLOCK = 0x2`）时释放。若将 POSIX 锁外键级联绑定至 `file_handles(fh) ON DELETE CASCADE`，不仅合并区间无法指派单一 `fh`，关闭未直接加锁的句柄也会漏删锁或误删锁。
-3. **分布式客户端崩溃防护（Client Session 租约与 Fencing）**：文件锁属于运行期同步状态而非永久磁盘元数据。不同客户端内核独立生成的 64 位 `lock_owner` 哈希存在跨节点碰撞可能，且客户端崩溃或网络分区未下发 `Flush` / `Release` 时会导致持久化锁永久泄漏。
-4. **数据库事务隔离级别与并发快照可见性**：此前只读或部分校验路径使用了 `REPEATABLE READ` 隔离级别。但在加锁写路径中，若事务在 `SELECT ... FOR UPDATE` 阻塞等待前已建立 `REPEATABLE READ` 快照，获取行锁后仍会读取旧快照或触发序列化失败，无法感知持锁事务刚刚提交的锁状态变更。
-5. **`SetLkw`（`FUSE_SETLKW`）阻塞等待的悬挂锁风险、同节点死锁（`EDEADLK`）与写锁饥饿**：在网络 RPC 与异步中断（`FUSE_INTERRUPT`）并发到达时，若服务端数据库事务刚提交授锁而上下文恰好取消，缺乏状态机原子裁决会产生无人认领的“悬挂锁（Orphaned Lock）”；同时，同一 Inode 上双读锁同时阻塞升级写锁会形成直接死锁。
-6. **目录锁的内核拦截边界与 Inode 时间戳不变量**：Linux VFS 虽允许对目录 fd 调用 `flock(2)`，但 Linux 内核 FUSE 驱动（`fs/fuse/dir.c`）的 `fuse_dir_operations` 未注册任何锁回调，目录锁由内核本地处理而绝不下发用户态；同时文件锁操作属于运行期同步，严禁污染 Inode 的 `atime`、`mtime` 或 `ctime`。
+Storage 元数据引擎在完成扩展属性（Xattr）和错误码规范（ADR-0011）后，需要实现 Linux FUSE 文件锁相关的三个接口：`FUSE_GETLK (31)`、`FUSE_SETLK (32)` 和 `FUSE_SETLKW (33)`，并在 `FUSE_FLUSH` 与 `FUSE_RELEASE` 关闭文件时清理对应的锁。在按照 POSIX `fcntl(2)`、BSD `flock(2)` 和 Linux 内核 FUSE 协议实现文件锁时，需要处理六个实际问题：
+1. **POSIX 字节区间锁和 BSD `flock` 整文件锁的规则完全不同**：Linux FUSE 用同一个锁接口里的 `lk_flags`（`0` 代表 POSIX 锁，`FUSE_LK_FLOCK = 0x1` 代表 BSD `flock`）来区分这两种锁。在 Linux 内核里，POSIX 锁和 `flock` 各自管各自的，互不冲突；POSIX 锁要求检查打开句柄有没有对应的读/写权限（没权限返回 `EBADF`），并且读锁升级写锁遇到冲突失败时会保留原来的读锁；而 BSD `flock` 允许对只读句柄加排他锁（`LOCK_EX`），并且升级锁时是“先删掉旧锁、再申请新锁”（如果遇到冲突失败，原来的旧锁也没了）。另外，标准 Linux FUSE 协议没有专门区分 OFD（Open File Description）锁的通道，因此我们只按标准 POSIX 锁和 BSD `flock` 来实现。
+2. **`Flush` 与 `Release` 分别该清理哪种锁**：POSIX 标准规定，只要同一个进程关闭了某个文件的**任何一个**文件描述符（触发 `FUSE_FLUSH` 并带上进程锁标识 `lock_owner`），就必须立刻释放这个进程（`lock_owner`）在该文件上持有的所有 POSIX 记录锁，哪怕这些锁当初是用别的句柄 `fh` 申请的；而 BSD `flock` 是绑在打开文件句柄（`fh`）上的，只有当这个句柄彻底关闭（触发 `FUSE_RELEASE` 且带有 `FUSE_RELEASE_FLOCK_UNLOCK = 0x2` 标志）时才释放。所以数据库里的 `file_locks` 表绝对不能在 `fh` 列上加级联删除外键（`REFERENCES file_handles(fh) ON DELETE CASCADE`），否则关掉一个没加锁的句柄或者合并了多个句柄的锁时就会把锁删错。
+3. **客户端死机或断网后，留下的锁怎么自动清理**：文件锁只是程序运行期间的临时状态。不同客户端机器各自生成的 64 位 `lock_owner` 有可能撞号，而且一旦客户端机器断电或断网，没机会发 `Flush` 或 `Release`，数据库里留下的锁如果不自动过期清理，就会把其他正常机器永远卡死。
+4. **加锁写事务不能用 `REPEATABLE READ` 隔离级别**：如果加锁事务用了 `REPEATABLE READ`（可重复读），当它在 `SELECT ... FOR UPDATE` 等待别人释放 `Inode` 行锁时，等拿到行锁往下查 `file_locks` 表时读到的还是等待之前的旧快照（或者直接报并发修改冲突），看不到刚刚提交的锁变化。
+5. **`SetLkw` 阻塞等锁时被中途取消，如何避免留下没人要的锁，以及如何发现死锁（`EDEADLK`）**：当 `SetLkw` 正在等待锁，如果服务端事务刚把锁授给它，同一瞬间网络请求却超时或收到中断（`FUSE_INTERRUPT`）取消了，如果不做清理就会在数据库里留下一把没人认领的锁；另外，如果两个进程各自拿着同一个文件的读锁，同时调用 `SetLkw` 想升级成写锁，两边互相等待对方释放读锁，就会直接卡死。
+6. **目录锁不需要服务端处理，且加解锁不能修改文件时间戳**：Linux 内核的 FUSE 驱动根本不会把目录上的 `flock(2)` 请求发给用户态服务端；同时加锁和解锁不能改动 `Inode` 的 `atime`、`mtime` 或 `ctime`。
 
 ## 决策
-1. **三接口 1:1 拆分、`FileLock` 完整契约与 `lock_owner` 64 位无损编码**：
-   - 在 `StorageService` 与 `meta.Manager` 中提供 `GetLk`（`FUSE_GETLK = 31`）、`SetLk`（`FUSE_SETLK = 32`）、`SetLkw`（`FUSE_SETLKW = 33`）三个独立方法，共用 `FileLock` 结构（包含 `uint64 start`、`uint64 end`、`uint32 type`、`uint32 pid`）。
-   - 在 `meta` 领域层定义平台无关的 Linux FUSE 常量：`F_RDLCK = 0`、`F_WRLCK = 1`、`F_UNLCK = 2`（严禁依赖宿主机 `syscall.F_*`）；锁标志位 `FuseLkFlock = 0x1`（`1 << 0`）；释放标志位 `FuseReleaseFlush = 0x1`（`1 << 0`）与 `FuseReleaseFlockUnlock = 0x2`（`1 << 1`）；最大字节偏移量 `OffsetMax = math.MaxInt64`（`0x7fffffffffffffff`）。
-   - **区间与 `lock_owner` 约束**：锁区间遵循闭区间 `0 <= start <= end <= OffsetMax`（`end == OffsetMax` 代表延伸至无穷远，区间裂解与相邻合并计算时必须先判 `< OffsetMax` 防止 `+ 1` 溢出）。由于 Linux 内核 `fuse_lock_owner_id()` 生成的 64 位无符号哈希最高位可能为 `1`，Protobuf 中的 `lock_owner` 允许全范围 `uint64`（不设 `lte = MaxInt64`），在存入 PostgreSQL `BIGINT` 时通过 `int64(lock_owner)` 二进制补码无损重解释。
-2. **POSIX 记录锁与 BSD `flock` 双命名空间隔离及独立状态机**：
-   - **冲突域完全正交**：`lk_flags == 0`（POSIX 记录锁）与 `lk_flags == FuseLkFlock (0x1)`（BSD `flock`）在冲突检测、查询与清理时严格按 `lk_flags` 隔离，互不阻塞。暂不对标准连接承诺完整 OFD 锁跨句柄共享语义。
-   - **打开句柄模式位校验分流**：
-     - POSIX 记录锁（`lk_flags == 0`）：`SetLk` / `SetLkw` 申请 `F_RDLCK` 时要求 `fh` 具备读权限（`flags & O_ACCMODE` 为 `O_RDONLY` 或 `O_RDWR`），申请 `F_WRLCK` 时要求具备写权限（`O_WRONLY` 或 `O_RDWR`），否则返回 `ErrBadFileHandle`（`EBADF`）；`F_UNLCK` 与 `GetLk` 仅校验 `fh` 存在且归属目标 `ino`，不限制读写模式位。
-     - BSD `flock`（`lk_flags == FuseLkFlock`）：强制要求 `start == 0 && end == OffsetMax`（否则返回 `ErrInvalidArgument` / `EINVAL`）；校验 `fh` 归属目标 `ino`，但**不校验 `fh` 的读写打开模式位**（允许对只读句柄加排他锁 `F_WRLCK` / `LOCK_EX`）。
-   - **转换与裂解合并算法分流**：
-     - **POSIX 原子区间算法**：属于同一 `(session_id, ino, lock_owner)` 的锁在外部冲突时直接拒绝（`SetLk` 返回 `ErrAgain`），原锁完整保留；无外部冲突时，对相交的同拥有者锁执行覆盖或左右裂解（裂解出的左右残段保留原记录的 `pid`），对相交或首尾紧邻（`prev.end < OffsetMax && prev.end + 1 == next.start`）且同类型的同拥有者锁合并为单条连续区间（合并后记录的 `pid` 更新为新请求的 `pid`）。
-     - **BSD `flock` 非原子转换算法**：属于同一 `(session_id, ino, fh)` 的 `flock` 在请求模式转换（如 `F_RDLCK -> F_WRLCK`）时，**先在事务内删除该 `(session_id, ino, fh)` 已持有的旧 `flock` 记录**，再检测与其他 `fh` 的冲突；若存在冲突，`SetLk` 仍提交“删除旧锁”的变更并返回 `ErrAgain`（`EAGAIN`），`SetLkw` 则提交旧锁删除并登记 `PENDING` 等待，严格还原 Linux `flock_lock_inode` 的非原子升级语义。
-3. **会话租约（Client Session Lease）、持久化表结构与 `READ COMMITTED` 事务协议**：
-   - **数据库表结构**：
-     - `client_sessions` 表：`session_id BIGINT PRIMARY KEY`、`expires_at TIMESTAMPTZ NOT NULL`、`updated_at TIMESTAMPTZ NOT NULL`。每次锁操作或携带 `session_id` 的 `Flush` / `Release` 自动通过 `UPSERT` 续期会话租约（默认 `DefaultSessionLeaseTTL = 60s`）。
-     - `file_locks` 表：`id BIGSERIAL PRIMARY KEY`、`session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE`、`ino BIGINT NOT NULL REFERENCES inodes(ino) ON DELETE CASCADE`、`fh BIGINT NOT NULL`（仅作为 `flock` 绑定键，**严禁设置 `REFERENCES file_handles(fh) ON DELETE CASCADE`**）、`lock_owner BIGINT NOT NULL`、`lk_flags INTEGER NOT NULL`、`start_offset BIGINT NOT NULL`、`end_offset BIGINT NOT NULL`、`lock_type SMALLINT NOT NULL`、`pid INTEGER NOT NULL`、`created_at TIMESTAMPTZ NOT NULL`。
-     - `file_lock_waiters` 表：`request_id BIGINT NOT NULL`、`session_id BIGINT NOT NULL REFERENCES client_sessions(session_id) ON DELETE CASCADE`、`ino BIGINT NOT NULL REFERENCES inodes(ino) ON DELETE CASCADE`、`fh BIGINT NOT NULL`、`lock_owner BIGINT NOT NULL`、`lk_flags INTEGER NOT NULL`、`start_offset BIGINT NOT NULL`、`end_offset BIGINT NOT NULL`、`lock_type SMALLINT NOT NULL`、`pid INTEGER NOT NULL`、`status SMALLINT NOT NULL`（`1 = PENDING, 2 = GRANTED, 3 = CANCELLED`）、`created_at TIMESTAMPTZ NOT NULL`，主键为 `(session_id, request_id)`。
-   - **写路径 `READ COMMITTED` 三步事务协议**：`SetLk`、`SetLkw`、携带 `lock_owner` 的 `Flush` 以及携带 `FUSE_RELEASE_FLOCK_UNLOCK` 的 `Release` 统一使用默认 `READ COMMITTED` 隔离级别：
-     1. 调用 `GetInodeForUpdate(ino)` 获取目标 Inode 行级排他锁（校验节点存在且非目录），随后清理已超期的 `client_sessions`（`expires_at <= clock_timestamp()`，级联清除过期锁与等待者）并续期当前 `session_id`；
-     2. 执行独立 SQL 语句扫描当前 `ino` 在对应 `lk_flags` 命名空间下的活跃锁与 `PENDING` 等待队列（确保读取行锁等待结束后的最新已提交快照）；
-     3. 执行死锁判定、冲突判定、区间裂解合并或锁清理，并在提交后通知唤醒等待队列。
-   - **读路径轻量化**：`GetLk` 采用只读事务直查主库（校验 `Inode` 存在且非目录、`fh` 有效，过滤 `s.expires_at > clock_timestamp()`），不加行级排他锁；若 `req.lk.type == F_UNLCK` 返回 `ErrInvalidArgument`（`EINVAL`）；存在多个冲突锁时按 `ORDER BY start_offset ASC, end_offset ASC, id ASC LIMIT 1` 确定性返回首个冲突锁，无冲突时返回 `{start: req.start, end: req.end, type: F_UNLCK, pid: 0}`。
-4. **`Flush` 与 `Release` 的职责边界与清理解耦**：
-   - **`Flush`（清理进程级 POSIX 记录锁）**：当 `Flush` 携带 `lock_owner` 时，在 `READ COMMITTED` 写事务内锁定 `Inode`、校验 `(ino, fh)` 合法后，按 `(session_id, ino, lock_owner)`（若存量调用未传 `session_id` 则按 `(ino, lock_owner)`）删除全部 `lk_flags == 0` 的 POSIX 记录锁并唤醒等待者；`Flush` 不销毁 `fh`，亦不清理 `flock`。当未携带 `lock_owner` 时维持只读校验。
-   - **`Release`（销毁句柄与按标志位清理 `flock`）**：`ReleaseRequest` 扩展 `optional uint64 lock_owner`、`uint32 release_flags` 与 `optional uint64 session_id`。在 `READ COMMITTED` 写事务中锁定 `Inode` 并删除 `file_handles(fh)`；仅当 `(release_flags & FuseReleaseFlockUnlock) != 0` 时，清理该 `(session_id, ino, fh)`（未传 `session_id` 时按 `(ino, fh)`）绑定的 `lk_flags == FuseLkFlock` 锁并唤醒等待者，不越权清理 POSIX 锁；最后若 `nlink == 0` 且无剩余活跃句柄，执行孤儿节点物理回收（`ON DELETE CASCADE` 自动兜底清理孤儿节点残留锁）。
-5. **`SetLkw` 原子状态机、同 Inode 有界死锁检测（`EDEADLK`）与防写锁饥饿**：
-   - **状态机防悬挂锁**：`SetLkw` 以 `(session_id, request_id)` 驱动 `PENDING / GRANTED / CANCELLED` 状态机。每次在 `GetInodeForUpdate(ino)` 事务内尝试授锁前，必须先检查 `ctx.Err()` 与 waiter 状态；若已取消则将状态收敛为 `CANCELLED`（删除 waiter）并返回 `ErrInterrupted`（`EINTR`），绝不写入 `file_locks`；若可授锁，则在同一事务内原子写入 `file_locks` 并完成 waiter 状态收敛。若事务外部等待期间收到 `ctx.Done()`，立即开启清理事务将 `PENDING` 置为 `CANCELLED`（若发现并发事务已将其置为 `GRANTED`，则回滚撤销已授锁或按原子状态裁决，杜绝无人认领的悬挂锁）。
-   - **同一 Inode 内的有界死锁检测**：在 `GetInodeForUpdate(ino)` 保护下，当请求者 $O_{\text{req}}$ 遇冲突需等待时，基于该 `ino` 当前同命名空间的活跃锁集合与 `PENDING` 等待者集合构建局部等待有向图（若等待者 $W$ 的请求与持锁者 $H \neq W$ 的活跃锁冲突，则存在有向边 $W \to H$）。若引入 $O_{\text{req}}$ 的等待边后存在从 $O_{\text{req}}$ 回到 $O_{\text{req}}$ 的有向环（如双读锁同时阻塞升级写锁 $A \leftrightarrow B$ 或多方环），立即拒绝等待并返回 `ErrDeadlock`（`EDEADLK`）。不维护跨 Inode 全局死锁检测图。
-   - **可靠唤醒与防写锁饥饿排队**：短事务登记 `PENDING` 后立即提交并释放 Inode 行锁，在事务外通过进程内条件广播 / PostgreSQL `NOTIFY` 配合带抖动的指数退避轮询等待。当新到达的加锁请求者当前在该 `ino` 同命名空间下**未持有任何活跃锁**，且其请求与队列中更早的 `PENDING` 等待者存在冲突（如写锁等待期间新到达的读锁）时，不可插队越过等待者（`SetLk` 返回 `ErrAgain`，`SetLkw` 排入队列尾部），防止写锁永久饥饿；若请求者已持有该节点活跃锁（如重入、降级、拆分或升级），则不触发排队拦截以免引入附加死锁。
-6. **目录防御边界、时间戳不变量与 `ErrorInfo` 映射扩展**：
-   - 虽然 Linux VFS 允许目录 `flock(2)`，但内核 FUSE 驱动从不向用户态下发目录锁请求；若服务端收到针对目录 Inode（`S_IFDIR`）的 `GetLk` / `SetLk` / `SetLkw`，统一防御性返回 `ErrIsDir`（`EISDIR`）。处于 `unlink-whilst-open`（`nlink == 0` 且持有活跃 `fh`）的孤儿节点正常支持全部文件锁操作。
-   - `GetLk`、`SetLk`、`SetLkw` 严格不修改 `Inode` 的 `atime`、`mtime` 或 `ctime`。
-   - 扩展 ADR-0011 的领域哨兵错误映射表（`domain = "bowl.storage"`）：
+1. **提供 `GetLk`、`SetLk`、`SetLkw` 三个接口，并正确处理 64 位 `lock_owner`**：
+   - 在 `StorageService` 和 `meta.Manager` 中提供 `GetLk`（`FUSE_GETLK = 31`）、`SetLk`（`FUSE_SETLK = 32`）、`SetLkw`（`FUSE_SETLKW = 33`）三个方法，共用 `FileLock` 结构（包含 `uint64 start`、`uint64 end`、`uint32 type`、`uint32 pid`）。
+   - 定义与操作系统无关的常量：`F_RDLCK = 0`、`F_WRLCK = 1`、`F_UNLCK = 2`；锁标志 `FuseLkFlock = 0x1`；释放标志 `FuseReleaseFlush = 0x1` 和 `FuseReleaseFlockUnlock = 0x2`；最大字节偏移量 `OffsetMax = math.MaxInt64`（`0x7fffffffffffffff`）。
+   - **锁区间与 `lock_owner` 存储**：锁区间为闭区间 `0 <= start <= end <= OffsetMax`（`end == OffsetMax` 表示一直锁到文件末尾，计算相邻区间合并时先判断 `< OffsetMax` 以防加 1 溢出）。因为 Linux 内核生成的 64 位无符号 `lock_owner` 最高位可能是 `1`，Protobuf 里允许完整的 `uint64` 范围，存入 PostgreSQL `BIGINT` 时直接转成 `int64(lock_owner)` 按原二进制位保存。
+2. **POSIX 记录锁与 BSD `flock` 分开管理，各自检查权限和合并区间**：
+   - **两种锁互不冲突**：`lk_flags == 0`（POSIX 记录锁）和 `lk_flags == FuseLkFlock (0x1)`（BSD `flock`）在检查冲突、查询和释放时各按各的 `lk_flags` 过滤，互不影响。
+   - **打开句柄的读写权限检查**：
+     - POSIX 记录锁（`lk_flags == 0`）：调 `SetLk` / `SetLkw` 申请读锁 `F_RDLCK` 时，要求句柄 `fh` 必须有读权限（`O_RDONLY` 或 `O_RDWR`）；申请写锁 `F_WRLCK` 时，要求句柄必须有写权限（`O_WRONLY` 或 `O_RDWR`），否则返回 `ErrBadFileHandle`（`EBADF`）；解锁 `F_UNLCK` 和查锁 `GetLk` 只检查 `fh` 存在且属于该文件，不限制读写模式。
+     - BSD `flock`（`lk_flags == FuseLkFlock`）：要求锁区间必须是整文件 `start == 0 && end == OffsetMax`（否则返回 `ErrInvalidArgument` / `EINVAL`）；检查 `fh` 属于该文件，但**不检查 `fh` 的读写模式**（允许对只读句柄加排他锁 `F_WRLCK`）。
+   - **锁区间拆分合并与锁升级规则**：
+     - **POSIX 锁区间拆分与合并**：属于同一个 `(session_id, ino, lock_owner)` 的锁，如果跟别人的锁冲突就直接拒绝（`SetLk` 返回 `ErrAgain`），自己原有的锁保持不变；如果不跟别人冲突，就把自己名下与新区间重叠的旧锁覆盖或拆成左右两段（拆出来的残留段保留原来的 `pid`），并把重叠或首尾紧挨着（`prev.end < OffsetMax && prev.end + 1 == next.start`）且类型相同的锁合并成一条连续记录（合并后的 `pid` 更新为新请求的 `pid`）。
+     - **BSD `flock` 先删旧锁再加新锁**：同一个句柄 `(session_id, ino, fh)` 上的 `flock` 在转换锁类型（例如从读锁升级为写锁）时，**先在事务里删掉这个 `(session_id, ino, fh)` 原来持有的旧 `flock` 记录**，再去检查跟其他句柄有没有冲突；如果有冲突，`SetLk` 依然会提交“删掉旧锁”的操作并返回 `ErrAgain`（`EAGAIN`），`SetLkw` 则提交删掉旧锁的操作并进入 `PENDING` 等待队列，与 Linux 内核 `flock_lock_inode` 的行为保持一致。
+3. **用 `client_sessions` 表管理客户端会话有效期，加锁写事务统一使用 `READ COMMITTED`**：
+   - **新建三张数据库表**：
+     - `client_sessions` 表：`session_id BIGINT PRIMARY KEY`、`expires_at TIMESTAMPTZ NOT NULL`、`updated_at TIMESTAMPTZ NOT NULL`。每次锁操作或带 `session_id` 的请求自动延长会话过期时间（默认有效期 60 秒）。
+     - `file_locks` 表：保存当前生效的锁，关联 `client_sessions(session_id) ON DELETE CASCADE` 和 `inodes(ino) ON DELETE CASCADE`；其中的 `fh` 字段只用来区分 `flock` 句柄，**不加 `file_handles(fh)` 外键**。
+     - `file_lock_waiters` 表：保存 `SetLkw` 正在排队等待的锁请求，状态 `status` 分为 `1 = PENDING（等待中）`、`2 = GRANTED（已拿到锁）`、`3 = CANCELLED（已取消）`，主键为 `(session_id, request_id)`。
+   - **加解锁写事务分三步执行（使用 `READ COMMITTED` 隔离级别）**：
+     1. 调用 `GetInodeForUpdate(ino)` 锁住目标文件的 `Inode` 行（确认文件存在且不是目录），顺带清理已经过期的 `client_sessions`（数据库外键会自动删掉过期会话名下的锁和等待记录）并续期当前 `session_id`；
+     2. 查询当前文件在对应 `lk_flags` 下的有效锁和 `PENDING` 等待队列（因为用了 `READ COMMITTED`，拿到 `Inode` 行锁后再查，一定能读到别人刚刚提交的最新锁状态）；
+     3. 判断是否死锁、是否冲突，执行锁的增删改，事务提交后唤醒正在等待的请求。
+   - **查锁 `GetLk` 用只读查询**：`GetLk` 不加行锁，只检查文件存在且不是目录、`fh` 有效，并过滤掉已过期会话的锁；如果传入的锁类型是 `F_UNLCK` 则返回 `ErrInvalidArgument`（`EINVAL`）；如果查到多个冲突的锁，按 `ORDER BY start_offset ASC, end_offset ASC, id ASC LIMIT 1` 返回排在最前面的一个冲突锁；没有冲突则返回 `type: F_UNLCK, pid: 0`。
+4. **`Flush` 负责清理进程级 POSIX 锁，`Release` 负责销毁句柄并按需清理 `flock`**：
+   - **`Flush`（清理 POSIX 锁）**：当 `Flush` 请求带有 `lock_owner` 时，在写事务里锁住 `Inode`、检查 `(ino, fh)` 有效后，按 `(session_id, ino, lock_owner)` 删掉该进程在这个文件上持有的所有 POSIX 记录锁（`lk_flags == 0`）并唤醒等待队列；`Flush` 不会删掉文件句柄 `fh`，也不会动 `flock` 锁。
+   - **`Release`（销毁句柄并按标志清理 `flock`）**：在写事务里删掉 `file_handles(fh)`；只有当 `release_flags` 带有 `FuseReleaseFlockUnlock` 标志时，才去删掉这个 `(session_id, ino, fh)` 绑定的 `flock` 锁并唤醒等待队列，绝不误删其他句柄的 POSIX 锁；最后如果文件已被删除（`nlink == 0`）且没有其他打开的句柄了，就把这个孤儿文件彻底从数据库删掉。
+5. **`SetLkw` 阻塞等待防残留、检查同文件死锁（`EDEADLK`）与防止写锁一直排不上队**：
+   - **记录等待状态，防止请求取消后留下没人要的锁**：`SetLkw` 用 `(session_id, request_id)` 在 `file_lock_waiters` 表里记录状态（`PENDING / GRANTED / CANCELLED`）。每次在 `GetInodeForUpdate(ino)` 事务里准备授锁前，先检查请求有没有被取消（`ctx.Err()`）以及等待记录还在不在；如果已经取消了，就把状态改为 `CANCELLED`（删掉等待记录）并返回 `ErrInterrupted`（`EINTR`），绝不往 `file_locks` 写锁；如果可以授锁，就在同一个事务里同时写进 `file_locks` 并更新等待记录。如果在事务外面等待期间收到了取消信号 `ctx.Done()`，立刻开一个清理事务去把等待记录删掉；万一发现另一个并发事务刚好已经把锁授给它了（`GRANTED`），就把那把刚授的锁一并撤销删掉并唤醒别人，绝不留下没人认领的锁。
+   - **检查同一个文件内的死锁（`EDEADLK`）**：当 `SetLkw` 遇到锁冲突需要排队等待时，根据这个文件当前已经持有的锁和正在排队的 `PENDING` 等待记录，检查“谁在等谁释放锁”的依赖链；如果把当前请求加进去之后会形成死循环（比如两个进程拿着读锁同时想升级成写锁，互相等待对方先放手），就立刻拒绝等待并返回 `ErrDeadlock`（`EDEADLK`）。（只检查同一个文件内的死锁，不做跨多个文件的全局死锁检查）。
+   - **唤醒机制与防止写锁饿死**：登记 `PENDING` 的短事务提交后立刻释放 `Inode` 行锁，在事务外通过进程内通知结合退避轮询等待锁释放。当一个新的加锁请求进来时，如果这个请求者当前在该文件上**还没有持有任何锁**，而且它想要的锁跟已经在排队的 `PENDING` 等待者有冲突（比如已经有写锁在排队等待了，又新来了一个不相干的读锁），就不允许它插队（`SetLk` 直接返回 `ErrAgain`，`SetLkw` 老老实实排到队尾去），防止排队的写锁永远被源源不断的新读锁插队饿死；但如果请求者手里本来就已经拿着这个文件的锁（比如自己重入、降级或升级），就不拦它，以免造成额外的死锁。
+6. **拒绝目录锁请求、不改文件时间戳并补充 3 个错误码映射**：
+   - 如果服务端收到针对目录（`S_IFDIR`）的 `GetLk` / `SetLk` / `SetLkw`，统一返回 `ErrIsDir`（`EISDIR`）。已被删除但还打开着的孤儿文件（`nlink == 0`）照常支持所有文件锁操作。
+   - `GetLk`、`SetLk`、`SetLkw` 一律不修改 `Inode` 的 `atime`、`mtime` 或 `ctime`。
+   - 在 ADR-0011 的错误码列表上增加 3 个锁相关的错误映射：
      - `ErrAgain` $\rightarrow$ `ResourceExhausted` + `reason: "EAGAIN"`
      - `ErrDeadlock` $\rightarrow$ `Aborted` + `reason: "EDEADLK"`
      - `ErrInterrupted` $\rightarrow$ `Canceled` + `reason: "EINTR"`
 
 ## 结果
-- **积极影响**：完整闭环了 `FUSE_GETLK (31)`、`FUSE_SETLK (32)`、`FUSE_SETLKW (33)` 及 `Flush` / `Release` 的锁生命周期，精准区分了 POSIX 字节区间裂解合并与 BSD `flock` 非原子转换语义，通过 `client_sessions` 租约消除了客户端异常断连导致的死锁泄漏，并通过 `request_id` 原子状态机与同节点局部等待图环检测根治了 `SetLkw` 悬挂锁与同区间升级死锁问题。
-- **代价考量**：引入 `client_sessions`、`file_locks` 与 `file_lock_waiters` 三张运行期状态表后，加锁与带锁关闭操作需在 `READ COMMITTED` 事务内执行行级排他锁与区间计算，但由于单文件活跃锁与等待者数量通常极小且均命中 `(ino, lk_flags)` 复合索引，事务内计算开销可控。
+- **正面效果**：完整支持了 `FUSE_GETLK (31)`、`FUSE_SETLK (32)`、`FUSE_SETLKW (33)` 以及关闭文件时的锁清理，准确还原了 POSIX 字节区间锁拆分合并与 BSD `flock` 先删后加的规则；用 `client_sessions` 过期机制解决了客户端死机留下的死锁；用等待状态表和环路检查解决了请求中途取消留下残留锁以及双读锁升级互卡死锁的问题。
+- **代价与取舍**：新增了 `client_sessions`、`file_locks` 和 `file_lock_waiters` 三张表，加锁和带锁关闭文件时需要在事务里锁住 `Inode` 行并计算锁区间；不过单个文件上同时存在的锁和等待者数量通常很少，且都有 `(ino, lk_flags)` 索引，查询和计算很快。

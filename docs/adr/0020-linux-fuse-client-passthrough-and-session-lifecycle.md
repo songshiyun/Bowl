@@ -1,35 +1,35 @@
-# 0020. Linux FUSE 客户端无缓存直通架构、会话自愈生命周期与容器化测试边界
+# 0020. Linux FUSE 客户端直接转发请求、会话过期自动重建与独立测试容器
 
 ## 状态
 已采纳 (accepted) — 演进 [ADR-0002](0002-disk-concept-and-client-root-inode-mapping.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0017](0017-storage-service-fx-bootstrap-and-e2e-boundary.md) 与 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)
 
 ## 背景
-在 `StorageService` 完成 38 项 POSIX 元数据、商业 `Disk` 配额核算与基于不可变 `Chunk-Slice-Block` 的数据读写闭环（ADR-0001 至 ADR-0019）后，系统需要交付面向 Linux 环境的 `bowl` CLI 客户端，通过 FUSE 将指定 `Disk` 挂载为本地标准文件系统（支持多客户端并发共享挂载同一 `Disk`）。在确定客户端架构边界时，面临五项核心权衡：
-1. **客户端缓存深度与服务端不可变切片封装的冲突**：以 JuiceFS 为代表的胖客户端之所以能在本地磁盘安全缓存数据块，是因为客户端直接持有全局不可变的物理 `sliceId` 直连对象存储；而 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 已将 `Slice` 与 `Block` 内聚隐藏于 `StorageService` 内部，客户端仅能按可变的 `(ino, offset)` 调用 `Read` / `Write`。在多客户端并发共享挂载同一 `Disk` 的前提下，若过早引入客户端本地读写缓存或异步写回（Writeback），不仅会带来跨节点脏读风险，还会破坏服务端单事务持久化与配额实时扣减承诺。
-2. **多用户 POSIX 权限执行边界**：`StorageService` 持久化了每个 `Inode` 的 `mode`、`uid` 与 `gid`，但 `Lookup`、`Open`、`Unlink` 等数据面 RPC 不携带调用进程身份，服务端自身不执行传统 POSIX `rwx` 属主权限拦截。
-3. **分布式会话租约（`ClientSession`）超期后的锁安全恢复**：当网络分区导致客户端租约在服务端超期回收时，该会话此前打开的全部 `FileHandle` 与持有的 `FileLock` 已被服务端级联销毁。网络恢复后需在“避免挂载点永久瘫痪”与“严防业务进程在不知情丢失文件锁的情况下无锁并发写坏数据”之间确立明确状态机。
-4. **底层 Go FUSE 库维护边界与 `FUSE_TMPFILE` 取舍**：上游官方 `github.com/hanwen/go-fuse/v2` 的 `RawFileSystem` 已覆盖 `Rename2`、`ReadDirPlus`、`FsyncDir`、`Fallocate`、`Xattr` 及 `GetLk/SetLk/SetLkw` 等全部常规操作码，但未注册 `FUSE_TMPFILE (51)` 回调，需权衡是否为此维护私有底层库 Fork。
-5. **纯 Linux FUSE 特权依赖与开发测试容器隔离**：客户端仅面向 Linux 交付，而真实 `/dev/fuse` 挂载需要 `CAP_SYS_ADMIN` 与设备透传，既不能强求非 Linux 开发宿主机原生运行，也不能破坏生产 `storage-service` 容器的无特权安全基线。
+在 `StorageService` 完成了 38 个 POSIX 元数据接口、磁盘配额管理以及基于 `Chunk-Slice-Block` 的数据读写功能（ADR-0001 至 ADR-0019）后，我们需要开发运行在 Linux 上的 `bowl` 命令行客户端，通过 FUSE 把指定的 `Disk` 挂载成本地目录（并且支持多台机器同时挂载同一块 `Disk`）。在设计客户端时，需要解决以下五个问题：
+1. **客户端自己不切块，能否在本地做读写缓存**：像 JuiceFS 这类客户端之所以能在本地硬盘缓存数据块，是因为它的客户端直接拿到全局不变的 `sliceId` 去读写对象存储；而在我们的 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 中，`Slice` 和 `Block` 都由服务端 `StorageService` 内部管理，客户端只按文件的 `(ino, offset)` 调服务端的 `Read` 和 `Write`。在多台客户端共享挂载同一块 `Disk` 的情况下，如果客户端自己在本地缓存文件数据或者攒一批写入再异步发给服务端，不仅容易让其他机器读到旧数据，还会破坏服务端实时检查配额和落盘的机制。
+2. **多用户文件权限（`rwx`）在哪里检查**：`StorageService` 虽然保存了每个文件的 `mode`、`uid` 和 `gid`，但像 `Lookup`、`Open`、`Unlink` 这些 RPC 请求并没有传当前操作进程的用户身份，服务端自己不做 Linux 的 `rwx` 权限检查。
+3. **网络断连导致客户端会话（`ClientSession`）过期后怎么恢复**：当客户端因为网络中断没能按时续期，服务端会把过期的 `ClientSession` 以及它名下打开的所有文件句柄（`FileHandle`）和文件锁（`FileLock`）全部清掉。等网络恢复后，客户端既不能让整个挂载目录从此卡死不能用，也不能瞒着业务进程偷偷重新打开文件句柄（因为原来的文件锁已经丢了，偷偷重开会导致业务进程在以为自己还持有锁的情况下无锁写坏数据）。
+4. **要不要为了支持 `FUSE_TMPFILE` 去改第三方 Go FUSE 库**：官方的 `github.com/hanwen/go-fuse/v2` 库里的 `RawFileSystem` 已经支持了 `Rename2`、`ReadDirPlus`、`FsyncDir`、`Fallocate`、`Xattr` 和 `GetLk/SetLk/SetLkw` 等几乎所有常用操作，唯独没有接 `FUSE_TMPFILE (51)` 回调。我们需要决定值不值得为了这一个低频操作去自己维护一份修改版的 `go-fuse` 库。
+5. **如何在非 Linux 开发机（如 macOS）上运行需要内核特权的 FUSE 测试**：客户端只面向 Linux 发布，而且挂载 `/dev/fuse` 需要 `CAP_SYS_ADMIN` 权限。我们既不能要求开发者的 macOS 电脑直接跑 Linux FUSE，也不能给生产环境的 `storage-service` 容器加上危险的特权模式。
 
 ## 决策
-1. **独立 `client/` 子模块、顶层 `mount`/`umount` 命令与无 PID 文件守护生命周期**：
-   - 在仓库根目录建立独立 Go 模块 `client/`（`module github.com/starsrc/bowl/client`，纯 Linux 构建、零 CGO，通过本地 `replace` 复用根模块 `gen/go` ConnectRPC 契约）。
-   - 提供顶层一级命令 `bowl mount <disk-id> <mountpoint>` 与 `bowl umount <mountpoint>`（内置 `unmount` 等价别名），将 `bowl disk ...` 命名空间留作未来的控制面资源管理。客户端通过 `--endpoint` / `BOWL_STORAGE_ENDPOINT`（自适应 `h2c` 与 `HTTPS`）直连 `StorageService`，并预留可选 `--token` / `BOWL_TOKEN` 注入 Bearer 认证头。
-   - **默认后台守护与同步握手**：`bowl mount` 先在前台校验挂载点有效且未重复挂载、调用 `GetDisk` 解析 `root_ino` 并注册初始 `ClientSession`，随后派生后台守护进程执行 `/dev/fuse` 挂载，父进程经管道握手确认挂载就绪（或接收具体失败原因）后方才退出（同时支持 `-f / --foreground` 前台托管模式）；后台日志默认写入 `/var/log/bowl/mount-<disk-id>.log`（无权限时回退至 `~/.local/state/bowl/logs/mount-<disk-id>.log`）。
-   - **内核事件驱动卸载**：不维护易失步残留的本地 PID 文件；`bowl umount`（支持 `-f / --force` 懒卸载）按序调用系统 `fusermount3 -u` / `fusermount -u` / `umount`，待内核冲刷完活跃句柄的 `Flush` 与 `Release` / `ReleaseDir` 并关闭 `/dev/fuse` 后，守护进程在 `OnUnmount` 中终止会话续期并自退出。
-2. **用户态零缓存直通、内核态缓存透传与 `default_permissions` 权限闭环**：
-   - **用户态零缓存直通**：第一阶段客户端进程不引入任何用户态内存或本地磁盘缓存，所有 FUSE 操作直通 `StorageService`；挂载时禁用内核异步 `writeback_cache` 以确保每次写入同步直达服务端，协商 `MaxWrite = 1 MiB` 并在读写超 `4 MiB` 时按 `4 MiB` 边界分片调用 RPC。
-   - **透传服务端内核缓存指令以保留 `mmap`**：客户端原样透传服务端响应中的 `entry_timeout_seconds`、`attr_timeout_seconds` 与 `open_flags`（服务端默认 `OpenKeepCache = false` 实现跨客户端打开时刷新），默认不强制置位 `FOPEN_DIRECT_IO` 以确保 `mmap` 与挂载点可执行二进制文件正常运行（另提供 `--direct-io` 可选开关）。
-   - **根 `Inode` 双向重写与本地内核权限强制校验**：在 FUSE 适配边界对所有请求入参与目录遍历（含 `.` / `..`）结果执行内核根节点 `1` 与服务端 `Disk.root_ino` 的双向转换；默认强制开启 FUSE 内核 `default_permissions` 由 Linux VFS 本地执行标准 POSIX `rwx` 及 Sticky Bit 校验，创建类操作透传请求头真实 `uid / gid`，暴露 `--allow-other` 与 `--ro` 选项，并通过 `Ioctl` 将 `FS_IOC_GETFLAGS` / `FS_IOC_SETFLAGS` 桥接至 `GetAttr` / `SetAttr(flags)`。
-3. **`ClientSession` 自适应续期、超期会话轮换、有界网络重试与待释放句柄异步重试队列**：
-   - **自适应心跳与会话轮换自愈**：客户端启动时生成随机 63 位正整数 `session_id` 调用 `RenewSession`，并按服务端返回的 `expires_at` 剩余时长 `1/3` 动态调度续期心跳。若网络中断恢复后检测到原租约已超期回收（`session_recreated == true`），立即记录告警并原子切换为全新 `session_id`：保障后续新打开的文件立即恢复正常服务，同时令断网前已丢失服务端 `FileLock` 与句柄的老文件描述符诚实返回 `EBADF`（严禁静默伪造重开句柄掩盖锁丢失）。
-   - **错误无损提取与有界重试**：解析 ConnectRPC 错误详情中的 `google.rpc.ErrorInfo.Reason` 映射为 Linux `syscall.Errno`；仅对传输层未送达的连接瞬断及只读/幂等 RPC 执行总长不超过 `5s` 的指数退避重试（收到内核 `cancel` 中断时立即返回 `EINTR`），重试耗尽返回 `EIO`，防止服务端停机时宿主机进程永久挂死。
-   - **待释放句柄异步重试队列**：由于 FUSE `Release` 与 `ReleaseDir` 回调不向内核返回错误码，客户端在同步解绑本地句柄会话映射的同时，维护轻量待释放句柄重试队列：当 `Release` / `ReleaseDir` 因网络闪断、超时或中断错误失败时入队由后台协程周期重试（在 `OnUnmount` 卸载时停止后台循环并尽力冲刷队列），将服务端返回的 `EBADF` / `ENOENT` / `EINVAL` 视为已完成销毁直接出队，并在 `ClientSession` 发生超期轮换时自动丢弃旧会话的待释放项，避免长稳活跃会话下瞬断导致服务端句柄与关联 BSD `flock` 或孤儿节点延迟回收。
-4. **直接使用上游官方 `github.com/hanwen/go-fuse/v2`**：
-   - 直接依赖上游官方稳定版 `github.com/hanwen/go-fuse/v2`，不为低频匿名 `open(O_TMPFILE)` 维护私有底层库 Fork（内核下发 `FUSE_TMPFILE` 时按标准未实现操作码降级返回 `EOPNOTSUPP`，常规具名临时文件如 `mkstemp` 不受影响）。
-5. **独立特权测试容器与 `Taskfile.yml` 闭环验证**：
-   - 保持 [`docker-compose.yaml`](../../docker-compose.yaml) 生产 `storage-service` 容器无特权不变；为 `client/` 构建包含 Go 1.26 与 `fuse3` 的专用 Linux 测试容器镜像，通过 `task test:client` 执行容器内静态检查与单元测试，通过 `task test:client:e2e`（按需授予 `/dev/fuse` 与 `CAP_SYS_ADMIN` 并接入 `bowl-net`）运行包含多挂载点并发共享读写与锁互斥在内的真实 FUSE 挂载/卸载黑盒验证。
+1. **新建独立的 `client/` 模块，提供 `bowl mount` / `bowl umount` 命令，不用 PID 文件管理后台进程**：
+   - 在仓库根目录下新建独立的 Go 模块 `client/`（`module github.com/starsrc/bowl/client`，只针对 Linux 编译、不依赖 CGO，通过本地 `replace` 直接引用根目录 `gen/go` 下的 ConnectRPC 接口代码）。
+   - 提供顶层命令 `bowl mount <disk-id> <mountpoint>` 和 `bowl umount <mountpoint>`（同时支持 `unmount` 别名），把 `bowl disk ...` 留给磁盘管理命令使用。客户端通过 `--endpoint` 或环境变量 `BOWL_STORAGE_ENDPOINT`（自动识别 `h2c` 和 `HTTPS`）连接 `StorageService`，并支持用 `--token` 或 `BOWL_TOKEN` 传入认证令牌。
+   - **默认转入后台运行，并等挂载成功后再退出前台命令**：执行 `bowl mount` 时，前台进程先检查挂载目录是否存在且没有被重复挂载，再调用 `GetDisk` 拿到根目录 `root_ino` 并向服务端注册初始 `ClientSession`；接着启动后台守护进程去挂载 `/dev/fuse`，前台父进程通过管道（Pipe）等待后台进程通知“挂载成功”（或者拿到具体的失败报错）后才退出（同时也支持加 `-f / --foreground` 在前台运行）。后台进程的日志默认写在 `/var/log/bowl/mount-<disk-id>.log`（如果没权限写 `/var/log`，就写到 `~/.local/state/bowl/logs/mount-<disk-id>.log`）。
+   - **通过系统卸载命令通知守护进程退出**：不在本地留容易过期的 PID 文件；执行 `bowl umount`（支持 `-f / --force` 懒卸载）时，依次尝试调用系统的 `fusermount3 -u`、`fusermount -u` 或 `umount`。等 Linux 内核把已打开文件的 `Flush` 和 `Release` / `ReleaseDir` 全部发完并关闭 `/dev/fuse` 后，后台守护进程在收到 `OnUnmount` 事件时停止会话续期并自动退出。
+2. **客户端直接转发读写请求，使用内核的 `default_permissions` 检查权限**：
+   - **客户端不做本地写缓冲**：第一阶段客户端不在用户态内存或本地磁盘缓存文件数据，所有 FUSE 操作都直接发给 `StorageService`；挂载时关闭内核的异步写回缓存（`writeback_cache`），保证每次写入都同步发到服务端；单次最大写入设为 `MaxWrite = 1 MiB`，当读写请求超过 `4 MiB` 时按 `4 MiB` 切分后调用服务端接口。
+   - **使用服务端返回的缓存超时，不强制开启 `Direct IO` 以保证 `mmap` 可用**：客户端把服务端返回的 `entry_timeout_seconds`、`attr_timeout_seconds` 和 `open_flags` 原样传给 FUSE 内核（服务端默认 `OpenKeepCache = false`，使得重新打开文件时会刷新内核页缓存），默认不强制加上 `FOPEN_DIRECT_IO`，从而保证挂载目录里的程序执行和 `mmap` 内存映射能正常工作（另外提供 `--direct-io` 可选参数）。
+   - **根目录 `Inode 1` 与 `Disk.root_ino` 互相转换，并开启 `default_permissions`**：在客户端收发 FUSE 请求和返回目录项（包括 `.` 和 `..`）时，自动把内核要求的根目录编号 `1` 和服务端该磁盘真实的 `Disk.root_ino` 互相转换；挂载时默认加上 FUSE 内核的 `default_permissions` 参数，由客户端所在机器的 Linux 内核直接根据调用进程的 `uid / gid` 检查标准 POSIX `rwx` 权限和粘滞位（Sticky Bit），创建文件或目录时把调用方真实的 `uid / gid` 传给服务端，并提供 `--allow-other` 和 `--ro`（只读挂载）参数，同时通过 `Ioctl` 把 `FS_IOC_GETFLAGS` / `FS_IOC_SETFLAGS` 转发给 `GetAttr` / `SetAttr(flags)`。
+3. **`ClientSession` 定时续期、过期后自动换新会话、网络闪断有限重试，以及关闭句柄失败时后台重试**：
+   - **定时心跳续期与会话过期后换新 ID**：客户端启动时生成一个 63 位随机正整数作为 `session_id` 调用 `RenewSession`，并根据服务端返回的过期时间 `expires_at`，每隔剩余有效期的 `1/3` 时间自动发一次续期心跳。如果断网恢复后服务端返回 `session_recreated == true`（说明原来的会话已经过期被清理了），客户端立刻打印一条告警日志，并切换成一个新的随机 `session_id`：这样后续新打开的文件马上就能正常读写，而断网前打开的老文件描述符（它们在服务端的句柄和文件锁其实已经丢了）再去读写时会如实收到 `EBADF` 错误，绝不偷偷重开句柄掩盖丢锁问题。
+   - **提取服务端 POSIX 错误码与最多 5 秒的网络重试**：客户端从 ConnectRPC 错误详情里读取 `google.rpc.ErrorInfo.Reason` 并转成 Linux 的 `syscall.Errno`；只有当请求因为网络闪断根本没发出去，或者是只读/幂等请求遇到连接断开时，才做总时长不超过 `5s` 的退避重试（如果等待期间收到内核的 `cancel` 中断信号则立刻返回 `EINTR`），超过 5 秒还连不上就返回 `EIO`，防止服务端停机时客户端机器上的进程永远卡死。
+   - **关闭句柄（`Release` / `ReleaseDir`）失败时放入后台队列重试**：因为 FUSE 的 `Release` 和 `ReleaseDir` 不会把错误码返回给用户进程，如果关闭文件时刚好遇到网络闪断失败，服务端上的文件句柄、`flock` 锁或待回收的孤儿文件就会一直残留。因此客户端在本地删掉句柄记录的同时，如果发现发给服务端的 `Release` / `ReleaseDir` 因为网络断开、超时或中断失败了，就把它放进一个后台重试队列里定期重发（卸载退出时尽力把队列发完）；如果服务端返回 `EBADF` / `ENOENT` / `EINVAL` 说明句柄本来就已经不在了，就直接从队列移除；如果整个 `ClientSession` 都过期换新了，旧会话的所有待关闭句柄在服务端早已被一并清掉，客户端也直接清空旧队列。
+4. **直接使用官方 `github.com/hanwen/go-fuse/v2` 库，不自行维护修改版**：
+   - 直接使用上游官方的 `github.com/hanwen/go-fuse/v2`，不为了极少用到的匿名 `open(O_TMPFILE)` 去自己维护一份私有的 `go-fuse` 分支（当内核发来 `FUSE_TMPFILE` 时，直接按不支持该操作返回 `EOPNOTSUPP`，常见的临时文件写法如 `mkstemp` 完全不受影响）。
+5. **用专门的 Linux 测试容器跑 FUSE 挂载测试**：
+   - 保持 [`docker-compose.yaml`](../../docker-compose.yaml) 里的生产 `storage-service` 容器不加任何特权；单独为 `client/` 准备一个装有 Go 1.26 和 `fuse3` 的 Linux 测试容器镜像，用 `task test:client` 跑代码检查和单元测试，用 `task test:client:e2e`（只给这个测试容器加上 `/dev/fuse` 设备和 `CAP_SYS_ADMIN` 权限，并连入 `bowl-net` 网络）在容器里真正挂载目录，测试多挂载点并发读写和文件锁互斥。
 
 ## 结果
-- **积极影响**：在不破坏 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 服务端单事务持久化与商业配额强一致边界的前提下，以极简、零私有 Fork 的薄客户端打通了完整的 Linux POSIX FUSE 挂载闭环；`default_permissions` 补齐了多用户权限安全边界；会话超期自动轮换兼顾了挂载点长稳自愈与分布式文件锁语义安全；独立测试容器在非 Linux 开发机上也能一键完成真实内核级 FUSE 端到端测试。
-- **代价考量**：因第一阶段未引入用户态数据块缓存，跨客户端重开大文件或内核页回收后的重复读取均会发起内网 `StorageService.Read` RPC；后续若面临超大规模只读数据集复用瓶颈，可在不改变 CLI 契约的前提下按 `(disk_id, ino, generation, mtime, size)` 版本键渐进扩展可选的客户端只读块缓存。
+- **正面效果**：在不破坏 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 服务端统一管数据和配额的前提下，用简单清晰的客户端代码完成了 Linux FUSE 挂载功能；靠内核 `default_permissions` 解决了多用户权限检查；靠会话过期换新 ID 既让挂载点断网恢复后能继续用，又不会掩盖文件锁丢失；靠独立的测试容器让 macOS 开发者也能一键跑完真正的 FUSE 挂载测试。
+- **代价与取舍**：由于第一阶段客户端不在本地缓存文件数据块（直到 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md) 才加上了顺序预读），跨机器重复打开大文件或者系统内存紧张回收了内核页缓存后再次读取时，都需要发请求去服务端读取。

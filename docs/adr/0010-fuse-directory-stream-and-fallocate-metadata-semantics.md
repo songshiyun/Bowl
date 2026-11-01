@@ -1,41 +1,41 @@
-# 0010. FUSE 目录会话遍历游标合成与 Fallocate 元数据预分配及打洞语义设计
+# 0010. FUSE 目录打开与分页读取（OpenDir/ReadDir/ReadDirPlus/ReleaseDir）及 Fallocate 预分配与打洞
 
 ## 状态
 已采纳 (accepted)
 
 ## 背景
-Storage 元数据引擎在确立文件句柄生命周期（ADR-0009：`Create`、`Open`、`Flush`、`Fsync`、`Release`）后，需进一步在纯元数据层推进目录打开与遍历（`OpenDir`、`ReadDir`、`ReadDirPlus`、`ReleaseDir`）以及文件空间预分配与打洞（`Fallocate`）五项核心能力。在遵循 POSIX 与 Linux FUSE 协议规范时，面临四项关键架构权衡：
-1. **目录句柄与文件句柄的存储模型与类型边界**：FUSE 协议在 `FUSE_OPENDIR`、`FUSE_READDIR`、`FUSE_READDIRPLUS` 与 `FUSE_RELEASEDIR` 中同样使用 64 位无符号 `fh` 标识会话。需决定是新建独立的目录句柄表，还是复用 `file_handles` 表并在领域层实施目录与非目录接口的正交隔离。
-2. **`ReadDir` / `ReadDirPlus` 的 `.` 与 `..` 合成、确定性分页游标及内核缓存约定**：`entries` 表仅持久化真实子项而不存储 `"."` 与 `".."`，且主键为 `(parent_ino, name)`。如何在不改动 `entries` 表结构的前提下提供单调递增的 `offset` 游标，并在 `ReadDirPlus` 中兼顾父目录属性解析与 Linux 内核对 `"."` / `".."` 不缓存 dentry 的协议要求。
-3. **`rmdir-whilst-open` 孤儿目录（`Orphan Inode`）的全生命周期闭环**：ADR-0008 规定 `Rmdir` 将空目录 `nlink` 置为 `0` 并保留 `inodes` 记录。需明确已解链目录在持有活跃 `FileHandle` 期间的二次 `OpenDir` 准入、`ReadDir` / `ReadDirPlus` 遍历返回值，以及最后一个句柄 `ReleaseDir` 时的物理回收机制。
-4. **纯元数据层 `Fallocate` 的标志位矩阵与特权位剥离边界**：Linux `fallocate(2)` 包含多种模式掩码（默认扩展、`FALLOC_FL_KEEP_SIZE`、`FALLOC_FL_PUNCH_HOLE` 等）。需明确在尚未接入数据分块层时支持哪些模式组合、何时扩展 `size`、何时剥离 `S_ISUID` / `S_ISGID` 特权位以及何时刷新 `mtime` 与 `ctime`。
+Storage 元数据引擎在完成文件打开与关闭（ADR-0009：`Create`、`Open`、`Flush`、`Fsync`、`Release`）后，需要继续实现目录的打开与遍历（`OpenDir`、`ReadDir`、`ReadDirPlus`、`ReleaseDir`）以及文件空间预分配与打洞（`Fallocate`）。在设计这五个接口时，需要确定四个具体问题：
+1. **目录句柄 `fh` 是单独建表还是共用 `file_handles` 表**：FUSE 协议在 `FUSE_OPENDIR`、`FUSE_READDIR`、`FUSE_READDIRPLUS` 和 `FUSE_RELEASEDIR` 中同样使用 64 位无符号整数 `fh` 来代表一次打开会话。我们需要决定是给目录单独建一张表，还是直接共用 `file_handles` 表并在代码里按节点是不是目录（`S_IFDIR`）来区分。
+2. **`ReadDir` / `ReadDirPlus` 如何生成 `.` 和 `..`、如何计算分页游标 `offset`**：数据库的 `entries` 表只存了真实的子文件和子目录，没有存 `"."` 和 `".."`。我们需要在不改 `entries` 表结构的前提下，给每次目录读取提供递增的 `offset` 分页游标，并且在 `ReadDirPlus` 里既能查出父目录属性，又符合 Linux 内核“不对 `.` 和 `..` 缓存目录项”的要求。
+3. **目录被删除但还打开着（`rmdir-whilst-open`）时怎么处理**：ADR-0008 规定 `Rmdir` 删除空目录时会把它的 `nlink` 设为 `0` 并保留 `inodes` 记录。我们需要明确：当这个已被删的目录还被某个句柄打开着时，能不能再次调用 `OpenDir` 打开它、调用 `ReadDir` / `ReadDirPlus` 会返回什么，以及最后一个句柄调用 `ReleaseDir` 关闭时怎么把它彻底从数据库删掉。
+4. **`Fallocate` 支持哪些模式标志（`mode`），什么时候改文件大小和时间戳**：Linux 的 `fallocate(2)` 有好几种模式（默认扩展文件大小、`FALLOC_FL_KEEP_SIZE` 保持大小不变、`FALLOC_FL_PUNCH_HOLE` 区间打洞等）。需要明确哪些模式组合合法、什么时候扩大 `size`、什么时候清除 `S_ISUID` / `S_ISGID` 特权位以及什么时候更新 `mtime` 和 `ctime`。
 
 ## 决策
-1. **统一复用 `file_handles` 表并实施 `S_IFDIR` 正交类型隔离**：
-   - `OpenDir` 与 `ReleaseDir` 直接复用 ADR-0009 引入的 `file_handles` 表与 `file_handle_id_seq` 序列。
-   - 通过目标 `Inode` 的文件类型位严格隔离目录操作与文件操作：
-     - `OpenDir`：要求目标 `Inode` 为 `S_IFDIR`（非目录返回 `ErrNotDir` / `ENOTDIR`），且打开标志位必须为只读（`flags & O_ACCMODE == O_RDONLY && flags & O_TRUNC == 0`，否则返回 `ErrInvalidArgument` / `EINVAL`）。
-     - `ReadDir` / `ReadDirPlus` / `ReleaseDir`：若目标 `Inode` 非目录，统一返回 `ErrNotDir`（`ENOTDIR`）；若为目录但 `(fh, ino)` 不存在或不匹配，返回 `ErrBadFileHandle`（`EBADF`）。同时文件接口（`Release` / `Fallocate`）面对目录节点时返回 `ErrIsDir`（`EISDIR`），彻底阻断跨类型混用 `FileHandle`。
-2. **基于确定性序号游标（`1` / `2` / `>=3`）的目录流读取与 `noatime` 只读快照事务**：
-   - `ReadDir` 与 `ReadDirPlus` 全程运行在 `RepeatableRead` 只读事务中，遵循 `noatime` 策略不写库刷新目录 `atime`。
-   - 游标编码约定：
-     - `offset = 1`：固定合成 `"."`，指向当前目录 `Inode`。
-     - `offset = 2`：固定合成 `".."`，通过 `GetParentInode(dir_ino)`（查询 `entries` 中 `ino = dir_ino` 绑定的父目录 `Inode`）获取；若未命中（如顶层根目录），则回退指向当前目录自身 `Inode`。
-     - `offset >= 3`：对应 `entries JOIN inodes` 按 `ORDER BY e.name ASC` 确定性排序的真实子项，第 $k$ 个真实子项（从 $0$ 起计）的返回游标为 `next_offset = k + 3`（SQL 分页偏移量为 `OFFSET max(0, req.offset - 2)`）。
-   - 在 `ReadDirPlus` 中，合成的 `"."` 与 `".."` 条目填充完整 `Inode` 属性，但将其 `entry_timeout_seconds` 显式置为 `0`（符合 Linux FUSE 内核不对 `.` 和 `..` 缓存 dentry 的规范），真实子项则根据子项类型分别赋予目录（`dirEntryTimeout`）或非目录（`entryTimeout`）的 `entry_timeout_seconds` 及 `attr_timeout_seconds`。
-3. **孤儿目录（`nlink == 0`）的打开准入、空流返回与最终物理回收**：
-   - `OpenDir`：在读写事务内对目标目录 `GetInodeForUpdate(ino)` 加排他锁；若 `nlink == 0`，仅当 `HasFileHandlesByIno(ino)` 为 `true` 时允许分配新 `FileHandle`，否则返回 `ErrNotFound`（`ENOENT`）；当配置 `WithOpenDirCache(true)` 时在响应 `OpenFlags` 中下发 `FOPEN_CACHE_DIR`。
-   - `ReadDir` / `ReadDirPlus`：校验目录存在且 `(fh, ino)` 有效后，若发现目录 `nlink == 0`（处于 `rmdir-whilst-open` 状态），遵循 POSIX `readdir(3)` 规范直接返回空列表（不合成 `"."` 与 `".."`）。
-   - `ReleaseDir`：在读写事务内 `GetInodeForUpdate(ino)` 并调用 `DeleteFileHandle(fh, ino)`；若目录 `nlink == 0` 且 `HasFileHandlesByIno(ino)` 为 `false`，在同一事务内调用 `DeleteInode(ino)` 物理删除该孤儿目录记录。
-4. **`Fallocate` 模式位矩阵、可写句柄校验与差异化元数据更新**：
-   - 新增领域哨兵错误 `ErrNotSupported`（映射 gRPC `Unimplemented` / POSIX `EOPNOTSUPP`），并定义平台无关的 Linux `fallocate` 模式常量：`FALLOC_FL_KEEP_SIZE = 0x01`、`FALLOC_FL_PUNCH_HOLE = 0x02`。
-   - 在读写事务内 `GetInodeForUpdate(ino)` 并校验 `GetFileHandle(fh, ino)`：若句柄不存在返回 `ErrBadFileHandle`；若句柄以只读模式打开（`fh.Flags & O_ACCMODE == O_RDONLY`）同样返回 `ErrBadFileHandle`（`EBADF`）；若目标为目录返回 `ErrIsDir`（`EISDIR`），若为非常规文件（非 `S_IFREG`）返回 `ErrNotSupported`（`EOPNOTSUPP`）。
-   - 模式分支语义：
-     - `mode == 0`（默认预分配）：若 `offset + length > current.Size`，将 `size` 更新为 `offset + length` 并刷新 `mtime` 与 `ctime`（遵循 POSIX `posix_fallocate` 规范，不剥离 `S_ISUID` / `S_ISGID`）；若 `offset + length <= current.Size`，保持 `size` 不变，仅刷新 `ctime`。
-     - `mode == FALLOC_FL_KEEP_SIZE`：保持 `size` 不变，仅刷新 `ctime`。
-     - `mode == FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE`（区间打洞）：保持 `size` 不变，剥离常规文件的 `S_ISUID` 与 `S_ISGID` 特权位，并同时刷新 `mtime` 与 `ctime`。
-     - 单独传入 `FALLOC_FL_PUNCH_HOLE`（未带 `FALLOC_FL_KEEP_SIZE`）返回 `ErrInvalidArgument`（`EINVAL`）；传入任何其他未知或未支持标志位返回 `ErrNotSupported`（`EOPNOTSUPP`）。
+1. **目录句柄与文件句柄共用 `file_handles` 表，按是不是目录（`S_IFDIR`）严格区分调用接口**：
+   - `OpenDir` 和 `ReleaseDir` 直接共用 ADR-0009 建立的 `file_handles` 表和 `file_handle_id_seq` 序列。
+   - 根据目标 `Inode` 的类型严格区分目录操作和文件操作，不准混用：
+     - `OpenDir`：要求目标 `Inode` 必须是目录 `S_IFDIR`（不是目录返回 `ErrNotDir` / `ENOTDIR`），而且打开标志必须是只读模式（`flags & O_ACCMODE == O_RDONLY && flags & O_TRUNC == 0`，否则返回 `ErrInvalidArgument` / `EINVAL`）。
+     - `ReadDir` / `ReadDirPlus` / `ReleaseDir`：如果目标 `Inode` 不是目录，统一返回 `ErrNotDir`（`ENOTDIR`）；如果是目录但 `(fh, ino)` 在表里找不到或对不上，返回 `ErrBadFileHandle`（`EBADF`）。反过来，文件接口（`Release` / `Fallocate`）如果收到目录节点，一律返回 `ErrIsDir`（`EISDIR`）。
+2. **`ReadDir` / `ReadDirPlus` 按固定游标编号（`1` / `2` / `>=3`）返回 `.`、`..` 和真实子项**：
+   - `ReadDir` 和 `ReadDirPlus` 全程在 `RepeatableRead` 只读事务中执行，遵循 `noatime` 策略不修改目录的 `atime`。
+   - 游标 `offset` 的含义规定如下：
+     - `offset = 1`：固定返回合成的 `"."`，指向当前目录自己的 `Inode`。
+     - `offset = 2`：固定返回合成的 `".."`，通过 `GetParentInode(dir_ino)` 查询当前目录的父目录 `Inode`；如果查不到（比如已经是顶层根目录），就指向当前目录自己的 `Inode`。
+     - `offset >= 3`：对应 `entries JOIN inodes` 按文件名升序（`ORDER BY e.name ASC`）查出来的真实子项，第 $k$ 个真实子项（从 $0$ 开始数）返回的下一个游标为 `next_offset = k + 3`（对应的 SQL 分页偏移量为 `OFFSET max(0, req.offset - 2)`）。
+   - 在 `ReadDirPlus` 中，合成的 `"."` 和 `".."` 也会填上完整的 `Inode` 属性，但把它们的 `entry_timeout_seconds` 明确设为 `0`（因为 Linux FUSE 内核规定不对 `.` 和 `..` 缓存 dentry）；而真实子项则根据它是子目录还是文件，分别填上目录缓存时间（`dirEntryTimeout`）或文件缓存时间（`entryTimeout`）以及属性缓存时间（`attrTimeout`）。
+3. **已被删除但仍打开的孤儿目录（`nlink == 0`）：允许继续打开、读取返回空列表、最后一个句柄关闭时彻底删除**：
+   - `OpenDir`：在写事务里对目标目录调用 `GetInodeForUpdate(ino)` 加行锁；如果发现目录的 `nlink == 0`，只有当 `HasFileHandlesByIno(ino)` 为 `true`（说明还有别的未关闭句柄正打开着这个目录）时才允许分配新句柄，否则返回 `ErrNotFound`（`ENOENT`）；当开启了 `WithOpenDirCache(true)` 配置时，在返回结果的 `OpenFlags` 中加上 `FOPEN_CACHE_DIR`。
+   - `ReadDir` / `ReadDirPlus`：检查完目录存在且 `(fh, ino)` 有效后，如果发现目录的 `nlink == 0`（已经被 `Rmdir` 删掉了），按照 POSIX `readdir(3)` 标准直接返回空列表（连 `"."` 和 `".."` 都不返回）。
+   - `ReleaseDir`：在写事务里调用 `DeleteFileHandle(fh, ino)` 删掉当前句柄；如果目录的 `nlink == 0` 且删完后 `HasFileHandlesByIno(ino)` 变成了 `false`（没有任何打开句柄了），就在同一个事务里调用 `DeleteInode(ino)` 把这条孤儿目录记录彻底从数据库删掉。
+4. **`Fallocate` 的支持模式、写权限检查与属性更新规则**：
+   - 新增业务错误 `ErrNotSupported`（对应 gRPC `Unimplemented` / POSIX `EOPNOTSUPP`），并定义常量：`FALLOC_FL_KEEP_SIZE = 0x01`、`FALLOC_FL_PUNCH_HOLE = 0x02`。
+   - 在写事务里调用 `GetInodeForUpdate(ino)` 锁住节点并检查 `GetFileHandle(fh, ino)`：如果句柄不存在，或者句柄是以只读模式打开的（`fh.Flags & O_ACCMODE == O_RDONLY`），都返回 `ErrBadFileHandle`（`EBADF`）；如果目标是目录返回 `ErrIsDir`（`EISDIR`），如果不是常规文件（非 `S_IFREG`）返回 `ErrNotSupported`（`EOPNOTSUPP`）。
+   - 不同 `mode` 的处理规则：
+     - `mode == 0`（默认预分配空间）：如果 `offset + length > current.Size`，就把文件的 `size` 扩大为 `offset + length`，并同时更新 `mtime` 和 `ctime`（按照 POSIX `posix_fallocate` 规范，预分配空间不清除 `S_ISUID` / `S_ISGID` 位）；如果 `offset + length <= current.Size`，保持 `size` 不变，只更新 `ctime`。
+     - `mode == FALLOC_FL_KEEP_SIZE`：保持 `size` 不变，只更新 `ctime`。
+     - `mode == FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE`（区间打洞清零）：保持 `size` 不变，清除常规文件的 `S_ISUID` 和 `S_ISGID` 特权位，并同时更新 `mtime` 和 `ctime`（在接入 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 数据层后，同时在该区间追加一条 `id = 0` 的空洞 `Slice` 记录）。
+     - 如果只传了 `FALLOC_FL_PUNCH_HOLE` 却没带 `FALLOC_FL_KEEP_SIZE`，返回 `ErrInvalidArgument`（`EINVAL`）；传入任何其他不支持的标志位，返回 `ErrNotSupported`（`EOPNOTSUPP`）。
 
 ## 结果
-- **积极影响**：在不引入额外表结构的前提下，完整闭环了目录会话生命周期、带属性预取的确定性分页目录遍历以及文件空间预分配/打洞的元数据状态机，且目录部分的逻辑在未来接入数据分块层后无需任何改动。
-- **代价考量**：`ReadDir` / `ReadDirPlus` 采用基于 `ORDER BY name ASC` 的序号游标（`OFFSET`），在大目录深分页下会产生线性扫描开销，但契合当前单表 `(parent_ino, name)` B-Tree 索引结构且保证了实现简洁性。
+- **正面效果**：不用新建额外的数据库表，就支持了目录打开、带属性预取的分页遍历、孤儿目录回收以及 `Fallocate` 预分配和打洞。
+- **代价与取舍**：`ReadDir` / `ReadDirPlus` 用 `ORDER BY name ASC` 加 `OFFSET` 实现分页，当单个目录下有成千上万个文件且翻到很后面的页时会有扫描开销，但对绝大多数常规目录来说简单直接且完全够用。

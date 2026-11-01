@@ -1,27 +1,27 @@
-# 0002. Disk 概念隔离与客户端根 Inode 虚拟映射设计
+# 0002. 早期客户端根目录 Inode 编号转换设计
 
 ## 状态
-部分被 [ADR-0014](0014-disk-service-and-quota-ledger.md) 替代 (partially superseded by ADR-0014)
+部分被 [ADR-0014](0014-disk-service-and-quota-ledger.md) 与 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 替代 (partially superseded by ADR-0014 and ADR-0015)
 
 ## 背景
-本项目为一个 C/S 架构的分布式存储系统：服务端提供元数据及存储 RPC 接口，客户端通过 FUSE 协议挂载为本地磁盘供用户使用。在产品和使用形态上，系统引入了“Disk（磁盘）”的概念。
+本项目采用客户端-服务端架构：服务端提供文件元数据和存储接口，客户端通过 Linux FUSE 协议挂载成本地目录供用户使用。在产品使用上，每个挂载实例对应一块独立的“Disk（磁盘）”。
 
-Linux FUSE 协议规范规定，文件系统根目录的 Inode ID 必须固定为 `1`（即内核定义的 `FUSE_ROOT_ID = 1`）。若在服务端元数据层直接建模 Disk，并为每个 Disk 重置 Inode 编号，会导致全局 Inode 冲突、元数据表结构与挂载实例过度耦合，大幅增加服务端目录树并发与一致性复杂度。因此需要界定 Disk 概念的归属层级与 Inode 映射机制。
+Linux FUSE 协议硬性规定：挂载点根目录的 Inode 编号必须固定是 `1`（即内核里的 `FUSE_ROOT_ID = 1`）。但服务端要同时管理很多块 Disk，如果服务端给每块 Disk 都从 1 开始分配 Inode 编号，不同 Disk 之间的 Inode 编号就会全部撞车。因此需要明确：怎么在服务端保证全局 Inode 编号唯一，同时又让客户端满足 FUSE 内核“根目录编号必须是 1”的要求。
 
 ## 决策
-1. **元数据服务完全无感知 Disk**：
-   - 服务端元数据层（RPC 契约及底层的关系数据库/KV 存储）不维护任何 Disk 实体表或字段，对 Disk 概念无感知。
-   - 每个 Disk 在元数据层本质上就是一个普通的目录 Inode。全局 Inode 单调递增分配（例如：Disk A 的根目录 Inode 为 2，后续写入文件依次为 3..1000；新建 Disk B 的根目录 Inode 为 1001）。
-2. **客户端承担 Disk 抽象与 Inode 1 重写**：
-   - 客户端即为 Disk 概念的载体。
-   - 客户端在挂载特定 Disk 时，本地 FUSE 驱动层强制将该 Disk 对应的根目录 Inode 映射重写为 `1` 暴露给操作系统内核。
-   - 其余非根目录及文件的 Inode 保持元数据服务的原始 ID 不变。
-3. **分层聚焦**：
-   - 当前元数据层的基础操作（如 `Lookup` 等 RPC）仅围绕标准的 `(parent_ino, name) -> Inode` 展开，不掺杂任何 Disk 逻辑。
+1. **服务端全局递增分配 Inode 编号，每块 Disk 对应一个独立的根目录 Inode**：
+   - 服务端的 Inode 编号全局递增、绝不重复（比如：Disk A 的根目录 Inode 是 `2`，它里面的文件是 `3..1000`；新建的 Disk B 的根目录 Inode 是 `1001`）。
+   - （注：本 ADR 早期曾假设服务端完全不建 `disks` 表；后续在 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 中，服务端增加了 `disks` 表来保存每块盘的 UUID、`root_ino` 和容量上限，但“每块 Disk 对应一个全局唯一 `root_ino`”的做法保持不变）。
+2. **客户端挂载时，把该 Disk 的 `root_ino` 和内核要求的编号 `1` 互相转换**：
+   - 客户端在挂载某块 Disk 时，先拿到这块 Disk 真实的根目录编号 `root_ino`。
+   - 当 FUSE 内核传进来的请求里节点编号是 `1` 时，客户端把它替换成真实的 `root_ino` 再发给服务端；当服务端返回的结果（比如 `Lookup` 或 `ReadDirPlus` 里的 `.` 和 `..`）里节点编号是 `root_ino` 时，客户端把它替换成 `1` 再报给 FUSE 内核。
+   - 除了根目录之外，其他所有子目录和文件的 Inode 编号都原样透传，不做改动。
+3. **服务端日常文件操作直接传 `ino`，不用每次都传 `disk_id`**：
+   - 像 `Lookup`、`GetAttr`、`Read`、`Write` 这些日常文件操作，请求里只需要传 `(parent_ino, name)` 或 `ino`，不需要每次都传 `disk_id`。
 
 ## 结果
-- **积极影响**：
-  - 服务端元数据模型极简，聚焦目录树拓扑与标准 POSIX 语义，无多余的状态和隔离包袱。
-  - 符合 FUSE 内核对根节点 `ino = 1` 的硬性约束，用户侧挂载体验透明。
-- **代价考量**：
-  - 客户端 FUSE 适配层需双向维护根节点 Inode 的转换逻辑（对内核呈报 1，对服务端 RPC 请求转换为实际 Inode）。
+- **正面效果**：
+  - 服务端所有文件共用一套全局唯一的 `ino` 主键，表结构简单清晰，不会出现不同磁盘的 Inode 撞号问题。
+  - 客户端做一次简单的 `1 <-> root_ino` 数字替换，就满足了 FUSE 内核对根目录编号为 `1` 的硬性要求。
+- **代价与取舍**：
+  - 客户端 FUSE 适配层需要在收发请求和返回目录项时，记得把根目录的 `root_ino` 和 `1` 互相转换。
