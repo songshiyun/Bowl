@@ -44,12 +44,6 @@ type handleCacheEntry struct {
 	bizErr error
 }
 
-type sessionTouchKey struct {
-	sessionID       uint64
-	handleCreatedAt int64
-	valid           bool
-}
-
 type batchChunkAppendStat struct {
 	ino      uint64
 	indx     int64
@@ -358,12 +352,7 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 	var committedStats []chunkAppendStat
 	var everReachedCommit bool
 	var resp *WriteResponse
-	var lastTouchRollback func()
 	txErr := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if lastTouchRollback != nil {
-			lastTouchRollback()
-			lastTouchRollback = nil
-		}
 		everReachedCommit = false
 		committedStats = nil
 		if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
@@ -402,14 +391,6 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 		accMode := uint32(handle.Flags) & O_ACCMODE
 		if accMode != O_WRONLY && accMode != O_RDWR {
 			return ErrBadFileHandle
-		}
-
-		if req.SessionID != nil {
-			rollbackTouch, err := m.touchWriteClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt)
-			if err != nil {
-				return err
-			}
-			lastTouchRollback = rollbackTouch
 		}
 
 		actualOffset := req.Offset
@@ -529,10 +510,6 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 	})
 
 	if txErr != nil {
-		if lastTouchRollback != nil {
-			lastTouchRollback()
-			lastTouchRollback = nil
-		}
 		// 当 everReachedCommit 为 false 时，事务未进入提交阶段，安全清理在途写入物理块；
 		// 若已进入 COMMIT 阶段（everReachedCommit 为 true），提交结果未知或在途，
 		// 必须保守保留物理块，杜绝误删即将提交完成的数据，未引用的残留块由后台 GC 回收。
@@ -540,7 +517,6 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 			t.cleanupBlocks()
 		}
 
-		m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, txErr)
 		return nil, mapWriteBizError(txErr)
 	}
 
@@ -555,15 +531,8 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []*writeBatchTask) {
 	var committedStats []batchChunkAppendStat
 	var everReachedCommit bool
-	var touchRollbacks []func()
 
 	txErr := m.execWriteTxWithRetry(batchCtx, func(q db.Querier) error {
-		for i := len(touchRollbacks) - 1; i >= 0; i-- {
-			if touchRollbacks[i] != nil {
-				touchRollbacks[i]()
-			}
-		}
-		touchRollbacks = nil
 		everReachedCommit = false
 		committedStats = nil
 		if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
@@ -611,7 +580,6 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 
 		// 2. 校验 Inode 类型、按 (ino, fh, sessionID) 去重校验 FileHandle 与 ClientSession
 		handleCache := make(map[handleCacheKey]handleCacheEntry, len(validTasks))
-		sessionTouchCache := make(map[sessionTouchKey]error)
 		seenRootInos := make(map[int64]struct{})
 		var uniqueRootInos []int64
 
@@ -655,31 +623,6 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 					accMode := uint32(handle.Flags) & O_ACCMODE
 					if accMode != O_WRONLY && accMode != O_RDWR {
 						hEntry = handleCacheEntry{handle: handle, bizErr: ErrBadFileHandle}
-					} else if t.req.SessionID != nil {
-						sKey := sessionTouchKey{
-							sessionID:       *t.req.SessionID,
-							handleCreatedAt: handle.CreatedAt.Time.UnixNano(),
-							valid:           handle.CreatedAt.Valid,
-						}
-						if touchErr, sCached := sessionTouchCache[sKey]; sCached {
-							hEntry = handleCacheEntry{handle: handle, bizErr: touchErr}
-						} else {
-							rollbackTouch, touchErr := m.touchWriteClientSessionForHandle(batchCtx, q, *t.req.SessionID, handle.CreatedAt)
-							if touchErr != nil {
-								if errors.Is(touchErr, ErrBadFileHandle) {
-									sessionTouchCache[sKey] = touchErr
-									hEntry = handleCacheEntry{handle: handle, bizErr: touchErr}
-								} else {
-									return touchErr
-								}
-							} else {
-								if rollbackTouch != nil {
-									touchRollbacks = append(touchRollbacks, rollbackTouch)
-								}
-								sessionTouchCache[sKey] = nil
-								hEntry = handleCacheEntry{handle: handle}
-							}
-						}
 					} else {
 						hEntry = handleCacheEntry{handle: handle}
 					}
@@ -888,23 +831,9 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 	})
 
 	if txErr != nil {
-		for i := len(touchRollbacks) - 1; i >= 0; i-- {
-			if touchRollbacks[i] != nil {
-				touchRollbacks[i]()
-			}
-		}
-		touchRollbacks = nil
-
-		cleanedSessions := make(map[uint64]struct{})
 		for _, t := range validTasks {
 			if !everReachedCommit || t.bizErr != nil {
 				t.cleanupBlocks()
-			}
-			if errors.Is(t.bizErr, ErrBadFileHandle) && t.req.SessionID != nil {
-				if _, ok := cleanedSessions[*t.req.SessionID]; !ok {
-					cleanedSessions[*t.req.SessionID] = struct{}{}
-					m.handleBadFileHandleSessionCleanup(t.ctx, t.req.SessionID, t.bizErr)
-				}
 			}
 			t.resp = nil
 			t.err = mapWriteBizError(txErr)
@@ -912,16 +841,9 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 		return
 	}
 
-	cleanedSessions := make(map[uint64]struct{})
 	for _, t := range validTasks {
 		if t.bizErr != nil {
 			t.cleanupBlocks()
-			if errors.Is(t.bizErr, ErrBadFileHandle) && t.req.SessionID != nil {
-				if _, ok := cleanedSessions[*t.req.SessionID]; !ok {
-					cleanedSessions[*t.req.SessionID] = struct{}{}
-					m.handleBadFileHandleSessionCleanup(t.ctx, t.req.SessionID, t.bizErr)
-				}
-			}
 			t.resp = nil
 			t.err = mapWriteBizError(t.bizErr)
 		}
@@ -935,12 +857,7 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 // writeZeroBytes 处理 0 字节写入探针。
 func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*WriteResponse, error) {
 	var resp *WriteResponse
-	var lastTouchRollback func()
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if lastTouchRollback != nil {
-			lastTouchRollback()
-			lastTouchRollback = nil
-		}
 		inode, err := q.GetInodeForUpdate(ctx, int64(req.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -974,14 +891,6 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 			return ErrBadFileHandle
 		}
 
-		if req.SessionID != nil {
-			rollbackTouch, err := m.touchWriteClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt)
-			if err != nil {
-				return err
-			}
-			lastTouchRollback = rollbackTouch
-		}
-
 		resp = &WriteResponse{
 			Size:  0,
 			Inode: m.newInode(inode),
@@ -990,10 +899,6 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 	})
 
 	if err != nil {
-		if lastTouchRollback != nil {
-			lastTouchRollback()
-			lastTouchRollback = nil
-		}
 		switch {
 		case errors.Is(err, ErrInvalidArgument):
 			return nil, ErrInvalidArgument
@@ -1002,7 +907,6 @@ func (m *manager) writeZeroBytes(ctx context.Context, req *WriteRequest) (*Write
 		case errors.Is(err, ErrIsDir):
 			return nil, ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, err)
 			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("write zero bytes tx: %w", err)

@@ -339,7 +339,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 		env.Model.RecordNewInode(f1Model)
 		env.Model.Entries[formalEntryKey{ParentIno: disk.RootIno, Name: fName1}] = f1Model.Ino
 		disk.UsedInodes++
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		h1 := &formalHandle{
 			Fh: cRes1.Fh, Ino: f1Model.Ino, Flags: meta.O_CREAT | meta.O_RDWR,
 			SessionID: modelCloneSessionID(&expSID), IsDir: false,
@@ -437,7 +436,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		dh := &formalHandle{
 			Fh: openDirRes.Fh, Ino: dirModel.Ino, Flags: meta.O_RDONLY,
 			SessionID: modelCloneSessionID(&expSID), IsDir: true,
@@ -462,7 +460,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		tmpModel := &formalInode{
 			Ino: tmpRes.Inode.Ino, Generation: tmpRes.Inode.Generation, RootIno: disk.RootIno,
 			Mode: tmpRes.Inode.Attr.Mode, Size: 0, Nlink: 0, IsTmpFile: true,
@@ -508,7 +505,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		fhFifo := &formalHandle{
 			Fh: openFifoRes.Fh, Ino: fifoModel.Ino, Flags: meta.O_RDWR,
 			SessionID: modelCloneSessionID(&expSID), IsDir: false,
@@ -551,7 +547,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &keepSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &keepSID, env.LeaseTTL)
 		env.Model.RecordNewHandle(&formalHandle{
 			Fh: openKeepRes.Fh, Ino: sharedModel.Ino, Flags: meta.O_RDWR,
 			SessionID: modelCloneSessionID(&keepSID), IsDir: false,
@@ -1172,7 +1167,7 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 		require.True(t, resExpInit.SessionRecreated, "首次创建 sidExp 时 SessionRecreated 必须为 true")
 		env.Model.RecordSession(sidExp, resExpInit.ExpiresAt)
 
-		resExpRenew, err := shortMgr.RenewSessionWithStatus(ctx, sidExp)
+		resExpRenew, err := mgr.RenewSessionWithStatus(ctx, sidExp)
 		require.NoError(t, err)
 		require.False(t, resExpRenew.SessionRecreated, "未过期续期 sidExp 时 SessionRecreated 必须为 false")
 		env.Model.RecordSession(sidExp, resExpRenew.ExpiresAt)
@@ -1372,6 +1367,8 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 
 		// 5. 通过公开接口 SetLkw (搭配 1ms 租约的 tinyMgr) 让 sidExp 在冲突写锁上真实入队 file_lock_waiters 并在首次轮询间隔内自然超期
 		tinyMgr := meta.New(store, meta.WithSessionLeaseTTL(1*time.Millisecond))
+		_, err = shortMgr.RenewSession(ctx, sidExp)
+		require.NoError(t, err)
 		tinyCtx, tinyCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer tinyCancel()
 		err = tinyMgr.SetLkw(tinyCtx, meta.SetLkwParams{
@@ -1417,7 +1414,6 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 		runAllProbesAndAuditors()
 
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: orphan6Model.Ino, Fh: h6Keep.Fh, SessionID: &sidKeep}))
-		modelSyncSessionRenewal(env.Model, &sidKeep, leaseTTL)
 		h6Keep.Closed = true
 		env.Model.ClosedHandles[h6Keep.Fh] = h6Keep
 		delete(env.Model.Handles, h6Keep.Fh)

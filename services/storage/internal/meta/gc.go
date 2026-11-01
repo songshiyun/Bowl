@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -21,9 +22,10 @@ const (
 )
 
 // CollectGarbage 执行单批次物理垃圾回收。
-//  1. 扫描 slice_refs 表中引用计数已归零 (refs <= 0) 的物理切片，调用 BlockStore.DeleteBlock 物理删除本地 NVMe 文件，
+//  1. 清理已超期的客户端会话租约（级联释放句柄、文件锁与等待队列），并非阻塞物理回收无有效句柄引用的 Orphan Inode。
+//  2. 扫描 slice_refs 表中引用计数已归零 (refs <= 0) 的物理切片，调用 BlockStore.DeleteBlock 物理删除本地 NVMe 文件，
 //     在该切片的所有关联 Block 文件均物理删除成功（或文件本就不存在）后，从数据库中清除 slice_refs 行。
-//  2. 若底层 BlockStore 实现了 BlockLister，进一步扫描修改时间超过安全宽限期（默认 1 小时）的物理块文件并与 slice_refs 对账，
+//  3. 若底层 BlockStore 实现了 BlockLister，进一步扫描修改时间超过安全宽限期（默认 1 小时）的物理块文件并与 slice_refs 对账，
 //     仅对在 slice_refs 中无记录（pgx.ErrNoRows）的未登记孤儿物理块文件执行物理回收。
 //
 // 若 limit <= 0，默认采用 DefaultGCBatchLimit (100)。
@@ -33,14 +35,30 @@ func (m *manager) CollectGarbage(ctx context.Context, limit int32) (int, error) 
 		limit = DefaultGCBatchLimit
 	}
 
-	var totalReclaimed int
-	var capturedBlockErrs []error
+	var (
+		totalReclaimed    int
+		capturedBlockErrs []error
+		expiredCount      int64
+		reclaimedInos     []int64
+	)
 
 	bs := m.getBlockStore()
 
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		totalReclaimed = 0
 		capturedBlockErrs = nil
+		expiredCount = 0
+		reclaimedInos = nil
+
+		var txErr error
+		expiredCount, txErr = q.DeleteExpiredClientSessions(ctx)
+		if txErr != nil {
+			return fmt.Errorf("delete expired client sessions: %w", txErr)
+		}
+		reclaimedInos, txErr = m.reclaimUnreferencedOrphansInTx(ctx, q)
+		if txErr != nil {
+			return txErr
+		}
 
 		rows, err := q.ListGarbageSliceRefs(ctx, limit)
 		if err != nil {
@@ -92,6 +110,12 @@ func (m *manager) CollectGarbage(ctx context.Context, limit int32) (int, error) 
 	})
 	if err != nil {
 		return 0, err
+	}
+
+	m.finalizeReclaimedOrphans(reclaimedInos)
+	if expiredCount > 0 {
+		m.cleanExpiredDirCursors(ctx)
+		m.notifyAllLockWaiters()
 	}
 
 	if lister, ok := bs.(BlockLister); ok && m.store != nil {

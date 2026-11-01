@@ -1310,6 +1310,32 @@ func (q *Queries) GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTa
 	return i, err
 }
 
+const hasActiveClientSession = `-- name: HasActiveClientSession :one
+SELECT EXISTS (
+    SELECT 1
+    FROM client_sessions s
+    WHERE s.session_id = $1::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR $2::bigint <= 0
+          OR s.disk_id = (SELECT d.disk_id FROM disks d WHERE d.root_ino = $2::bigint)
+      )
+)::boolean
+`
+
+type HasActiveClientSessionParams struct {
+	SessionID int64 `json:"session_id"`
+	RootIno   int64 `json:"root_ino"`
+}
+
+func (q *Queries) HasActiveClientSession(ctx context.Context, arg HasActiveClientSessionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasActiveClientSession, arg.SessionID, arg.RootIno)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const hasChildEntries = `-- name: HasChildEntries :one
 SELECT EXISTS(
     SELECT 1 FROM entries WHERE parent_ino = $1
@@ -1454,12 +1480,20 @@ func (q *Queries) IsSubdirectory(ctx context.Context, arg IsSubdirectoryParams) 
 }
 
 const listActiveFileLocksByInoAndFlags = `-- name: ListActiveFileLocksByInoAndFlags :many
+WITH locked_locks AS MATERIALIZED (
+    SELECT l.id, l.created_at AS lock_created_at, s.created_at AS sess_created_at, s.expires_at
+    FROM file_locks l
+    JOIN client_sessions s ON l.session_id = s.session_id
+    WHERE l.ino = $1
+      AND l.lk_flags = $2
+    ORDER BY s.session_id ASC, l.id ASC
+    FOR SHARE OF l, s
+)
 SELECT l.id, l.session_id, l.ino, l.fh, l.lock_owner, l.lk_flags, l.start_offset, l.end_offset, l.lock_type, l.pid, l.created_at
 FROM file_locks l
-JOIN client_sessions s ON l.session_id = s.session_id
-WHERE l.ino = $1
-  AND l.lk_flags = $2
-  AND s.expires_at > clock_timestamp()
+JOIN locked_locks ll ON l.id = ll.id
+WHERE ll.expires_at > clock_timestamp()
+  AND ll.lock_created_at >= ll.sess_created_at
 ORDER BY l.start_offset ASC, l.end_offset ASC, l.id ASC
 `
 
@@ -2210,15 +2244,20 @@ func (q *Queries) UpdateInodeParentInoAndTouchCtime(ctx context.Context, arg Upd
 }
 
 const upsertClientSession = `-- name: UpsertClientSession :one
-WITH ts AS (
+WITH locked_existing AS MATERIALIZED (
+    SELECT s.session_id, s.expires_at
+    FROM client_sessions s
+    WHERE s.session_id = $1
+    FOR UPDATE OF s
+),
+ts AS MATERIALIZED (
     SELECT clock_timestamp() AS now
+    FROM (SELECT count(*) FROM locked_existing) _barrier
 ),
 expired_target AS MATERIALIZED (
-    SELECT s.session_id
-    FROM client_sessions s, ts
-    WHERE s.session_id = $1
-      AND s.expires_at <= ts.now
-    FOR UPDATE OF s
+    SELECT le.session_id
+    FROM locked_existing le, ts
+    WHERE le.expires_at <= ts.now
 ),
 purged_locks AS (
     DELETE FROM file_locks

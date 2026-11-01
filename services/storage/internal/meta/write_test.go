@@ -189,7 +189,7 @@ func TestWrite_ZeroLengthData(t *testing.T) {
 		assert.Equal(t, uint32(meta.S_IFREG|meta.S_ISUID|meta.S_ISGID|0o644), resp.Inode.Attr.Mode)
 	})
 
-	t.Run("0 字节写带 session_id 时续期会话", func(t *testing.T) {
+	t.Run("0 字节写带 session_id 时内联校验句柄与会话且不执行搭便车续期", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -216,18 +216,6 @@ func TestWrite_ZeroLengthData(t *testing.T) {
 			}, nil).
 			Once()
 
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sessionID)
-			})).
-			Return(db.ClientSession{
-				SessionID: int64(sessionID),
-				ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-				UpdatedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true},
-			}, nil).
-			Once()
-
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,
 			Fh:        fh,
@@ -239,6 +227,7 @@ func TestWrite_ZeroLengthData(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		assert.Equal(t, uint32(0), resp.Size)
+		mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
 		mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
 		mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
 	})
@@ -1658,7 +1647,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("同一活跃 ClientSession 在节流窗口内连续与并发多次 Write 仅首次触发 UpsertClientSession 且零全表扫描", func(t *testing.T) {
+	t.Run("同一活跃 ClientSession 连续与并发多次 Write 零次触发 UpsertClientSession 且零全表扫描", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockBS := metamock.NewMockBlockStore(t)
 
@@ -1671,8 +1660,6 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			PutBlock(mock.Anything, mock.Anything, uint32(0), mock.Anything).
 			Return(nil)
 
-		var upsertCalls atomic.Int64
-		sessCreatedAt := now.Add(-10 * time.Minute)
 		handleCreatedAt := now.Add(-5 * time.Minute)
 
 		mockStore.EXPECT().
@@ -1698,20 +1685,6 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 					}, nil).
 					Once()
 				mockQuerier.EXPECT().
-					UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-						return arg.SessionID == int64(sessionID)
-					})).
-					RunAndReturn(func(ctx context.Context, arg db.UpsertClientSessionParams) (db.ClientSession, error) {
-						upsertCalls.Add(1)
-						return db.ClientSession{
-							SessionID: int64(sessionID),
-							ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
-							CreatedAt: pgtype.Timestamptz{Time: sessCreatedAt, Valid: true},
-							UpdatedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-						}, nil
-					}).
-					Maybe()
-				mockQuerier.EXPECT().
 					AppendChunkSlice(mock.Anything, mock.Anything).
 					Return(int64(24), nil).
 					Maybe()
@@ -1723,26 +1696,28 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 					UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
 					Return(baseFileRow, nil).
 					Maybe()
-				return fn(mockQuerier)
+				err := fn(mockQuerier)
+				mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
+				mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
+				mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
+				return err
 			})
 
 		mgr := meta.New(
 			mockStore,
 			meta.WithBlockStore(mockBS),
-			meta.WithWriteSessionTouchInterval(80*time.Millisecond),
 		)
 
-		// 1. 在 80ms 节流窗口内并发执行 12 次非零写入 + 4 次零字节写入
-		const totalInWindow = 16
+		const totalWrites = 16
 		var wg sync.WaitGroup
-		errs := make([]error, totalInWindow)
-		for i := 0; i < totalInWindow; i++ {
+		errs := make([]error, totalWrites)
+		for i := 0; i < totalWrites; i++ {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
 				var data []byte
 				if idx < 12 {
-					data = fmt.Appendf(nil, "throttled-write-%d", idx)
+					data = fmt.Appendf(nil, "unidirectional-write-%d", idx)
 				}
 				_, errs[idx] = mgr.Write(ctx, &meta.WriteRequest{
 					Ino:       ino,
@@ -1755,26 +1730,11 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		}
 		wg.Wait()
 		for i, err := range errs {
-			require.NoError(t, err, "窗口内第 %d 次并发写入应成功", i)
+			require.NoError(t, err, "第 %d 次并发写入应成功", i)
 		}
-
-		// 核心断言：节流窗口内 16 次并发 Write 仅触发 1 次 UpsertClientSession，且未触发任何 DeleteExpiredClientSessions / DeleteUnreferencedOrphanInodes
-		assert.Equal(t, int64(1), upsertCalls.Load(), "节流窗口内同一活跃会话多次并发 Write 必须仅首次触发 1 次 UpsertClientSession")
-
-		// 2. 等待跨过 80ms 节流窗口后再次写入，应触发第 2 次 UpsertClientSession
-		time.Sleep(100 * time.Millisecond)
-		_, err := mgr.Write(ctx, &meta.WriteRequest{
-			Ino:       ino,
-			Fh:        fh,
-			Offset:    0,
-			Data:      []byte("after-throttle-window"),
-			SessionID: &sessionID,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, int64(2), upsertCalls.Load(), "跨越节流窗口后的首次 Write 应再次续期会话")
 	})
 
-	t.Run("已超期会话与已退役重建会话（handle.CreatedAt < session.CreatedAt）在首次及节流窗口内均 100% 返回 ErrBadFileHandle", func(t *testing.T) {
+	t.Run("GetFileHandle 内联拦截已超期或已退役重建会话并返回 ErrBadFileHandle 且回滚清理物理块", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		payload := []byte("intercepted-write")
@@ -1787,105 +1747,32 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		mockBS.EXPECT().
 			PutBlock(mock.Anything, mock.Anything, uint32(0), payload).
 			Return(nil).
-			Times(3)
+			Times(2)
 
-		// 3 次被拒的写入均须在事务外回滚清理物理块
 		mockBS.EXPECT().
 			DeleteBlock(mock.Anything, mock.Anything, uint32(0), uint32(len(payload))).
 			Return(nil).
-			Times(3)
+			Times(2)
 
-		recreatedSessionTime := now.Add(-1 * time.Minute)
-		staleHandleTime := now.Add(-5 * time.Minute) // handle.CreatedAt < session.CreatedAt
-
-		var step int
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.Anything).
 			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				step++
 				mockQuerier := dbmock.NewMockQuerier(t)
-				switch step {
-				case 1:
-					// 场景 A：首次 Write 遇到已退役重建会话（handle.CreatedAt < session.CreatedAt）
-					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
-						Fh:        int64(fh),
-						Ino:       int64(ino),
-						Flags:     int32(meta.O_WRONLY),
-						CreatedAt: pgtype.Timestamptz{Time: staleHandleTime, Valid: true},
-						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
-					}, nil).Once()
-					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
-						SessionID: int64(sessionID),
-						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
-						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-					}, nil).Once()
-				case 2:
-					// 场景 B：合法新句柄（createdAt >= recreatedSessionTime）写入成功，激活节流窗口
-					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
-						Fh:        int64(fh + 1),
-						Ino:       int64(ino),
-						Flags:     int32(meta.O_WRONLY),
-						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
-						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
-					}, nil).Once()
-					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
-						SessionID: int64(sessionID),
-						CreatedAt: pgtype.Timestamptz{Time: recreatedSessionTime, Valid: true},
-						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-					}, nil).Once()
-					mockQuerier.EXPECT().AppendChunkSlice(mock.Anything, mock.Anything).Return(int64(24), nil).Once()
-					mockQuerier.EXPECT().InsertSliceRef(mock.Anything, mock.Anything).Return(nil).Once()
-					mockQuerier.EXPECT().UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).Return(baseFileRow, nil).Once()
-				case 3:
-					// 场景 C：处于节流窗口内（不调用 UpsertClientSession），旧代际句柄（staleHandleTime < recreatedSessionTime）依然被 100% 拦截
-					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
-						Fh:        int64(fh),
-						Ino:       int64(ino),
-						Flags:     int32(meta.O_WRONLY),
-						CreatedAt: pgtype.Timestamptz{Time: staleHandleTime, Valid: true},
-						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
-					}, nil).Once()
-				case 4:
-					// 场景 D：已超期会话（UpsertClientSession 返回 CreatedAt == UpdatedAt）被拦截并触发异步清理
-					mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-					mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{
-						Fh:        int64(fh + 2),
-						Ino:       int64(ino),
-						Flags:     int32(meta.O_WRONLY),
-						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-						SessionID: pgtype.Int8{Int64: int64(sessionID + 1), Valid: true},
-					}, nil).Once()
-					mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.Anything).Return(db.ClientSession{
-						SessionID: int64(sessionID + 1),
-						CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-						UpdatedAt: pgtype.Timestamptz{Time: now, Valid: true}, // CreatedAt == UpdatedAt 表示原会话已过期
-						ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-					}, nil).Once()
-				case 5:
-					// cleanExpiredSessionByID 异步清理
-					mockQuerier.EXPECT().DeleteExpiredClientSessions(mock.Anything).Return(int64(1), nil).Once()
-				}
-				return fn(mockQuerier)
-			})
-
-		// 允许第 2 次合法写入的 PutBlock
-		mockBS.EXPECT().
-			PutBlock(mock.Anything, mock.Anything, uint32(0), []byte("valid-write")).
-			Return(nil).
-			Once()
+				mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
+				mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{}, pgx.ErrNoRows).Once()
+				err := fn(mockQuerier)
+				mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
+				mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
+				return err
+			}).
+			Times(2)
 
 		mgr := meta.New(
 			mockStore,
 			meta.WithBlockStore(mockBS),
-			meta.WithWriteSessionTouchInterval(5*time.Second),
 		)
 
-		// Step 1: 首次使用退役旧代际句柄 -> ErrBadFileHandle
+		// Step 1: 退役旧代际句柄 -> GetFileHandle 返回 pgx.ErrNoRows -> ErrBadFileHandle
 		_, err := mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,
 			Fh:        fh,
@@ -1895,27 +1782,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		})
 		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 
-		// Step 2: 合法新代际句柄写入 -> 成功并进入 5s 节流窗口
-		_, err = mgr.Write(ctx, &meta.WriteRequest{
-			Ino:       ino,
-			Fh:        fh + 1,
-			Offset:    0,
-			Data:      []byte("valid-write"),
-			SessionID: &sessionID,
-		})
-		require.NoError(t, err)
-
-		// Step 3: 节流窗口内再次使用退役旧代际句柄 -> 无需调 UpsertClientSession 依然 100% 返回 ErrBadFileHandle
-		_, err = mgr.Write(ctx, &meta.WriteRequest{
-			Ino:       ino,
-			Fh:        fh,
-			Offset:    0,
-			Data:      payload,
-			SessionID: &sessionID,
-		})
-		require.ErrorIs(t, err, meta.ErrBadFileHandle)
-
-		// Step 4: 已超期会话（sessionID + 1）写入 -> 100% 返回 ErrBadFileHandle
+		// Step 2: 已超期会话 -> GetFileHandle 返回 pgx.ErrNoRows -> ErrBadFileHandle
 		expiredSess := sessionID + 1
 		_, err = mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,
@@ -1927,7 +1794,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 	})
 
-	t.Run("PostgreSQL 集成验证：节流窗口内会话过期或退役重建均被无锁校验 100% 实时拦截", func(t *testing.T) {
+	t.Run("PostgreSQL 集成验证：Write 不推进 client_sessions.updated_at 且会话过期或退役重建均被 GetFileHandle 100% 实时拦截", func(t *testing.T) {
 		pool, pgCtx := setupMetaTestDB(t)
 		if pool == nil {
 			return
@@ -1937,10 +1804,10 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		store := db.NewStore(pool)
 		dataDir := t.TempDir()
 		bs := meta.NewLocalFSBlockStore(dataDir)
-		mgr := meta.New(store, meta.WithBlockStore(bs), meta.WithWriteSessionTouchInterval(10*time.Second))
+		mgr := meta.New(store, meta.WithBlockStore(bs))
 
 		disk, err := mgr.CreateDisk(pgCtx, meta.CreateDiskParams{
-			Name:     fmt.Sprintf("write-session-throttle-%d", time.Now().UnixNano()),
+			Name:     fmt.Sprintf("write-session-check-%d", time.Now().UnixNano()),
 			MaxBytes: 10 * 1024 * 1024,
 		})
 		require.NoError(t, err)
@@ -1953,9 +1820,12 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sess))
 		})
 
+		_, err = mgr.RenewSession(pgCtx, sess)
+		require.NoError(t, err)
+
 		createRes, err := mgr.Create(pgCtx, meta.CreateParams{
 			ParentIno: disk.RootIno,
-			Name:      []byte("throttle_session_check.bin"),
+			Name:      []byte("unidirectional_session_check.bin"),
 			Mode:      meta.S_IFREG | 0o644,
 			UID:       1000,
 			GID:       1000,
@@ -1969,7 +1839,11 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			cleanupWriteTestInoAndSlices(t, store, mgr, int64(targetIno), targetFh)
 		})
 
-		// 1. 第 1 次写入成功，进入 10s 节流窗口
+		var beforeUpdatedAt time.Time
+		require.NoError(t, pool.QueryRow(pgCtx, "SELECT updated_at FROM client_sessions WHERE session_id = $1", int64(sess)).Scan(&beforeUpdatedAt))
+		time.Sleep(10 * time.Millisecond)
+
+		// 1. 第 1 次写入成功，且不修改 client_sessions.updated_at
 		_, err = mgr.Write(pgCtx, &meta.WriteRequest{
 			Ino:       targetIno,
 			Fh:        targetFh,
@@ -1979,7 +1853,11 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 2. 在 10s 节流窗口内，模拟该会话在数据库中已重建为更新的 created_at（使 targetFh.created_at < session.created_at）
+		var afterUpdatedAt time.Time
+		require.NoError(t, pool.QueryRow(pgCtx, "SELECT updated_at FROM client_sessions WHERE session_id = $1", int64(sess)).Scan(&afterUpdatedAt))
+		assert.True(t, beforeUpdatedAt.Equal(afterUpdatedAt), "Write 绝不能搭便车推进 client_sessions.updated_at")
+
+		// 2. 模拟该会话在数据库中已重建为更新的 created_at（使 targetFh.created_at < session.created_at）
 		_, err = pool.Exec(pgCtx, "UPDATE client_sessions SET created_at = clock_timestamp() + interval '5 seconds' WHERE session_id = $1", int64(sess))
 		require.NoError(t, err)
 
@@ -1990,9 +1868,9 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			Data:      []byte("stale-handle-in-window"),
 			SessionID: &sess,
 		})
-		require.ErrorIs(t, err, meta.ErrBadFileHandle, "节流窗口内已退役重建会话的旧句柄必须 100% 返回 ErrBadFileHandle")
+		require.ErrorIs(t, err, meta.ErrBadFileHandle, "已退役重建会话的旧句柄必须 100% 返回 ErrBadFileHandle")
 
-		// 3. 恢复 created_at 但令会话过期，同样在窗口内必须 100% 拦截返回 ErrBadFileHandle
+		// 3. 恢复 created_at 但令会话过期，同样必须 100% 拦截返回 ErrBadFileHandle
 		_, err = pool.Exec(pgCtx, "UPDATE client_sessions SET created_at = clock_timestamp() - interval '1 hour', expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sess))
 		require.NoError(t, err)
 
@@ -2003,6 +1881,6 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			Data:      []byte("expired-in-window"),
 			SessionID: &sess,
 		})
-		require.ErrorIs(t, err, meta.ErrBadFileHandle, "节流窗口内已过期会话必须 100% 返回 ErrBadFileHandle")
+		require.ErrorIs(t, err, meta.ErrBadFileHandle, "已过期会话必须 100% 返回 ErrBadFileHandle")
 	})
 }

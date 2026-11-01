@@ -20,32 +20,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-// setupRenewClientSessionMocks 设置通用的会话续期 Mock 期望序列（包含 DeleteExpiredClientSessions、UpsertClientSession、DeleteUnreferencedOrphanInodes）。
-func setupRenewClientSessionMocks(mockQuerier *dbmock.MockQuerier, sessionID uint64) {
-	now := time.Now()
-	mockQuerier.EXPECT().
-		DeleteExpiredClientSessions(mock.Anything).
-		Return(int64(0), nil).
-		Once()
-
-	mockQuerier.EXPECT().
-		UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-			return arg.SessionID == int64(sessionID)
-		})).
-		Return(db.ClientSession{
-			SessionID: int64(sessionID),
-			ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-			CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-			UpdatedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true},
-		}, nil).
-		Once()
-
-	mockQuerier.EXPECT().
-		DeleteUnreferencedOrphanInodes(mock.Anything).
-		Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-		Once()
-}
-
 func TestRelease_InputValidation(t *testing.T) {
 	ctx := context.Background()
 
@@ -250,27 +224,6 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(baseInode, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		beforeCall := time.Now()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sessionID) &&
-					arg.ExpiresAt.Valid &&
-					arg.ExpiresAt.Time.After(beforeCall.Add(25*time.Second)) &&
-					arg.ExpiresAt.Time.Before(beforeCall.Add(35*time.Second))
-			})).
-			Return(db.ClientSession{SessionID: int64(sessionID)}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -507,9 +460,6 @@ func TestRelease_PositivePath(t *testing.T) {
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanInode, nil).
 			Once()
-
-		// 1. 先续期会话并清理其他孤儿节点
-		setupRenewClientSessionMocks(mockQuerier, sessionID)
 
 		// 2. 删除句柄 (DeleteFileHandle)
 		mockQuerier.EXPECT().
@@ -1222,6 +1172,8 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		}()
 
 		sessID := uint64(770001)
+		_, err = mgr.RenewSession(ctx, sessID)
+		require.NoError(t, err)
 
 		// 1. 创建常驻文件 normal.txt，大小 8192 字节，用于提供配额基底
 		normRes, err := mgr.Create(ctx, meta.CreateParams{
@@ -1300,6 +1252,8 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		}()
 
 		sessID := uint64(770002)
+		_, err = mgr.RenewSession(ctx, sessID)
+		require.NoError(t, err)
 
 		// 1. 创建常驻子目录 dir1，用于提供配额基底
 		dir1, err := mgr.Mkdir(ctx, meta.MkdirParams{

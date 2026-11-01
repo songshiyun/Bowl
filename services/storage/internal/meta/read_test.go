@@ -1290,8 +1290,6 @@ func TestRead_AtimeModeAndSessionRenew(t *testing.T) {
 			}, nil).
 			Once()
 
-		setupRenewClientSessionMocks(mockQuerier, sessionID)
-
 		resp, err := mgr.Read(ctx, &meta.ReadRequest{
 			Ino:       ino,
 			Fh:        fh,

@@ -540,6 +540,10 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(activeSess), int64(expiredSess))
 	})
+	_, err = mgr.RenewSession(ctx, activeSess)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, expiredSess)
+	require.NoError(t, err)
 
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: disk.RootIno,

@@ -309,10 +309,7 @@ func TestReleaseDir_PositivePath(t *testing.T) {
 			Return(orphanDir, nil).
 			Once()
 
-		// 1. 先续期会话 (renewOptionalClientSession)
-		setupRenewClientSessionMocks(mockQuerier, sessionID)
-
-		// 2. 再删除句柄 (DeleteFileHandle)
+		// 2. 删除句柄 (DeleteFileHandle)
 		mockQuerier.EXPECT().
 			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
 				Fh:        int64(fh),
@@ -601,6 +598,8 @@ func TestReleaseDir_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		}()
 
 		sessID := uint64(770002)
+		_, err = mgr.RenewSession(ctx, sessID)
+		require.NoError(t, err)
 
 		// 1. 创建常驻子目录 normal_dir，提供配额基底
 		_, err = mgr.Mkdir(ctx, meta.MkdirParams{

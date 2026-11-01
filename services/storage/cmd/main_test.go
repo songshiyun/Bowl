@@ -234,6 +234,14 @@ func TestRun_AutoGCWorker_TriggersOnIntervalAndDrainsGracefully(t *testing.T) {
 		Maybe()
 
 	mockQuerier.EXPECT().
+		DeleteExpiredClientSessions(mock.Anything).
+		Return(int64(0), nil).
+		Maybe()
+	mockQuerier.EXPECT().
+		DeleteUnreferencedOrphanInodes(mock.Anything).
+		Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
+		Maybe()
+	mockQuerier.EXPECT().
 		ListGarbageSliceRefs(mock.Anything, int32(100)).
 		RunAndReturn(func(ctx context.Context, limit int32) ([]db.SliceRef, error) {
 			gcCount.Add(1)
@@ -299,6 +307,14 @@ func TestRun_AutoGCWorker_WaitsForInFlightGCToCompleteOnStop(t *testing.T) {
 		Maybe()
 
 	var once sync.Once
+	mockQuerier.EXPECT().
+		DeleteExpiredClientSessions(mock.Anything).
+		Return(int64(0), nil).
+		Maybe()
+	mockQuerier.EXPECT().
+		DeleteUnreferencedOrphanInodes(mock.Anything).
+		Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
+		Maybe()
 	mockQuerier.EXPECT().
 		ListGarbageSliceRefs(mock.Anything, int32(100)).
 		RunAndReturn(func(ctx context.Context, limit int32) ([]db.SliceRef, error) {

@@ -1822,21 +1822,6 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 			}, nil).
 			Once()
 
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: sessionID}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
 		// 模拟存在冲突锁
 		mockQuerier.EXPECT().
 			ListActiveFileLocksByInoAndFlags(mock.Anything, db.ListActiveFileLocksByInoAndFlagsParams{
@@ -2111,6 +2096,8 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		defer func() {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessionID))
 		}()
+		_, err = mgr.RenewSession(ctx, sessionID)
+		require.NoError(t, err)
 
 		// 1. 创建常规文件
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
@@ -2191,6 +2178,10 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		defer func() {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(s1), int64(s2))
 		}()
+		_, err = mgr.RenewSession(ctx, s1)
+		require.NoError(t, err)
+		_, err = mgr.RenewSession(ctx, s2)
+		require.NoError(t, err)
 
 		// 1. 创建常规文件
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
@@ -2607,9 +2598,6 @@ func TestWriteOps_DeadlockRetry_Unit(t *testing.T) {
 				SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
 			}, nil).
 			Once()
-
-		// renewClientSession 调用
-		setupRenewClientSessionMocks(mockQuerier, sessionID)
 
 		// applyFlockSetLk 调用
 		mockQuerier.EXPECT().

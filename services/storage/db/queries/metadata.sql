@@ -363,16 +363,34 @@ WHERE ino = $1 AND name = $2;
 DELETE FROM client_sessions
 WHERE expires_at <= clock_timestamp();
 
+-- name: HasActiveClientSession :one
+SELECT EXISTS (
+    SELECT 1
+    FROM client_sessions s
+    WHERE s.session_id = @session_id::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR @root_ino::bigint <= 0
+          OR s.disk_id = (SELECT d.disk_id FROM disks d WHERE d.root_ino = @root_ino::bigint)
+      )
+)::boolean;
+
 -- name: UpsertClientSession :one
-WITH ts AS (
+WITH locked_existing AS MATERIALIZED (
+    SELECT s.session_id, s.expires_at
+    FROM client_sessions s
+    WHERE s.session_id = $1
+    FOR UPDATE OF s
+),
+ts AS MATERIALIZED (
     SELECT clock_timestamp() AS now
+    FROM (SELECT count(*) FROM locked_existing) _barrier
 ),
 expired_target AS MATERIALIZED (
-    SELECT s.session_id
-    FROM client_sessions s, ts
-    WHERE s.session_id = $1
-      AND s.expires_at <= ts.now
-    FOR UPDATE OF s
+    SELECT le.session_id
+    FROM locked_existing le, ts
+    WHERE le.expires_at <= ts.now
 ),
 purged_locks AS (
     DELETE FROM file_locks
@@ -460,12 +478,20 @@ ORDER BY l.start_offset ASC, l.end_offset ASC, l.id ASC
 LIMIT 1;
 
 -- name: ListActiveFileLocksByInoAndFlags :many
+WITH locked_locks AS MATERIALIZED (
+    SELECT l.id, l.created_at AS lock_created_at, s.created_at AS sess_created_at, s.expires_at
+    FROM file_locks l
+    JOIN client_sessions s ON l.session_id = s.session_id
+    WHERE l.ino = @ino
+      AND l.lk_flags = @lk_flags
+    ORDER BY s.session_id ASC, l.id ASC
+    FOR SHARE OF l, s
+)
 SELECT l.id, l.session_id, l.ino, l.fh, l.lock_owner, l.lk_flags, l.start_offset, l.end_offset, l.lock_type, l.pid, l.created_at
 FROM file_locks l
-JOIN client_sessions s ON l.session_id = s.session_id
-WHERE l.ino = @ino
-  AND l.lk_flags = @lk_flags
-  AND s.expires_at > clock_timestamp()
+JOIN locked_locks ll ON l.id = ll.id
+WHERE ll.expires_at > clock_timestamp()
+  AND ll.lock_created_at >= ll.sess_created_at
 ORDER BY l.start_offset ASC, l.end_offset ASC, l.id ASC;
 
 -- name: CreateFileLock :one
