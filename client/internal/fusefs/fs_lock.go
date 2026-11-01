@@ -106,7 +106,7 @@ func (fs *RawFS) GetLk(cancel <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut
 		SessionId: sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	respLk := resp.Msg.GetLk()
@@ -164,7 +164,7 @@ func (fs *RawFS) SetLk(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 		SessionId: sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK
@@ -214,7 +214,7 @@ func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 		RequestId: reqID,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK

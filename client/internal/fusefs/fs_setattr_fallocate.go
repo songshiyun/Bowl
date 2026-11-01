@@ -116,6 +116,9 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
+		if req.SessionId != nil {
+			return fs.ToStatusWithSession(err, cancel)
+		}
 		return fs.ToStatus(err, cancel)
 	}
 
@@ -164,7 +167,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK

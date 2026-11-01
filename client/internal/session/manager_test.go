@@ -465,15 +465,15 @@ func TestManager_SessionRecreated_RotationAndHandleIsolation(t *testing.T) {
 	// 1. 验证输出明确的 WARN 告警日志
 	require.True(t, logCapture.hasWarnLog("client session expired on server; rotating session_id"), "必须输出会话超期轮换警告日志")
 
-	// 2. 验证断网前打开的老句柄确定性返回 EBADF，绝不借用新会话续命
+	// 2. 验证断网前打开的老句柄已被清除，确定性返回 EBADF，绝不借用新会话续命
 	oldResSID, err := mgr.ResolveHandleSession(oldFH)
 	require.ErrorIs(t, err, session.ErrBadFileHandle, "老句柄解析必须返回 EBADF")
-	require.Equal(t, oldSID, oldResSID, "老句柄解析应返回其创建时的原始 sessionID")
+	require.Equal(t, uint64(0), oldResSID, "老句柄在旧会话退役时已从 handleSessions 清理，应返回 0")
 
-	// 验证 LookupHandleSession 仍然保留打开时的原始 ID
+	// 验证 LookupHandleSession 已被立即清理
 	lookupSID, ok := mgr.LookupHandleSession(oldFH)
-	require.True(t, ok)
-	require.Equal(t, oldSID, lookupSID)
+	require.False(t, ok, "旧会话退役后 LookupHandleSession 应返回 false")
+	require.Equal(t, uint64(0), lookupSID)
 
 	// 3. 验证新句柄在轮换后绑定新 session_id 并自愈可用
 	newFH := uint64(502)
@@ -482,7 +482,7 @@ func TestManager_SessionRecreated_RotationAndHandleIsolation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, newSID, activeResSID)
 
-	// 4. 验证 UnbindHandle 清理老句柄后不再查到
+	// 4. 验证 UnbindHandle 幂等安全
 	mgr.UnbindHandle(oldFH)
 	_, okAfterUnbind := mgr.LookupHandleSession(oldFH)
 	require.False(t, okAfterUnbind)
@@ -578,11 +578,13 @@ func TestManager_SessionExpired_RotationRetryOnError(t *testing.T) {
 		t.Fatal("timed out waiting for first rotation RenewSession attempt")
 	}
 
-	// 此时新会话尚未激活成功，CurrentSessionID() 仍为 initialSID，但旧句柄必须已因 retiredSessions 登记立即返回 EBADF
+	// 此时新会话尚未激活成功，CurrentSessionID() 仍为 initialSID，但旧句柄必须已因 retireAndCleanupSession 清理立即返回 EBADF
 	require.Equal(t, initialSID, mgr.CurrentSessionID(), "新会话激活完成前 CurrentSessionID 仍应保持为 initialSID")
 	midSID, err := mgr.ResolveHandleSession(oldFH)
 	require.ErrorIs(t, err, session.ErrBadFileHandle, "轮换激活受阻窗口内旧句柄必须立即返回 EBADF")
-	require.Equal(t, initialSID, midSID)
+	require.Equal(t, uint64(0), midSID)
+	_, okMid := mgr.LookupHandleSession(oldFH)
+	require.False(t, okMid, "轮换激活受阻窗口内旧句柄必须已从 handleSessions 清理")
 
 	// 放行首次轮换尝试（使其返回 Unavailable 触发重试）
 	close(releaseFirstRotation)
@@ -681,4 +683,251 @@ func TestManager_DiskIDPropagation_And_CloseSession(t *testing.T) {
 		require.NoError(t, mgr.Close())
 		require.True(t, logCapture.hasWarnLog("close session failed on shutdown"), "CloseSession 失败时应记录 Warn 日志而不阻塞卸载")
 	})
+}
+
+func TestManager_PerCallRenewRPCTimeout(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+
+	handler := &mockStorageHandler{
+		renewSessionFunc: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+			mu.Lock()
+			attempts++
+			cur := attempts
+			mu.Unlock()
+
+			// 第 1 次初始激活成功
+			if cur == 1 {
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(300 * time.Millisecond)),
+					SessionRecreated: false,
+				}), nil
+			}
+			// 第 2 次模拟黑洞/假死连接，阻塞直到单次 RPC 超时取消
+			if cur == 2 {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			// 第 3 次恢复正常
+			return connect.NewResponse(&storagev1.RenewSessionResponse{
+				ExpiresAt:        timestamppb.New(time.Now().Add(300 * time.Millisecond)),
+				SessionRecreated: false,
+			}), nil
+		},
+	}
+	client, cleanup := setupTestServer(t, handler)
+	defer cleanup()
+
+	mgr, err := session.New(context.Background(), client, session.Config{
+		MinInterval:         20 * time.Millisecond,
+		MaxInterval:         40 * time.Millisecond,
+		InitialRetryBackoff: 15 * time.Millisecond,
+		MaxRetryBackoff:     30 * time.Millisecond,
+		RenewRPCTimeout:     40 * time.Millisecond,
+	})
+	require.NoError(t, err)
+	defer func() { _ = mgr.Close() }()
+
+	require.NoError(t, mgr.Start(context.Background()))
+
+	// 验证第 2 次挂起的 RenewSession 被 RenewRPCTimeout 取消后不会卡死 renewLoop，能够推进到第 3 次成功续约
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return attempts >= 3
+	}, 2*time.Second, 10*time.Millisecond, "挂起的 RenewSession 必须被 RenewRPCTimeout 超时打断并继续后续重试")
+}
+
+func TestManager_GracePeriodExpiryImmediateCleanup_OnRenewFailure(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	expiredCallbacks := make([]uint64, 0)
+	registeredCallbacks := make([]uint64, 0)
+	serverPartitioned := true
+
+	handler := &mockStorageHandler{
+		renewSessionFunc: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+			mu.Lock()
+			attempts++
+			cur := attempts
+			partitioned := serverPartitioned
+			mu.Unlock()
+
+			if cur == 1 {
+				// 初始租约 60ms
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(60 * time.Millisecond)),
+					SessionRecreated: false,
+				}), nil
+			}
+			if partitioned {
+				return nil, connect.NewError(connect.CodeUnavailable, errors.New("network partition"))
+			}
+			return connect.NewResponse(&storagev1.RenewSessionResponse{
+				ExpiresAt:        timestamppb.New(time.Now().Add(300 * time.Millisecond)),
+				SessionRecreated: true,
+			}), nil
+		},
+	}
+	client, cleanup := setupTestServer(t, handler)
+	defer cleanup()
+
+	mgr, err := session.New(context.Background(), client, session.Config{
+		MinInterval:         15 * time.Millisecond,
+		MaxInterval:         25 * time.Millisecond,
+		InitialRetryBackoff: 15 * time.Millisecond,
+		MaxRetryBackoff:     25 * time.Millisecond,
+		RenewRPCTimeout:     50 * time.Millisecond,
+		OnSessionExpired: func(expiredSID uint64) {
+			mu.Lock()
+			expiredCallbacks = append(expiredCallbacks, expiredSID)
+			mu.Unlock()
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = mgr.Close() }()
+
+	mgr.RegisterOnSessionExpired(func(expiredSID uint64) {
+		mu.Lock()
+		registeredCallbacks = append(registeredCallbacks, expiredSID)
+		mu.Unlock()
+	})
+
+	oldSID := mgr.CurrentSessionID()
+	const oldFH = uint64(801)
+	mgr.BindHandle(oldFH, oldSID)
+
+	require.NoError(t, mgr.Start(context.Background()))
+
+	// 在网络仍然断开（serverPartitioned == true）的情况下，等待 60ms 租约宽限期耗尽：
+	// 客户端必须立即标记旧会话退役、清空 handleSessions 并触发 OnSessionExpired（无需等待网络恢复）
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(expiredCallbacks) > 0 && len(registeredCallbacks) > 0
+	}, 2*time.Second, 10*time.Millisecond, "宽限期耗尽时无需等待网络恢复即应立即触发 OnSessionExpired")
+
+	mu.Lock()
+	require.Equal(t, []uint64{oldSID}, expiredCallbacks, "Config.OnSessionExpired 对同一旧会话必须恰好触发一次")
+	require.Equal(t, []uint64{oldSID}, registeredCallbacks, "RegisterOnSessionExpired 对同一旧会话必须恰好触发一次")
+	mu.Unlock()
+
+	_, ok := mgr.LookupHandleSession(oldFH)
+	require.False(t, ok, "宽限期耗尽后本地 handleSessions 必须已被立即清空")
+	_, err = mgr.ResolveHandleSession(oldFH)
+	require.ErrorIs(t, err, session.ErrBadFileHandle)
+
+	// 恢复网络连通后，自动完成新会话激活且不再重复触发旧会话的过期回调
+	mu.Lock()
+	serverPartitioned = false
+	mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		return mgr.CurrentSessionID() != oldSID
+	}, 2*time.Second, 10*time.Millisecond)
+
+	mu.Lock()
+	require.Equal(t, []uint64{oldSID}, expiredCallbacks, "网络恢复完成轮换后不得重复触发同一 oldSID 的回调")
+	require.Equal(t, []uint64{oldSID}, registeredCallbacks)
+	mu.Unlock()
+}
+
+func TestManager_ResolveHandleSession_LocalExpiryBeforeRenewLoopTick(t *testing.T) {
+	var mu sync.Mutex
+	expiredCallbacks := make([]uint64, 0)
+
+	handler := &mockStorageHandler{
+		renewSessionFunc: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+			// 返回 40ms 后过期的短租约
+			return connect.NewResponse(&storagev1.RenewSessionResponse{
+				ExpiresAt:        timestamppb.New(time.Now().Add(40 * time.Millisecond)),
+				SessionRecreated: false,
+			}), nil
+		},
+	}
+	client, cleanup := setupTestServer(t, handler)
+	defer cleanup()
+
+	// 不启动 renewLoop（或模拟 renewLoop 尚未 tick），直接验证 ResolveHandleSession 的本地超期即时拦截
+	mgr, err := session.New(context.Background(), client, session.Config{
+		MinInterval: 10 * time.Second,
+		MaxInterval: 20 * time.Second,
+		OnSessionExpired: func(expiredSID uint64) {
+			mu.Lock()
+			expiredCallbacks = append(expiredCallbacks, expiredSID)
+			mu.Unlock()
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = mgr.Close() }()
+
+	oldSID := mgr.CurrentSessionID()
+	const fh = uint64(901)
+	mgr.BindHandle(fh, oldSID)
+
+	// 等待超过 40ms 使本地 expiresAt 到期
+	time.Sleep(60 * time.Millisecond)
+
+	// 调用 ResolveHandleSession 必须立即检测到本地租约超期，返回 ErrBadFileHandle，清空 handleSessions 并触发回调
+	gotSID, err := mgr.ResolveHandleSession(fh)
+	require.ErrorIs(t, err, session.ErrBadFileHandle)
+	require.Equal(t, oldSID, gotSID)
+
+	_, ok := mgr.LookupHandleSession(fh)
+	require.False(t, ok, "ResolveHandleSession 检测到本地超期后必须立即清空该会话的 handleSessions")
+
+	mu.Lock()
+	require.Equal(t, []uint64{oldSID}, expiredCallbacks, "ResolveHandleSession 检测到本地超期后必须立即触发一次 OnSessionExpired")
+	mu.Unlock()
+
+	// 再次调用不会重复触发回调
+	_, err = mgr.ResolveHandleSession(fh)
+	require.ErrorIs(t, err, session.ErrBadFileHandle)
+	mu.Lock()
+	require.Equal(t, []uint64{oldSID}, expiredCallbacks)
+	mu.Unlock()
+}
+
+func TestManager_TriggerRenew_ImmediateWakeup(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+
+	handler := &mockStorageHandler{
+		renewSessionFunc: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			// 返回 60s 租约，使得默认自适应睡眠间隔达到 MaxInterval (10s)
+			return connect.NewResponse(&storagev1.RenewSessionResponse{
+				ExpiresAt:        timestamppb.New(time.Now().Add(60 * time.Second)),
+				SessionRecreated: false,
+			}), nil
+		},
+	}
+	client, cleanup := setupTestServer(t, handler)
+	defer cleanup()
+
+	mgr, err := session.New(context.Background(), client, session.Config{
+		MinInterval: 5 * time.Second,
+		MaxInterval: 10 * time.Second,
+	})
+	require.NoError(t, err)
+	defer func() { _ = mgr.Close() }()
+
+	require.NoError(t, mgr.Start(context.Background()))
+
+	// 初始仅有 1 次调用（New 阶段）
+	time.Sleep(30 * time.Millisecond)
+	mu.Lock()
+	require.Equal(t, 1, calls)
+	mu.Unlock()
+
+	// 调用 TriggerRenew() 应立即唤醒处于 10s 长睡眠中的 renewLoop 发起 RenewSession
+	mgr.TriggerRenew()
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls >= 2
+	}, 500*time.Millisecond, 10*time.Millisecond, "TriggerRenew 必须立即唤醒 renewLoop 发起续约 RPC")
 }

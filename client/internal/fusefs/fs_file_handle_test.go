@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -595,5 +596,155 @@ func TestRawFS_Release(t *testing.T) {
 		// 等待超过一个 ReleaseRetryInterval 周期，验证旧会话项被直接丢弃，不再发起额外 Release RPC
 		time.Sleep(120 * time.Millisecond)
 		require.Equal(t, int32(1), releaseCalls.Load(), "会话轮换后队列应自动丢弃旧会话待释放项，不再发送 RPC")
+	})
+
+	t.Run("session expiry callback immediately cancels in-flight readAhead prefetch and purges releaseQueue", func(t *testing.T) {
+		const step = 64 * 1024
+		prefetchStarted := make(chan struct{})
+		prefetchCanceled := make(chan struct{})
+		var prefetchOnce sync.Once
+		var releaseCalls atomic.Int32
+
+		localSrv := &rwMockStorageServer{
+			renewSessionFn: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+				// 赋予 80ms 初始短租约，以便通过 ResolveHandleSession 本地超期立即触发 OnSessionExpired
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(80 * time.Millisecond)),
+					SessionRecreated: false,
+				}), nil
+			},
+			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+				// 异步预取下一 4 MiB 窗口（Offset == step + 4 MiB）时模拟长耗时请求，等待被会话过期取消
+				if req.Msg.GetOffset() == step+fusefs.MaxRPCChunkSize {
+					prefetchOnce.Do(func() { close(prefetchStarted) })
+					<-ctx.Done()
+					close(prefetchCanceled)
+					return nil, ctx.Err()
+				}
+				return connect.NewResponse(&storagev1.ReadResponse{
+					Data: make([]byte, int(req.Msg.GetSize())),
+				}), nil
+			},
+			releaseFn: func(ctx context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
+				releaseCalls.Add(1)
+				return nil, connect.NewError(connect.CodeUnavailable, errors.New("network down"))
+			},
+		}
+		localClient := setupRWTestRPCServer(t, localSrv)
+		localMgr, err := session.New(context.Background(), localClient, session.Config{
+			MinInterval: 10 * time.Second,
+			MaxInterval: 20 * time.Second,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = localMgr.Close() })
+
+		oldSID := localMgr.CurrentSessionID()
+		rawFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{
+			RootIno:              1001,
+			ReleaseRetryInterval: 30 * time.Millisecond,
+		})
+		t.Cleanup(rawFS.OnUnmount)
+
+		const readFH = uint64(301)
+		const relFH = uint64(302)
+		localMgr.BindHandle(readFH, oldSID)
+		localMgr.BindHandle(relFH, oldSID)
+
+		// 1. 连续两次顺序读取触发 4 MiB 窗口拉取及下一 4 MiB 窗口异步预取（prefetchFuture）
+		_, st1 := rawFS.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       readFH,
+			Offset:   0,
+			Size:     step,
+		}, nil)
+		require.Equal(t, fuse.OK, st1)
+
+		_, st2 := rawFS.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       readFH,
+			Offset:   step,
+			Size:     step,
+		}, nil)
+		require.Equal(t, fuse.OK, st2)
+
+		select {
+		case <-prefetchStarted:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for async prefetch to start")
+		}
+
+		// 2. 等待 90ms 让 80ms 租约在本地过期，先把 relFH 放入 releaseQueue（此时首次 Release 调用 1 次）
+		time.Sleep(90 * time.Millisecond)
+		rawFS.Release(nil, &fuse.ReleaseIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       relFH,
+		})
+		require.Equal(t, int32(1), releaseCalls.Load())
+
+		// 立即调用 ResolveHandle 触发 OnSessionExpired 即时清理（此时 localMgr.CurrentSessionID() 仍等于 oldSID，因为未启动 renewLoop）
+		_, stExpired := rawFS.ResolveHandle(readFH)
+		require.Equal(t, fuse.EBADF, stExpired)
+
+		// 3. 断言在途的 prefetchFuture 被立即取消（无需等待 30s defaultPrefetchTimeout 或 OnUnmount）
+		select {
+		case <-prefetchCanceled:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected in-flight prefetchFuture to be cancelled immediately on session expiry")
+		}
+
+		// 4. 断言即使 CurrentSessionID 尚未被后台 renewLoop 切换，releaseQueue 中属于 oldSID 的项也已被 onSessionExpired 立即移除，不再发起后台重试 RPC
+		time.Sleep(80 * time.Millisecond)
+		require.Equal(t, int32(1), releaseCalls.Load(), "onSessionExpired 必须立即清空 releaseQueue 中属于已过期会话的待重试项")
+	})
+
+	t.Run("server EBADF on session-bound RPC triggers immediate renewLoop wakeup via TriggerRenew", func(t *testing.T) {
+		var renewCalls atomic.Int32
+		localSrv := &handleMockStorageServer{
+			renewSessionFn: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+				n := renewCalls.Add(1)
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(60 * time.Second)),
+					SessionRecreated: n >= 2,
+				}), nil
+			},
+			flushFn: func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+				cerr := connect.NewError(connect.CodeFailedPrecondition, errors.New("session expired on server"))
+				detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{
+					Reason: "EBADF",
+					Domain: "bowl.storage",
+				})
+				require.NoError(t, err)
+				cerr.AddDetail(detail)
+				return nil, cerr
+			},
+		}
+		localClient := setupHandleTestRPCServer(t, localSrv)
+		localMgr, err := session.New(context.Background(), localClient, session.Config{
+			MinInterval: 10 * time.Second,
+			MaxInterval: 20 * time.Second,
+		})
+		require.NoError(t, err)
+		require.NoError(t, localMgr.Start(context.Background()))
+		t.Cleanup(func() { _ = localMgr.Close() })
+
+		oldSID := localMgr.CurrentSessionID()
+		const fh = uint64(401)
+		localMgr.BindHandle(fh, oldSID)
+
+		rawFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{RootIno: 1001})
+		t.Cleanup(rawFS.OnUnmount)
+
+		require.Equal(t, int32(1), renewCalls.Load())
+
+		// 调用 Flush 收到服务端 EBADF，必须通过 ToStatusWithSession -> TriggerRenew 立即唤醒处于 20s 睡眠中的 renewLoop
+		st := rawFS.Flush(nil, &fuse.FlushIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       fh,
+		})
+		require.Equal(t, fuse.EBADF, st)
+
+		require.Eventually(t, func() bool {
+			return renewCalls.Load() >= 3 && localMgr.CurrentSessionID() != oldSID
+		}, 1*time.Second, 10*time.Millisecond, "服务端返回 EBADF 后必须立即唤醒 renewLoop 并完成会话轮换")
 	})
 }

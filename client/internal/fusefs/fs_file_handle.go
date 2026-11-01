@@ -71,7 +71,7 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 		SessionId: sessionID,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	fh := resp.Msg.GetFh()
@@ -119,7 +119,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 		SessionId: sessionID,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	if (input.Flags & uint32(syscall.O_TRUNC)) != 0 {
@@ -164,7 +164,7 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status 
 		SessionId: &sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK
@@ -194,7 +194,7 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 		SessionId: &sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK
@@ -237,6 +237,9 @@ func (fs *RawFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
 		SessionId:    &sid,
 	}
 	_, err := fs.client.Release(ctx, connect.NewRequest(req))
+	if isServerEBADF(err) && fs.sessions != nil {
+		fs.sessions.TriggerRenew()
+	}
 	if shouldEnqueueReleaseRetry(err) {
 		fs.enqueueReleaseFileRetry(req, sid)
 	}

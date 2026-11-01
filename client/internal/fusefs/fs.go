@@ -2,6 +2,7 @@ package fusefs
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -75,7 +76,7 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		cfg.ReleaseRetryInterval = DefaultReleaseRetryInterval
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
-	return &RawFS{
+	fs := &RawFS{
 		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
 		client:           client,
 		sessions:         sessions,
@@ -85,6 +86,43 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		releaseCancel:    releaseCancel,
 		readAheadHandles: make(map[uint64]*handleReadAhead),
 	}
+	if sessions != nil {
+		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
+	}
+	return fs
+}
+
+// onSessionExpired 在指定 ClientSession 过期淘汰时立即清理所有关联的预读缓存与待释放句柄重试项。
+func (fs *RawFS) onSessionExpired(expiredSID uint64) {
+	if fs == nil {
+		return
+	}
+
+	fs.readAheadMu.Lock()
+	var targets []*handleReadAhead
+	for fh, hra := range fs.readAheadHandles {
+		if expiredSID == 0 || hra.sessionID == expiredSID {
+			targets = append(targets, hra)
+			delete(fs.readAheadHandles, fh)
+		}
+	}
+	fs.readAheadMu.Unlock()
+
+	for _, hra := range targets {
+		hra.mu.Lock()
+		hra.resetLocked()
+		hra.mu.Unlock()
+	}
+
+	fs.releaseMu.Lock()
+	remaining := fs.releaseQueue[:0]
+	for _, item := range fs.releaseQueue {
+		if expiredSID != 0 && item.key.sessionID != expiredSID {
+			remaining = append(remaining, item)
+		}
+	}
+	fs.releaseQueue = remaining
+	fs.releaseMu.Unlock()
 }
 
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
@@ -125,6 +163,31 @@ func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.Ca
 func (fs *RawFS) ToStatus(err error, cancel <-chan struct{}) fuse.Status {
 	if err == nil {
 		return fuse.OK
+	}
+	errno := rpc.MapErrorWithCancel(err, cancel)
+	return fuse.Status(errno)
+}
+
+// isServerEBADF 判断服务端返回的错误是否表示句柄或会话已失效（EBADF / FailedPrecondition）。
+func isServerEBADF(err error) bool {
+	if err == nil {
+		return false
+	}
+	if rpc.MapError(err) == syscall.EBADF {
+		return true
+	}
+	var connectErr *connect.Error
+	return errors.As(err, &connectErr) && connectErr.Code() == connect.CodeFailedPrecondition
+}
+
+// ToStatusWithSession 将携带会话的 ConnectRPC 错误解码为 fuse.Status；
+// 若服务端返回 EBADF / FailedPrecondition，立即按需唤醒后台 renewLoop 发起续约/轮换探测。
+func (fs *RawFS) ToStatusWithSession(err error, cancel <-chan struct{}) fuse.Status {
+	if err == nil {
+		return fuse.OK
+	}
+	if isServerEBADF(err) && fs.sessions != nil {
+		fs.sessions.TriggerRenew()
 	}
 	errno := rpc.MapErrorWithCancel(err, cancel)
 	return fuse.Status(errno)

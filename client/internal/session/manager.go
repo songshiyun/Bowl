@@ -24,6 +24,7 @@ const (
 	DefaultMaxInterval         = 20 * time.Second
 	DefaultInitialRetryBackoff = 200 * time.Millisecond
 	DefaultMaxRetryBackoff     = 2 * time.Second
+	DefaultRenewRPCTimeout     = 5 * time.Second
 )
 
 // StorageClient 抽象 StorageService 的 RenewSession 与 CloseSession RPC 契约。
@@ -39,6 +40,8 @@ type Config struct {
 	MaxInterval         time.Duration
 	InitialRetryBackoff time.Duration
 	MaxRetryBackoff     time.Duration
+	RenewRPCTimeout     time.Duration
+	OnSessionExpired    func(expiredSID uint64)
 	Logger              *slog.Logger
 }
 
@@ -52,16 +55,18 @@ type Manager struct {
 	currentSessionID atomic.Uint64
 
 	// 句柄血缘映射与已淘汰会话集合
-	handleMu        sync.RWMutex
-	handleSessions  map[uint64]uint64
-	retiredSessions map[uint64]struct{}
+	handleMu           sync.RWMutex
+	handleSessions     map[uint64]uint64
+	retiredSessions    map[uint64]struct{}
+	onSessionExpiredFn []func(expiredSID uint64)
 
 	// 后台续期协程生命周期控制
-	loopCtx    context.Context
-	cancelLoop context.CancelFunc
-	loopDone   chan struct{}
-	startOnce  sync.Once
-	closeOnce  sync.Once
+	loopCtx     context.Context
+	cancelLoop  context.CancelFunc
+	loopDone    chan struct{}
+	renewWakeCh chan struct{}
+	startOnce   sync.Once
+	closeOnce   sync.Once
 
 	// 最新租约截止时间
 	expiresAtMu sync.RWMutex
@@ -82,7 +87,9 @@ func New(ctx context.Context, client StorageClient, cfg Config) (*Manager, error
 		return nil, fmt.Errorf("generate initial session id: %w", err)
 	}
 
-	resp, err := client.RenewSession(ctx, newRenewSessionRequest(initialSID, cfg.DiskID))
+	callCtx, cancel := context.WithTimeout(ctx, cfg.RenewRPCTimeout)
+	resp, err := client.RenewSession(callCtx, newRenewSessionRequest(initialSID, cfg.DiskID))
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("activate initial session: %w", err)
 	}
@@ -105,11 +112,71 @@ func New(ctx context.Context, client StorageClient, cfg Config) (*Manager, error
 		loopCtx:         loopCtx,
 		cancelLoop:      cancelLoop,
 		loopDone:        make(chan struct{}),
+		renewWakeCh:     make(chan struct{}, 1),
 		expiresAt:       expiresAt,
 	}
 	m.currentSessionID.Store(initialSID)
 
 	return m, nil
+}
+
+// RegisterOnSessionExpired 线程安全地注册会话过期淘汰回调。
+// 当某个会话过期淘汰时，每个过期 sessionID 保证至多触发一次回调。
+func (m *Manager) RegisterOnSessionExpired(fn func(expiredSID uint64)) {
+	if m == nil || fn == nil {
+		return
+	}
+	m.handleMu.Lock()
+	m.onSessionExpiredFn = append(m.onSessionExpiredFn, fn)
+	m.handleMu.Unlock()
+}
+
+// TriggerRenew 按需唤醒后台 renewLoop 立即发起一次续约探测（例如业务 RPC 遇到服务端返回 EBADF 时）。
+func (m *Manager) TriggerRenew() {
+	if m == nil {
+		return
+	}
+	select {
+	case m.renewWakeCh <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) isSessionRetired(sid uint64) bool {
+	m.handleMu.RLock()
+	_, retired := m.retiredSessions[sid]
+	m.handleMu.RUnlock()
+	return retired
+}
+
+func (m *Manager) retireAndCleanupSession(oldSID uint64) {
+	if m == nil || oldSID == 0 {
+		return
+	}
+	m.handleMu.Lock()
+	_, alreadyRetired := m.retiredSessions[oldSID]
+	m.retiredSessions[oldSID] = struct{}{}
+	for fh, s := range m.handleSessions {
+		if s == oldSID {
+			delete(m.handleSessions, fh)
+		}
+	}
+	var callbacks []func(expiredSID uint64)
+	if !alreadyRetired {
+		if m.cfg.OnSessionExpired != nil {
+			callbacks = append(callbacks, m.cfg.OnSessionExpired)
+		}
+		callbacks = append(callbacks, m.onSessionExpiredFn...)
+	}
+	m.handleMu.Unlock()
+
+	if !alreadyRetired {
+		for _, cb := range callbacks {
+			if cb != nil {
+				cb(oldSID)
+			}
+		}
+	}
 }
 
 // Start 启动后台自适应租约续期保活协程。
@@ -130,10 +197,16 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 func (m *Manager) renewLoop(ctx context.Context) {
-
 	currentBackoff := m.cfg.InitialRetryBackoff
 
 	for {
+		sid := m.currentSessionID.Load()
+		if m.isSessionRetired(sid) {
+			m.handleSessionExpired(ctx, sid)
+			currentBackoff = m.cfg.InitialRetryBackoff
+			continue
+		}
+
 		m.expiresAtMu.RLock()
 		exp := m.expiresAt
 		m.expiresAtMu.RUnlock()
@@ -152,28 +225,64 @@ func (m *Manager) renewLoop(ctx context.Context) {
 			}
 		}
 
+		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(interval):
+		case <-timer.C:
+		case <-m.renewWakeCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
 		}
 
-		sid := m.currentSessionID.Load()
-		resp, err := m.client.RenewSession(ctx, newRenewSessionRequest(sid, m.cfg.DiskID))
+		sid = m.currentSessionID.Load()
+		if m.isSessionRetired(sid) {
+			m.handleSessionExpired(ctx, sid)
+			currentBackoff = m.cfg.InitialRetryBackoff
+			continue
+		}
+
+		callCtx, cancel := context.WithTimeout(ctx, m.cfg.RenewRPCTimeout)
+		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(sid, m.cfg.DiskID))
+		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
+
+			m.expiresAtMu.RLock()
+			expNow := m.expiresAt
+			m.expiresAtMu.RUnlock()
+			if !time.Now().Before(expNow) || m.isSessionRetired(sid) {
+				m.handleSessionExpired(ctx, sid)
+				currentBackoff = m.cfg.InitialRetryBackoff
+				continue
+			}
+
 			m.logger.Warn("renew session failed, retrying with backoff",
 				"session_id", sid,
 				"error", err,
 				"backoff", currentBackoff,
 			)
 
+			backoffTimer := time.NewTimer(currentBackoff)
 			select {
 			case <-ctx.Done():
+				backoffTimer.Stop()
 				return
-			case <-time.After(currentBackoff):
+			case <-backoffTimer.C:
+			case <-m.renewWakeCh:
+				if !backoffTimer.Stop() {
+					select {
+					case <-backoffTimer.C:
+					default:
+					}
+				}
 			}
 
 			currentBackoff = min(currentBackoff*2, m.cfg.MaxRetryBackoff)
@@ -182,7 +291,7 @@ func (m *Manager) renewLoop(ctx context.Context) {
 
 		currentBackoff = m.cfg.InitialRetryBackoff
 
-		if resp.Msg.GetSessionRecreated() {
+		if resp.Msg.GetSessionRecreated() || m.isSessionRetired(sid) {
 			m.handleSessionExpired(ctx, sid)
 			continue
 		}
@@ -196,6 +305,9 @@ func (m *Manager) renewLoop(ctx context.Context) {
 }
 
 func (m *Manager) handleSessionExpired(ctx context.Context, oldSID uint64) {
+	// 立即淘汰旧会话、清空其关联的本地句柄血缘映射并触发 OnSessionExpired 清理回调
+	m.retireAndCleanupSession(oldSID)
+
 	newSID, err := generateSessionID(oldSID)
 	if err != nil {
 		m.logger.Error("failed to generate new session id on session expiry", "error", err)
@@ -207,15 +319,12 @@ func (m *Manager) handleSessionExpired(ctx context.Context, oldSID uint64) {
 		"new_session_id", newSID,
 	)
 
-	// 将旧会话登记到已退役集合中，使后续对旧会话句柄的访问立即失效
-	m.handleMu.Lock()
-	m.retiredSessions[oldSID] = struct{}{}
-	m.handleMu.Unlock()
-
 	// 激活新会话，遇到临时网络错误时以指数退避重试保活
 	backoff := m.cfg.InitialRetryBackoff
 	for {
-		resp, err := m.client.RenewSession(ctx, newRenewSessionRequest(newSID, m.cfg.DiskID))
+		callCtx, cancel := context.WithTimeout(ctx, m.cfg.RenewRPCTimeout)
+		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(newSID, m.cfg.DiskID))
+		cancel()
 		if err == nil {
 			// 新会话激活成功，原子切换当前活跃会话 ID
 			m.currentSessionID.Store(newSID)
@@ -242,10 +351,19 @@ func (m *Manager) handleSessionExpired(ctx context.Context, oldSID uint64) {
 			"backoff", backoff,
 		)
 
+		backoffTimer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			backoffTimer.Stop()
 			return
-		case <-time.After(backoff):
+		case <-backoffTimer.C:
+		case <-m.renewWakeCh:
+			if !backoffTimer.Stop() {
+				select {
+				case <-backoffTimer.C:
+				default:
+				}
+			}
 		}
 
 		backoff = min(backoff*2, m.cfg.MaxRetryBackoff)
@@ -275,21 +393,29 @@ func (m *Manager) LookupHandleSession(fh uint64) (uint64, bool) {
 }
 
 // ResolveHandleSession 校验并获取指定 fh 绑定的有效 sessionID。
-// 若句柄不存在或其绑定的会话已被判定淘汰/退役，返回 (0, ErrBadFileHandle) (syscall.EBADF)。
+// 若句柄不存在、其绑定的会话已被判定淘汰/退役或本地租约已超期，立即清理并返回 ErrBadFileHandle (syscall.EBADF)。
 // 严格杜绝借用新 CurrentSessionID 伪造续命老句柄。
 func (m *Manager) ResolveHandleSession(fh uint64) (uint64, error) {
 	m.handleMu.RLock()
-	defer m.handleMu.RUnlock()
-
 	sid, ok := m.handleSessions[fh]
 	if !ok {
+		m.handleMu.RUnlock()
 		return 0, ErrBadFileHandle
 	}
+	_, retired := m.retiredSessions[sid]
+	m.handleMu.RUnlock()
 
-	if _, retired := m.retiredSessions[sid]; retired {
+	if retired || sid != m.currentSessionID.Load() {
 		return sid, ErrBadFileHandle
 	}
-	if sid != m.currentSessionID.Load() {
+
+	m.expiresAtMu.RLock()
+	exp := m.expiresAt
+	m.expiresAtMu.RUnlock()
+
+	if !time.Now().Before(exp) {
+		m.retireAndCleanupSession(sid)
+		m.TriggerRenew()
 		return sid, ErrBadFileHandle
 	}
 
@@ -357,6 +483,9 @@ func normalizeConfig(cfg *Config) {
 	}
 	if cfg.InitialRetryBackoff > cfg.MaxRetryBackoff {
 		cfg.InitialRetryBackoff, cfg.MaxRetryBackoff = cfg.MaxRetryBackoff, cfg.InitialRetryBackoff
+	}
+	if cfg.RenewRPCTimeout <= 0 {
+		cfg.RenewRPCTimeout = DefaultRenewRPCTimeout
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
