@@ -1,0 +1,51 @@
+{
+  "bowl_commit": "7fbc2fef7564502f94bda34c2c2532c4be6fb760",
+  "date_local": "2026-11-02",
+  "timezone": "Asia/Shanghai",
+  "region": "us-west-1",
+  "zone": "us-west-1a",
+  "instance_type": "ecs.c9i.xlarge",
+  "production_code_modified": false,
+  "suites": {
+    "pjdfstest": {
+      "status": "passed",
+      "scripts": 238,
+      "passed_tests": 8798,
+      "failed_tests": 0,
+      "report": "pjdfstest/REPORT.md"
+    },
+    "drive9": {
+      "status": "completed",
+      "reference_commit": "b529a36f",
+      "cold_cases": 45,
+      "hot_cases": 45,
+      "samples_per_case": 3,
+      "report": "drive9/REPORT.md"
+    },
+    "juicefs": {
+      "status": "partial_failure",
+      "controls": "jfs_pg/jfs_redis 全套完成",
+      "bowl": "两次独立运行均在 fio seq_write_1job 最终 fsync 失败；其余 fio 与 mdtest 未执行",
+      "error": "EIO: flush wal: context deadline exceeded",
+      "report": "juicefs/REPORT.md"
+    }
+  },
+  "cleanup": {
+    "verified_at_utc": "2026-11-01T18:27:40.940026+00:00",
+    "remaining_instances_in_region": 0,
+    "remaining_keypairs_in_region": 0,
+    "created_instances_total": 10
+  },
+  "validation": [
+    "报告从已替换原始数据再生成一致",
+    "16 份 JuiceFS 对照组 fio error 均为 0",
+    "失败 fio 吞吐已排除，并以旧解析逻辑反事实验证",
+    "Drive9 冷热各45项且每项3次样本，三组完整性结果齐全",
+    "shell/Python 语法及代码文档 diff 空白检查通过"
+  ],
+  "limitations": [
+    "Bowl 失败结果未修复，不宣称全套通过",
+    "JuiceFS 对照与 Bowl 复跑为同规格不同实例",
+    "原始日志保留原始尾随空格"
+  ]
+}
