@@ -21,6 +21,9 @@ import (
 // DefaultReleaseRetryInterval 是待释放句柄异步重试队列的默认轮询周期。
 const DefaultReleaseRetryInterval = 200 * time.Millisecond
 
+// DefaultRPCTimeout 是 FUSE 常规请求（不含阻塞锁 SetLkw）的默认单请求超时预算。
+const DefaultRPCTimeout = 5 * time.Second
+
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
 
@@ -32,6 +35,7 @@ type Config struct {
 	DirectIO             bool
 	AllowOther           bool
 	Debug                bool
+	RPCTimeout           time.Duration
 	ReleaseRetryInterval time.Duration
 	OnUnmount            func()
 }
@@ -72,6 +76,9 @@ type RawFS struct {
 
 // NewRawFS 创建并初始化 RawFS 实例。
 func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Manager, cfg Config) *RawFS {
+	if cfg.RPCTimeout <= 0 {
+		cfg.RPCTimeout = DefaultRPCTimeout
+	}
 	if cfg.ReleaseRetryInterval <= 0 {
 		cfg.ReleaseRetryInterval = DefaultReleaseRetryInterval
 	}
@@ -154,9 +161,18 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 	return fuse.OK
 }
 
-// RPCContext 包装内核 cancel 信号通道为派生 context，支持 FUSE_INTERRUPT 及时取消。
+// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 5s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
-	return rpc.ContextWithCancelChan(context.Background(), cancel)
+	timeout := fs.cfg.RPCTimeout
+	if timeout <= 0 {
+		timeout = DefaultRPCTimeout
+	}
+	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), timeout)
+	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
+	return ctx, func() {
+		cancelChan()
+		cancelTimeout()
+	}
 }
 
 // ToStatus 将 ConnectRPC 错误解码为对应的 Linux fuse.Status。

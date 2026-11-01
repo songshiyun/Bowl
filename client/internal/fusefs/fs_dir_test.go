@@ -302,7 +302,8 @@ func TestRawFS_ReleaseDir(t *testing.T) {
 
 		rotateFlag.Store(true)
 		require.Eventually(t, func() bool {
-			return localMgr.CurrentSessionID() != oldSID
+			cur := localMgr.CurrentSessionID()
+			return cur != 0 && cur != oldSID
 		}, 500*time.Millisecond, 10*time.Millisecond, "会话应完成轮换")
 
 		time.Sleep(120 * time.Millisecond)

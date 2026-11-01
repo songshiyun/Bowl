@@ -590,7 +590,8 @@ func TestRawFS_Release(t *testing.T) {
 		// 触发会话超期轮换
 		rotateFlag.Store(true)
 		require.Eventually(t, func() bool {
-			return localMgr.CurrentSessionID() != oldSID
+			cur := localMgr.CurrentSessionID()
+			return cur != 0 && cur != oldSID
 		}, 500*time.Millisecond, 10*time.Millisecond, "会话应完成轮换")
 
 		// 等待超过一个 ReleaseRetryInterval 周期，验证旧会话项被直接丢弃，不再发起额外 Release RPC
@@ -641,14 +642,16 @@ func TestRawFS_Release(t *testing.T) {
 		oldSID := localMgr.CurrentSessionID()
 		rawFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{
 			RootIno:              1001,
-			ReleaseRetryInterval: 30 * time.Millisecond,
+			ReleaseRetryInterval: 200 * time.Millisecond,
 		})
 		t.Cleanup(rawFS.OnUnmount)
 
 		const readFH = uint64(301)
 		const relFH = uint64(302)
+		const lateRelFH = uint64(303)
 		localMgr.BindHandle(readFH, oldSID)
 		localMgr.BindHandle(relFH, oldSID)
+		localMgr.BindHandle(lateRelFH, oldSID)
 
 		// 1. 连续两次顺序读取触发 4 MiB 窗口拉取及下一 4 MiB 窗口异步预取（prefetchFuture）
 		_, st1 := rawFS.Read(nil, &fuse.ReadIn{
@@ -673,17 +676,25 @@ func TestRawFS_Release(t *testing.T) {
 			t.Fatal("timed out waiting for async prefetch to start")
 		}
 
-		// 2. 等待 90ms 让 80ms 租约在本地过期，先把 relFH 放入 releaseQueue（此时首次 Release 调用 1 次）
-		time.Sleep(90 * time.Millisecond)
+		// 2. 在 80ms 租约尚未到期前，先调用 Release(relFH) 使其因网络错误进入 releaseQueue（此时 ReleaseRetryInterval=200ms 尚未触发）
 		rawFS.Release(nil, &fuse.ReleaseIn{
 			InHeader: fuse.InHeader{NodeId: 2001},
 			Fh:       relFH,
 		})
 		require.Equal(t, int32(1), releaseCalls.Load())
 
-		// 立即调用 ResolveHandle 触发 OnSessionExpired 即时清理（此时 localMgr.CurrentSessionID() 仍等于 oldSID，因为未启动 renewLoop）
+		// 等待 90ms 让 80ms 租约在本地过期，调用 ResolveHandle 触发 OnSessionExpired 即时清理
+		time.Sleep(90 * time.Millisecond)
 		_, stExpired := rawFS.ResolveHandle(readFH)
 		require.Equal(t, fuse.EBADF, stExpired)
+		require.Equal(t, uint64(0), localMgr.CurrentSessionID())
+
+		// 对已过期会话的 lateRelFH 调用 Release 必须直接清理本地状态并返回，绝不向服务端发起额外 Release RPC
+		rawFS.Release(nil, &fuse.ReleaseIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       lateRelFH,
+		})
+		require.Equal(t, int32(1), releaseCalls.Load(), "会话过期后对旧句柄调用 Release 绝不能再向服务端发起 Release RPC")
 
 		// 3. 断言在途的 prefetchFuture 被立即取消（无需等待 30s defaultPrefetchTimeout 或 OnUnmount）
 		select {
@@ -692,8 +703,8 @@ func TestRawFS_Release(t *testing.T) {
 			t.Fatal("expected in-flight prefetchFuture to be cancelled immediately on session expiry")
 		}
 
-		// 4. 断言即使 CurrentSessionID 尚未被后台 renewLoop 切换，releaseQueue 中属于 oldSID 的项也已被 onSessionExpired 立即移除，不再发起后台重试 RPC
-		time.Sleep(80 * time.Millisecond)
+		// 4. 等待超过 ReleaseRetryInterval (200ms)，断言 releaseQueue 中属于 oldSID 的 relFH 已被 onSessionExpired 立即移除，不再发起后台重试 RPC
+		time.Sleep(160 * time.Millisecond)
 		require.Equal(t, int32(1), releaseCalls.Load(), "onSessionExpired 必须立即清空 releaseQueue 中属于已过期会话的待重试项")
 	})
 
@@ -744,7 +755,198 @@ func TestRawFS_Release(t *testing.T) {
 		require.Equal(t, fuse.EBADF, st)
 
 		require.Eventually(t, func() bool {
-			return renewCalls.Load() >= 3 && localMgr.CurrentSessionID() != oldSID
+			cur := localMgr.CurrentSessionID()
+			return renewCalls.Load() >= 3 && cur != 0 && cur != oldSID
 		}, 1*time.Second, 10*time.Millisecond, "服务端返回 EBADF 后必须立即唤醒 renewLoop 并完成会话轮换")
 	})
+
+	t.Run("Create, Open, and OpenDir wait on AcquireSessionID when session is inactive, share new session, and respect RPCTimeout (EIO) and cancel (EINTR)", func(t *testing.T) {
+		var mu sync.Mutex
+		var renewSIDs []uint64
+		allowNewSession := make(chan struct{})
+
+		localSrv := &mockDirStorageServer{
+			renewSessionFn: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+				mu.Lock()
+				sid := req.Msg.GetSessionId()
+				renewSIDs = append(renewSIDs, sid)
+				callNum := len(renewSIDs)
+				mu.Unlock()
+
+				if callNum == 1 {
+					return connect.NewResponse(&storagev1.RenewSessionResponse{
+						ExpiresAt:        timestamppb.New(time.Now().Add(40 * time.Millisecond)),
+						SessionRecreated: false,
+					}), nil
+				}
+				select {
+				case <-allowNewSession:
+					return connect.NewResponse(&storagev1.RenewSessionResponse{
+						ExpiresAt:        timestamppb.New(time.Now().Add(60 * time.Second)),
+						SessionRecreated: false,
+					}), nil
+				default:
+					return nil, connect.NewError(connect.CodeUnavailable, errors.New("network outage"))
+				}
+			},
+			openDirFn: func(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+				return connect.NewResponse(&storagev1.OpenDirResponse{
+					Fh: 5003,
+				}), nil
+			},
+		}
+
+		// 同时在同一个测试服务上挂载 Create 与 Open 处理
+		mux := http.NewServeMux()
+		var createSID, openSID, openDirSID uint64
+		combinedSrv := &struct {
+			*mockDirStorageServer
+		}{mockDirStorageServer: localSrv}
+		_ = combinedSrv
+
+		handleSrv := &handleMockStorageServer{
+			renewSessionFn: localSrv.renewSessionFn,
+			createFn: func(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
+				mu.Lock()
+				createSID = req.Msg.GetSessionId()
+				mu.Unlock()
+				return connect.NewResponse(&storagev1.CreateResponse{
+					Inode: &storagev1.Inode{Ino: 2001, Attr: &storagev1.InodeAttribute{Mode: 0o644 | syscall.S_IFREG}},
+					Fh:    5001,
+				}), nil
+			},
+			openFn: func(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
+				mu.Lock()
+				openSID = req.Msg.GetSessionId()
+				mu.Unlock()
+				return connect.NewResponse(&storagev1.OpenResponse{
+					Fh: 5002,
+				}), nil
+			},
+		}
+
+		// 组合支持 Create/Open/OpenDir/RenewSession 的 mock handler
+		fullSrv := &fullSessionTestServer{
+			handleMockStorageServer: handleSrv,
+			openDirFn: func(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+				mu.Lock()
+				openDirSID = req.Msg.GetSessionId()
+				mu.Unlock()
+				return connect.NewResponse(&storagev1.OpenDirResponse{
+					Fh: 5003,
+				}), nil
+			},
+		}
+		path, handler := storagev1connect.NewStorageServiceHandler(fullSrv)
+		mux.Handle(path, handler)
+		ts := httptest.NewServer(mux)
+		t.Cleanup(ts.Close)
+		localClient := storagev1connect.NewStorageServiceClient(ts.Client(), ts.URL)
+
+		localMgr, err := session.New(context.Background(), localClient, session.Config{
+			MinInterval:         15 * time.Millisecond,
+			MaxInterval:         25 * time.Millisecond,
+			InitialRetryBackoff: 5 * time.Second,
+			MaxRetryBackoff:     5 * time.Second,
+		})
+		require.NoError(t, err)
+		require.NoError(t, localMgr.Start(context.Background()))
+		t.Cleanup(func() { _ = localMgr.Close() })
+
+		oldSID := localMgr.CurrentSessionID()
+		// 等待初始会话过期并使 CurrentSessionID 变为 0
+		require.Eventually(t, func() bool {
+			return localMgr.CurrentSessionID() == 0
+		}, 1*time.Second, 5*time.Millisecond)
+
+		rawFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{
+			RootIno:    1001,
+			RPCTimeout: 50 * time.Millisecond,
+		})
+		t.Cleanup(rawFS.OnUnmount)
+
+		// 1. 断网持续超过 RPCTimeout (50ms) 时，Create / Open / OpenDir 等待 AcquireSessionID 超时返回 EIO
+		var createOut fuse.CreateOut
+		stCreateTimeout := rawFS.Create(nil, &fuse.CreateIn{
+			InHeader: fuse.InHeader{NodeId: 1},
+			Flags:    uint32(syscall.O_CREAT | syscall.O_WRONLY),
+			Mode:     0o644,
+		}, "timeout.txt", &createOut)
+		require.Equal(t, fuse.Status(syscall.EIO), stCreateTimeout)
+
+		// 2. FUSE cancel 通道关闭时，Open 等待 AcquireSessionID 立即中断返回 EINTR
+		cancelCh := make(chan struct{})
+		close(cancelCh)
+		var openOut fuse.OpenOut
+		stOpenCancel := rawFS.Open(cancelCh, &fuse.OpenIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Flags:    uint32(syscall.O_RDONLY),
+		}, &openOut)
+		require.Equal(t, fuse.Status(syscall.EINTR), stOpenCancel)
+
+		// 3. 恢复网络后，并发发起 Create / Open / OpenDir：
+		// 立即唤醒处于 5s 退避中的 renewLoop，并在新会话就绪后共享同一个新 session_id 成功完成调用
+		rawFSWithNormalTimeout := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{
+			RootIno:    1001,
+			RPCTimeout: 2 * time.Second,
+		})
+		t.Cleanup(rawFSWithNormalTimeout.OnUnmount)
+
+		close(allowNewSession)
+
+		var wg sync.WaitGroup
+		wg.Add(3)
+		var stC, stO, stOD fuse.Status
+		go func() {
+			defer wg.Done()
+			var out fuse.CreateOut
+			stC = rawFSWithNormalTimeout.Create(nil, &fuse.CreateIn{
+				InHeader: fuse.InHeader{NodeId: 1},
+				Flags:    uint32(syscall.O_CREAT | syscall.O_WRONLY),
+				Mode:     0o644,
+			}, "new.txt", &out)
+		}()
+		go func() {
+			defer wg.Done()
+			var out fuse.OpenOut
+			stO = rawFSWithNormalTimeout.Open(nil, &fuse.OpenIn{
+				InHeader: fuse.InHeader{NodeId: 2001},
+				Flags:    uint32(syscall.O_RDONLY),
+			}, &out)
+		}()
+		go func() {
+			defer wg.Done()
+			var out fuse.OpenOut
+			stOD = rawFSWithNormalTimeout.OpenDir(nil, &fuse.OpenIn{
+				InHeader: fuse.InHeader{NodeId: 1},
+			}, &out)
+		}()
+		wg.Wait()
+
+		require.Equal(t, fuse.OK, stC)
+		require.Equal(t, fuse.OK, stO)
+		require.Equal(t, fuse.OK, stOD)
+
+		newSID := localMgr.CurrentSessionID()
+		require.NotZero(t, newSID)
+		require.NotEqual(t, oldSID, newSID)
+
+		mu.Lock()
+		require.Equal(t, newSID, createSID)
+		require.Equal(t, newSID, openSID)
+		require.Equal(t, newSID, openDirSID)
+		mu.Unlock()
+	})
+}
+
+type fullSessionTestServer struct {
+	*handleMockStorageServer
+	openDirFn func(context.Context, *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error)
+}
+
+func (f *fullSessionTestServer) OpenDir(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+	if f.openDirFn != nil {
+		return f.openDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }

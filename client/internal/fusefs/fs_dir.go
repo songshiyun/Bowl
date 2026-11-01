@@ -18,17 +18,19 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 		return st
 	}
 
+	ctx, cancelFunc := fs.RPCContext(cancel)
+	defer cancelFunc()
+
 	var sessionIDPtr *uint64
 	var sid uint64
 	if fs.sessions != nil {
-		sid = fs.sessions.CurrentSessionID()
-		if sid != 0 {
-			sessionIDPtr = &sid
+		var err error
+		sid, err = fs.sessions.AcquireSessionID(ctx)
+		if err != nil {
+			return fs.ToStatus(err, cancel)
 		}
+		sessionIDPtr = &sid
 	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
 
 	resp, err := fs.client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
 		Ino:       ino,

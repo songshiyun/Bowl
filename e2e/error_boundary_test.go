@@ -363,7 +363,17 @@ func TestDomainSentinels_ContractMapping(t *testing.T) {
 		}))
 		testutil.RequireConnectError(t, err, connect.CodeFailedPrecondition, "EBADF")
 
-		// 以只读模式打开文件并显式绑定会话 70001
+		// 先激活会话 70001，再以只读模式打开文件并显式绑定会话 70001
+		_, err = client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: 70001,
+		}))
+		require.NoError(t, err)
+		defer func() {
+			_, _ = client.CloseSession(ctx, connect.NewRequest(&storagev1.CloseSessionRequest{
+				SessionId: 70001,
+			}))
+		}()
+
 		readOnlyOpen, err := client.Open(ctx, connect.NewRequest(&storagev1.OpenRequest{
 			Ino:       fileIno,
 			Flags:     oRdOnly,
