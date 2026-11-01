@@ -288,16 +288,8 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 	return nil
 }
 
-// flushDurabilityBarrier 按「先刷物理数据块，后刷 PostgreSQL WAL」的顺序触发物理落盘屏障。
+// flushDurabilityBarrier 触发 PostgreSQL WAL 落盘屏障。
 func (m *manager) flushDurabilityBarrier(ctx context.Context) error {
-	if stagedBS, ok := m.getBlockStore().(StagedBlockStore); ok && stagedBS != nil {
-		if err := stagedBS.SyncPending(ctx); err != nil {
-			if errors.Is(err, ErrIO) {
-				return err
-			}
-			return fmt.Errorf("%w: sync pending blocks: %v", ErrIO, err)
-		}
-	}
 	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
 		var lsn string
 		if err := pp.Pool().QueryRow(ctx, "SELECT pg_current_wal_flush_lsn()::text").Scan(&lsn); err != nil {
@@ -307,7 +299,7 @@ func (m *manager) flushDurabilityBarrier(ctx context.Context) error {
 	return nil
 }
 
-// Fsync 同步文件节点与句柄关联的状态，并触发块存储与数据库 WAL 物理落盘屏障。
+// Fsync 同步文件节点与句柄关联的状态，并触发数据库 WAL 物理落盘屏障。
 func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
 	if err := validateOptionalSessionID(params.SessionID); err != nil {
 		return err
@@ -482,7 +474,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	return nil
 }
 
-// FsyncDir 同步目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议），并触发块存储与数据库 WAL 物理落盘屏障。
+// FsyncDir 同步目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议），并触发数据库 WAL 物理落盘屏障。
 func (m *manager) FsyncDir(ctx context.Context, params FsyncDirParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument

@@ -484,7 +484,7 @@ func (h *spyDirHandle) Close() error {
 func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("PutBlock 原子 Rename 后必须对分片目录执行 dir.Sync", func(t *testing.T) {
+	t.Run("PutBlock 原子 Rename 发布至 OS Page Cache 不阻塞等待叶子分片目录 dir.Sync", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("requires non-root user to enforce directory 0o300 read permission")
 		}
@@ -504,18 +504,17 @@ func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 			_ = os.Chmod(shardDir, 0o755)
 		})
 
-		// 设为 0o300（d-wx------）：允许在该目录内创建临时文件、写入并 os.Rename，
-		// 但禁止 os.Open(shardDir) 获取目录 fd 执行 Sync()，必然触发内核 EACCES: permission denied
+		// 设为 0o300（d-wx------）：允许在该目录内创建临时文件、写入并 os.Rename，但禁止 os.Open(shardDir) 获取目录 fd 执行 Sync()
 		require.NoError(t, os.Chmod(shardDir, 0o300))
 
 		err := store.PutBlock(ctx, sliceID, blockIdx, payload)
-		require.Error(t, err, "PutBlock 必须在 Rename 后同步分片目录，无目录读权限时应报错 permission denied")
+		require.NoError(t, err, "PutBlock 发布至 OS Page Cache，不再在 Rename 后同步叶子分片目录")
 
-		// 恢复 0o755 权限后检查 shardDir，断言当目录 Sync 失败返回错误时，PutBlock 已清理回滚未完成持久化确认的目标块文件
 		require.NoError(t, os.Chmod(shardDir, 0o755))
 		finalPath := filepath.Join(shardDir, fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
-		_, statErr := os.Stat(finalPath)
-		assert.True(t, errors.Is(statErr, os.ErrNotExist), "目录 Sync 失败后目标块文件应被清理回滚，不应残留半发布文件: %s", finalPath)
+		got, readErr := os.ReadFile(finalPath)
+		require.NoError(t, readErr)
+		assert.Equal(t, payload, got)
 	})
 
 	t.Run("DeleteBlock 删除实际存在的文件时直接删除而不阻塞等待 dir.Sync", func(t *testing.T) {
@@ -550,10 +549,9 @@ func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 		assert.ErrorIs(t, statErr, os.ErrNotExist)
 	})
 
-	t.Run("PutBlock 与 DeleteBlock 目录 Sync 计数及 Sync 失败回滚清理断言", func(t *testing.T) {
+	t.Run("PutBlock 与 DeleteBlock 仅发布至 OS Page Cache 不触发叶子分片目录 Sync", func(t *testing.T) {
 		dataDir := t.TempDir()
 		var syncedDirs []string
-		var failNextShardSync bool
 
 		shardDir := filepath.Join(dataDir, "chunks", "03", "0")
 		store := meta.NewLocalFSBlockStore(dataDir, meta.WithOpenDirHook(func(dir string) (meta.DirHandle, error) {
@@ -566,36 +564,22 @@ func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 				dir:  filepath.Clean(dir),
 				onSync: func(cleaned string, file *os.File) error {
 					syncedDirs = append(syncedDirs, cleaned)
-					if failNextShardSync && cleaned == filepath.Clean(shardDir) {
-						return errors.New("injected dir sync failure")
-					}
 					return file.Sync()
 				},
 			}, nil
 		}))
 
-		// 1. 首次写入 sliceID=3：应同步祖先目录（dataDir, chunks, chunks/03）以及 Rename 后的叶子目录 chunks/03/0
+		// 1. 首次写入 sliceID=3：创建目录，但不对叶子分片目录 chunks/03/0 执行 Rename 后 Sync
 		payload := []byte("hook-verified-payload")
 		require.NoError(t, store.PutBlock(ctx, 3, 0, payload))
-		require.Contains(t, syncedDirs, filepath.Clean(shardDir), "PutBlock 必须对叶子分片目录执行实际 Sync")
+		assert.NotContains(t, syncedDirs, filepath.Clean(shardDir), "PutBlock 仅发布至 OS Page Cache，不触发叶子分片目录 Sync")
 
-		// 2. 同分片目录再次写入 sliceID=259：祖先目录已缓存，但 Rename 后仍必须对 shardDir 执行 1 次 Sync
+		// 2. 同分片目录再次写入 sliceID=259：目录已缓存，产生 0 次目录 Sync
 		syncedDirs = nil
 		require.NoError(t, store.PutBlock(ctx, 259, 0, payload))
-		assert.Equal(t, []string{filepath.Clean(shardDir)}, syncedDirs, "同分片目录后续 PutBlock 必须在 Rename 后精确执行 1 次分片目录 Sync")
+		assert.Empty(t, syncedDirs, "已缓存分片目录后续 PutBlock 产生 0 次目录 Sync")
 
-		// 3. 注入分片目录 Sync 失败：PutBlock 必须返回 ErrIO 并回滚删除已 Rename 的目标文件
-		syncedDirs = nil
-		failNextShardSync = true
-		err := store.PutBlock(ctx, 515, 0, payload)
-		require.ErrorIs(t, err, meta.ErrIO)
-		assert.Equal(t, []string{filepath.Clean(shardDir)}, syncedDirs)
-		rolledBackPath := filepath.Join(shardDir, fmt.Sprintf("515_0_%d", len(payload)))
-		_, statErr := os.Stat(rolledBackPath)
-		assert.ErrorIs(t, statErr, os.ErrNotExist, "目录 Sync 失败时必须回滚清理目标块文件")
-
-		// 4. 恢复正常后 DeleteBlock 删除已存在块：不触发目录 Sync，且文件被移除
-		failNextShardSync = false
+		// 3. DeleteBlock 删除已存在块：不触发目录 Sync，且文件被移除
 		syncedDirs = nil
 		require.NoError(t, store.DeleteBlock(ctx, 3, 0, uint32(len(payload))))
 		assert.Empty(t, syncedDirs, "DeleteBlock 删除块文件时不触发同步目录 Sync")
@@ -845,7 +829,7 @@ func TestLocalFSBlockStore_DirSyncedCacheFastPathAndSelfHeal(t *testing.T) {
 		assert.Equal(t, []string{filepath.Clean(expectedShardDir)}, syncedDirs, "SyncDirs 对同一父目录必须去重仅执行 1 次 Sync")
 		syncMu.Unlock()
 
-		// 3. 再次调用 PutBlock 写入同一散列目录：同样 0 次目录 Stat，且仅在 Rename 后对叶子目录执行 1 次 Sync
+		// 3. 再次调用 PutBlock 写入同一散列目录：同样 0 次目录 Stat 与 0 次目录 Sync（直接发布至 OS Page Cache）
 		statCalls.Store(0)
 		syncMu.Lock()
 		syncedDirs = nil
@@ -854,7 +838,7 @@ func TestLocalFSBlockStore_DirSyncedCacheFastPathAndSelfHeal(t *testing.T) {
 		require.NoError(t, store.PutBlock(ctx, 7+11*256, 0, []byte("put-block-cached-dir")))
 		assert.Equal(t, int64(0), statCalls.Load(), "已缓存散列目录后续 PutBlock 不得重复执行目录 Stat")
 		syncMu.Lock()
-		assert.Equal(t, []string{filepath.Clean(expectedShardDir)}, syncedDirs)
+		assert.Empty(t, syncedDirs, "PutBlock 发布至 OS Page Cache 不触发叶子目录 Sync")
 		syncMu.Unlock()
 	})
 

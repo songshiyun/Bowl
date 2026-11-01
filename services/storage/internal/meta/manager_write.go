@@ -21,7 +21,6 @@ type writeBatchTask struct {
 	req           *WriteRequest
 	dataLen       int
 	sliceID       int64
-	stagedDirs    []string
 	cleanupBlocks func()
 	doneCh        chan struct{}
 
@@ -55,7 +54,7 @@ type batchChunkAppendStat struct {
 // 1. 静态边界校验：参数非空、(ino, fh, offset) 在正数范围内、len(data) <= 4 MiB、offset + len(data) <= MaxInt64；
 // 2. 零字节写入：在事务内锁定 Inode 校验常规文件类型与写句柄有效性，续期会话，不分配 slice_id 且不修改任何元数据；
 // 3. 两阶段流水线落盘与 Group Commit：
-//   - 阶段 1（无锁并行写入页缓存）：从内存号段分配器领取 slice_id，将 data 写入底层物理块存储（StageBlock 写入同目录临时文件并 Rename 至正式路径，发布到 OS Page Cache）；失败立即清理物理块返回 ErrIO；
+//   - 阶段 1（无锁并行写入页缓存）：从内存号段分配器领取 slice_id，将 data 写入底层物理块存储（PutBlock 写入同目录临时文件并 Rename 至正式路径，发布到 OS Page Cache）；失败立即清理物理块返回 ErrIO；
 //   - 阶段 2（WriteThread Leader-Follower 单事务 Group Commit）：
 //   - 步骤 2a：在单个 PostgreSQL 事务内启用 SET LOCAL synchronous_commit = off，按 Inode 升序加锁、按句柄/会话去重校验、按 RootIno 升序锁盘并在内存中依次推演各请求偏移（含 O_APPEND）与配额增量、按 (ino, indx) 拼接追加 Slice、登记 slice_refs、更新 Inode 属性并全组共享 1 次事务 COMMIT；
 //   - 步骤 2b：对批次内被业务规则隔离剔除或事务回滚未提交的任务立即调用 DeleteBlock 清理物理块（零孤儿块残留），触发异步 Compaction 并批量唤醒 Follower。
@@ -98,13 +97,8 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	}
 
 	bs := m.getBlockStore()
-	stagedBS, hasStagedBS := bs.(StagedBlockStore)
 	blocks := SliceBlocks(uint32(dataLen))
 	writtenBlocks := make([]SliceBlockInfo, 0, len(blocks))
-	var stagedDirs []string
-	if hasStagedBS {
-		stagedDirs = make([]string, 0, len(blocks))
-	}
 
 	var cleanupOnce sync.Once
 	cleanupBlocks := func() {
@@ -121,25 +115,12 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		start := b.BlockIdx * BlockSize
 		end := start + b.BlockSize
 		blockData := req.Data[start:end]
-		if hasStagedBS {
-			dir, err := stagedBS.StageBlock(ctx, uint64(sliceID), b.BlockIdx, blockData)
-			if err != nil {
-				cleanupBlocks()
-				m.onStage1Aborted()
-				return nil, fmt.Errorf("%w: put block (slice_id=%d, block_idx=%d): %v", ErrIO, sliceID, b.BlockIdx, err)
-			}
-			writtenBlocks = append(writtenBlocks, b)
-			if dir != "" {
-				stagedDirs = append(stagedDirs, dir)
-			}
-		} else {
-			if err := bs.PutBlock(ctx, uint64(sliceID), b.BlockIdx, blockData); err != nil {
-				cleanupBlocks()
-				m.onStage1Aborted()
-				return nil, fmt.Errorf("%w: put block (slice_id=%d, block_idx=%d): %v", ErrIO, sliceID, b.BlockIdx, err)
-			}
-			writtenBlocks = append(writtenBlocks, b)
+		if err := bs.PutBlock(ctx, uint64(sliceID), b.BlockIdx, blockData); err != nil {
+			cleanupBlocks()
+			m.onStage1Aborted()
+			return nil, fmt.Errorf("%w: put block (slice_id=%d, block_idx=%d): %v", ErrIO, sliceID, b.BlockIdx, err)
 		}
+		writtenBlocks = append(writtenBlocks, b)
 	}
 
 	task := &writeBatchTask{
@@ -147,7 +128,6 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		req:           req,
 		dataLen:       dataLen,
 		sliceID:       sliceID,
-		stagedDirs:    stagedDirs,
 		cleanupBlocks: cleanupBlocks,
 		doneCh:        make(chan struct{}),
 	}

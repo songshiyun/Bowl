@@ -671,25 +671,10 @@ func (s *LocalFSBlockStore) SyncDirs(ctx context.Context, dirs []string) error {
 	return nil
 }
 
-// PutBlock 采用两级目录散列，通过写入同目录唯一临时文件、原子重命名发布到目标路径、Sync 块文件并同步父目录。
+// PutBlock 采用两级目录散列，通过写入同目录唯一临时文件并原子重命名发布到目标路径（OS Page Cache）。
 func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
-	dir, err := s.StageBlock(ctx, sliceID, blockIdx, data)
-	if err != nil {
-		return err
-	}
-
-	finalPath := s.blockPath(sliceID, blockIdx, uint32(len(data)))
-	if err := s.syncBlockFile(finalPath); err != nil {
-		_ = os.Remove(finalPath)
-		return err
-	}
-
-	if err := s.SyncDirs(ctx, []string{dir}); err != nil {
-		_ = os.Remove(finalPath)
-		return err
-	}
-
-	return nil
+	_, err := s.StageBlock(ctx, sliceID, blockIdx, data)
+	return err
 }
 
 // GetBlock 从目标物理块文件的 offset 处精确读取 len(dst) 字节。

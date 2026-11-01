@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -26,8 +27,8 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-// gateStagedBlockStore 包装 StagedBlockStore，用于在测试中同步汇聚指定数量的并发请求完成阶段 1 StageBlock，
-// 确保它们确定性地进入同一个阶段 2 WriteThread 批次，同时统计 StageBlock、SyncDirs 与 DeleteBlock 调用次数。
+// gateStagedBlockStore 包装 StagedBlockStore，用于在测试中同步汇聚指定数量的并发请求完成阶段 1 PutBlock，
+// 确保它们确定性地进入同一个阶段 2 WriteThread 批次，同时统计 PutBlock、SyncDirs 与 DeleteBlock 调用次数。
 type gateStagedBlockStore struct {
 	meta.StagedBlockStore
 	gateCount   int
@@ -57,11 +58,10 @@ func (g *gateStagedBlockStore) releaseGate() {
 	})
 }
 
-func (g *gateStagedBlockStore) StageBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) (string, error) {
+func (g *gateStagedBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
 	g.stageCalls.Add(1)
-	dir, err := g.StagedBlockStore.StageBlock(ctx, sliceID, blockIdx, data)
-	if err != nil {
-		return "", err
+	if err := g.StagedBlockStore.PutBlock(ctx, sliceID, blockIdx, data); err != nil {
+		return err
 	}
 	if g.gateCount > 0 {
 		if int(g.arrived.Add(1)) >= g.gateCount {
@@ -70,10 +70,14 @@ func (g *gateStagedBlockStore) StageBlock(ctx context.Context, sliceID uint64, b
 		select {
 		case <-g.gateCh:
 		case <-ctx.Done():
-			return dir, ctx.Err()
+			return ctx.Err()
 		}
 	}
-	return dir, nil
+	return nil
+}
+
+func (g *gateStagedBlockStore) StageBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) (string, error) {
+	return g.StagedBlockStore.StageBlock(ctx, sliceID, blockIdx, data)
 }
 
 func (g *gateStagedBlockStore) SyncDirs(ctx context.Context, dirs []string) error {
@@ -999,9 +1003,15 @@ func (t *sqlOrderTracer) snapshot() []string {
 
 type orderSpyStagedBlockStore struct {
 	meta.StagedBlockStore
+	putBlockCalls    atomic.Int64
 	syncPendingCalls atomic.Int64
 	failErr          error
 	onSyncPending    func()
+}
+
+func (s *orderSpyStagedBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+	s.putBlockCalls.Add(1)
+	return s.StagedBlockStore.PutBlock(ctx, sliceID, blockIdx, data)
 }
 
 func (s *orderSpyStagedBlockStore) SyncPending(ctx context.Context) error {
@@ -1015,12 +1025,12 @@ func (s *orderSpyStagedBlockStore) SyncPending(ctx context.Context) error {
 	return s.StagedBlockStore.SyncPending(ctx)
 }
 
-// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0024：
-//  1. 普通 Write（含单任务与多任务批次）在真实数据库事务内启用 SET LOCAL synchronous_commit = off，且热路径不触发目录 Sync；
+// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0026：
+//  1. 普通 Write（含单任务与多任务批次）统一调用 BlockStore.PutBlock 写入 OS Page Cache，且在真实数据库事务内启用 SET LOCAL synchronous_commit = off，热路径不触发目录 Sync；
 //  2. Write 返回后立即发起 Read、GetAttr、Lookup 100% 读到最新数据与最新属性；
-//  3. Fsync 与 FsyncDir 句柄校验失败时不触发 SyncPending 与 WAL 刷盘；
-//  4. Fsync 与 FsyncDir 句柄校验通过后严格按「先 SyncPending 刷物理数据块、后 SELECT pg_current_wal_flush_lsn() 刷 PG WAL」顺序执行；
-//  5. 无新写入时重复 Fsync/FsyncDir 不触发冗余块刷盘；当 SyncPending 或 WAL 刷盘失败时准确返回 ErrIO，且后续重试可恢复。
+//  3. Fsync 与 FsyncDir 句柄校验失败时不触发 WAL 刷盘与块存储 SyncPending；
+//  4. Fsync 与 FsyncDir 句柄校验通过后仅执行 SELECT pg_current_wal_flush_lsn()::text 刷 PG WAL，不再调用 StagedBlockStore.SyncPending；
+//  5. 当数据库 WAL 刷盘失败时准确返回包装 ErrIO 的错误。
 func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *testing.T) {
 	tracer := &sqlOrderTracer{}
 	pool, ctx := setupMetaTestDBWithTracer(t, tracer)
@@ -1040,21 +1050,14 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		return &countingDirHandle{File: f, syncCount: &dirSyncCalls}, nil
 	}))
 
-	var eventsMu sync.Mutex
-	var barrierEvents []string
 	spyBS := &orderSpyStagedBlockStore{
 		StagedBlockStore: localBS,
-		onSyncPending: func() {
-			eventsMu.Lock()
-			barrierEvents = append(barrierEvents, "block_sync_pending")
-			eventsMu.Unlock()
-		},
 	}
 
 	mgr := meta.New(store, meta.WithBlockStore(spyBS))
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
-		Name:     fmt.Sprintf("adr0024-barrier-%d", time.Now().UnixNano()),
+		Name:     fmt.Sprintf("adr0026-barrier-%d", time.Now().UnixNano()),
 		MaxBytes: 100 * 1024 * 1024,
 	})
 	require.NoError(t, err)
@@ -1089,20 +1092,9 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino), fh)
 	})
 
-	// 预热散列目录并排空首次建目录同步计数
-	warmupPayload := []byte("warmup-first")
-	_, err = mgr.Write(ctx, &meta.WriteRequest{
-		Ino:    ino,
-		Fh:     fh,
-		Offset: 0,
-		Data:   warmupPayload,
-	})
-	require.NoError(t, err)
-	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-
-	// 1. 验证单任务 Write 在已缓存散列目录下零目录 Sync，且事务内执行了 SET LOCAL synchronous_commit = off
-	// 强制分配一个与已预热目录同散列桶的 slice_id，或预热所有目标桶：此处通过写入并檢查 SQL 与 SyncPending
+	// 1. 验证 Write 统一调用 PutBlock，事务内执行了 SET LOCAL synchronous_commit = off，且不调用 SyncPending
 	tracer.reset()
+	spyBS.putBlockCalls.Store(0)
 	spyBS.syncPendingCalls.Store(0)
 
 	payload1 := []byte("hello-page-cache-immediate-visibility")
@@ -1114,7 +1106,8 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint32(len(payload1)), wRes.Size)
-	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "普通 Write 绝不调用 SyncPending")
+	assert.Equal(t, int64(1), spyBS.putBlockCalls.Load(), "Write 阶段 1 必须统一调用 PutBlock")
+	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "Write 绝不调用 SyncPending")
 
 	queries := tracer.snapshot()
 	var hasAsyncCommitSQL, hasWalFlushSQLOnWrite bool
@@ -1149,54 +1142,33 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	assert.Equal(t, uint64(len(payload1)), lookupRes.Attr.Size)
 	assert.Equal(t, uint32(meta.S_IFREG|0o755), lookupRes.Attr.Mode)
 
-	// 3. Fsync 与 FsyncDir 句柄校验失败时保持错误优先级，且不触发 SyncPending
+	// 3. Fsync 与 FsyncDir 句柄校验失败时保持错误优先级，且不触发 WAL 刷盘与 SyncPending
+	tracer.reset()
 	require.ErrorIs(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: 99999999}), meta.ErrBadFileHandle)
 	require.ErrorIs(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: 99999999}), meta.ErrBadFileHandle)
 	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "句柄校验失败时不得触发 SyncPending")
-
-	// 4. 注入 SyncPending 非包装错误：Fsync / FsyncDir 必须包装为 ErrIO 返回，且不继续调用 pg_current_wal_flush_lsn
-	tracer.reset()
-	spyBS.failErr = errors.New("raw disk sync failure")
-	fErr := mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh})
-	require.ErrorIs(t, fErr, meta.ErrIO, "SyncPending 报错时 Fsync 必须返回 ErrIO")
-	fdErr := mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh})
-	require.ErrorIs(t, fdErr, meta.ErrIO, "SyncPending 报错时 FsyncDir 必须返回 ErrIO")
 	for _, q := range tracer.snapshot() {
-		assert.False(t, strings.Contains(q, "pg_current_wal_flush_lsn"), "块存储刷盘失败时不得提前刷入数据库 WAL")
+		assert.False(t, strings.Contains(q, "pg_current_wal_flush_lsn"), "句柄校验失败时不得触发数据库 WAL 刷盘")
 	}
 
-	// 5. 恢复正常后调用 Fsync：验证先执行 SyncPending 刷入刚才未完成的批次，再执行 SELECT pg_current_wal_flush_lsn()
-	spyBS.failErr = nil
+	// 4. 即使 spyBS.failErr 注入了 SyncPending 错误，Fsync 与 FsyncDir 也必须直接成功（仅刷 PG WAL，不再调用 SyncPending）
+	spyBS.failErr = errors.New("raw disk sync failure should never be called")
 	tracer.reset()
 	dirSyncCalls.Store(0)
-	eventsMu.Lock()
-	barrierEvents = nil
-	eventsMu.Unlock()
 
 	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-	assert.Greater(t, dirSyncCalls.Load(), int64(0), "恢复后 Fsync 必须将挂起的写入批次刷入磁盘")
+	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "Fsync 不再调用 StagedBlockStore.SyncPending")
+	assert.Equal(t, int64(0), dirSyncCalls.Load(), "Fsync 不再触发块存储目录刷盘")
 
 	var walFlushMeasured bool
 	for _, q := range tracer.snapshot() {
-		if strings.Contains(q, "pg_current_wal_flush_lsn") {
+		if strings.Contains(q, "SELECT pg_current_wal_flush_lsn()::text") {
 			walFlushMeasured = true
-			eventsMu.Lock()
-			barrierEvents = append(barrierEvents, "wal_flush")
-			eventsMu.Unlock()
 		}
 	}
-	assert.True(t, walFlushMeasured, "Fsync 必须执行 SELECT pg_current_wal_flush_lsn()")
-	eventsMu.Lock()
-	assert.Equal(t, []string{"block_sync_pending", "wal_flush"}, barrierEvents)
-	eventsMu.Unlock()
+	assert.True(t, walFlushMeasured, "Fsync 必须执行 SELECT pg_current_wal_flush_lsn()::text")
 
-	// 6. 无新写入时再次调用 Fsync 与 FsyncDir：底层磁盘目录 Sync 计数为 0（不触发冗余刷盘）
-	dirSyncCalls.Store(0)
-	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-	require.NoError(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh}))
-	assert.Equal(t, int64(0), dirSyncCalls.Load(), "无新写入时重复 Fsync / FsyncDir 不触发冗余块刷盘")
-
-	// 7. 再次写入新数据后调用 FsyncDir：同样触发 SyncPending + pg_current_wal_flush_lsn
+	// 5. 再次写入新数据后调用 FsyncDir：同样仅执行 SELECT pg_current_wal_flush_lsn()::text，不调用 SyncPending
 	_, err = mgr.Write(ctx, &meta.WriteRequest{
 		Ino:    ino,
 		Fh:     fh,
@@ -1204,15 +1176,45 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		Data:   []byte("-tail"),
 	})
 	require.NoError(t, err)
+	assert.Equal(t, int64(2), spyBS.putBlockCalls.Load(), "第 2 次 Write 同样调用 PutBlock")
+
 	tracer.reset()
 	dirSyncCalls.Store(0)
 	require.NoError(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh}))
-	assert.Greater(t, dirSyncCalls.Load(), int64(0), "有新写入后调用 FsyncDir 必须触发底层块刷盘")
+	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "FsyncDir 不再调用 StagedBlockStore.SyncPending")
+	assert.Equal(t, int64(0), dirSyncCalls.Load(), "FsyncDir 不再触发块存储目录刷盘")
+
 	var dirWalFlushed bool
 	for _, q := range tracer.snapshot() {
-		if strings.Contains(q, "pg_current_wal_flush_lsn") {
+		if strings.Contains(q, "SELECT pg_current_wal_flush_lsn()::text") {
 			dirWalFlushed = true
 		}
 	}
-	assert.True(t, dirWalFlushed, "FsyncDir 必须执行 SELECT pg_current_wal_flush_lsn()")
+	assert.True(t, dirWalFlushed, "FsyncDir 必须执行 SELECT pg_current_wal_flush_lsn()::text")
+
+	// 6. 验证数据库 WAL 刷盘失败时，Fsync 与 FsyncDir 均返回包装 ErrIO 的错误
+	closedPool, err := pgxpool.New(ctx, getStorageTestDSN())
+	require.NoError(t, err)
+	closedPool.Close()
+
+	walFailStore := &walFlushFailStore{
+		Store:    store,
+		failPool: closedPool,
+	}
+	walFailMgr := meta.New(walFailStore, meta.WithBlockStore(spyBS))
+
+	fsyncWalErr := walFailMgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh})
+	require.ErrorIs(t, fsyncWalErr, meta.ErrIO, "WAL 刷盘失败时 Fsync 必须返回包装 ErrIO 的错误")
+
+	fsyncDirWalErr := walFailMgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh})
+	require.ErrorIs(t, fsyncDirWalErr, meta.ErrIO, "WAL 刷盘失败时 FsyncDir 必须返回包装 ErrIO 的错误")
+}
+
+type walFlushFailStore struct {
+	db.Store
+	failPool *pgxpool.Pool
+}
+
+func (s *walFlushFailStore) Pool() *pgxpool.Pool {
+	return s.failPool
 }
