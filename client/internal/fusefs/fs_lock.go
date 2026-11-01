@@ -1,12 +1,14 @@
 package fusefs
 
 import (
+	"context"
 	"math"
 	"syscall"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
@@ -106,7 +108,7 @@ func (fs *RawFS) GetLk(cancel <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut
 		SessionId: sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	respLk := resp.Msg.GetLk()
@@ -164,7 +166,7 @@ func (fs *RawFS) SetLk(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 		SessionId: sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK
@@ -196,7 +198,7 @@ func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 
 	reqID := fs.NextRequestID()
 
-	ctx, cancelRPC := fs.RPCContext(cancel)
+	ctx, cancelRPC := rpc.ContextWithCancelChan(context.Background(), cancel)
 	defer cancelRPC()
 
 	_, err := fs.client.SetLkw(ctx, connect.NewRequest(&storagev1.SetLkwRequest{
@@ -214,7 +216,7 @@ func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 		RequestId: reqID,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK

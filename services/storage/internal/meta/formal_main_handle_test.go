@@ -242,6 +242,12 @@ func pickOptionalFormalSessionID(env *formalMainEnv) *uint64 {
 		if s, exists := env.Model.Sessions[sid]; exists && s.Expired {
 			return nil
 		}
+		if _, exists := env.Model.Sessions[sid]; !exists {
+			if _, err := env.Mgr.RenewSession(context.Background(), sid); err != nil {
+				return nil
+			}
+			modelSyncSessionRenewal(env.Model, &sid, env.LeaseTTL)
+		}
 		return &sid
 	}
 	return nil
@@ -482,8 +488,7 @@ func formalActionCreate(ctx context.Context, t *testing.T, env *formalMainEnv) s
 		disk.UsedInodes++
 	}
 
-	// 先同步可选会话续期，再登记新分配的文件句柄
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
+	// 登记新分配的文件句柄
 	env.Model.RecordNewHandle(&formalHandle{
 		Fh:        got.Fh,
 		Ino:       got.Inode.Ino,
@@ -730,7 +735,6 @@ func formalActionOpen(ctx context.Context, t *testing.T, env *formalMainEnv) str
 		}
 	}
 
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
 	env.Model.RecordNewHandle(&formalHandle{
 		Fh:        got.Fh,
 		Ino:       targetNode.Ino,
@@ -922,10 +926,8 @@ func formalActionRelease(ctx context.Context, t *testing.T, env *formalMainEnv) 
 	require.NotNil(t, targetHandle)
 
 	// 同步更新内存参考模型：
-	// 1. 同步可选会话续期；
-	// 2. 将句柄标记为已关闭并移入 ClosedHandles；
-	// 3. 若目标节点 nlink == 0，调用 ReclaimOrphanInModel（当且仅当再无任何有效句柄时物理删除孤儿节点并退还 used_inodes 与 used_bytes）。
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
+	// 1. 将句柄标记为已关闭并移入 ClosedHandles；
+	// 2. 若目标节点 nlink == 0，调用 ReclaimOrphanInModel（当且仅当再无任何有效句柄时物理删除孤儿节点并退还 used_inodes 与 used_bytes）。
 	targetHandle.Closed = true
 	env.Model.ClosedHandles[targetHandle.Fh] = targetHandle
 	delete(env.Model.Handles, targetHandle.Fh)
@@ -1517,6 +1519,9 @@ func TestFormalMain_T6_FileHandleOrphan(t *testing.T) {
 		// 3.2 携带 O_WRONLY | O_TRUNC 打开 c1_in_sgid (并绑定会话 sid=1001)：
 		// 预期：Size 从 8192 归零，disk.UsedBytes 从 8192 扣减至 0，Mode 剥离 S_ISUID|S_ISGID 变为 S_IFREG|0o755
 		sid1 := uint64(1001)
+		_, err = mgr.RenewSession(ctx, sid1)
+		require.NoError(t, err)
+		modelSyncSessionRenewal(env.Model, &sid1, env.LeaseTTL)
 		openTruncRes, err := mgr.Open(ctx, meta.OpenParams{
 			Ino:       c1Model.Ino,
 			Flags:     meta.O_WRONLY | meta.O_TRUNC,
@@ -1527,7 +1532,6 @@ func TestFormalMain_T6_FileHandleOrphan(t *testing.T) {
 		c1Model.Size = 0
 		c1Model.Mode &^= (meta.S_ISUID | meta.S_ISGID)
 		disk.UsedBytes = 0
-		modelSyncSessionRenewal(env.Model, &sid1, env.LeaseTTL)
 		env.Model.RecordNewHandle(&formalHandle{
 			Fh: openTruncRes.Fh, Ino: c1Model.Ino, Flags: meta.O_WRONLY | meta.O_TRUNC, SessionID: modelCloneSessionID(&sid1),
 		})

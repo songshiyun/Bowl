@@ -102,9 +102,6 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.NoError(t, f.Sync())
 	require.NoError(t, f.Close())
 
-	// 等待后台 WatchSession 流在服务端完成注册
-	time.Sleep(150 * time.Millisecond)
-
 	// 4. Update (在线扩容成功 & 缩容低于已用空间被拦截)
 	updateCmd := exec.Command(bowlBin, "disk", "update", "--endpoint", endpoint, diskID, "--size", "2GiB", "--name", "e2e-resized", "--json")
 	updateOut, err := updateCmd.CombinedOutput()
@@ -127,7 +124,7 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	shrinkOut, shrinkErr := shrinkCmd.CombinedOutput()
 	require.Error(t, shrinkErr, "缩容至已用空间以下必须被拦截: %s", string(shrinkOut))
 
-	// 5. 挂载态删盘拦截（本机快检 + 远端 WatchSession 探活拦截 EBUSY）
+	// 5. 挂载态删盘拦截（本机快检 + 远端未过期会话拦截 EBUSY）
 	// 5a. 本机 CLI 删盘：被 /proc/self/mountinfo 快检拦截
 	localDelCmd := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, diskID, "-y")
 	localDelOut, localDelErr := localDelCmd.CombinedOutput()
@@ -137,13 +134,13 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.Equal(t, 1, exitErr.ExitCode())
 	require.Contains(t, string(localDelOut), "bowl umount")
 
-	// 5b. 模拟异机/远端直接调用服务端 RPC 删盘：服务端通过 WatchSession 发送 Ping 并收到 Pong，返回 FailedPrecondition (EBUSY)
+	// 5b. 模拟异机/远端直接调用服务端 RPC 删盘：服务端检测到未过期的挂载会话，返回 FailedPrecondition (EBUSY)
 	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_, remoteDelErr := client.DeleteDisk(rpcCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
 		DiskId: diskID,
 	}))
 	rpcCancel()
-	require.Error(t, remoteDelErr, "活跃挂载期间远端直接调用 DeleteDisk RPC 必须被服务端探活拦截")
+	require.Error(t, remoteDelErr, "活跃挂载期间远端直接调用 DeleteDisk RPC 必须被未过期会话拦截")
 	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(remoteDelErr))
 	require.Contains(t, remoteDelErr.Error(), "busy")
 
@@ -182,7 +179,7 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.Equal(t, 1, exitErr.ExitCode())
 	require.Contains(t, string(getAfterOut), "磁盘不存在")
 
-	// 7. 守护进程异常崩溃（kill -9）后 WatchSession 断连感知与立即删盘成功
+	// 7. 守护进程异常崩溃（kill -9）后等待短租约（2s）过期即可自动清理过期会话并成功删盘
 	createCmd2 := exec.Command(bowlBin, "disk", "create", "--endpoint", endpoint, "--size", "1GiB", "--name", "e2e-kill9-disk", "-q")
 	createOut2, err := createCmd2.CombinedOutput()
 	require.NoError(t, err, "创建第二块测试盘失败: %s", string(createOut2))
@@ -203,9 +200,6 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	daemonPID2, err := findBowlDaemonPID(disk2ID, mountpoint2)
 	require.NoError(t, err)
 
-	// 等待 WatchSession 流建立
-	time.Sleep(150 * time.Millisecond)
-
 	// 直接发送 SIGKILL (kill -9) 杀死守护进程
 	require.NoError(t, syscall.Kill(daemonPID2, syscall.SIGKILL))
 	require.NoError(t, waitForProcessExit(t, daemonPID2, 5*time.Second))
@@ -214,10 +208,17 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	_ = unix.Unmount(mountpoint2, unix.MNT_DETACH)
 	require.NoError(t, waitForUnmount(mountpoint2, 5*time.Second))
 
-	// 立即（无需等待 60s 租约过期）执行 bowl disk delete
-	delCmd2 := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, disk2ID, "-y", "--json")
-	delOut2, err := delCmd2.CombinedOutput()
-	require.NoError(t, err, "kill -9 后立即删盘应成功: %s", string(delOut2))
+	// 等待 E2E 环境 2s 租约过期后执行 bowl disk delete
+	var delOut2 []byte
+	require.Eventually(t, func() bool {
+		delCmd2 := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, disk2ID, "-y", "--json")
+		out, delErr := delCmd2.CombinedOutput()
+		if delErr == nil {
+			delOut2 = out
+			return true
+		}
+		return false
+	}, 5*time.Second, 200*time.Millisecond, "kill -9 后等待短租约过期删盘应成功")
 
 	var delRes2 struct {
 		DiskID  string `json:"disk_id"`
@@ -226,4 +227,10 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.NoError(t, json.Unmarshal(delOut2, &delRes2))
 	require.Equal(t, disk2ID, delRes2.DiskID)
 	require.True(t, delRes2.Deleted)
+
+	getAfterKillDelCtx, getAfterKillDelCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer getAfterKillDelCancel()
+	_, getDisk2Err := client.GetDisk(getAfterKillDelCtx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: disk2ID}))
+	require.Error(t, getDisk2Err)
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(getDisk2Err))
 }

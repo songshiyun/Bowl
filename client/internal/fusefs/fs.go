@@ -2,6 +2,7 @@ package fusefs
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,9 @@ import (
 // DefaultReleaseRetryInterval 是待释放句柄异步重试队列的默认轮询周期。
 const DefaultReleaseRetryInterval = 200 * time.Millisecond
 
+// DefaultRPCTimeout 是 FUSE 常规请求（不含阻塞锁 SetLkw）的默认单请求超时预算。
+const DefaultRPCTimeout = 5 * time.Second
+
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
 
@@ -31,6 +35,7 @@ type Config struct {
 	DirectIO             bool
 	AllowOther           bool
 	Debug                bool
+	RPCTimeout           time.Duration
 	ReleaseRetryInterval time.Duration
 	OnUnmount            func()
 }
@@ -71,11 +76,14 @@ type RawFS struct {
 
 // NewRawFS 创建并初始化 RawFS 实例。
 func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Manager, cfg Config) *RawFS {
+	if cfg.RPCTimeout <= 0 {
+		cfg.RPCTimeout = DefaultRPCTimeout
+	}
 	if cfg.ReleaseRetryInterval <= 0 {
 		cfg.ReleaseRetryInterval = DefaultReleaseRetryInterval
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
-	return &RawFS{
+	fs := &RawFS{
 		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
 		client:           client,
 		sessions:         sessions,
@@ -85,6 +93,43 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		releaseCancel:    releaseCancel,
 		readAheadHandles: make(map[uint64]*handleReadAhead),
 	}
+	if sessions != nil {
+		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
+	}
+	return fs
+}
+
+// onSessionExpired 在指定 ClientSession 过期淘汰时立即清理所有关联的预读缓存与待释放句柄重试项。
+func (fs *RawFS) onSessionExpired(expiredSID uint64) {
+	if fs == nil {
+		return
+	}
+
+	fs.readAheadMu.Lock()
+	var targets []*handleReadAhead
+	for fh, hra := range fs.readAheadHandles {
+		if expiredSID == 0 || hra.sessionID == expiredSID {
+			targets = append(targets, hra)
+			delete(fs.readAheadHandles, fh)
+		}
+	}
+	fs.readAheadMu.Unlock()
+
+	for _, hra := range targets {
+		hra.mu.Lock()
+		hra.resetLocked()
+		hra.mu.Unlock()
+	}
+
+	fs.releaseMu.Lock()
+	remaining := fs.releaseQueue[:0]
+	for _, item := range fs.releaseQueue {
+		if expiredSID != 0 && item.key.sessionID != expiredSID {
+			remaining = append(remaining, item)
+		}
+	}
+	fs.releaseQueue = remaining
+	fs.releaseMu.Unlock()
 }
 
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
@@ -116,15 +161,49 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 	return fuse.OK
 }
 
-// RPCContext 包装内核 cancel 信号通道为派生 context，支持 FUSE_INTERRUPT 及时取消。
+// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 5s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
-	return rpc.ContextWithCancelChan(context.Background(), cancel)
+	timeout := fs.cfg.RPCTimeout
+	if timeout <= 0 {
+		timeout = DefaultRPCTimeout
+	}
+	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), timeout)
+	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
+	return ctx, func() {
+		cancelChan()
+		cancelTimeout()
+	}
 }
 
 // ToStatus 将 ConnectRPC 错误解码为对应的 Linux fuse.Status。
 func (fs *RawFS) ToStatus(err error, cancel <-chan struct{}) fuse.Status {
 	if err == nil {
 		return fuse.OK
+	}
+	errno := rpc.MapErrorWithCancel(err, cancel)
+	return fuse.Status(errno)
+}
+
+// isServerEBADF 判断服务端返回的错误是否表示句柄或会话已失效（EBADF / FailedPrecondition）。
+func isServerEBADF(err error) bool {
+	if err == nil {
+		return false
+	}
+	if rpc.MapError(err) == syscall.EBADF {
+		return true
+	}
+	var connectErr *connect.Error
+	return errors.As(err, &connectErr) && connectErr.Code() == connect.CodeFailedPrecondition
+}
+
+// ToStatusWithSession 将携带会话的 ConnectRPC 错误解码为 fuse.Status；
+// 若服务端返回 EBADF / FailedPrecondition，立即按需唤醒后台 renewLoop 发起续约/轮换探测。
+func (fs *RawFS) ToStatusWithSession(err error, cancel <-chan struct{}) fuse.Status {
+	if err == nil {
+		return fuse.OK
+	}
+	if isServerEBADF(err) && fs.sessions != nil {
+		fs.sessions.TriggerRenew()
 	}
 	errno := rpc.MapErrorWithCancel(err, cancel)
 	return fuse.Status(errno)

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/readbuf"
@@ -267,36 +266,6 @@ func ProjectChunkSlices(rawSlices []Slice, chunkReadStart, chunkReadEnd uint32) 
 	return result
 }
 
-func (m *manager) tryThrottledReadSessionCheck(ctx context.Context, pp poolProvider, sessionID uint64, handleCreatedAt pgtype.Timestamptz) (handled bool, err error) {
-	if m.writeSessionTouchDisabled || m.writeSessionTouchInterval <= 0 || pp == nil || pp.Pool() == nil {
-		return false, nil
-	}
-	if _, hasLockSync := db.LockSyncInoFromContext(ctx); hasLockSync {
-		return false, nil
-	}
-
-	interval := m.writeSessionTouchInterval
-	if interval <= 0 {
-		interval = DefaultWriteSessionTouchInterval
-	}
-	now := time.Now()
-	m.writeSessionTouchMu.Lock()
-	if m.writeSessionTouches == nil {
-		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-	}
-	prev, hadPrev := m.writeSessionTouches[sessionID]
-	inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-	m.writeSessionTouchMu.Unlock()
-
-	if !inWindow {
-		return false, nil
-	}
-	if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
-		return true, ErrBadFileHandle
-	}
-	return true, nil
-}
-
 func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRequest) (*ReadResponse, error) {
 	startIndx := int64(req.Offset / ChunkSize)
 	endIndx := startIndx
@@ -332,7 +301,6 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, ErrBadFileHandle)
 			return nil, ErrBadFileHandle
 		}
 		return nil, fmt.Errorf("read tx: get file handle (fh=%d, ino=%d): %w", req.Fh, req.Ino, err)
@@ -340,31 +308,7 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 
 	accMode := uint32(handle.Flags) & O_ACCMODE
 	if accMode != O_RDONLY && accMode != O_RDWR {
-		m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, ErrBadFileHandle)
 		return nil, ErrBadFileHandle
-	}
-
-	if req.SessionID != nil {
-		handled, checkErr := m.tryThrottledReadSessionCheck(ctx, pp, *req.SessionID, handle.CreatedAt)
-		if checkErr != nil {
-			if errors.Is(checkErr, ErrBadFileHandle) {
-				m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, checkErr)
-				return nil, ErrBadFileHandle
-			}
-			return nil, fmt.Errorf("read tx: %w", checkErr)
-		}
-		if !handled {
-			txErr := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-				return m.touchActiveClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt)
-			})
-			if txErr != nil {
-				if errors.Is(txErr, ErrBadFileHandle) {
-					m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, txErr)
-					return nil, ErrBadFileHandle
-				}
-				return nil, fmt.Errorf("read tx: %w", txErr)
-			}
-		}
 	}
 
 	if req.Size == 0 || req.Offset >= uint64(firstRow.Size) {
@@ -524,12 +468,6 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 			return ErrBadFileHandle
 		}
 
-		if req.SessionID != nil {
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *req.SessionID, handle.CreatedAt); err != nil {
-				return err
-			}
-		}
-
 		// 到达 EOF 或请求大小为 0 时直接返回空字节流
 		if req.Size == 0 || req.Offset >= uint64(firstRow.Size) {
 			resp = &ReadResponse{Data: []byte{}}
@@ -625,7 +563,6 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 		case errors.Is(err, ErrIsDir):
 			return nil, ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			m.handleBadFileHandleSessionCleanup(ctx, req.SessionID, err)
 			return nil, ErrBadFileHandle
 		case errors.Is(err, ErrIO):
 			return nil, err

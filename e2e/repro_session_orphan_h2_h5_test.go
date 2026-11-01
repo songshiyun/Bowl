@@ -129,125 +129,6 @@ func requireShortLeaseTTL(ctx context.Context, t testing.TB, client storagev1con
 	require.LessOrEqual(t, ttl, 5, "当前环境租约 TTL=%d 秒 > 5 秒；请确保测试环境配置短租约（如 2s/3s），杜绝 60s 默认租约耗尽测试预算", ttl)
 }
 
-// waitForBlockedExpiredSessionDelete 轮询检测是否有后端活跃连接针对 client_sessions 表/元组级锁处于未授予等待 (granted = false) 或活跃锁阻塞状态，
-// 消除对内部具体 SQL 文本（如 %DELETE FROM client_sessions%）的脆弱耦合。
-func waitForBlockedExpiredSessionDelete(ctx context.Context, t testing.TB) {
-	t.Helper()
-	waitBlockCtx, waitBlockCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer waitBlockCancel()
-
-	checkLockSQL := `
-SELECT COUNT(*)
-FROM pg_stat_activity a
-JOIN pg_locks l ON a.pid = l.pid
-WHERE a.datname = current_database()
-  AND a.state = 'active'
-  AND (
-    (l.relation = 'client_sessions'::regclass AND l.granted = false)
-    OR (l.granted = false AND EXISTS (
-      SELECT 1 FROM pg_locks b
-      WHERE b.pid = a.pid AND b.relation = 'client_sessions'::regclass
-    ))
-  );`
-
-	blocked := false
-	for {
-		select {
-		case <-waitBlockCtx.Done():
-			t.Fatalf("等待操作在 client_sessions 上发生锁阻塞超时: %v", waitBlockCtx.Err())
-		default:
-		}
-		cntStr := execSessionPsql(ctx, t, checkLockSQL)
-		if cnt, convErr := strconv.Atoi(cntStr); convErr == nil && cnt >= 1 {
-			blocked = true
-			break
-		}
-		_ = sleepWithContext(ctx, 20*time.Millisecond)
-	}
-	require.True(t, blocked, "必须检测到针对 client_sessions 的未授予等待或锁阻塞状态")
-}
-
-// acquireExpiredBlockerSessionLock 插入一条已过期的 blocker 行并在后台持有其行级 FOR UPDATE 锁，
-// 返回释放行锁的 release 回调。在 release 之前，任何全表清理 client_sessions 的 DELETE
-// 扫描到该 blockerSessionID 时都会阻塞在行锁等待上。
-func acquireExpiredBlockerSessionLock(ctx context.Context, t testing.TB, blockerSessionID uint64) func() {
-	t.Helper()
-	container, db := getSessionPsqlConfig()
-
-	// 1. 插入已过期的阻塞锚点行
-	initSQL := fmt.Sprintf(
-		"INSERT INTO client_sessions (session_id, expires_at, updated_at, created_at) VALUES (%d, clock_timestamp() - interval '30 seconds', clock_timestamp(), clock_timestamp()) ON CONFLICT (session_id) DO UPDATE SET expires_at = clock_timestamp() - interval '30 seconds';",
-		blockerSessionID,
-	)
-	execSessionPsql(ctx, t, initSQL)
-
-	// 2. 启动后台 psql 进程开启事务并持有该行锁
-	lockCtx, lockCancel := context.WithTimeout(ctx, 15*time.Second)
-	cmd := exec.CommandContext(lockCtx, "docker", "exec", "-i", container,
-		"psql", "-U", "postgres", "-d", db, "-X", "-A", "-t", "-v", "ON_ERROR_STOP=1")
-	stdin, err := cmd.StdinPipe()
-	require.NoError(t, err)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Start()
-	require.NoError(t, err)
-
-	_, err = fmt.Fprintf(stdin, "BEGIN; SELECT session_id FROM client_sessions WHERE session_id = %d FOR UPDATE;\n", blockerSessionID)
-	require.NoError(t, err)
-
-	// 3. 轮询 pg_locks 确保行锁已成功持有
-	pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pollCancel()
-	locked := false
-	checkLockSQL := fmt.Sprintf(
-		"SELECT COUNT(*) FROM pg_locks l JOIN pg_stat_activity a ON l.pid = a.pid WHERE l.relation = 'client_sessions'::regclass AND l.mode = 'RowShareLock' AND l.granted = true AND a.query LIKE '%%%d FOR UPDATE%%'",
-		blockerSessionID,
-	)
-	for {
-		select {
-		case <-pollCtx.Done():
-			t.Fatalf("等待 blockerSessionID=%d 行锁持有超时: %v, stderr: %s", blockerSessionID, pollCtx.Err(), stderr.String())
-		default:
-		}
-		out := execSessionPsql(ctx, t, checkLockSQL)
-		if cnt, convErr := strconv.Atoi(out); convErr == nil && cnt >= 1 {
-			locked = true
-			break
-		}
-		_ = sleepWithContext(ctx, 30*time.Millisecond)
-	}
-	require.True(t, locked, "必须成功持有 blockerSessionID=%d 的行锁", blockerSessionID)
-
-	var once sync.Once
-	cleanupReleased := false
-
-	release := func() {
-		once.Do(func() {
-			cleanupReleased = true
-			_, _ = fmt.Fprintln(stdin, "COMMIT;\n\\q")
-			_ = stdin.Close()
-			_ = cmd.Wait()
-			lockCancel()
-
-			cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cleanCancel()
-			delSQL := fmt.Sprintf("DELETE FROM client_sessions WHERE session_id = %d", blockerSessionID)
-			execSessionPsql(cleanCtx, t, delSQL)
-		})
-	}
-
-	t.Cleanup(func() {
-		if !cleanupReleased {
-			release()
-		}
-	})
-
-	return release
-}
-
 // sleepWithContext 封装受 context 控制的睡眠，严禁使用裸 time.Sleep。
 func sleepWithContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
@@ -286,7 +167,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
-		cleanSQL := fmt.Sprintf("DELETE FROM inodes WHERE root_ino = %d AND ino <> %d; DELETE FROM client_sessions WHERE session_id = 210001;", targetDisk.GetRootIno(), targetDisk.GetRootIno())
+		cleanSQL := fmt.Sprintf("DELETE FROM inodes WHERE root_ino = %d AND ino <> %d; DELETE FROM client_sessions WHERE session_id = 210001 OR (session_id >= 220000 AND session_id < 240000);", targetDisk.GetRootIno(), targetDisk.GetRootIno())
 		execSessionPsql(cleanupCtx, t, cleanSQL)
 		if _, err := client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: targetDisk.GetDiskId()})); err != nil {
 			if connect.CodeOf(err) != connect.CodeNotFound {
@@ -306,6 +187,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		execSessionPsql(cleanupCtx, t, "DELETE FROM client_sessions WHERE session_id >= 220000 AND session_id < 240000;")
 		if _, err := client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: controlDisk.GetDiskId()})); err != nil {
 			if connect.CodeOf(err) != connect.CodeNotFound {
 				t.Errorf("清理 controlDisk 失败: %v", err)
@@ -342,7 +224,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 
 	// 保持 helperSessionID 租约在测试期间不过期，避免背景孤儿被提前清理，
 	// 使用直接的 SQL 更新租约并更新统计信息（不调用全表扫描的 RenewSession RPC，避免占用 DB 连接池与触发锁竞争）
-	execSessionPsql(ctx, t, fmt.Sprintf("UPDATE client_sessions SET expires_at = clock_timestamp() + interval '1 hour' WHERE session_id = %d; UPDATE disks SET used_inodes = used_inodes + 25000 WHERE root_ino = %d; ANALYZE inodes; ANALYZE file_handles;", helperSessionID, targetDisk.GetRootIno()))
+	execSessionPsql(ctx, t, fmt.Sprintf("UPDATE client_sessions SET expires_at = clock_timestamp() + interval '1 hour' WHERE session_id = %d; ANALYZE inodes; ANALYZE file_handles;", helperSessionID))
 
 	// 3. 循环轮次，最多 8 轮复现 H2 竞态
 	targetSessionBase := uint64(220000)
@@ -353,6 +235,12 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 	for round := 0; round < 8; round++ {
 		targetSessionID := targetSessionBase + uint64(round*20)
 		sweeperSessionID := sweeperSessionBase + uint64(round*20)
+
+		// 3.0 预先通过 RenewSession 注册激活 targetSessionID（Create 仅做只读会话存活校验，不隐式创建未注册会话）
+		_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: targetSessionID,
+		}))
+		require.NoError(t, err)
 
 		// 3.1 在 controlDisk 上创建金丝雀常规文件（保持 nlink=1，绝不 Unlink）
 		canaryName := []byte(fmt.Sprintf("canary_r%d.txt", round))
@@ -585,7 +473,12 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 		sessionA := uint64(250001)
 		blockerSessionID := uint64(249999)
 
-		// 1. 创建常规文件并获得句柄 fhA
+		// 1. 先注册激活 sessionA，再创建常规文件并获得句柄 fhA
+		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: sessionA,
+		}))
+		require.NoError(t, err)
+
 		fileName := []byte("regular_h5.txt")
 		createResp, err := client.Create(subCtx, connect.NewRequest(&storagev1.CreateRequest{
 			ParentIno: disk.GetRootIno(),
@@ -598,54 +491,7 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 		fileIno := createResp.Msg.GetInode().GetIno()
 		fhA := createResp.Msg.GetFh()
 
-		// 确保 sessionA 有完整的租约（距离过期非常充裕）
-		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
-			SessionId: sessionA,
-		}))
-		require.NoError(t, err)
-
-		// 确保 sessionA 的物理存储元组 (ctid) 位于 blocker 之后，使全表扫描必然先阻塞在 blocker
-		execSessionPsql(subCtx, t, fmt.Sprintf("UPDATE client_sessions SET updated_at = clock_timestamp() WHERE session_id = %d;", sessionA))
-
-		// 2. 启动后台协程清理屏障，再启动行锁屏障锁住已过期的 blockerSessionID = 249999
-		var setLkWg sync.WaitGroup
-		t.Cleanup(func() {
-			setLkWg.Wait()
-		})
-
-		releaseBlocker := acquireExpiredBlockerSessionLock(subCtx, t, blockerSessionID)
-
-		// 3. 启动后台协程调用唯一 1 次 client.SetLk
-		type setLkResult struct {
-			resp *connect.Response[storagev1.SetLkResponse]
-			err  error
-		}
-		setLkResCh := make(chan setLkResult, 1)
-		setLkWg.Add(1)
-
-		go func() {
-			defer setLkWg.Done()
-			r, sErr := client.SetLk(subCtx, connect.NewRequest(&storagev1.SetLkRequest{
-				Ino:       fileIno,
-				Fh:        fhA,
-				LockOwner: 1001,
-				SessionId: sessionA,
-				Lk: &storagev1.FileLock{
-					Start: 0,
-					End:   100,
-					Type:  fWrLck,
-					Pid:   1001,
-				},
-				LkFlags: 0,
-			}))
-			setLkResCh <- setLkResult{resp: r, err: sErr}
-		}()
-
-		// 4. 轮询数据库确认 SetLk 已通过 GetFileHandle 并针对 client_sessions 发生锁阻塞
-		waitForBlockedExpiredSessionDelete(subCtx, t)
-		t.Logf("【确证 1】SetLk 已成功阻塞在 client_sessions 锁等待")
-
-		// 5. 轮询数据库等待 sessionA 跨期失效
+		// 2. 轮询数据库等待 sessionA 租约跨期失效
 		waitExpireCtx, waitExpireCancel := context.WithTimeout(subCtx, 5*time.Second)
 		defer waitExpireCancel()
 		expired := false
@@ -663,15 +509,39 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 			_ = sleepWithContext(subCtx, 20*time.Millisecond)
 		}
 		require.True(t, expired, "sessionA 租约必须已跨期失效")
-		t.Logf("【确证 2】sessionA 已跨期失效")
+		t.Logf("【确证】sessionA 已跨期失效")
 
-		// 6. 释放行锁屏障，等待 SetLk 返回
-		releaseBlocker()
+		// 3. 在 ADR-0025 语义下，SetLk 不再执行随路会话续期，携带已过期 sessionA / fhA 调用 SetLk 必须立即返回 EBADF 且绝不复活会话或写入幽灵锁
+		_, setLkErr := client.SetLk(subCtx, connect.NewRequest(&storagev1.SetLkRequest{
+			Ino:       fileIno,
+			Fh:        fhA,
+			LockOwner: 1001,
+			SessionId: sessionA,
+			Lk: &storagev1.FileLock{
+				Start: 0,
+				End:   100,
+				Type:  fWrLck,
+				Pid:   1001,
+			},
+			LkFlags: 0,
+		}))
+		testutil.RequireConnectError(t, setLkErr, connect.CodeFailedPrecondition, "EBADF")
 
-		res := <-setLkResCh
-		setLkErr := res.err
+		stillExpired := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT (clock_timestamp() > expires_at)::text FROM client_sessions WHERE session_id = %d", sessionA))
+		require.Equal(t, "true", stillExpired, "SetLk 绝不能随路复活已过期的 sessionA")
 
-		// 7. 直接审计数据库并执行无条件断言（彻底删除 if 包裹）
+		// 4. 通过 sweeper 会话 (blockerSessionID) 调用 RenewSession 触发过期会话与关联句柄清理
+		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: blockerSessionID,
+		}))
+		require.NoError(t, err)
+		defer func() {
+			_, _ = client.CloseSession(subCtx, connect.NewRequest(&storagev1.CloseSessionRequest{
+				SessionId: blockerSessionID,
+			}))
+		}()
+
+		// 5. 直接审计数据库并执行无条件断言
 		handleCountStr := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT COUNT(*) FROM file_handles WHERE fh = %d AND ino = %d", fhA, fileIno))
 		lockCountStr := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT COUNT(*) FROM file_locks WHERE ino = %d AND fh = %d AND session_id = %d", fileIno, fhA, sessionA))
 		handleCount, convErr1 := strconv.Atoi(handleCountStr)
@@ -681,7 +551,6 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 
 		assert.Equal(t, 0, handleCount, "跨期后旧句柄 fh=%d 应已被级联清理", fhA)
 		assert.Equal(t, 0, lockCount, "已过期会话的旧句柄 fh=%d (当前 file_handles 存活数=%d) 绝不能在 file_locks 表中写入幽灵锁", fhA, handleCount)
-		testutil.RequireConnectError(t, setLkErr, connect.CodeFailedPrecondition, "EBADF")
 	})
 
 	// 子场景 2: 孤儿文件场景 (OrphanFile_ExpiredHandleSetLkLeaksForeignKeyError)
@@ -712,7 +581,12 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 		sessionOrphan := uint64(260001)
 		blockerSessionID := uint64(259999)
 
-		// 1. 创建文件并 Unlink 成为打开孤儿 (nlink = 0)
+		// 1. 先注册激活 sessionOrphan，再创建文件并 Unlink 成为打开孤儿 (nlink = 0)
+		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: sessionOrphan,
+		}))
+		require.NoError(t, err)
+
 		orphanName := []byte("orphan_h5.tmp")
 		createResp, err := client.Create(subCtx, connect.NewRequest(&storagev1.CreateRequest{
 			ParentIno: disk.GetRootIno(),
@@ -731,52 +605,7 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 		}))
 		require.NoError(t, err)
 
-		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
-			SessionId: sessionOrphan,
-		}))
-		require.NoError(t, err)
-
-		// 确保 sessionOrphan 的物理存储元组 (ctid) 位于 blocker 之后，使全表扫描必然先阻塞在 blocker
-		execSessionPsql(subCtx, t, fmt.Sprintf("UPDATE client_sessions SET updated_at = clock_timestamp() WHERE session_id = %d;", sessionOrphan))
-
-		// 2. 启动后台协程清理屏障，再启动行锁屏障锁住已过期的 blockerSessionID = 259999
-		var setLkWg sync.WaitGroup
-		t.Cleanup(func() {
-			setLkWg.Wait()
-		})
-
-		releaseBlocker := acquireExpiredBlockerSessionLock(subCtx, t, blockerSessionID)
-
-		// 3. 启动后台协程对 orphanIno 调用唯一 1 次 client.SetLk
-		type setLkResult struct {
-			resp *connect.Response[storagev1.SetLkResponse]
-			err  error
-		}
-		setLkResCh := make(chan setLkResult, 1)
-		setLkWg.Add(1)
-
-		go func() {
-			defer setLkWg.Done()
-			r, sErr := client.SetLk(subCtx, connect.NewRequest(&storagev1.SetLkRequest{
-				Ino:       orphanIno,
-				Fh:        fhOrphan,
-				LockOwner: 1001,
-				SessionId: sessionOrphan,
-				Lk: &storagev1.FileLock{
-					Start: 0,
-					End:   100,
-					Type:  fWrLck,
-					Pid:   1001,
-				},
-				LkFlags: 0,
-			}))
-			setLkResCh <- setLkResult{resp: r, err: sErr}
-		}()
-
-		// 4. 轮询 pg_stat_activity 确认 SetLk 已通过 GetFileHandle 并针对 client_sessions 发生锁阻塞
-		waitForBlockedExpiredSessionDelete(subCtx, t)
-
-		// 5. 轮询确认 sessionOrphan 跨期失效
+		// 2. 轮询确认 sessionOrphan 租约跨期失效
 		waitExpireCtx, waitExpireCancel := context.WithTimeout(subCtx, 5*time.Second)
 		defer waitExpireCancel()
 		expired := false
@@ -795,20 +624,49 @@ func TestE2E_H5_ExpiredHandleRevivedBySessionUpsert(t *testing.T) {
 		}
 		require.True(t, expired, "sessionOrphan 租约必须已跨期失效")
 
-		// 6. 释放行锁屏障，等待 SetLk 返回
-		releaseBlocker()
+		// 3. 携带已过期 sessionOrphan / fhOrphan 对孤儿文件调用 SetLk：必须立即返回 EBADF 且绝不复活会话或插入任何锁
+		_, setLkErr := client.SetLk(subCtx, connect.NewRequest(&storagev1.SetLkRequest{
+			Ino:       orphanIno,
+			Fh:        fhOrphan,
+			LockOwner: 1001,
+			SessionId: sessionOrphan,
+			Lk: &storagev1.FileLock{
+				Start: 0,
+				End:   100,
+				Type:  fWrLck,
+				Pid:   1001,
+			},
+			LkFlags: 0,
+		}))
+		testutil.RequireConnectError(t, setLkErr, connect.CodeFailedPrecondition, "EBADF")
 
-		res := <-setLkResCh
-		setLkErr := res.err
+		stillExpired := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT (clock_timestamp() > expires_at)::text FROM client_sessions WHERE session_id = %d", sessionOrphan))
+		require.Equal(t, "true", stillExpired, "SetLk 绝不能随路复活已过期的 sessionOrphan")
 
-		// 7. 查询 orphanInodeCount 与 orphanLockCount，无条件断言
+		// 4. 通过 sweeper 会话 (blockerSessionID) 调用 RenewSession 触发过期会话、句柄及孤儿节点物理清理
+		_, err = client.RenewSession(subCtx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: blockerSessionID,
+		}))
+		require.NoError(t, err)
+		defer func() {
+			_, _ = client.CloseSession(subCtx, connect.NewRequest(&storagev1.CloseSessionRequest{
+				SessionId: blockerSessionID,
+			}))
+		}()
+
+		// 5. 查询 handleCount、orphanLockCount 与 orphanInodeCount，无条件断言全部为 0
+		handleCountStr := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT COUNT(*) FROM file_handles WHERE fh = %d AND ino = %d", fhOrphan, orphanIno))
 		orphanInodeCountStr := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT COUNT(*) FROM inodes WHERE ino = %d", orphanIno))
 		orphanLockCountStr := execSessionPsql(subCtx, t, fmt.Sprintf("SELECT COUNT(*) FROM file_locks WHERE ino = %d", orphanIno))
+		handleCount, convErr0 := strconv.Atoi(handleCountStr)
+		require.NoError(t, convErr0, "解析 handleCount 失败: %s", handleCountStr)
 		orphanLockCount, convErr1 := strconv.Atoi(orphanLockCountStr)
 		require.NoError(t, convErr1, "解析 orphanLockCount 失败: %s", orphanLockCountStr)
-		_ = orphanInodeCountStr // 孤儿节点在当前缺陷实现下会被回收
+		orphanInodeCount, convErr2 := strconv.Atoi(orphanInodeCountStr)
+		require.NoError(t, convErr2, "解析 orphanInodeCount 失败: %s", orphanInodeCountStr)
 
+		assert.Equal(t, 0, handleCount, "跨期清理后旧孤儿句柄 fh=%d 应已被级联清理", fhOrphan)
 		assert.Equal(t, 0, orphanLockCount, "已物理删除的孤儿 Inode 不应存在任何锁残留")
-		testutil.RequireConnectError(t, setLkErr, connect.CodeFailedPrecondition, "EBADF")
+		assert.Equal(t, 0, orphanInodeCount, "跨期清理后无引用孤儿 Inode=%d 应已被物理回收", orphanIno)
 	})
 }

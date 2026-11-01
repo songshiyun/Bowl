@@ -129,30 +129,17 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	expectRenewSession := func(mockQuerier *dbmock.MockQuerier, sid uint64) {
-		now := time.Now()
+	expectVerifyActiveSession := func(mockQuerier *dbmock.MockQuerier, sid uint64) {
 		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sid) && arg.ExpiresAt.Valid
-			})).
-			Return(db.ClientSession{
+			HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
 				SessionID: int64(sid),
-				ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
-				UpdatedAt: pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true},
-			}, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
+				RootIno:   0,
+			}).
+			Return(true, nil).
 			Once()
 	}
 
-	t.Run("Create 传入 SessionID 时续期会话并写入 file_handles.session_id", func(t *testing.T) {
+	t.Run("Create 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -163,6 +150,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			GetInodeForUpdate(mock.Anything, int64(1)).
 			Return(dirInode, nil).
 			Once()
+		expectVerifyActiveSession(mockQuerier, sessID)
 		mockQuerier.EXPECT().
 			CreateInode(mock.Anything, mock.Anything).
 			Return(fileInode, nil).
@@ -179,7 +167,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			TouchInodeTimestamps(mock.Anything, int64(1)).
 			Return(nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
 		mockQuerier.EXPECT().
 			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
 				Ino:       100,
@@ -205,7 +192,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		assert.Equal(t, uint64(501), res.Fh)
 	})
 
-	t.Run("Open 传入 SessionID 时续期会话并写入 file_handles.session_id", func(t *testing.T) {
+	t.Run("Open 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -216,7 +203,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			GetInode(mock.Anything, int64(100)).
 			Return(fileInode, nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
+		expectVerifyActiveSession(mockQuerier, sessID)
 		mockQuerier.EXPECT().
 			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
 				Ino:       100,
@@ -240,7 +227,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		assert.Equal(t, uint64(502), res.Fh)
 	})
 
-	t.Run("OpenDir 传入 SessionID 时续期会话并写入 file_handles.session_id", func(t *testing.T) {
+	t.Run("OpenDir 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -251,7 +238,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			GetInode(mock.Anything, int64(1)).
 			Return(dirInode, nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
+		expectVerifyActiveSession(mockQuerier, sessID)
 		mockQuerier.EXPECT().
 			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
 				Ino:       1,
@@ -275,12 +262,17 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		assert.Equal(t, uint64(503), res.Fh)
 	})
 
-	t.Run("Flush 仅传 SessionID 未传 LockOwner 时走写事务完成校验与会话续期", func(t *testing.T) {
+	t.Run("Flush 仅传 SessionID 未传 LockOwner 时走只读句柄校验且不执行会话续期", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			RunAndReturn(func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+				return fn(mockQuerier)
+			}).
+			Once()
 
 		mockQuerier.EXPECT().
 			GetInode(mock.Anything, int64(100)).
@@ -294,7 +286,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			}).
 			Return(db.FileHandle{Fh: 502, Ino: 100}, nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
 
 		err := mgr.Flush(ctx, meta.FlushParams{
 			Ino:       100,
@@ -304,7 +295,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("Release 未传 FuseReleaseFlockUnlock 但传 SessionID 时仍续期会话", func(t *testing.T) {
+	t.Run("Release 未传 FuseReleaseFlockUnlock 但传 SessionID 时通过 DeleteFileHandle 校验删除", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -323,7 +314,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			}).
 			Return(int64(502), nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
 			Ino:       100,
@@ -333,7 +323,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("ReleaseDir 传入 SessionID 时续期会话并触发孤儿目录回收检查", func(t *testing.T) {
+	t.Run("ReleaseDir 传入 SessionID 时通过 DeleteFileHandle 校验删除", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -352,7 +342,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			}).
 			Return(int64(503), nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
 
 		err := mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
 			Ino:       1,
@@ -362,7 +351,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("Fallocate 传入 SessionID 时校验句柄有效后续期会话", func(t *testing.T) {
+	t.Run("Fallocate 传入 SessionID 时通过 GetFileHandle 内联校验句柄与会话活跃性", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -385,7 +374,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 				Flags: int32(meta.O_RDWR),
 			}, nil).
 			Once()
-		expectRenewSession(mockQuerier, sessID)
 		mockQuerier.EXPECT().
 			TouchInodeCtime(mock.Anything, int64(100)).
 			Return(nil).
@@ -402,7 +390,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("renewClientSession 中 DeleteUnreferencedOrphanInodes 失败时向上传播错误", func(t *testing.T) {
+	t.Run("RenewSession 中 DeleteUnreferencedOrphanInodes 失败时向上传播错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -410,16 +398,15 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(100)).
-			Return(fileInode, nil).
-			Once()
-		mockQuerier.EXPECT().
 			DeleteExpiredClientSessions(mock.Anything).
 			Return(int64(0), nil).
 			Once()
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: int64(sessID)}, nil).
+			Return(db.ClientSession{
+				SessionID: int64(sessID),
+				ExpiresAt: pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true},
+			}, nil).
 			Once()
 		orphanErr := errors.New("orphan gc failed")
 		mockQuerier.EXPECT().
@@ -427,11 +414,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), orphanErr).
 			Once()
 
-		_, err := mgr.Open(ctx, meta.OpenParams{
-			Ino:       100,
-			Flags:     meta.O_RDONLY,
-			SessionID: &sessID,
-		})
+		_, err := mgr.RenewSession(ctx, sessID)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, orphanErr)
 	})
@@ -505,6 +488,8 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 
 	// AC2: 会话过期后句柄自动失效，且孤儿节点仅剩过期句柄时拒绝再次 Open / OpenDir
 	t.Run("AC2_会话过期后读写与释放操作返回ErrBadFileHandle且孤儿禁止重新打开", func(t *testing.T) {
+		_, err := mgr.RenewSession(ctx, s1)
+		require.NoError(t, err)
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: rootIno,
 			Name:      []byte("ac2_file.txt"),
@@ -600,6 +585,8 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 
 	// AC3: 客户端崩溃后 Orphan Inode 物理回收（文件与目录）
 	t.Run("AC3_客户端S1租约超期后由S2写请求级联清理句柄并物理回收孤儿文件与目录", func(t *testing.T) {
+		_, err := mgr.RenewSession(ctx, s1)
+		require.NoError(t, err)
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: rootIno,
 			Name:      []byte("ac3_orphan_file.txt"),
@@ -643,16 +630,9 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(s1))
 		require.NoError(t, err)
 
-		// S2 发起携带 SessionID 的写操作（例如 Open 根目录下的新文件或 OpenDir 根目录）
-		s2DirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{
-			Ino:       rootIno,
-			Flags:     meta.O_RDONLY,
-			SessionID: &s2,
-		})
+		// S2 调用 RenewSession 触发超期会话清理并物理回收孤儿节点
+		_, err = mgr.RenewSession(ctx, s2)
 		require.NoError(t, err)
-		defer func() {
-			_ = mgr.ReleaseDir(context.Background(), meta.ReleaseDirParams{Ino: rootIno, Fh: s2DirRes.Fh, SessionID: &s2})
-		}()
 
 		// 断言孤儿文件与孤儿目录均已被物理删除
 		_, err = store.GetInode(ctx, int64(orphanFileIno))
@@ -663,6 +643,10 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 
 	// AC4: 多会话共享 Orphan Inode 的引用计数保护
 	t.Run("AC4_多会话共享孤儿节点时仅清理超期会话S1不误删活跃会话S2或NULL句柄持有的孤儿节点", func(t *testing.T) {
+		_, err := mgr.RenewSession(ctx, s1)
+		require.NoError(t, err)
+		_, err = mgr.RenewSession(ctx, s2)
+		require.NoError(t, err)
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: rootIno,
 			Name:      []byte("ac4_shared_orphan.txt"),
@@ -696,8 +680,11 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 		// Unlink 使其变为 nlink == 0 的 Orphan Inode
 		require.NoError(t, mgr.Unlink(ctx, rootIno, []byte("ac4_shared_orphan.txt")))
 
-		// S1 租约过期，S2 发起 Flush 触发清理
+		// S1 租约过期，S2 发起 RenewSession 与 Flush 触发清理
 		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(s1))
+		require.NoError(t, err)
+
+		_, err = mgr.RenewSession(ctx, s2)
 		require.NoError(t, err)
 
 		require.NoError(t, mgr.Flush(ctx, meta.FlushParams{
@@ -731,6 +718,8 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 
 	// AC5: 并发锁竞争下 SKIP LOCKED 无死锁与非阻塞保证
 	t.Run("AC5_并发事务持有孤儿Inode排他锁时renewClientSession通过SKIP_LOCKED非阻塞跳过", func(t *testing.T) {
+		_, err := mgr.RenewSession(ctx, s1)
+		require.NoError(t, err)
 		// 创建两个 Orphan Inode：lockedOrphanIno 将被并发事务锁定，freeOrphanIno 未被锁定
 		lockedRes, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: rootIno,
@@ -780,31 +769,18 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 		err = txA.QueryRow(ctx, "SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE", int64(lockedOrphanIno)).Scan(&lockedIno)
 		require.NoError(t, err)
 
-		// 在 txA 未提交期间，客户端 S3 执行带 SessionID 的 OpenDir，触发 renewClientSession -> DeleteUnreferencedOrphanInodes
+		// 在 txA 未提交期间，客户端 S3 执行 RenewSession 触发 DeleteUnreferencedOrphanInodes
 		doneCh := make(chan error, 1)
 		go func() {
-			dirRes, oErr := mgr.OpenDir(ctx, meta.OpenDirParams{
-				Ino:       rootIno,
-				Flags:     meta.O_RDONLY,
-				SessionID: &s3,
-			})
-			if oErr != nil {
-				doneCh <- oErr
-				return
-			}
-			_ = mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
-				Ino:       rootIno,
-				Fh:        dirRes.Fh,
-				SessionID: &s3,
-			})
-			doneCh <- nil
+			_, rErr := mgr.RenewSession(ctx, s3)
+			doneCh <- rErr
 		}()
 
 		select {
 		case opErr := <-doneCh:
 			require.NoError(t, opErr, "SKIP LOCKED 应保证并发孤儿回收不被 txA 阻塞或触发死锁")
 		case <-time.After(2 * time.Second):
-			t.Fatal("renewClientSession 被并发事务持有的孤儿 Inode 行锁阻塞超时")
+			t.Fatal("RenewSession 被并发事务持有的孤儿 Inode 行锁阻塞超时")
 		}
 
 		// 未被锁定的 freeOrphanIno 已被立即物理回收
@@ -816,17 +792,8 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 		_, err = store.GetInode(ctx, int64(lockedOrphanIno))
 		require.NoError(t, err, "被 txA 锁定的孤儿节点在跳过后仍暂留")
 
-		dirRes2, err := mgr.OpenDir(ctx, meta.OpenDirParams{
-			Ino:       rootIno,
-			Flags:     meta.O_RDONLY,
-			SessionID: &s3,
-		})
+		_, err = mgr.RenewSession(ctx, s3)
 		require.NoError(t, err)
-		require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
-			Ino:       rootIno,
-			Fh:        dirRes2.Fh,
-			SessionID: &s3,
-		}))
 
 		_, err = store.GetInode(ctx, int64(lockedOrphanIno))
 		assert.ErrorIs(t, err, pgx.ErrNoRows, "txA 释放锁后下一轮会话续期应回收该孤儿节点")
@@ -856,6 +823,8 @@ func TestSessionHandleAndOrphanGC_PostgresIntegration(t *testing.T) {
 		defer func() {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(sess1), int64(sess2))
 		}()
+		_, err = mgr.RenewSession(ctx, sess1)
+		require.NoError(t, err)
 
 		// 1. 客户端会话 1 在磁盘下创建 TmpFile 并 SetAttr(size=8192)
 		tmpRes, err := mgr.TmpFile(ctx, meta.TmpFileParams{
@@ -1115,37 +1084,38 @@ func TestSession_ExpiredHandleOperationsReturnBadFileHandle(t *testing.T) {
 		require.True(t, fhExists, "调用前该句柄在表中应仍然存在（尚未被清理）")
 	}
 
-	// 辅助函数：断言调用后过期会话与句柄已被清除（或绝未被重新插入复活为活跃会话）
+	// 辅助函数：断言调用后过期会话与句柄不会复活为活跃会话，且在 GC 后被彻底清理
 	assertSessionAndHandleCleanedAfter := func(t *testing.T, sessID uint64, ino, fh uint64, opName string) {
 		t.Helper()
-		if opName == "Release" || opName == "ReleaseDir" {
-			var sessExists, fhExists bool
-			err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM client_sessions WHERE session_id = $1)", int64(sessID)).Scan(&sessExists)
-			require.NoError(t, err)
-			assert.False(t, sessExists, "持已过期句柄调用 %s 绝不能复活会话，过期会话应已被彻底清理", opName)
-
-			err = pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM file_handles WHERE fh = $1 AND ino = $2)", int64(fh), int64(ino)).Scan(&fhExists)
-			require.NoError(t, err)
-			assert.False(t, fhExists, "持已过期句柄调用 %s 后，该句柄应已被彻底清除（级联删除）", opName)
+		var exp pgtype.Timestamptz
+		err := pool.QueryRow(ctx, "SELECT expires_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&exp)
+		if err == nil {
+			assert.True(t, exp.Valid && exp.Time.Before(time.Now()), "持已过期句柄调用 %s 绝不能被重新插入复活为活跃会话", opName)
 		} else {
-			var exp pgtype.Timestamptz
-			err := pool.QueryRow(ctx, "SELECT expires_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&exp)
-			if err == nil {
-				assert.True(t, exp.Valid && exp.Time.Before(time.Now()), "持已过期句柄调用 %s 绝不能被重新插入复活为活跃会话", opName)
-			} else {
-				assert.ErrorIs(t, err, pgx.ErrNoRows)
-			}
-
-			var fhActive bool
-			err = pool.QueryRow(ctx, `
-				SELECT EXISTS(
-					SELECT 1 FROM file_handles fh
-					JOIN client_sessions s ON fh.session_id = s.session_id
-					WHERE fh.fh = $1 AND fh.ino = $2 AND s.expires_at > clock_timestamp()
-				)`, int64(fh), int64(ino)).Scan(&fhActive)
-			require.NoError(t, err)
-			assert.False(t, fhActive, "持已过期句柄调用 %s 后，该句柄绝不得被复活为活跃句柄", opName)
+			assert.ErrorIs(t, err, pgx.ErrNoRows)
 		}
+
+		var fhActive bool
+		err = pool.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM file_handles fh
+				JOIN client_sessions s ON fh.session_id = s.session_id
+				WHERE fh.fh = $1 AND fh.ino = $2 AND s.expires_at > clock_timestamp()
+			)`, int64(fh), int64(ino)).Scan(&fhActive)
+		require.NoError(t, err)
+		assert.False(t, fhActive, "持已过期句柄调用 %s 后，该句柄绝不得被复活为活跃句柄", opName)
+
+		_, err = mgr.CollectGarbage(ctx, 100)
+		require.NoError(t, err)
+
+		var sessExists, fhExists bool
+		err = pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM client_sessions WHERE session_id = $1)", int64(sessID)).Scan(&sessExists)
+		require.NoError(t, err)
+		assert.False(t, sessExists, "GC 后过期会话应已被彻底清理 (%s)", opName)
+
+		err = pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM file_handles WHERE fh = $1 AND ino = $2)", int64(fh), int64(ino)).Scan(&fhExists)
+		require.NoError(t, err)
+		assert.False(t, fhExists, "GC 后该句柄应已被彻底清除（级联删除）(%s)", opName)
 	}
 
 	// 辅助函数：令指定会话过期
@@ -1354,29 +1324,28 @@ func TestSession_ExpiredHandleOperationsReturnBadFileHandle(t *testing.T) {
 
 type staleHandleHookQuerier struct {
 	db.Querier
-	afterGetFileHandle func()
+	beforeGetFileHandle func()
 }
 
 func (q *staleHandleHookQuerier) GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error) {
-	h, err := q.Querier.GetFileHandle(ctx, arg)
-	if err == nil && q.afterGetFileHandle != nil {
-		q.afterGetFileHandle()
+	if q.beforeGetFileHandle != nil {
+		q.beforeGetFileHandle()
 	}
-	return h, err
+	return q.Querier.GetFileHandle(ctx, arg)
 }
 
 type staleHandleHookStore struct {
 	db.Store
-	afterGetFileHandle func()
-	hookActive         bool
+	beforeGetFileHandle func()
+	hookActive          bool
 }
 
 func (s *staleHandleHookStore) ExecTxWithOptions(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
 	return s.Store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		if s.hookActive && s.afterGetFileHandle != nil {
+		if s.hookActive && s.beforeGetFileHandle != nil {
 			wrapped := &staleHandleHookQuerier{
-				Querier:            q,
-				afterGetFileHandle: s.afterGetFileHandle,
+				Querier:             q,
+				beforeGetFileHandle: s.beforeGetFileHandle,
 			}
 			return fn(wrapped)
 		}
@@ -1385,7 +1354,7 @@ func (s *staleHandleHookStore) ExecTxWithOptions(ctx context.Context, fn func(db
 }
 
 // TestSession_ExpiredAndRecreatedSameSessionID_RejectsStaleFileHandle 验证 G-02：
-// 会话过期并被相同 session_id 重建后，写操作预检通过的旧代际句柄绝不得逃逸 CreatedAt == UpdatedAt 检查，
+// 会话过期并被相同 session_id 重建后，旧代际句柄绝不得逃逸代次检查，
 // 必须严格返回 ErrBadFileHandle，底表 file_locks 绝不能写入已失效句柄的锁记录，且新重建的活跃会话不能被误删。
 func TestSession_ExpiredAndRecreatedSameSessionID_RejectsStaleFileHandle(t *testing.T) {
 	dsn := getStorageTestDSN()
@@ -1438,9 +1407,9 @@ func TestSession_ExpiredAndRecreatedSameSessionID_RejectsStaleFileHandle(t *test
 	require.NoError(t, err)
 	require.True(t, fhExists)
 
-	// 配置钩子：在 T1 事务内通过 GetFileHandle 预检之后、即将执行 touchActiveClientSession 之前触发
+	// 配置钩子：在 T1 事务内 GetInodeForUpdate 之后、即将执行 GetFileHandle 之前触发
 	var hookTriggered bool
-	hookStore.afterGetFileHandle = func() {
+	hookStore.beforeGetFileHandle = func() {
 		if hookTriggered {
 			return
 		}

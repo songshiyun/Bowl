@@ -175,6 +175,9 @@ func (fs *RawFS) startPrefetchLocked(hra *handleReadAhead, fh uint64, nextOffset
 			SessionId: &sid,
 		}))
 		if err != nil {
+			if isServerEBADF(err) && fs.sessions != nil {
+				fs.sessions.TriggerRenew()
+			}
 			pf.err = err
 			return
 		}
@@ -227,6 +230,9 @@ func (fs *RawFS) fetchReadWindow(ctx context.Context, hra *handleReadAhead, ino,
 	}))
 	hra.mu.Lock()
 	if err != nil {
+		if isServerEBADF(err) && fs.sessions != nil {
+			fs.sessions.TriggerRenew()
+		}
 		return nil, err
 	}
 	return resp.Msg.GetData(), nil
@@ -350,7 +356,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 			winData, err := fs.fetchReadWindow(ctx, hra, ino, input.Fh, sid, input.Offset)
 			if err != nil {
 				hra.mu.Unlock()
-				return nil, fs.ToStatus(err, cancel)
+				return nil, fs.ToStatusWithSession(err, cancel)
 			}
 
 			n := min(want, len(winData))
@@ -383,7 +389,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 			SessionId: &sid,
 		}))
 		if err != nil {
-			return nil, fs.ToStatus(err, cancel)
+			return nil, fs.ToStatusWithSession(err, cancel)
 		}
 
 		data := resp.Msg.GetData()
@@ -426,10 +432,13 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 			SessionId: &sid,
 		}))
 		if err != nil {
+			if isServerEBADF(err) && fs.sessions != nil {
+				fs.sessions.TriggerRenew()
+			}
 			if totalRead > 0 {
 				break
 			}
-			return nil, fs.ToStatus(err, cancel)
+			return nil, fs.ToStatusWithSession(err, cancel)
 		}
 
 		chunkData := resp.Msg.GetData()
@@ -493,7 +502,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			SessionId: &sid,
 		}))
 		if err != nil {
-			return 0, fs.ToStatus(err, cancel)
+			return 0, fs.ToStatusWithSession(err, cancel)
 		}
 		return resp.Msg.GetSize(), fuse.OK
 	}
@@ -515,10 +524,13 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			SessionId: &sid,
 		}))
 		if err != nil {
+			if isServerEBADF(err) && fs.sessions != nil {
+				fs.sessions.TriggerRenew()
+			}
 			if totalWritten > 0 {
 				return totalWritten, fuse.OK
 			}
-			return 0, fs.ToStatus(err, cancel)
+			return 0, fs.ToStatusWithSession(err, cancel)
 		}
 
 		n := resp.Msg.GetSize()

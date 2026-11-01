@@ -64,6 +64,11 @@ func TestHandleSessionAuth_PostgresRegression(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2, $3)", int64(s1), int64(s2), int64(sExpired))
 	}()
 
+	_, err = mgr.RenewSession(ctx, s1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, s2)
+	require.NoError(t, err)
+
 	// 1. 创建属于 s1 的文件句柄与目录句柄
 	createRes1, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: rootDirIno,

@@ -111,7 +111,7 @@ func TestConfig_Load_Defaults(t *testing.T) {
 	assert.Equal(t, "handled rpc", cfg.Message())
 
 	// 验证元数据领域默认配置
-	assert.Equal(t, 60*time.Second, cfg.Meta.SessionLeaseTTL())
+	assert.Equal(t, 15*time.Second, cfg.Meta.SessionLeaseTTL())
 	assert.Equal(t, "noatime", cfg.Meta.AtimeMode())
 	assert.Equal(t, 1.0, cfg.Meta.EntryTimeoutSeconds())
 	assert.Equal(t, 1.0, cfg.Meta.AttrTimeoutSeconds())

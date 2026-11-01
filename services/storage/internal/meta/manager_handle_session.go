@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -47,106 +46,6 @@ func RecordPosixLockActivityForTest(mgr Manager, ino uint64) {
 	if m, ok := mgr.(*manager); ok {
 		m.RecordPosixLockActivity(ino)
 	}
-}
-
-func (m *manager) tryThrottledSessionTouchReadOnly(ctx context.Context, sessionID uint64, handleCreatedAt pgtype.Timestamptz) (bool, error) {
-	pp, throttle := m.shouldThrottleSessionTouch(ctx)
-	if !throttle || pp == nil || pp.Pool() == nil {
-		return false, nil
-	}
-	interval := m.writeSessionTouchInterval
-	if interval <= 0 {
-		interval = DefaultWriteSessionTouchInterval
-	}
-	now := time.Now()
-	m.writeSessionTouchMu.Lock()
-	if m.writeSessionTouches == nil {
-		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-	}
-	prev, hadPrev := m.writeSessionTouches[sessionID]
-	inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-	m.writeSessionTouchMu.Unlock()
-	if !inWindow {
-		return false, nil
-	}
-	if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
-		return true, ErrBadFileHandle
-	}
-	if !m.hasDeferredOrphans() {
-		return true, nil
-	}
-
-	var sessionCreatedAt pgtype.Timestamptz
-	var alive, hasPendingCleanup bool
-	err := pp.Pool().QueryRow(ctx, `
-		SELECT
-			cs.created_at,
-			(cs.expires_at > clock_timestamp()) AS alive,
-			(
-				EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
-				OR EXISTS (
-					SELECT 1 FROM inodes i
-					WHERE i.nlink = 0
-					  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
-				)
-			) AS has_pending_cleanup
-		FROM client_sessions cs
-		WHERE cs.session_id = $1
-	`, int64(sessionID)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			m.clearWriteSessionTouch(sessionID)
-			return true, errExpiredSessionBadHandle
-		}
-		return true, fmt.Errorf("check active client session %d: %w", sessionID, err)
-	}
-	if !alive {
-		m.clearWriteSessionTouch(sessionID)
-		return true, errExpiredSessionBadHandle
-	}
-	if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
-		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-		return true, ErrBadFileHandle
-	}
-	if !hasPendingCleanup {
-		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-		return true, nil
-	}
-	return false, nil
-}
-
-func (m *manager) canSkipHandleSessionTouchInWindow(ctx context.Context, sessionID uint64) bool {
-	if _, throttle := m.shouldThrottleSessionTouch(ctx); !throttle {
-		return false
-	}
-	if m.hasDeferredOrphans() {
-		return false
-	}
-	interval := m.writeSessionTouchInterval
-	if interval <= 0 {
-		interval = DefaultWriteSessionTouchInterval
-	}
-	now := time.Now()
-	m.writeSessionTouchMu.Lock()
-	prev, hadPrev := m.writeSessionTouches[sessionID]
-	inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-	m.writeSessionTouchMu.Unlock()
-	return inWindow
-}
-
-func (m *manager) lookupHandleCreatedAt(ctx context.Context, q db.Querier, fh, ino, sessionID uint64) pgtype.Timestamptz {
-	pp, _ := m.store.(poolProvider)
-	dbtx := queryDBTX(q, pp)
-	if dbtx == nil {
-		return pgtype.Timestamptz{}
-	}
-	var createdAt pgtype.Timestamptz
-	_ = dbtx.QueryRow(
-		ctx,
-		`SELECT created_at FROM file_handles WHERE fh = $1 AND ino = $2 AND session_id = $3`,
-		int64(fh), int64(ino), int64(sessionID),
-	).Scan(&createdAt)
-	return createdAt
 }
 
 // checkFileHandleReadOnly 在只读 RepeatableRead 事务内校验 Inode 与 FileHandle 归属有效性。
@@ -213,15 +112,15 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 		return err
 	}
 
-	if params.LockOwner == nil && params.SessionID == nil {
-		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, nil, "flush")
+	if params.LockOwner == nil {
+		return m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, params.SessionID, "flush")
 	}
 
 	needsPosixUnlock := false
 	pp, hasPool := m.store.(poolProvider)
 	hasActivePool := hasPool && pp != nil && pp.Pool() != nil
 
-	if params.LockOwner != nil && m.hasPosixLockActivity(params.Ino) {
+	if m.hasPosixLockActivity(params.Ino) {
 		needsPosixUnlock = true
 	}
 	var snapshot flushSnapshot
@@ -244,34 +143,9 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 			}
 
 			if !snapshot.hasHandle {
-				m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, ErrBadFileHandle)
 				return ErrBadFileHandle
 			}
 
-			if params.SessionID != nil {
-				handled, touchErr := m.tryThrottledSessionTouchReadOnly(ctx, *params.SessionID, snapshot.handleCreatedAt)
-				if handled {
-					if touchErr != nil {
-						if errors.Is(touchErr, ErrBadFileHandle) {
-							m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, touchErr)
-							return ErrBadFileHandle
-						}
-						return fmt.Errorf("flush tx: %w", touchErr)
-					}
-					return nil
-				}
-
-				err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-					return m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, snapshot.handleCreatedAt)
-				})
-				if err != nil {
-					if errors.Is(err, ErrBadFileHandle) {
-						m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
-						return ErrBadFileHandle
-					}
-					return fmt.Errorf("flush tx: %w", err)
-				}
-			}
 			return nil
 		}
 
@@ -288,7 +162,7 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 				return ErrIsDir
 			}
 
-			handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
+			_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
 				Fh:        int64(params.Fh),
 				Ino:       int64(params.Ino),
 				SessionID: toPgSessionID(params.SessionID),
@@ -298,12 +172,6 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 					return ErrBadFileHandle
 				}
 				return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
-			}
-
-			if params.SessionID != nil {
-				if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handle.CreatedAt); err != nil {
-					return err
-				}
 			}
 
 			return nil
@@ -317,7 +185,6 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 			case errors.Is(err, ErrIsDir):
 				return ErrIsDir
 			case errors.Is(err, ErrBadFileHandle):
-				m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 				return ErrBadFileHandle
 			default:
 				return fmt.Errorf("flush tx: %w", err)
@@ -353,7 +220,7 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 			return ErrIsDir
 		}
 
-		handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
+		_, err = q.GetFileHandle(ctx, db.GetFileHandleParams{
 			Fh:        int64(params.Fh),
 			Ino:       int64(params.Ino),
 			SessionID: toPgSessionID(params.SessionID),
@@ -363,12 +230,6 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 				return ErrBadFileHandle
 			}
 			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
-		}
-
-		if params.SessionID != nil {
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handle.CreatedAt); err != nil {
-				return err
-			}
 		}
 
 		if params.LockOwner != nil {
@@ -415,7 +276,6 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 		case errors.Is(err, ErrIsDir):
 			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("flush tx: %w", err)
@@ -531,15 +391,7 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return ErrIsDir
 		}
 
-		// 1. 校验会话有效性并原子续期（在 5s 内存节流窗口且无延迟孤儿时直接交由 DeleteFileHandle 内联校验；慢路径则先续期防止被 reclaimUnreferencedOrphans 抢先回收）
-		if params.SessionID != nil && !m.canSkipHandleSessionTouchInWindow(ctx, *params.SessionID) {
-			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
-				return err
-			}
-		}
-
-		// 2. 删除文件句柄（若句柄不存在直接返回 ErrBadFileHandle）
+		// 删除文件句柄（DeleteFileHandle 内联校验会话活跃性与重建代次，不满足则返回 pgx.ErrNoRows -> ErrBadFileHandle）
 		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
 			Fh:        int64(params.Fh),
 			Ino:       int64(params.Ino),
@@ -618,7 +470,6 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		case errors.Is(err, ErrIsDir):
 			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("release tx: %w", err)
@@ -700,15 +551,7 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 			}
 		}
 
-		// 1. 校验会话有效性并原子续期（在 5s 内存节流窗口且无延迟孤儿时直接交由 DeleteFileHandle 内联校验；慢路径则先续期防止被 reclaimUnreferencedOrphans 抢先回收）
-		if params.SessionID != nil && !m.canSkipHandleSessionTouchInWindow(ctx, *params.SessionID) {
-			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
-			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
-				return err
-			}
-		}
-
-		// 2. 删除目录句柄（若句柄不存在直接返回 ErrBadFileHandle）
+		// 删除目录句柄（DeleteFileHandle 内联校验会话活跃性与重建代次，不满足则返回 pgx.ErrNoRows -> ErrBadFileHandle）
 		_, err = q.DeleteFileHandle(ctx, db.DeleteFileHandleParams{
 			Fh:        int64(params.Fh),
 			Ino:       int64(params.Ino),
@@ -755,7 +598,6 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 		case errors.Is(err, ErrNotDir):
 			return ErrNotDir
 		case errors.Is(err, ErrBadFileHandle):
-			m.handleBadFileHandleSessionCleanup(ctx, params.SessionID, err)
 			return ErrBadFileHandle
 		default:
 			return fmt.Errorf("releasedir tx: %w", err)

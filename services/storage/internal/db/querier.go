@@ -67,6 +67,7 @@ type Querier interface {
 	GetParentInode(ctx context.Context, ino int64) (Inode, error)
 	GetSliceRef(ctx context.Context, sliceID int64) (SliceRef, error)
 	GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTargetRow, error)
+	HasActiveClientSession(ctx context.Context, arg HasActiveClientSessionParams) (bool, error)
 	HasChildEntries(ctx context.Context, parentIno int64) (bool, error)
 	HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error)
 	// 4194304 = 0o20000000 (O_TMPFILE), 128 = 0o200 (O_EXCL)

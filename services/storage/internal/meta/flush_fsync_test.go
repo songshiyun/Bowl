@@ -191,27 +191,6 @@ func TestFlush_PositivePath(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		beforeCall := time.Now()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sessionID) &&
-					arg.ExpiresAt.Valid &&
-					arg.ExpiresAt.Time.After(beforeCall.Add(25*time.Second)) &&
-					arg.ExpiresAt.Time.Before(beforeCall.Add(35*time.Second))
-			})).
-			Return(db.ClientSession{SessionID: int64(sessionID)}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
-		mockQuerier.EXPECT().
 			DeletePosixFileLocksBySessionAndOwner(mock.Anything, db.DeletePosixFileLocksBySessionAndOwnerParams{
 				SessionID: int64(sessionID),
 				Ino:       int64(ino),

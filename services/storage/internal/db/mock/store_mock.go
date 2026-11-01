@@ -3737,6 +3737,72 @@ func (_c *MockStore_GetSymlinkTarget_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// HasActiveClientSession provides a mock function for the type MockStore
+func (_mock *MockStore) HasActiveClientSession(ctx context.Context, arg db.HasActiveClientSessionParams) (bool, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for HasActiveClientSession")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.HasActiveClientSessionParams) (bool, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.HasActiveClientSessionParams) bool); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.HasActiveClientSessionParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_HasActiveClientSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HasActiveClientSession'
+type MockStore_HasActiveClientSession_Call struct {
+	*mock.Call
+}
+
+// HasActiveClientSession is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.HasActiveClientSessionParams
+func (_e *MockStore_Expecter) HasActiveClientSession(ctx any, arg any) *MockStore_HasActiveClientSession_Call {
+	return &MockStore_HasActiveClientSession_Call{Call: _e.mock.On("HasActiveClientSession", ctx, arg)}
+}
+
+func (_c *MockStore_HasActiveClientSession_Call) Run(run func(ctx context.Context, arg db.HasActiveClientSessionParams)) *MockStore_HasActiveClientSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.HasActiveClientSessionParams
+		if args[1] != nil {
+			arg1 = args[1].(db.HasActiveClientSessionParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_HasActiveClientSession_Call) Return(b bool, err error) *MockStore_HasActiveClientSession_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockStore_HasActiveClientSession_Call) RunAndReturn(run func(ctx context.Context, arg db.HasActiveClientSessionParams) (bool, error)) *MockStore_HasActiveClientSession_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // HasChildEntries provides a mock function for the type MockStore
 func (_mock *MockStore) HasChildEntries(ctx context.Context, parentIno int64) (bool, error) {
 	ret := _mock.Called(ctx, parentIno)

@@ -78,8 +78,6 @@ type Manager interface {
 	RenewSessionWithStatus(ctx context.Context, sessionID uint64) (RenewSessionResult, error)
 	RenewSessionWithDisk(ctx context.Context, sessionID uint64, diskID *string) (RenewSessionResult, error)
 	CloseSession(ctx context.Context, sessionID uint64) error
-	WatchHub() *SessionWatchHub
-	ValidateWatchSession(sessionID uint64, diskID *string) error
 	GetParents(ctx context.Context, ino uint64) (map[uint64]uint32, error)
 	CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error)
 	GetDisk(ctx context.Context, diskID string) (*Disk, error)
@@ -125,61 +123,48 @@ type dirCursorAnchor struct {
 	handleCreatedAt time.Time
 }
 
-type writeSessionTouchState struct {
-	lastTouchedAt    time.Time
-	sessionCreatedAt pgtype.Timestamptz
-}
-
 type manager struct {
-	store                       db.Store
-	blockStore                  BlockStore
-	entryTimeout                float64
-	attrTimeout                 float64
-	dirEntryTimeout             float64
-	openKeepCache               bool
-	openDirCache                bool
-	atimeMode                   AtimeMode
-	sessionLeaseTTL             time.Duration
-	sessionProbeTimeout         time.Duration
-	gcInterval                  time.Duration
-	gcBatchLimit                int32
-	gcOrphanGracePeriod         time.Duration
-	compactSliceThreshold       int
-	sliceIDBatchSize            int
-	sliceIDMu                   sync.Mutex
-	sliceIDQueue                []int64
-	lastAllocatedSliceID        int64
-	writeSessionTouchInterval   time.Duration
-	writeSessionTouchDisabled   bool
-	writeSessionTouchConfigured bool
-	writeSessionTouchMu         sync.Mutex
-	writeSessionTouches         map[uint64]writeSessionTouchState
-	writeGroupMaxBatchSize      int
-	writeInFlightStage1         atomic.Int64
-	writeGroupMu                sync.Mutex
-	writeLeaderActive           bool
-	writePendingQueue           []*writeBatchTask
-	writeCoalesceCh             chan struct{}
-	inFlightCompactsMu          sync.Mutex
-	inFlightCompacts            map[chunkKey]bool
-	lockNotifyMu                sync.Mutex
-	lockNotifyChans             map[uint64]*lockNotifyEntry
-	crossDirRenameMu            sync.Mutex
-	dirCursorMu                 sync.Mutex
-	dirCursors                  map[dirCursorKey]dirCursorAnchor
-	dirMutationSeq              map[uint64]uint64
-	inFlightDirMutations        map[uint64]int
-	activeDirReads              map[uint64]*inFlightDirRead
-	nextDirReadID               uint64
-	inFlightGrantMu             sync.Mutex
-	inFlightGrants              map[inFlightGrantKey]*inFlightGrant
-	nextInFlightGrantID         uint64
-	deferredOrphansMu           sync.Mutex
-	deferredOrphanInos          map[int64]struct{}
-	quotaMu                     sync.Mutex
-	diskQuotas                  map[int64]*diskQuotaState
-	watchHubMu                  sync.Mutex
-	watchHub                    *SessionWatchHub
+	store                  db.Store
+	blockStore             BlockStore
+	entryTimeout           float64
+	attrTimeout            float64
+	dirEntryTimeout        float64
+	openKeepCache          bool
+	openDirCache           bool
+	atimeMode              AtimeMode
+	sessionLeaseTTL        time.Duration
+	gcInterval             time.Duration
+	gcBatchLimit           int32
+	gcOrphanGracePeriod    time.Duration
+	compactSliceThreshold  int
+	sliceIDBatchSize       int
+	sliceIDMu              sync.Mutex
+	sliceIDQueue           []int64
+	lastAllocatedSliceID   int64
+	writeGroupMaxBatchSize int
+	writeInFlightStage1    atomic.Int64
+	writeGroupMu           sync.Mutex
+	writeLeaderActive      bool
+	writePendingQueue      []*writeBatchTask
+	writeCoalesceCh        chan struct{}
+	inFlightCompactsMu     sync.Mutex
+	inFlightCompacts       map[chunkKey]bool
+	lockNotifyMu           sync.Mutex
+	lockNotifyChans        map[uint64]*lockNotifyEntry
+	crossDirRenameMu       sync.Mutex
+	dirCursorMu            sync.Mutex
+	dirCursors             map[dirCursorKey]dirCursorAnchor
+	dirMutationSeq         map[uint64]uint64
+	inFlightDirMutations   map[uint64]int
+	activeDirReads         map[uint64]*inFlightDirRead
+	nextDirReadID          uint64
+	inFlightGrantMu        sync.Mutex
+	inFlightGrants         map[inFlightGrantKey]*inFlightGrant
+	nextInFlightGrantID    uint64
+	deferredOrphansMu      sync.Mutex
+	deferredOrphanInos     map[int64]struct{}
+	quotaMu                sync.Mutex
+	diskQuotas             map[int64]*diskQuotaState
 }
 
 func (m *manager) markDeferredOrphan(ino int64) {
@@ -216,32 +201,6 @@ type poolProvider interface {
 	Pool() *pgxpool.Pool
 }
 
-func queryDBTX(q db.Querier, pp poolProvider) db.DBTX {
-	if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
-		return r.RawDBTX()
-	}
-	if pp != nil && pp.Pool() != nil {
-		return pp.Pool()
-	}
-	return nil
-}
-
-func (m *manager) shouldThrottleSessionTouch(ctx context.Context) (poolProvider, bool) {
-	if m.writeSessionTouchDisabled || m.writeSessionTouchInterval <= 0 {
-		return nil, false
-	}
-	if _, hasLockSync := db.LockSyncInoFromContext(ctx); hasLockSync {
-		return nil, false
-	}
-	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
-		return pp, true
-	}
-	if m.writeSessionTouchConfigured {
-		return nil, true
-	}
-	return nil, false
-}
-
 var _ Manager = (*manager)(nil)
 
 // Option 定义 Manager 的配置选项。
@@ -272,15 +231,6 @@ func WithSessionLeaseTTL(ttl time.Duration) Option {
 	return func(m *manager) {
 		if ttl > 0 {
 			m.sessionLeaseTTL = ttl
-		}
-	}
-}
-
-// WithSessionProbeTimeout 配置删盘时对活跃客户端会话流发送 Ping-Pong 探活的超时窗口（d > 0 时生效，默认 DefaultSessionProbeTimeout）。
-func WithSessionProbeTimeout(d time.Duration) Option {
-	return func(m *manager) {
-		if d > 0 {
-			m.sessionProbeTimeout = d
 		}
 	}
 }
@@ -378,21 +328,6 @@ func WithSliceIDBatchSize(batchSize int) Option {
 	}
 }
 
-// WithWriteSessionTouchInterval 配置对同一活跃客户端会话执行租约续期的最小节流时间窗口（d >= 0 时生效，默认 DefaultWriteSessionTouchInterval）。
-func WithWriteSessionTouchInterval(d time.Duration) Option {
-	return func(m *manager) {
-		if d == 0 {
-			m.writeSessionTouchInterval = 0
-			m.writeSessionTouchDisabled = true
-			m.writeSessionTouchConfigured = false
-		} else if d > 0 {
-			m.writeSessionTouchInterval = d
-			m.writeSessionTouchDisabled = false
-			m.writeSessionTouchConfigured = true
-		}
-	}
-}
-
 // WithWriteGroupMaxBatchSize 配置 Write 阶段 2 Group Commit 单批次最大聚合请求数（batchSize > 0 时生效，默认 DefaultWriteGroupMaxBatchSize）。
 func WithWriteGroupMaxBatchSize(batchSize int) Option {
 	return func(m *manager) {
@@ -405,37 +340,30 @@ func WithWriteGroupMaxBatchSize(batchSize int) Option {
 // New 创建 Manager 实例。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
-		store:                     store,
-		entryTimeout:              DefaultEntryTimeoutSeconds,
-		attrTimeout:               DefaultAttrTimeoutSeconds,
-		dirEntryTimeout:           DefaultEntryTimeoutSeconds,
-		sessionLeaseTTL:           DefaultSessionLeaseTTL,
-		sessionProbeTimeout:       DefaultSessionProbeTimeout,
-		gcInterval:                DefaultGCInterval,
-		gcBatchLimit:              DefaultGCBatchLimit,
-		gcOrphanGracePeriod:       DefaultGCOrphanGracePeriod,
-		compactSliceThreshold:     CompactSliceThreshold,
-		sliceIDBatchSize:          DefaultSliceIDBatchSize,
-		writeSessionTouchInterval: DefaultWriteSessionTouchInterval,
-		writeSessionTouches:       make(map[uint64]writeSessionTouchState),
-		writeGroupMaxBatchSize:    DefaultWriteGroupMaxBatchSize,
-		writeCoalesceCh:           make(chan struct{}, 1),
-		inFlightCompacts:          make(map[chunkKey]bool),
-		lockNotifyChans:           make(map[uint64]*lockNotifyEntry),
-		dirCursors:                make(map[dirCursorKey]dirCursorAnchor),
-		dirMutationSeq:            make(map[uint64]uint64),
-		inFlightDirMutations:      make(map[uint64]int),
-		activeDirReads:            make(map[uint64]*inFlightDirRead),
-		inFlightGrants:            make(map[inFlightGrantKey]*inFlightGrant),
-		watchHub:                  NewSessionWatchHub(),
+		store:                  store,
+		entryTimeout:           DefaultEntryTimeoutSeconds,
+		attrTimeout:            DefaultAttrTimeoutSeconds,
+		dirEntryTimeout:        DefaultEntryTimeoutSeconds,
+		sessionLeaseTTL:        DefaultSessionLeaseTTL,
+		gcInterval:             DefaultGCInterval,
+		gcBatchLimit:           DefaultGCBatchLimit,
+		gcOrphanGracePeriod:    DefaultGCOrphanGracePeriod,
+		compactSliceThreshold:  CompactSliceThreshold,
+		sliceIDBatchSize:       DefaultSliceIDBatchSize,
+		writeGroupMaxBatchSize: DefaultWriteGroupMaxBatchSize,
+		writeCoalesceCh:        make(chan struct{}, 1),
+		inFlightCompacts:       make(map[chunkKey]bool),
+		lockNotifyChans:        make(map[uint64]*lockNotifyEntry),
+		dirCursors:             make(map[dirCursorKey]dirCursorAnchor),
+		dirMutationSeq:         make(map[uint64]uint64),
+		inFlightDirMutations:   make(map[uint64]int),
+		activeDirReads:         make(map[uint64]*inFlightDirRead),
+		inFlightGrants:         make(map[inFlightGrantKey]*inFlightGrant),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
 		}
-	}
-	if !m.writeSessionTouchConfigured && !m.writeSessionTouchDisabled && m.sessionLeaseTTL > 0 && m.writeSessionTouchInterval > m.sessionLeaseTTL/3 {
-		m.writeSessionTouchInterval = m.sessionLeaseTTL / 3
 	}
 	return m
 }
@@ -882,16 +810,6 @@ func newManagerFromParams(params ManagerParams) Manager {
 	return mgr
 }
 
-// WatchHub 返回会话流探活中心实例（懒初始化兜底，防止测试直接构造 &manager{} 时返回 nil）。
-func (m *manager) WatchHub() *SessionWatchHub {
-	m.watchHubMu.Lock()
-	defer m.watchHubMu.Unlock()
-	if m.watchHub == nil {
-		m.watchHub = NewSessionWatchHub()
-	}
-	return m.watchHub
-}
-
 // Module 提供 meta 依赖注入模块。
 var Module = fx.Module("meta",
 	fx.Provide(newManagerFromParams),
@@ -1091,62 +1009,22 @@ func toPgSessionID(sessionID *uint64) pgtype.Int8 {
 	}
 }
 
-// renewOptionalClientSession 若传入了有效的客户端会话标识，则在当前事务中按内存时间窗口节流执行会话租约续期并清理相关孤儿节点。
-func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, sessionID *uint64) error {
+// verifyActiveClientSession 若传入了有效的客户端会话标识，则在当前事务中只读校验会话是否存在、未超期且归属目标磁盘。
+func (m *manager) verifyActiveClientSession(ctx context.Context, q db.Querier, sessionID *uint64, rootIno int64) error {
 	if sessionID == nil {
 		return nil
 	}
-	sid := *sessionID
-	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle && (m.writeSessionTouchConfigured || isNativeTxQuerier(q)) {
-		interval := m.writeSessionTouchInterval
-		if interval <= 0 {
-			interval = DefaultWriteSessionTouchInterval
-		}
-		now := time.Now()
-		m.writeSessionTouchMu.Lock()
-		if m.writeSessionTouches == nil {
-			m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-		}
-		prev, hadPrev := m.writeSessionTouches[sid]
-		inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-		m.writeSessionTouchMu.Unlock()
-
-		if inWindow {
-			if !m.hasDeferredOrphans() {
-				return nil
-			}
-			dbtx := queryDBTX(q, pp)
-			if dbtx == nil {
-				return nil
-			}
-			var sessionCreatedAt pgtype.Timestamptz
-			var alive, hasPendingCleanup bool
-			err := dbtx.QueryRow(ctx, `
-				SELECT
-					cs.created_at,
-					(cs.expires_at > clock_timestamp()) AS alive,
-					(
-						EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
-						OR EXISTS (
-							SELECT 1 FROM inodes i
-							WHERE i.nlink = 0
-							  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
-						)
-					) AS has_pending_cleanup
-				FROM client_sessions cs
-				WHERE cs.session_id = $1
-			`, int64(sid)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
-			if err == nil && alive && !hasPendingCleanup {
-				m.recordWriteSessionTouch(sid, time.Time{}, sessionCreatedAt)
-				return nil
-			}
-			if err != nil || !alive {
-				m.clearWriteSessionTouch(sid)
-			}
-		}
+	active, err := q.HasActiveClientSession(ctx, db.HasActiveClientSessionParams{
+		SessionID: int64(*sessionID),
+		RootIno:   rootIno,
+	})
+	if err != nil {
+		return fmt.Errorf("check active client session %d: %w", *sessionID, err)
 	}
-	_, err := m.renewClientSession(ctx, q, sid)
-	return err
+	if !active {
+		return ErrBadFileHandle
+	}
+	return nil
 }
 
 // GetParents 返回指定 Inode 挂载在各个父目录下的目录项数量统计。
@@ -1224,7 +1102,6 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 		if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 			return err
 		}
-		m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
 		res.ExpiresAt = session.ExpiresAt.Time
 		res.SessionRecreated = session.CreatedAt.Time.Equal(session.UpdatedAt.Time)
 		return nil
@@ -1241,115 +1118,48 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 	return res, nil
 }
 
-var errSessionHasActiveStream = errors.New("meta: session regained active watch stream before close")
-
 // CloseSession 立即注销指定客户端会话租约，级联释放关联的文件句柄、文件锁并回收孤儿节点。
 func (m *manager) CloseSession(ctx context.Context, sessionID uint64) error {
-	if streamID, ok := disconnectedStreamIDFromContext(ctx); ok {
-		_, err := m.closeSessionAfterStream(ctx, sessionID, true, streamID)
-		return err
-	}
-	return m.closeSession(ctx, sessionID, false)
-}
-
-func (m *manager) closeSessionIfNoActiveStream(ctx context.Context, sessionID uint64, evictedStreamID uint64) (abortedByActiveStream bool, err error) {
-	return m.closeSessionAfterStream(ctx, sessionID, true, evictedStreamID)
-}
-
-func (m *manager) closeSession(ctx context.Context, sessionID uint64, abortIfActiveStream bool) error {
-	_, err := m.closeSessionAfterStream(ctx, sessionID, abortIfActiveStream, 0)
-	return err
-}
-
-func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64, abortIfActiveStream bool, expectedMaxStreamID uint64) (abortedByActiveStream bool, err error) {
 	if sessionID == 0 || sessionID > math.MaxInt64 {
-		return false, ErrInvalidArgument
+		return ErrInvalidArgument
 	}
 
 	var (
-		shouldNotify   bool
-		reclaimedInos  []int64
-		autoCloseGate  func()
-		releaseGateNow = func() {
-			if autoCloseGate != nil {
-				autoCloseGate()
-				autoCloseGate = nil
-			}
-		}
+		expiredCount  int64
+		deletedCount  int64
+		reclaimedInos []int64
 	)
-	defer func() {
-		releaseGateNow()
-	}()
+	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+		expiredCount = 0
+		deletedCount = 0
+		reclaimedInos = nil
 
-	var buffered *quotaBufferedQuerier
-	err = tx.Retry(ctx, func(attemptCtx context.Context) error {
-		defer releaseGateNow()
-		if buffered != nil {
-			buffered.rollback()
-			buffered = nil
+		var txErr error
+		expiredCount, txErr = q.DeleteExpiredClientSessions(ctx)
+		if txErr != nil {
+			return fmt.Errorf("delete expired client sessions: %w", txErr)
 		}
-		return m.store.ExecTxWithOptions(attemptCtx, func(rawQ db.Querier) error {
-			buffered = &quotaBufferedQuerier{
-				Querier: rawQ,
-				m:       m,
-			}
-			q := buffered
-			shouldNotify = false
-			reclaimedInos = nil
-			expiredCount, err := q.DeleteExpiredClientSessions(ctx)
-			if err != nil {
-				return fmt.Errorf("delete expired client sessions: %w", err)
-			}
-			deletedCount, err := q.DeleteClientSessionByID(ctx, int64(sessionID))
-			if err != nil {
-				return fmt.Errorf("delete client session %d: %w", sessionID, err)
-			}
-			if abortIfActiveStream && m.WatchHub().HasActiveStream(sessionID) {
-				return errSessionHasActiveStream
-			}
-			if expiredCount > 0 || deletedCount > 0 {
-				shouldNotify = true
-			}
-			reclaimedInos, err = m.reclaimUnreferencedOrphansInTx(ctx, q)
-			if err != nil {
-				return err
-			}
-			if abortIfActiveStream {
-				allowed, unlock := m.WatchHub().AcquireAutoCloseGate(sessionID, expectedMaxStreamID)
-				if !allowed {
-					return errSessionHasActiveStream
-				}
-				autoCloseGate = unlock
-			}
-			return nil
-		})
-	}, tx.WithDefaultRetry(errRetryTx))
-	releaseGateNow()
-
+		deletedCount, txErr = q.DeleteClientSessionByID(ctx, int64(sessionID))
+		if txErr != nil {
+			return fmt.Errorf("delete client session %d: %w", sessionID, txErr)
+		}
+		reclaimedInos, txErr = m.reclaimUnreferencedOrphansInTx(ctx, q)
+		return txErr
+	})
 	if err != nil {
-		if buffered != nil {
-			buffered.rollback()
-		}
-		if errors.Is(err, errSessionHasActiveStream) {
-			return true, nil
-		}
 		if errors.Is(err, ErrInvalidArgument) {
-			return false, ErrInvalidArgument
+			return ErrInvalidArgument
 		}
-		return false, fmt.Errorf("close session tx: %w", err)
+		return fmt.Errorf("close session tx: %w", err)
 	}
 
-	if buffered != nil {
-		buffered.commit()
-	}
 	m.finalizeReclaimedOrphans(reclaimedInos)
 	m.cleanExpiredDirCursors(ctx)
-	if shouldNotify {
+	if expiredCount > 0 || deletedCount > 0 {
 		m.notifyAllLockWaiters()
 	}
 	m.invalidateDirCursorsBySession(sessionID)
-	m.clearWriteSessionTouch(sessionID)
-	return false, nil
+	return nil
 }
 
 func (m *manager) invalidateDirCursorsBySession(sessionID uint64) {

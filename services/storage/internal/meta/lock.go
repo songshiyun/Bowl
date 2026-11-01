@@ -52,286 +52,6 @@ func validatePosixOpenMode(lockType uint32, handleFlags int32) error {
 
 var errExpiredSessionBadHandle = fmt.Errorf("%w: session expired", ErrBadFileHandle)
 
-// touchActiveClientSession 仅原子延长未过期的活跃会话租约；若会话已过期或不存在则返回 ErrBadFileHandle。
-func (m *manager) touchActiveClientSession(ctx context.Context, q db.Querier, sessionID uint64) error {
-	return m.touchActiveClientSessionForHandle(ctx, q, sessionID, pgtype.Timestamptz{})
-}
-
-func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Querier, sessionID uint64, handleCreatedAt pgtype.Timestamptz) error {
-	leaseTTL := m.sessionLeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = DefaultSessionLeaseTTL
-	}
-
-	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle && (m.writeSessionTouchConfigured || isNativeTxQuerier(q)) {
-		interval := m.writeSessionTouchInterval
-		if interval <= 0 {
-			interval = DefaultWriteSessionTouchInterval
-		}
-		now := time.Now()
-		m.writeSessionTouchMu.Lock()
-		if m.writeSessionTouches == nil {
-			m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-		}
-		prev, hadPrev := m.writeSessionTouches[sessionID]
-		inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-		m.writeSessionTouchMu.Unlock()
-
-		if inWindow {
-			if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
-				return ErrBadFileHandle
-			}
-			if handleCreatedAt.Valid && !m.hasDeferredOrphans() {
-				return nil
-			}
-			dbtx := queryDBTX(q, pp)
-			if dbtx == nil {
-				return nil
-			}
-
-			var sessionCreatedAt pgtype.Timestamptz
-			var alive, hasPendingCleanup bool
-			err := dbtx.QueryRow(ctx, `
-				SELECT
-					cs.created_at,
-					(cs.expires_at > clock_timestamp()) AS alive,
-					(
-						EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
-						OR EXISTS (
-							SELECT 1 FROM inodes i
-							WHERE i.nlink = 0
-							  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
-						)
-					) AS has_pending_cleanup
-				FROM client_sessions cs
-				WHERE cs.session_id = $1
-			`, int64(sessionID)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					m.clearWriteSessionTouch(sessionID)
-					return errExpiredSessionBadHandle
-				}
-				return fmt.Errorf("check active client session %d: %w", sessionID, err)
-			}
-			if !alive {
-				m.clearWriteSessionTouch(sessionID)
-				return errExpiredSessionBadHandle
-			}
-			if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
-				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-				return ErrBadFileHandle
-			}
-			if !hasPendingCleanup {
-				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-				return nil
-			}
-		}
-	}
-
-	deletedCount, err := q.DeleteExpiredClientSessions(ctx)
-	if err != nil {
-		return fmt.Errorf("delete expired client sessions: %w", err)
-	}
-	if deletedCount > 0 {
-		m.notifyAllLockWaiters()
-	}
-
-	session, err := q.UpsertClientSession(db.WithLeaseTTL(ctx, leaseTTL), db.UpsertClientSessionParams{
-		SessionID: int64(sessionID),
-		ExpiresAt: pgtype.Timestamptz{
-			Time:  time.Now().Add(leaseTTL),
-			Valid: true,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("upsert client session %d: %w", sessionID, err)
-	}
-	if session.CreatedAt.Valid && session.UpdatedAt.Valid && session.CreatedAt.Time.Equal(session.UpdatedAt.Time) {
-		m.clearWriteSessionTouch(sessionID)
-		return errExpiredSessionBadHandle
-	}
-	if handleCreatedAt.Valid && session.CreatedAt.Valid && handleCreatedAt.Time.Before(session.CreatedAt.Time) {
-		m.recordWriteSessionTouch(sessionID, time.Time{}, session.CreatedAt)
-		return ErrBadFileHandle
-	}
-	if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
-		return err
-	}
-	m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
-	return nil
-}
-
-func (m *manager) recordWriteSessionTouch(sessionID uint64, touchedAt time.Time, sessionCreatedAt pgtype.Timestamptz) {
-	if sessionID == 0 {
-		return
-	}
-	m.writeSessionTouchMu.Lock()
-	defer m.writeSessionTouchMu.Unlock()
-	if m.writeSessionTouches == nil {
-		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-	}
-	st := m.writeSessionTouches[sessionID]
-	if !touchedAt.IsZero() {
-		st.lastTouchedAt = touchedAt
-	}
-	if sessionCreatedAt.Valid {
-		st.sessionCreatedAt = sessionCreatedAt
-	}
-	m.writeSessionTouches[sessionID] = st
-}
-
-func (m *manager) clearWriteSessionTouch(sessionID uint64) {
-	if sessionID == 0 {
-		return
-	}
-	m.writeSessionTouchMu.Lock()
-	defer m.writeSessionTouchMu.Unlock()
-	delete(m.writeSessionTouches, sessionID)
-}
-
-func (m *manager) rollbackWriteSessionTouch(sessionID uint64, claimedAt time.Time, prev writeSessionTouchState, hadPrev bool) {
-	if sessionID == 0 {
-		return
-	}
-	m.writeSessionTouchMu.Lock()
-	defer m.writeSessionTouchMu.Unlock()
-	cur, ok := m.writeSessionTouches[sessionID]
-	if !ok || !cur.lastTouchedAt.Equal(claimedAt) {
-		return
-	}
-	if hadPrev {
-		m.writeSessionTouches[sessionID] = prev
-	} else {
-		delete(m.writeSessionTouches, sessionID)
-	}
-}
-
-// touchWriteClientSessionForHandle 专为 Write 热路径提供带内存时间窗口节流的活跃会话校验与续期，
-// 剥离全表过期会话清理与孤儿节点扫描，消除单客户端多线程并发写时的 client_sessions 行锁争用。
-func (m *manager) touchWriteClientSessionForHandle(ctx context.Context, q db.Querier, sessionID uint64, handleCreatedAt pgtype.Timestamptz) (func(), error) {
-	leaseTTL := m.sessionLeaseTTL
-	if leaseTTL <= 0 {
-		leaseTTL = DefaultSessionLeaseTTL
-	}
-
-	var interval time.Duration
-	if !m.writeSessionTouchDisabled {
-		interval = m.writeSessionTouchInterval
-		if interval <= 0 {
-			interval = DefaultWriteSessionTouchInterval
-		}
-	}
-
-	now := time.Now()
-	m.writeSessionTouchMu.Lock()
-	if m.writeSessionTouches == nil {
-		m.writeSessionTouches = make(map[uint64]writeSessionTouchState)
-	}
-	prev, hadPrev := m.writeSessionTouches[sessionID]
-	throttled := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
-	if !throttled {
-		m.writeSessionTouches[sessionID] = writeSessionTouchState{
-			lastTouchedAt:    now,
-			sessionCreatedAt: prev.sessionCreatedAt,
-		}
-	}
-	m.writeSessionTouchMu.Unlock()
-
-	if throttled {
-		pp, _ := m.store.(poolProvider)
-		if dbtx := queryDBTX(q, pp); dbtx != nil {
-			var sessionCreatedAt pgtype.Timestamptz
-			var alive bool
-			err := dbtx.QueryRow(
-				ctx,
-				`SELECT created_at, (expires_at > clock_timestamp()) FROM client_sessions WHERE session_id = $1`,
-				int64(sessionID),
-			).Scan(&sessionCreatedAt, &alive)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					m.clearWriteSessionTouch(sessionID)
-					return nil, errExpiredSessionBadHandle
-				}
-				return nil, fmt.Errorf("check active client session %d: %w", sessionID, err)
-			}
-			if !alive {
-				m.clearWriteSessionTouch(sessionID)
-				return nil, errExpiredSessionBadHandle
-			}
-			if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
-				m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-				return nil, ErrBadFileHandle
-			}
-			return nil, nil
-		}
-
-		if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
-			return nil, ErrBadFileHandle
-		}
-		return nil, nil
-	}
-
-	rollback := func() {
-		m.rollbackWriteSessionTouch(sessionID, now, prev, hadPrev)
-	}
-
-	session, err := q.UpsertClientSession(db.WithLeaseTTL(ctx, leaseTTL), db.UpsertClientSessionParams{
-		SessionID: int64(sessionID),
-		ExpiresAt: pgtype.Timestamptz{
-			Time:  now.Add(leaseTTL),
-			Valid: true,
-		},
-	})
-	if err != nil {
-		rollback()
-		return nil, fmt.Errorf("upsert client session %d: %w", sessionID, err)
-	}
-	if session.CreatedAt.Valid && session.UpdatedAt.Valid && session.CreatedAt.Time.Equal(session.UpdatedAt.Time) {
-		m.clearWriteSessionTouch(sessionID)
-		return nil, errExpiredSessionBadHandle
-	}
-	if handleCreatedAt.Valid && session.CreatedAt.Valid && handleCreatedAt.Time.Before(session.CreatedAt.Time) {
-		m.rollbackWriteSessionTouch(sessionID, now, writeSessionTouchState{
-			lastTouchedAt:    prev.lastTouchedAt,
-			sessionCreatedAt: session.CreatedAt,
-		}, true)
-		return nil, ErrBadFileHandle
-	}
-	m.recordWriteSessionTouch(sessionID, now, session.CreatedAt)
-	return rollback, nil
-}
-
-func (m *manager) cleanExpiredSessionByID(ctx context.Context, sessionID uint64) {
-	m.clearWriteSessionTouch(sessionID)
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_ = m.execWriteTxWithRetry(cleanupCtx, func(q db.Querier) error {
-		deletedCount, err := q.DeleteExpiredClientSessions(cleanupCtx)
-		if err != nil {
-			return err
-		}
-		if deletedCount > 0 {
-			m.notifyAllLockWaiters()
-		}
-		return nil
-	})
-}
-
-func (m *manager) handleBadFileHandleSessionCleanup(ctx context.Context, sessionID *uint64, err error) {
-	if sessionID == nil || !errors.Is(err, ErrBadFileHandle) {
-		return
-	}
-	if errors.Is(err, errExpiredSessionBadHandle) {
-		m.cleanExpiredSessionByID(ctx, *sessionID)
-		return
-	}
-	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
-		if !m.isClientSessionAlive(ctx, *sessionID) {
-			m.cleanExpiredSessionByID(ctx, *sessionID)
-		}
-	}
-}
-
 func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionID uint64) (time.Time, error) {
 	leaseTTL := m.sessionLeaseTTL
 	if leaseTTL <= 0 {
@@ -358,7 +78,6 @@ func (m *manager) renewClientSession(ctx context.Context, q db.Querier, sessionI
 	if err := m.reclaimUnreferencedOrphans(ctx, q); err != nil {
 		return time.Time{}, err
 	}
-	m.recordWriteSessionTouch(sessionID, time.Now(), session.CreatedAt)
 	return session.ExpiresAt.Time, nil
 }
 
@@ -599,11 +318,6 @@ func (m *manager) SetLk(ctx context.Context, params SetLkParams) error {
 			}
 		}
 
-		syncCtx := db.WithLockSyncIno(ctx, int64(params.Ino))
-		if err := m.touchActiveClientSessionForHandle(syncCtx, q, params.SessionID, handle.CreatedAt); err != nil {
-			return err
-		}
-
 		if params.LkFlags == FuseLkFlock {
 			if err := applyFlockSetLk(ctx, q, params, &flockConflictAfterDelete, &shouldNotify); err != nil {
 				return err
@@ -637,9 +351,6 @@ func (m *manager) SetLk(ctx context.Context, params SetLkParams) error {
 		case errors.Is(err, ErrIsDir):
 			return ErrIsDir
 		case errors.Is(err, ErrBadFileHandle):
-			if errors.Is(err, errExpiredSessionBadHandle) {
-				m.cleanExpiredSessionByID(ctx, params.SessionID)
-			}
 			return ErrBadFileHandle
 		case errors.Is(err, ErrAgain):
 			return ErrAgain
@@ -1202,10 +913,8 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 				})
 				if err != nil {
 					if errors.Is(err, pgx.ErrNoRows) {
-						if sessionID != 0 {
-							if touchErr := m.touchActiveClientSession(ctx, q, params.SessionID); touchErr != nil {
-								return touchErr
-							}
+						if waiterEverPersisted && !m.isClientSessionAlive(ctx, params.SessionID) {
+							return errExpiredSessionBadHandle
 						}
 						return ErrBadFileHandle
 					}
@@ -1216,11 +925,6 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 					if err := validatePosixOpenMode(reqType, handle.Flags); err != nil {
 						return err
 					}
-				}
-
-				syncCtx := db.WithLockSyncIno(ctx, int64(params.Ino))
-				if err := m.touchActiveClientSessionForHandle(syncCtx, q, params.SessionID, handle.CreatedAt); err != nil {
-					return err
 				}
 
 				if params.LkFlags == FuseLkFlock && (attempt == 0 || reqType == F_UNLCK) {
@@ -1468,9 +1172,6 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 				case errors.Is(txErr, ErrIsDir):
 					return true, ErrIsDir
 				case errors.Is(txErr, ErrBadFileHandle):
-					if errors.Is(txErr, errExpiredSessionBadHandle) && !waiterEverPersisted {
-						m.cleanExpiredSessionByID(ctx, params.SessionID)
-					}
 					return true, ErrBadFileHandle
 				case errors.Is(txErr, ErrDeadlock):
 					return true, ErrDeadlock
@@ -1547,17 +1248,6 @@ func (m *manager) cleanupCancelledWaiter(ino uint64, sessionID, requestID, expec
 				return nil
 			}
 			return err
-		}
-
-		deletedCount, err := q.DeleteExpiredClientSessions(cleanupCtx)
-		if err != nil {
-			return err
-		}
-		if deletedCount > 0 {
-			if err := m.reclaimUnreferencedOrphans(cleanupCtx, q); err != nil {
-				return err
-			}
-			shouldNotify = true
 		}
 
 		waiter, err := q.GetFileLockWaiter(cleanupCtx, db.GetFileLockWaiterParams{
@@ -2212,17 +1902,6 @@ func (m *manager) rollbackGrantedLock(params SetLkwParams, preGrantOwnerLocks []
 			return err
 		}
 
-		deletedCount, err := q.DeleteExpiredClientSessions(cleanupCtx)
-		if err != nil {
-			return err
-		}
-		if deletedCount > 0 {
-			if err := m.reclaimUnreferencedOrphans(cleanupCtx, q); err != nil {
-				return err
-			}
-			shouldNotify = true
-		}
-
 		curGrant := m.getInFlightGrant(params.Ino, params.SessionID, params.RequestID)
 		if curGrant == nil {
 			if _, err := q.DeleteFileLockWaiter(cleanupCtx, db.DeleteFileLockWaiterParams{
@@ -2511,6 +2190,14 @@ func (m *manager) rollbackGrantedLock(params SetLkwParams, preGrantOwnerLocks []
 
 		if len(idsToDelete) > 0 {
 			if err := q.DeleteFileLocksByIDs(cleanupCtx, idsToDelete); err != nil {
+				return err
+			}
+		} else if len(curOwnerLocks) == 0 {
+			if _, err := q.DeletePosixFileLocksBySessionAndOwner(cleanupCtx, db.DeletePosixFileLocksBySessionAndOwnerParams{
+				SessionID: sessionID,
+				Ino:       int64(params.Ino),
+				LockOwner: owner,
+			}); err != nil {
 				return err
 			}
 		}

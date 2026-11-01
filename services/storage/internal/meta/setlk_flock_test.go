@@ -56,21 +56,6 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
-		mockQuerier.EXPECT().
 			DeleteFlockFileLocksBySessionAndFh(mock.Anything, db.DeleteFlockFileLocksBySessionAndFhParams{
 				SessionID: 10,
 				Ino:       int64(ino),
@@ -149,21 +134,6 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDWR),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -249,21 +219,6 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 			}, nil).
 			Once()
 
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
 		// 第一步：在事务内删除 fh1 原本持有的 F_RDLCK (返回删除了 1 行)
 		mockQuerier.EXPECT().
 			DeleteFlockFileLocksBySessionAndFh(mock.Anything, db.DeleteFlockFileLocksBySessionAndFhParams{
@@ -337,21 +292,6 @@ func TestSetLk_FlockUnitSemantics(t *testing.T) {
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		// fh1 先前已持有排他 flock，DeleteFlockFileLocksBySessionAndFh 删除 1 条记录
@@ -440,6 +380,10 @@ func TestSetLk_FlockPostgresSemantics(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(session1), int64(session2))
 	}()
+	_, err = mgr.RenewSession(ctx, session1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, session2)
+	require.NoError(t, err)
 
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: uint64(rootDir.Ino),

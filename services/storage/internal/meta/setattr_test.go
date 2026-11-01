@@ -1416,19 +1416,6 @@ func TestSetAttr_NegativeCases(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: int64(sessionID)}, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return(nil, nil).
-			Once()
-
-		mockQuerier.EXPECT().
 			DeleteChunksAfterIndx(mock.Anything, db.DeleteChunksAfterIndxParams{
 				Ino:       int64(ino),
 				AfterIndx: 0,

@@ -397,6 +397,8 @@ func TestFsyncDir_PostgresIntegration(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sess1))
 	}()
+	_, err = mgr.RenewSession(ctx, sess1)
+	require.NoError(t, err)
 
 	// 1. 创建两个子目录 dirA 与 dirB，以及一个常规文件 regFile
 	dirA, err := mgr.Mkdir(ctx, meta.MkdirParams{

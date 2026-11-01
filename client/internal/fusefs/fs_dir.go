@@ -18,17 +18,19 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 		return st
 	}
 
+	ctx, cancelFunc := fs.RPCContext(cancel)
+	defer cancelFunc()
+
 	var sessionIDPtr *uint64
 	var sid uint64
 	if fs.sessions != nil {
-		sid = fs.sessions.CurrentSessionID()
-		if sid != 0 {
-			sessionIDPtr = &sid
+		var err error
+		sid, err = fs.sessions.AcquireSessionID(ctx)
+		if err != nil {
+			return fs.ToStatus(err, cancel)
 		}
+		sessionIDPtr = &sid
 	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
 
 	resp, err := fs.client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
 		Ino:       ino,
@@ -36,7 +38,7 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 		SessionId: sessionIDPtr,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	if fs.sessions != nil && sid != 0 {
@@ -71,7 +73,7 @@ func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.D
 		SessionId: &sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	for _, e := range resp.Msg.GetEntries() {
@@ -112,7 +114,7 @@ func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fu
 		SessionId: &sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	for _, e := range resp.Msg.GetEntries() {
@@ -166,7 +168,7 @@ func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Stat
 		SessionId: &sid,
 	}))
 	if err != nil {
-		return fs.ToStatus(err, cancel)
+		return fs.ToStatusWithSession(err, cancel)
 	}
 
 	return fuse.OK
@@ -205,6 +207,9 @@ func (fs *RawFS) ReleaseDir(input *fuse.ReleaseIn) {
 		SessionId: sessionIDPtr,
 	}
 	_, err := fs.client.ReleaseDir(ctx, connect.NewRequest(req))
+	if isServerEBADF(err) && fs.sessions != nil {
+		fs.sessions.TriggerRenew()
+	}
 	if shouldEnqueueReleaseRetry(err) {
 		fs.enqueueReleaseDirRetry(req, sid)
 	}

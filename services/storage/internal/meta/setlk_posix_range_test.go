@@ -47,18 +47,6 @@ func TestSetLk_PosixRangeSplitAndCoalesce(t *testing.T) {
 			}).
 			Return(rwHandle, nil).
 			Once()
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: sessionID}, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
 	}
 
 	t.Run("中间挖空解锁: [0, 100] (pid=1001) 对 [20, 50] 执行 F_UNLCK 裂解为 [0, 19] 与 [51, 100] 且均保留 pid=1001", func(t *testing.T) {
@@ -578,6 +566,10 @@ func TestSetLk_PosixRangeSplitAndCoalesce_Postgres(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(session1), int64(session2))
 	}()
+	_, err = mgr.RenewSession(ctx, session1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, session2)
+	require.NoError(t, err)
 
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: uint64(rootDir.Ino),

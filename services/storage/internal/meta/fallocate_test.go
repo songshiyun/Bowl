@@ -1347,6 +1347,18 @@ func (q *lockOrderTrackingQuerier) DeleteExpiredClientSessions(ctx context.Conte
 	return q.Querier.DeleteExpiredClientSessions(ctx)
 }
 
+func (q *lockOrderTrackingQuerier) HasActiveClientSession(ctx context.Context, arg db.HasActiveClientSessionParams) (bool, error) {
+	q.record("client_sessions")
+	return q.Querier.HasActiveClientSession(ctx, arg)
+}
+
+func (q *lockOrderTrackingQuerier) GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error) {
+	if arg.SessionID.Valid {
+		q.record("client_sessions")
+	}
+	return q.Querier.GetFileHandle(ctx, arg)
+}
+
 type lockOrderTrackingStore struct {
 	db.Store
 	recordedOps []string
@@ -1403,6 +1415,34 @@ func (q *deadlockBarrierQuerier) UpsertClientSession(ctx context.Context, arg db
 		q.onUpsertSessionDone()
 	}
 	return sess, err
+}
+
+func (q *deadlockBarrierQuerier) HasActiveClientSession(ctx context.Context, arg db.HasActiveClientSessionParams) (bool, error) {
+	active, err := q.Querier.HasActiveClientSession(ctx, arg)
+	if err != nil {
+		if q.onErr != nil {
+			q.onErr(err)
+		}
+		return active, err
+	}
+	if q.onUpsertSessionDone != nil {
+		q.onUpsertSessionDone()
+	}
+	return active, nil
+}
+
+func (q *deadlockBarrierQuerier) GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error) {
+	fh, err := q.Querier.GetFileHandle(ctx, arg)
+	if err != nil {
+		if q.onErr != nil {
+			q.onErr(err)
+		}
+		return fh, err
+	}
+	if arg.SessionID.Valid && q.onUpsertSessionDone != nil {
+		q.onUpsertSessionDone()
+	}
+	return fh, nil
 }
 
 func (q *deadlockBarrierQuerier) GetDiskByRootInoForUpdate(ctx context.Context, rootIno int64) (db.GetDiskByRootInoForUpdateRow, error) {

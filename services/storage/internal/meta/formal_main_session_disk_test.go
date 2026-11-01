@@ -339,7 +339,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 		env.Model.RecordNewInode(f1Model)
 		env.Model.Entries[formalEntryKey{ParentIno: disk.RootIno, Name: fName1}] = f1Model.Ino
 		disk.UsedInodes++
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		h1 := &formalHandle{
 			Fh: cRes1.Fh, Ino: f1Model.Ino, Flags: meta.O_CREAT | meta.O_RDWR,
 			SessionID: modelCloneSessionID(&expSID), IsDir: false,
@@ -437,7 +436,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		dh := &formalHandle{
 			Fh: openDirRes.Fh, Ino: dirModel.Ino, Flags: meta.O_RDONLY,
 			SessionID: modelCloneSessionID(&expSID), IsDir: true,
@@ -462,7 +460,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		tmpModel := &formalInode{
 			Ino: tmpRes.Inode.Ino, Generation: tmpRes.Inode.Generation, RootIno: disk.RootIno,
 			Mode: tmpRes.Inode.Attr.Mode, Size: 0, Nlink: 0, IsTmpFile: true,
@@ -508,7 +505,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &expSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &expSID, env.LeaseTTL)
 		fhFifo := &formalHandle{
 			Fh: openFifoRes.Fh, Ino: fifoModel.Ino, Flags: meta.O_RDWR,
 			SessionID: modelCloneSessionID(&expSID), IsDir: false,
@@ -551,7 +547,6 @@ func formalStepShortLeaseExpireAndSweep(ctx context.Context, t *testing.T, env *
 			SessionID: &keepSID,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &keepSID, env.LeaseTTL)
 		env.Model.RecordNewHandle(&formalHandle{
 			Fh: openKeepRes.Fh, Ino: sharedModel.Ino, Flags: meta.O_RDWR,
 			SessionID: modelCloneSessionID(&keepSID), IsDir: false,
@@ -770,6 +765,68 @@ func enrichDiskBeforeDelete(ctx context.Context, t *testing.T, env *formalMainEn
 	})
 }
 
+// modelSweepExpiredSessions 在执行 DeleteDisk 或 CloseSession 触发 DeleteExpiredClientSessions 后，同步清理参考模型中的已过期会话与无引用孤儿节点。
+func modelSweepExpiredSessions(m *formalMainModel) {
+	sweptAny := false
+	for _, sid := range m.AllSessionIDs {
+		sess, exists := m.Sessions[sid]
+		if exists && sess.Expired {
+			sweptAny = true
+			for _, fh := range m.AllCreatedFhs {
+				if h, ok := m.Handles[fh]; ok && h.SessionID != nil && *h.SessionID == sid {
+					h.Closed = true
+					m.ClosedHandles[fh] = h
+					delete(m.Handles, fh)
+				}
+			}
+			delete(m.Sessions, sid)
+		}
+	}
+	if sweptAny {
+		for _, ino := range m.AllCreatedInos {
+			if inode, ok := m.Inodes[ino]; ok && !inode.Deleted && inode.Nlink == 0 {
+				m.ReclaimOrphanInModel(ino)
+			}
+		}
+	}
+}
+
+// modelCloseSession 在调用 CloseSession(sid) 成功后，同步清理参考模型中的过期会话、目标会话及其关联句柄与无引用孤儿节点。
+func modelCloseSession(m *formalMainModel, sessionID uint64) {
+	for _, sid := range m.AllSessionIDs {
+		sess, exists := m.Sessions[sid]
+		if exists && (sess.Expired || sid == sessionID) {
+			for _, fh := range m.AllCreatedFhs {
+				if h, ok := m.Handles[fh]; ok && h.SessionID != nil && *h.SessionID == sid {
+					h.Closed = true
+					m.ClosedHandles[fh] = h
+					delete(m.Handles, fh)
+				}
+			}
+			delete(m.Sessions, sid)
+		}
+	}
+	for _, ino := range m.AllCreatedInos {
+		if inode, ok := m.Inodes[ino]; ok && !inode.Deleted && inode.Nlink == 0 {
+			m.ReclaimOrphanInModel(ino)
+		}
+	}
+}
+
+// modelHasActiveSessionHandlesOnDisk 判断指定虚拟磁盘下是否存在未过期客户端会话持有的打开句柄。
+func modelHasActiveSessionHandlesOnDisk(m *formalMainModel, rootIno uint64) bool {
+	for _, fh := range m.AllCreatedFhs {
+		h, ok := m.Handles[fh]
+		if !ok || h.Closed || h.SessionID == nil || !m.IsSessionValid(h.SessionID) {
+			continue
+		}
+		if inode, exists := m.Inodes[h.Ino]; exists && !inode.Deleted && inode.RootIno == rootIno {
+			return true
+		}
+	}
+	return false
+}
+
 // formalActionDeleteDisk 在状态机中随机生成：
 // 1. 合法强制级联销毁整盘（确保始终至少保留 1 块存活 Disk 供后续步骤继续操作，并核验存活邻盘的账本与拓扑毫发无损）；
 // 2. 不存在的合法 UUID 或已删除 DiskID 重复调用 DeleteDisk -> 返回 ErrNotFound；
@@ -790,6 +847,37 @@ func formalActionDeleteDisk(ctx context.Context, t *testing.T, env *formalMainEn
 		activeDisks := env.Model.ActiveDisks()
 		victim := activeDisks[env.Rng.IntN(len(activeDisks))]
 		enrichDiskBeforeDelete(ctx, t, env, victim)
+		if modelHasActiveSessionHandlesOnDisk(env.Model, victim.RootIno) {
+			busyErr := env.Mgr.DeleteDisk(ctx, victim.DiskID)
+			require.ErrorIs(t, busyErr, meta.ErrBusy, "存在活跃会话句柄时 DeleteDisk 必须返回 ErrBusy")
+			modelSweepExpiredSessions(env.Model)
+			for _, fh := range env.Model.AllCreatedFhs {
+				h, ok := env.Model.Handles[fh]
+				if !ok || h.Closed || h.SessionID == nil || !env.Model.IsSessionValid(h.SessionID) {
+					continue
+				}
+				inode, exists := env.Model.Inodes[h.Ino]
+				if !exists || inode.Deleted || inode.RootIno != victim.RootIno {
+					continue
+				}
+				sidCopy := *h.SessionID
+				if h.IsDir {
+					require.NoError(t, env.Mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+						Ino: h.Ino, Fh: h.Fh, SessionID: &sidCopy,
+					}))
+				} else {
+					require.NoError(t, env.Mgr.Release(ctx, meta.ReleaseParams{
+						Ino: h.Ino, Fh: h.Fh, SessionID: &sidCopy,
+					}))
+				}
+				h.Closed = true
+				env.Model.ClosedHandles[fh] = h
+				delete(env.Model.Handles, fh)
+				if inode.Nlink == 0 {
+					env.Model.ReclaimOrphanInModel(inode.Ino)
+				}
+			}
+		}
 		diskID = victim.DiskID
 		caseTag = "合法强制级联删盘(含嵌套目录树/硬链接/孤儿/TmpFile/打开句柄)"
 
@@ -845,7 +933,8 @@ func formalActionDeleteDisk(ctx context.Context, t *testing.T, env *formalMainEn
 	deletedUsedInodes := targetDisk.UsedInodes
 	deletedUsedBytes := targetDisk.UsedBytes
 
-	// 同步在内存参考模型中级联清理该盘的 Disk、Inodes、Entries 与 Handles
+	// 同步在内存参考模型中清理已过期会话并级联清理该盘的 Disk、Inodes、Entries 与 Handles
+	modelSweepExpiredSessions(env.Model)
 	env.Model.RecordDeletedDisk(diskID)
 
 	// 保底至少存在 1 块存活磁盘供后续步骤操作
@@ -1078,7 +1167,7 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 		require.True(t, resExpInit.SessionRecreated, "首次创建 sidExp 时 SessionRecreated 必须为 true")
 		env.Model.RecordSession(sidExp, resExpInit.ExpiresAt)
 
-		resExpRenew, err := shortMgr.RenewSessionWithStatus(ctx, sidExp)
+		resExpRenew, err := mgr.RenewSessionWithStatus(ctx, sidExp)
 		require.NoError(t, err)
 		require.False(t, resExpRenew.SessionRecreated, "未过期续期 sidExp 时 SessionRecreated 必须为 false")
 		env.Model.RecordSession(sidExp, resExpRenew.ExpiresAt)
@@ -1278,6 +1367,8 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 
 		// 5. 通过公开接口 SetLkw (搭配 1ms 租约的 tinyMgr) 让 sidExp 在冲突写锁上真实入队 file_lock_waiters 并在首次轮询间隔内自然超期
 		tinyMgr := meta.New(store, meta.WithSessionLeaseTTL(1*time.Millisecond))
+		_, err = shortMgr.RenewSession(ctx, sidExp)
+		require.NoError(t, err)
 		tinyCtx, tinyCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer tinyCancel()
 		err = tinyMgr.SetLkw(tinyCtx, meta.SetLkwParams{
@@ -1323,7 +1414,6 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 		runAllProbesAndAuditors()
 
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: orphan6Model.Ino, Fh: h6Keep.Fh, SessionID: &sidKeep}))
-		modelSyncSessionRenewal(env.Model, &sidKeep, leaseTTL)
 		h6Keep.Closed = true
 		env.Model.ClosedHandles[h6Keep.Fh] = h6Keep
 		delete(env.Model.Handles, h6Keep.Fh)
@@ -1401,14 +1491,19 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 		require.Len(t, disks, 2)
 		diskVictim, diskSurvivor := disks[0], disks[1]
 
-		sid := nextIsolatedFormalSessionID(env)
-		expAt, err := mgr.RenewSession(ctx, sid)
+		sidVictim := nextIsolatedFormalSessionID(env)
+		expAtVictim, err := mgr.RenewSession(ctx, sidVictim)
 		require.NoError(t, err)
-		env.Model.RecordSession(sid, expAt)
+		env.Model.RecordSession(sidVictim, expAtVictim)
+
+		sidSurvivor := nextIsolatedFormalSessionID(env)
+		expAtSurvivor, err := mgr.RenewSession(ctx, sidSurvivor)
+		require.NoError(t, err)
+		env.Model.RecordSession(sidSurvivor, expAtSurvivor)
 
 		// 3. 在 diskVictim 与 diskSurvivor 上分别构建包含多级子目录、多硬链接常规文件、符号链接、
 		//    unlink-whilst-open 孤儿常规文件、rmdir-whilst-open 孤儿目录、未具名化 TmpFile、打开句柄与文件锁的完整结构
-		populateComplexDisk := func(d *formalDisk, prefix string) {
+		populateComplexDisk := func(d *formalDisk, prefix string, sid uint64) {
 			rootIno := d.RootIno
 			rootModel := env.Model.Inodes[rootIno]
 
@@ -1537,15 +1632,20 @@ func TestFormalMain_T10_SessionAndDeleteDisk(t *testing.T) {
 			})
 		}
 
-		populateComplexDisk(diskVictim, "victim")
-		populateComplexDisk(diskSurvivor, "survivor")
+		populateComplexDisk(diskVictim, "victim", sidVictim)
+		populateComplexDisk(diskSurvivor, "survivor", sidSurvivor)
 		runAllProbesAndAuditors()
 
 		survivorInodesBefore := diskSurvivor.UsedInodes
 		survivorBytesBefore := diskSurvivor.UsedBytes
 
-		// 4. 执行 DeleteDisk(diskVictim.DiskID)，验证单事务强制级联销毁整盘且底表零残留
+		// 4. 当 sidVictim 未过期存活时，DeleteDisk(diskVictim.DiskID) 必须拒绝并返回 ErrBusy；
+		//    调用 CloseSession(sidVictim) 注销会话后，DeleteDisk(diskVictim.DiskID) 单事务强制级联销毁整盘且底表零残留
+		require.ErrorIs(t, mgr.DeleteDisk(ctx, diskVictim.DiskID), meta.ErrBusy)
+		require.NoError(t, mgr.CloseSession(ctx, sidVictim))
+		modelCloseSession(env.Model, sidVictim)
 		require.NoError(t, mgr.DeleteDisk(ctx, diskVictim.DiskID))
+		modelSweepExpiredSessions(env.Model)
 		env.Model.RecordDeletedDisk(diskVictim.DiskID)
 		runAllProbesAndAuditors()
 
