@@ -182,6 +182,9 @@ def parse_fio_json(json_path: Path, direction: str) -> dict[str, Any]:
     jobs = data.get("jobs", [])
     if not jobs:
         return {}
+    # fio 即使失败也输出吞吐；错误结果不能进入成功指标表。
+    if any(job.get("error", 0) != 0 for job in jobs):
+        return {}
     job = jobs[0]
     stat = job.get(direction, {})
     bw_bytes = float(stat.get("bw_bytes", stat.get("bw", 0) * 1024))
@@ -306,19 +309,21 @@ def render_report(summary: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Bowl vs JuiceFS 分布式文件系统 — 阿里云硅谷双机内网性能基准测试报告")
     lines.append("")
+    for note in env.get("execution_notes", []):
+        lines.extend([f"> {note}", ""])
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
     lines.append(
-        "本报告记录了 **Bowl** 与 **JuiceFS** 在阿里云硅谷地域（`us-west-1a`）真实开启 2 台按量计费云服务器"
-        "（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下完整运行 "
+        "本报告记录了 **Bowl** 与 **JuiceFS** 在阿里云硅谷地域（`us-west-1a`）使用按量计费双机环境"
+        "（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下运行 "
         "[JuiceFS 官方常规测试套件](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 **`juicefs bench` 基础测试**、"
         "**`fio` 顺序/随机大文件吞吐量测试**、**`mdtest` 元数据 IOPS 压测**）的实测对比结果。"
     )
     lines.append("")
-    lines.append("为确保对比的严谨性与公平性，本次评测在**完全相同的双机硬件、VPC 私网与 120 GiB `cloud_essd` 云盘**上依次测试了三组存储架构，并同步对照 JuiceFS 官方文档基线：")
+    lines.append("本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘。实际完成范围与重跑环境见本轮执行说明；官方文档数值仅作历史参考：")
     lines.append("")
     lines.append("1. **Bowl (PostgreSQL 16 + Server BlockStore)**：采用 Bowl 生产默认配置（`noatime` + `1.0s` FUSE 内核属性/目录项缓存，ConnectRPC 跨机直通读写）。")
-    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：与 Bowl 使用同台 Server 上的同一个 PostgreSQL 16 实例作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
+    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
     lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 rclone S3 存储（`--trash-days 0`）。")
     lines.append("")
 
@@ -344,7 +349,7 @@ def render_report(summary: dict[str, Any]) -> str:
     def get_md_mean(d: dict, k: str) -> float | None:
         return d.get(k, {}).get("mean")
 
-    lines.append("### 1.1 核心指标同机实测总览表")
+    lines.append("### 1.1 核心指标本轮实测总览表")
     lines.append("")
     lines.append("| 测试维度 | 指标项 | Bowl (PG 16) | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JuiceFS(PG) | Bowl vs JuiceFS(Redis) |")
     lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: |")
@@ -622,7 +627,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("### 5.1 官方 `mdtest.md` 标准单流树压测（`mdtest -b 6 -I 8 -z 4`，12,440 节点）")
     lines.append("")
     lines.append(
-        "复刻 [JuiceFS `mdtest` 基准测试文档](https://juicefs.com/docs/zh/community/mdtest/)参数（分支因子 `6`、深度 `4`、每目录 `8` 个条目，共 `1,555` 个目录节点、`12,440` 个测试目录与 `12,440` 个测试文件），对比同机实测结果与官方文档公布的 JuiceFS / Amazon EFS / S3FS 基线（单位：`ops/sec`，数值越大越好）："
+        "复刻 [JuiceFS `mdtest` 基准测试文档](https://juicefs.com/docs/zh/community/mdtest/)参数（分支因子 `6`、深度 `4`、每目录 `8` 个条目，共 `1,555` 个目录节点、`12,440` 个测试目录与 `12,440` 个测试文件），对比本轮实测结果与官方文档公布的 JuiceFS / Amazon EFS / S3FS 基线（单位：`ops/sec`，数值越大越好）："
     )
     lines.append("")
     lines.append("| 元数据操作 (`Operation`) | Bowl (PG 16) 实测 | JuiceFS (PG 16) 实测 | JuiceFS (Redis 7) 实测 | 官方文档: JuiceFS (Redis) | 官方文档: Amazon EFS | 官方文档: S3FS | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")

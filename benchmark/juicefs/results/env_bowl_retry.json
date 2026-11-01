@@ -1,0 +1,45 @@
+{
+  "bowl_commit": "7fbc2fef7564502f94bda34c2c2532c4be6fb760",
+  "server": {
+    "server": {
+      "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+      "vcpu": "4",
+      "memory_gib": "7.4 GiB",
+      "os_release": "Ubuntu 24.04.5 LTS",
+      "kernel": "6.8.0-147-generic",
+      "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+      "redis_version": "Redis server v=7.0.15",
+      "minio_version": "rclone v1.68.2"
+    },
+    "disk_baseline": {
+      "local_seq_write_mib_s": "177.18",
+      "local_seq_read_mib_s": "184.02"
+    }
+  },
+  "client": {
+    "client": {
+      "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+      "vcpu": "4",
+      "memory_gib": "7.4 GiB",
+      "os_release": "Ubuntu 24.04.5 LTS",
+      "kernel": "6.8.0-147-generic",
+      "fusermount_version": "fusermount3 version: 3.14.0",
+      "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
+      "fio_version": "fio-3.36",
+      "mdtest_version": "mdtest-3.3.0"
+    },
+    "network": {
+      "ping_rtt_ms": "0.065/0.093/0.267/0.047",
+      "iperf3_gbps": "15.91"
+    }
+  },
+  "instance_ids": [
+    "i-rj975iatsbmddtnotelc",
+    "i-rj975iatsbmddtnoteld"
+  ],
+  "source": "juicefs-retry.log",
+  "status": "failed",
+  "failed_case": "fio seq_write_1job",
+  "error": "end_fsync: EIO; flush wal: context deadline exceeded",
+  "remaining_instances": 0
+}

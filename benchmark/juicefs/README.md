@@ -1,8 +1,10 @@
 # Bowl vs JuiceFS 阿里云硅谷双机内网存储性能基准测试套件
 
+> 最新复跑：2026-11-02，Bowl `7fbc2fe`。Bowl 在两次独立运行的 4 GiB 写入最终 `fsync` 均返回 EIO；其余未执行项不沿用旧值。JuiceFS PG/Redis 对照组完整完成。详见 [REPORT.md](REPORT.md) 的执行说明与失败证据。
+
 本目录包含对标 [JuiceFS 官方常规测试](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 [`juicefs bench`](https://juicefs.com/docs/zh/community/performance_evaluation_guide/#juicefs-bench)、[`fio` 吞吐量测试](https://juicefs.com/docs/zh/community/fio/)、[`mdtest` 元数据 IOPS 测试](https://juicefs.com/docs/zh/community/mdtest/)）的端到端自动化评测脚本、实测原始数据及完整对比报告。
 
-测试在与 [`benchmark/pjdfstest`](../pjdfstest) 完全相同的**阿里云硅谷地域（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比，同时对照 JuiceFS 官方文档基线数据：
+默认测试在与 [`benchmark/pjdfstest`](../pjdfstest) 完全相同的**阿里云硅谷地域（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比，同时保留 JuiceFS 官方文档历史参考数据：
 
 1. **Bowl (PostgreSQL 16 + Server BlockStore)**：Bowl 生产默认配置（`noatime` + `1.0s` FUSE 属性/目录项缓存，ConnectRPC 跨机直通）。
 2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：与 Bowl 同款的 PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。

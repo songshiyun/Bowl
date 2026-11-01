@@ -1,19 +1,19 @@
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 25.1 s, CPU: 68.0%, Memory: 609.5 MiB
+Time used: 25.5 s, CPU: 66.6%, Memory: 692.8 MiB
 +------------------+------------------+--------------+
 |       ITEM       |       VALUE      |     COST     |
 +------------------+------------------+--------------+
-|   Write big file |     302.28 MiB/s | 13.55 s/file |
-|    Read big file |     464.37 MiB/s |  8.82 s/file |
-| Write small file |    539.6 files/s | 7.41 ms/file |
-|  Read small file |   3145.5 files/s | 1.27 ms/file |
-|        Stat file |   9212.9 files/s | 0.43 ms/file |
-|   FUSE operation | 71345 operations |   1.49 ms/op |
-|      Update meta |  6588 operations |   1.83 ms/op |
-|       Put object |  1424 operations | 184.81 ms/op |
-|       Get object |  1024 operations | 186.35 ms/op |
-|    Delete object |  1424 operations |   0.50 ms/op |
-| Write into cache |  1132 operations |   4.23 ms/op |
-|  Read from cache |   400 operations |   0.06 ms/op |
+|   Write big file |     306.37 MiB/s | 13.37 s/file |
+|    Read big file |     450.08 MiB/s |  9.10 s/file |
+| Write small file |    583.0 files/s | 6.86 ms/file |
+|  Read small file |   1112.6 files/s | 3.60 ms/file |
+|        Stat file |  13985.8 files/s | 0.29 ms/file |
+|   FUSE operation | 71418 operations |   1.54 ms/op |
+|      Update meta |  6655 operations |   1.78 ms/op |
+|       Put object |  1424 operations | 177.06 ms/op |
+|       Get object |  1024 operations | 187.67 ms/op |
+|    Delete object |  1424 operations |   0.70 ms/op |
+| Write into cache |  1153 operations |   5.90 ms/op |
+|  Read from cache |   400 operations |   2.40 ms/op |
 +------------------+------------------+--------------+
