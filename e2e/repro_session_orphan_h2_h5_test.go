@@ -286,7 +286,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
-		cleanSQL := fmt.Sprintf("DELETE FROM inodes WHERE root_ino = %d AND ino <> %d; DELETE FROM client_sessions WHERE session_id = 210001;", targetDisk.GetRootIno(), targetDisk.GetRootIno())
+		cleanSQL := fmt.Sprintf("DELETE FROM inodes WHERE root_ino = %d AND ino <> %d; DELETE FROM client_sessions WHERE session_id = 210001 OR (session_id >= 220000 AND session_id < 240000);", targetDisk.GetRootIno(), targetDisk.GetRootIno())
 		execSessionPsql(cleanupCtx, t, cleanSQL)
 		if _, err := client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: targetDisk.GetDiskId()})); err != nil {
 			if connect.CodeOf(err) != connect.CodeNotFound {
@@ -306,6 +306,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
+		execSessionPsql(cleanupCtx, t, "DELETE FROM client_sessions WHERE session_id >= 220000 AND session_id < 240000;")
 		if _, err := client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: controlDisk.GetDiskId()})); err != nil {
 			if connect.CodeOf(err) != connect.CodeNotFound {
 				t.Errorf("清理 controlDisk 失败: %v", err)
@@ -342,7 +343,7 @@ func TestE2E_H2_OrphanReclaimVsRenewSessionRace(t *testing.T) {
 
 	// 保持 helperSessionID 租约在测试期间不过期，避免背景孤儿被提前清理，
 	// 使用直接的 SQL 更新租约并更新统计信息（不调用全表扫描的 RenewSession RPC，避免占用 DB 连接池与触发锁竞争）
-	execSessionPsql(ctx, t, fmt.Sprintf("UPDATE client_sessions SET expires_at = clock_timestamp() + interval '1 hour' WHERE session_id = %d; UPDATE disks SET used_inodes = used_inodes + 25000 WHERE root_ino = %d; ANALYZE inodes; ANALYZE file_handles;", helperSessionID, targetDisk.GetRootIno()))
+	execSessionPsql(ctx, t, fmt.Sprintf("UPDATE client_sessions SET expires_at = clock_timestamp() + interval '1 hour' WHERE session_id = %d; ANALYZE inodes; ANALYZE file_handles;", helperSessionID))
 
 	// 3. 循环轮次，最多 8 轮复现 H2 竞态
 	targetSessionBase := uint64(220000)

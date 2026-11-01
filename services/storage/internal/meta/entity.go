@@ -138,8 +138,7 @@ const (
 
 	OffsetMax uint64 = math.MaxInt64
 
-	DefaultSessionLeaseTTL           = 60 * time.Second
-	DefaultSessionProbeTimeout       = 1500 * time.Millisecond
+	DefaultSessionLeaseTTL           = 15 * time.Second
 	DefaultWriteSessionTouchInterval = 5 * time.Second
 
 	WaiterStatusPending   int16 = 1

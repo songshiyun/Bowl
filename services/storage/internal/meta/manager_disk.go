@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"strings"
 	"time"
 
@@ -327,10 +326,8 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	return toDomainDisk(updatedRow), nil
 }
 
-var errNeedSessionProbe = errors.New("meta: need active session liveness probe")
-
 // DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-// 在单次读写事务内排他锁定目标磁盘并删除 Disk 记录，同时按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联的 entries、inode_xattrs、file_handles、file_locks）。
+// 在单次读写事务内排他锁定目标磁盘、清理过期客户端会话、校验是否存在存活挂载会话，随后删除 Disk 记录并按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联的 entries、inode_xattrs、file_handles、file_locks）。
 // 事务提交成功后，主动关闭并清理内存中对应 Inode 的阻塞等待通道，唤醒正在等待锁的协程。
 func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	// 静态参数校验（无需触达数据库）：非法格式或全零 Nil UUID 直接返回 ErrInvalidArgument
@@ -339,185 +336,91 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		return err
 	}
 
-	probeTimeout := m.sessionProbeTimeout
-	if probeTimeout <= 0 {
-		probeTimeout = DefaultSessionProbeTimeout
-	}
-
-	var rootIno int64
-	var deletedInos []int64
-
-	type sessionProbeTarget struct {
-		sid            uint64
-		streamID       uint64
-		reconnectedNew bool
-	}
-
 	var (
-		commitGateUnlock func()
-		releaseGateNow   = func() {
-			if commitGateUnlock != nil {
-				commitGateUnlock()
-				commitGateUnlock = nil
-			}
-		}
+		rootIno       int64
+		expiredCount  int64
+		reclaimedInos []int64
+		deletedInos   []int64
 	)
-	defer func() {
-		releaseGateNow()
-	}()
 
-	for attempt := 0; attempt < 3; attempt++ {
-		var needProbes []sessionProbeTarget
-		err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-			releaseGateNow()
-			needProbes = nil
-			deletedInos = nil
+	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+		rootIno = 0
+		expiredCount = 0
+		reclaimedInos = nil
+		deletedInos = nil
 
-			// 1. 获取并排他锁定目标 Disk 行与关联 Inodes
-			diskRow, err := q.GetDiskForUpdate(ctx, pgID)
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get disk for update %s: %w", diskID, err)
-			}
-			rootIno = diskRow.RootIno
-
-			// 2. 查询绑定该磁盘或持有该磁盘下句柄的未过期会话
-			activeSIDs, err := q.ListActiveSessionIDsByDisk(ctx, db.ListActiveSessionIDsByDiskParams{
-				DiskID:  pgID,
-				RootIno: diskRow.RootIno,
-			})
-			if err != nil {
-				return fmt.Errorf("list active sessions for disk %s: %w", diskID, err)
-			}
-
-			expectedLatestStreams := make(map[uint64]uint64, len(activeSIDs))
-			for _, sid := range activeSIDs {
-				if sid > 0 {
-					usid := uint64(sid)
-					if streamID, ok := m.WatchHub().ActiveStreamID(usid); ok {
-						needProbes = append(needProbes, sessionProbeTarget{
-							sid:      usid,
-							streamID: streamID,
-						})
-					} else {
-						expectedLatestStreams[usid] = m.WatchHub().LatestStreamID(usid)
-					}
-				}
-			}
-			if len(needProbes) > 0 {
-				// 存在活跃流，先回滚释放数据库行锁，在事务外执行 Ping-Pong 探活
-				return errNeedSessionProbe
-			}
-
-			// 3. 删除该 Disk 行（外键 ON DELETE CASCADE 自动级联清理 disk_id 绑定的残留无流 client_sessions）
-			rows, err := q.DeleteDisk(ctx, pgID)
-			if err != nil {
-				return fmt.Errorf("delete disk %s: %w", diskID, err)
-			}
-			if rows == 0 {
+		// 1. 获取并排他锁定目标 Disk 行与关联 Inodes
+		diskRow, err := q.GetDiskForUpdate(ctx, pgID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-
-			// 4. 按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联项）
-			deletedInos, err = q.DeleteInodesByRootIno(ctx, diskRow.RootIno)
-			if err != nil {
-				return fmt.Errorf("delete inodes by root_ino %d for disk %s: %w", diskRow.RootIno, diskID, err)
-			}
-
-			if len(deletedInos) > 0 {
-				if err := deleteAllChunksByInos(ctx, q, deletedInos); err != nil {
-					return fmt.Errorf("delete chunks for disk %s (root_ino=%d): %w", diskID, diskRow.RootIno, err)
-				}
-			}
-
-			if len(expectedLatestStreams) > 0 {
-				allowed, activeStreams, unlock := m.WatchHub().AcquireSessionsCommitGate(expectedLatestStreams)
-				if !allowed {
-					reconnectedSIDs := make([]uint64, 0, len(activeStreams))
-					for sid := range activeStreams {
-						reconnectedSIDs = append(reconnectedSIDs, sid)
-					}
-					slices.Sort(reconnectedSIDs)
-					for _, sid := range reconnectedSIDs {
-						needProbes = append(needProbes, sessionProbeTarget{
-							sid:            sid,
-							streamID:       activeStreams[sid],
-							reconnectedNew: true,
-						})
-					}
-					return errNeedSessionProbe
-				}
-				commitGateUnlock = unlock
-			}
-
-			return nil
-		})
-		releaseGateNow()
-
-		if errors.Is(err, errNeedSessionProbe) {
-			for _, target := range needProbes {
-				if target.reconnectedNew && m.WatchHub().HasVerifiedPong(target.sid, target.streamID) {
-					return fmt.Errorf("%w: disk %s has active mounted session %d", ErrBusy, diskID, target.sid)
-				}
-				curStreamID := target.streamID
-				for probeAttempt := 0; probeAttempt < 3; probeAttempt++ {
-					alive, probedID := m.WatchHub().ProbeStream(ctx, target.sid, curStreamID, probeTimeout)
-					if alive {
-						return fmt.Errorf("%w: disk %s has active mounted session %d", ErrBusy, diskID, target.sid)
-					}
-					if err := ctx.Err(); err != nil {
-						return err
-					}
-					if probedID == 0 {
-						// 原先记录的 curStreamID 在开始探测前已被注销或被新流替换
-						nextID, ok := m.WatchHub().ActiveStreamID(target.sid)
-						if !ok {
-							break
-						}
-						curStreamID = nextID
-						continue
-					}
-					if m.WatchHub().EvictIfStreamID(target.sid, probedID) {
-						aborted, _ := m.closeSessionIfNoActiveStream(ctx, target.sid, probedID)
-						if !aborted {
-							break
-						}
-					}
-					// 探测期间同 sessionID 被新流替换，严禁凭旧流失败驱逐新流或关闭会话，改为对新流重新探测
-					nextID, ok := m.WatchHub().ActiveStreamID(target.sid)
-					if !ok {
-						break
-					}
-					curStreamID = nextID
-				}
-			}
-			continue
+			return fmt.Errorf("get disk for update %s: %w", diskID, err)
 		}
+		rootIno = diskRow.RootIno
+
+		// 2. 先清理已过期的客户端会话，若清理了过期会话则回收无引用孤儿节点与配额
+		expiredCount, err = q.DeleteExpiredClientSessions(ctx)
 		if err != nil {
-			return err
+			return fmt.Errorf("delete expired client sessions before delete disk %s: %w", diskID, err)
 		}
-		break
-	}
-	if errors.Is(err, errNeedSessionProbe) {
-		return fmt.Errorf("%w: disk %s still has active mounted sessions", ErrBusy, diskID)
+		if expiredCount > 0 {
+			reclaimedInos, err = m.reclaimUnreferencedOrphansInTx(ctx, q)
+			if err != nil {
+				return err
+			}
+		}
+
+		// 3. 查询绑定该磁盘或持有该磁盘下句柄的未过期会话
+		activeSIDs, err := q.ListActiveSessionIDsByDisk(ctx, db.ListActiveSessionIDsByDiskParams{
+			DiskID:  pgID,
+			RootIno: diskRow.RootIno,
+		})
+		if err != nil {
+			return fmt.Errorf("list active sessions for disk %s: %w", diskID, err)
+		}
+		if len(activeSIDs) > 0 {
+			return fmt.Errorf("%w: disk %s has active mounted session %d", ErrBusy, diskID, uint64(activeSIDs[0]))
+		}
+
+		// 4. 删除该 Disk 行
+		rows, err := q.DeleteDisk(ctx, pgID)
+		if err != nil {
+			return fmt.Errorf("delete disk %s: %w", diskID, err)
+		}
+		if rows == 0 {
+			return ErrNotFound
+		}
+
+		// 5. 按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联项）
+		deletedInos, err = q.DeleteInodesByRootIno(ctx, diskRow.RootIno)
+		if err != nil {
+			return fmt.Errorf("delete inodes by root_ino %d for disk %s: %w", diskRow.RootIno, diskID, err)
+		}
+
+		if len(deletedInos) > 0 {
+			if err := deleteAllChunksByInos(ctx, q, deletedInos); err != nil {
+				return fmt.Errorf("delete chunks for disk %s (root_ino=%d): %w", diskID, diskRow.RootIno, err)
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// 5. 事务成功提交后，主动清理内存中的锁等待通道，唤醒等待该磁盘下所有节点的阻塞协程
-	if len(deletedInos) > 0 {
-		m.cleanLockWaitersForInos(deletedInos)
-	}
-
-	inosToClean := make([]uint64, 0, len(deletedInos)+1)
+	// 6. 事务成功提交后，主动清理孤儿节点状态、锁等待通道、配额状态与目录游标，并通知锁等待者
+	m.finalizeReclaimedOrphans(reclaimedInos)
+	m.finalizeReclaimedOrphans(deletedInos)
 	if rootIno > 0 {
 		m.deleteDiskQuotaState(rootIno)
-		inosToClean = append(inosToClean, uint64(rootIno))
+		m.clearDirCursorsForInos(uint64(rootIno))
 	}
-	for _, ino := range deletedInos {
-		inosToClean = append(inosToClean, uint64(ino))
+	if expiredCount > 0 {
+		m.cleanExpiredDirCursors(ctx)
 	}
-	m.clearDirCursorsForInos(inosToClean...)
+	m.notifyAllLockWaiters()
 
 	return nil
 }

@@ -77,7 +77,8 @@ func TestRenewSession_Unit(t *testing.T) {
 
 		mockQuerier.EXPECT().
 			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sessID) && arg.ExpiresAt.Valid
+				ttl := time.Until(arg.ExpiresAt.Time)
+				return arg.SessionID == int64(sessID) && arg.ExpiresAt.Valid && ttl > 10*time.Second && ttl <= meta.DefaultSessionLeaseTTL+time.Second
 			})).
 			Return(db.ClientSession{
 				SessionID: int64(sessID),
@@ -90,6 +91,7 @@ func TestRenewSession_Unit(t *testing.T) {
 			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
+		assert.Equal(t, 15*time.Second, meta.DefaultSessionLeaseTTL)
 		expiresAt, err := mgr.RenewSession(ctx, sessID)
 		require.NoError(t, err)
 		assert.Equal(t, expectedExpires, expiresAt)

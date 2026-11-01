@@ -1,42 +1,28 @@
 package meta_test
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
-	"net"
-	"net/http"
-	"net/http/httptest"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/hpack"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/starsrc/Aether/pkg/tx"
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
-	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	dbmock "github.com/starsrc/bowl/services/storage/internal/db/mock"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
-	"github.com/starsrc/bowl/services/storage/internal/server"
 )
 
 func TestCreateDisk_StaticValidation(t *testing.T) {
@@ -1550,6 +1536,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			ListActiveSessionIDsByDisk(mock.Anything, db.ListActiveSessionIDsByDiskParams{
 				DiskID:  validDiskID,
 				RootIno: rootIno,
@@ -1579,6 +1570,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 				DiskID:  validDiskID,
 				RootIno: rootIno,
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -1615,6 +1611,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			ListActiveSessionIDsByDisk(mock.Anything, db.ListActiveSessionIDsByDiskParams{
 				DiskID:  validDiskID,
 				RootIno: rootIno,
@@ -1638,7 +1639,7 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 		assert.True(t, errors.Is(err, dbErr))
 	})
 
-	t.Run("正常删除依次调用 GetDiskForUpdate -> ListActiveSessionIDsByDisk -> DeleteDisk -> DeleteInodesByRootIno", func(t *testing.T) {
+	t.Run("正常删除依次调用 GetDiskForUpdate -> DeleteExpiredClientSessions -> ListActiveSessionIDsByDisk -> DeleteDisk -> DeleteInodesByRootIno", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -1650,6 +1651,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 				DiskID:  validDiskID,
 				RootIno: rootIno,
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -1679,19 +1685,13 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("存在活跃会话且 WatchHub 探活回复 Pong 时返回 ErrBusy 且不执行 DeleteDisk", func(t *testing.T) {
+	t.Run("存在未过期活跃会话时立即返回 ErrBusy 且不执行 DeleteDisk", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		activeSID := uint64(80801)
-		var streamID uint64
-		streamID, unregister := mgr.WatchHub().Register(activeSID, func(pingSeq uint64) error {
-			go mgr.WatchHub().HandlePong(activeSID, streamID, pingSeq)
-			return nil
-		})
-		defer unregister()
 
 		mockQuerier.EXPECT().
 			GetDiskForUpdate(mock.Anything, validDiskID).
@@ -1699,6 +1699,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 				DiskID:  validDiskID,
 				RootIno: rootIno,
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -1715,25 +1720,12 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 		mockQuerier.AssertNotCalled(t, "DeleteDisk", mock.Anything, mock.Anything)
 	})
 
-	t.Run("存在活跃会话但 WatchHub 探活超时未响应 Pong 时自动清理死会话并在下一轮成功删除磁盘", func(t *testing.T) {
+	t.Run("清理过期会话后无存活会话时单次事务内回收孤儿节点并成功删除磁盘", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
-		mgr := meta.New(mockStore, meta.WithSessionProbeTimeout(30*time.Millisecond))
+		mgr := meta.New(mockStore)
+		setupMockWriteTx(mockStore, mockQuerier)
 
-		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.Anything).
-			RunAndReturn(func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				return fn(mockQuerier)
-			})
-
-		deadSID := uint64(80802)
-		_, unregister := mgr.WatchHub().Register(deadSID, func(pingSeq uint64) error {
-			// 模拟客户端死锁不回复 Pong
-			return nil
-		})
-		defer unregister()
-
-		// 第一轮：发现活跃流，回滚事务触发探活
 		mockQuerier.EXPECT().
 			GetDiskForUpdate(mock.Anything, validDiskID).
 			Return(db.GetDiskForUpdateRow{
@@ -1743,36 +1735,13 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
-			ListActiveSessionIDsByDisk(mock.Anything, db.ListActiveSessionIDsByDiskParams{
-				DiskID:  validDiskID,
-				RootIno: rootIno,
-			}).
-			Return([]int64{int64(deadSID)}, nil).
-			Once()
-
-		// 探活超时后触发 CloseSession(deadSID)
-		mockQuerier.EXPECT().
 			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteClientSessionByID(mock.Anything, int64(deadSID)).
 			Return(int64(1), nil).
 			Once()
 
 		mockQuerier.EXPECT().
 			DeleteUnreferencedOrphanInodes(mock.Anything).
 			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
-		// 第二轮：死会话已被 Evict 和 CloseSession，成功删除磁盘
-		mockQuerier.EXPECT().
-			GetDiskForUpdate(mock.Anything, validDiskID).
-			Return(db.GetDiskForUpdateRow{
-				DiskID:  validDiskID,
-				RootIno: rootIno,
-			}, nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -1800,7 +1769,6 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 
 		err := mgr.DeleteDisk(ctx, validDiskIDStr)
 		require.NoError(t, err)
-		assert.False(t, mgr.WatchHub().HasActiveStream(deadSID), "超时死会话的流应已被 Evict")
 	})
 
 	t.Run("DeleteDisk 删除磁盘后唤醒并中断阻塞在目标 Inode 上的 SetLkw 等待者返回 ErrNotFound", func(t *testing.T) {
@@ -1920,6 +1888,11 @@ func TestDeleteDisk_MockStore(t *testing.T) {
 				DiskID:  validDiskID,
 				RootIno: rootIno,
 			}, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -2135,6 +2108,9 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		rootIno := disk.RootIno
 
 		sessionID := uint64(time.Now().UnixNano() & 0x7FFFFFFFFFFFFFFF)
+		defer func() {
+			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessionID))
+		}()
 
 		// 1. 创建常规文件
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
@@ -2180,11 +2156,19 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, meta.F_WRLCK, lk.Type)
 
-		// 3. 执行 DeleteDisk 强制级联删除
+		// 3. 会话未过期时，DeleteDisk 必须拒绝并返回 ErrBusy
+		err = mgr.DeleteDisk(ctx, disk.DiskID)
+		require.Error(t, err)
+		require.ErrorIs(t, err, meta.ErrBusy)
+
+		// 4. 推进会话 expires_at 至过去使租约过期，随后执行 DeleteDisk 先清理过期会话再强制级联删除
+		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sessionID))
+		require.NoError(t, err)
+
 		err = mgr.DeleteDisk(ctx, disk.DiskID)
 		require.NoError(t, err)
 
-		// 4. 验证 Disk、Inode 均被清理
+		// 5. 验证 Disk、Inode 均被清理
 		_, err = mgr.GetDisk(ctx, disk.DiskID)
 		assert.True(t, errors.Is(err, meta.ErrNotFound))
 		_, err = mgr.GetAttr(ctx, fileIno)
@@ -2275,16 +2259,25 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 			return err == nil && len(waiters) == 1
 		}, 3*time.Second, 5*time.Millisecond)
 
+		// 会话未过期时，DeleteDisk 必须拒绝并返回 ErrBusy
+		err = mgr.DeleteDisk(ctx, disk.DiskID)
+		require.Error(t, err)
+		require.ErrorIs(t, err, meta.ErrBusy)
+
+		// 推进 s1, s2 的租约至已过期
+		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id IN ($1, $2)", int64(s1), int64(s2))
+		require.NoError(t, err)
+
 		// 6. 执行 DeleteDisk 强制删除磁盘实体及其所有元数据
 		startTime := time.Now()
 		err = mgr.DeleteDisk(ctx, disk.DiskID)
 		require.NoError(t, err)
 
-		// 7. 验证阻塞中的 SetLkw 立即被唤醒并返回 ErrNotFound (ENOENT)
+		// 7. 验证阻塞中的 SetLkw 立即被唤醒并返回 ErrNotFound (ENOENT) 或因过期会话在重试轮询中被感知返回 ErrBadFileHandle (EBADF)
 		select {
 		case lkwErr := <-errCh:
 			require.Error(t, lkwErr)
-			assert.True(t, errors.Is(lkwErr, meta.ErrNotFound), "期望得到 ErrNotFound，实际得到: %v", lkwErr)
+			assert.True(t, errors.Is(lkwErr, meta.ErrNotFound) || errors.Is(lkwErr, meta.ErrBadFileHandle), "期望得到 ErrNotFound 或 ErrBadFileHandle，实际得到: %v", lkwErr)
 		case <-time.After(3 * time.Second):
 			t.Fatal("SetLkw 超时未被唤醒")
 		}
@@ -2299,8 +2292,8 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		assert.True(t, errors.Is(err, meta.ErrNotFound))
 	})
 
-	t.Run("活跃会话注册了 WatchHub 流并自动回复 Pong 时 DeleteDisk 返回 ErrBusy 且磁盘与会话均完好保留", func(t *testing.T) {
-		diskName := fmt.Sprintf("test_del_busy_pong_%d", time.Now().UnixNano())
+	t.Run("存在未过期活跃挂载会话时 DeleteDisk 返回 ErrBusy 且磁盘与会话均完好保留", func(t *testing.T) {
+		diskName := fmt.Sprintf("test_del_busy_active_%d", time.Now().UnixNano())
 		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
 			Name:     diskName,
 			MaxBytes: 10 * 1024 * 1024 * 1024,
@@ -2319,14 +2312,7 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		_, err = mgr.RenewSessionWithDisk(ctx, sid, &diskID)
 		require.NoError(t, err)
 
-		var streamID uint64
-		streamID, unregister := mgr.WatchHub().Register(sid, func(pingSeq uint64) error {
-			go mgr.WatchHub().HandlePong(sid, streamID, pingSeq)
-			return nil
-		})
-		defer unregister()
-
-		// 执行 DeleteDisk，应被探活拦截返回 ErrBusy
+		// 执行 DeleteDisk，由于会话未过期，应立即返回 ErrBusy
 		err = mgr.DeleteDisk(ctx, disk.DiskID)
 		require.Error(t, err)
 		require.ErrorIs(t, err, meta.ErrBusy)
@@ -2346,17 +2332,15 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		assert.Equal(t, 1, count)
 	})
 
-	t.Run("活跃会话注册了 WatchHub 流但死锁不回复 Pong 时在探活超时后强制注销会话并成功删除磁盘", func(t *testing.T) {
-		fastMgr := meta.New(store, meta.WithSessionProbeTimeout(100*time.Millisecond))
-
-		diskName := fmt.Sprintf("test_del_dead_session_%d", time.Now().UnixNano())
-		disk, err := fastMgr.CreateDisk(ctx, meta.CreateDiskParams{
+	t.Run("绑定磁盘的会话租约已过期时 DeleteDisk 在同一事务中清理过期会话并成功删除磁盘", func(t *testing.T) {
+		diskName := fmt.Sprintf("test_del_expired_session_%d", time.Now().UnixNano())
+		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
 			Name:     diskName,
 			MaxBytes: 10 * 1024 * 1024 * 1024,
 		})
 		require.NoError(t, err)
 		defer func() {
-			_ = fastMgr.DeleteDisk(context.Background(), disk.DiskID)
+			_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
 		}()
 
 		sid := uint64(time.Now().UnixNano() & 0x7FFFFFFFFFFFFFFF)
@@ -2365,34 +2349,30 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		}()
 
 		diskID := disk.DiskID
-		_, err = fastMgr.RenewSessionWithDisk(ctx, sid, &diskID)
+		_, err = mgr.RenewSessionWithDisk(ctx, sid, &diskID)
 		require.NoError(t, err)
 
-		// 注册一个不回复 Pong 的流（模拟死锁/半开连接）
-		_, unregister := fastMgr.WatchHub().Register(sid, func(pingSeq uint64) error {
-			return nil
-		})
-		defer unregister()
+		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sid))
+		require.NoError(t, err)
 
-		err = fastMgr.DeleteDisk(ctx, disk.DiskID)
+		err = mgr.DeleteDisk(ctx, disk.DiskID)
 		require.NoError(t, err)
 
 		// 磁盘与根目录已被删除
-		_, err = fastMgr.GetDisk(ctx, disk.DiskID)
+		_, err = mgr.GetDisk(ctx, disk.DiskID)
 		require.ErrorIs(t, err, meta.ErrNotFound)
-		_, err = fastMgr.GetAttr(ctx, disk.RootIno)
+		_, err = mgr.GetAttr(ctx, disk.RootIno)
 		require.ErrorIs(t, err, meta.ErrNotFound)
 
-		// 死会话已被强制清理
+		// 过期会话已被清理
 		var count int
 		err = pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&count)
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
-		assert.False(t, fastMgr.WatchHub().HasActiveStream(sid))
 	})
 
-	t.Run("活跃会话已执行 CloseSession 或无活跃 WatchHub 流时零等待立即删除磁盘", func(t *testing.T) {
-		diskName := fmt.Sprintf("test_del_closed_or_nostream_%d", time.Now().UnixNano())
+	t.Run("挂载会话已执行 CloseSession 或租约已过期时立即删除磁盘", func(t *testing.T) {
+		diskName := fmt.Sprintf("test_del_closed_or_expired_%d", time.Now().UnixNano())
 		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
 			Name:     diskName,
 			MaxBytes: 10 * 1024 * 1024 * 1024,
@@ -2414,14 +2394,16 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		_, err = mgr.RenewSessionWithDisk(ctx, sid2, &diskID)
 		require.NoError(t, err)
 
-		// sid1 正常卸载调用 CloseSession，sid2 断开流（无 WatchHub 注册）
+		// sid1 正常卸载调用 CloseSession，sid2 租约过期
 		require.NoError(t, mgr.CloseSession(ctx, sid1))
+		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sid2))
+		require.NoError(t, err)
 
 		start := time.Now()
 		err = mgr.DeleteDisk(ctx, disk.DiskID)
 		elapsed := time.Since(start)
 		require.NoError(t, err)
-		assert.Less(t, elapsed, 500*time.Millisecond, "无活跃流时无需等待 1.5s 探活超时，应立即删除")
+		assert.Less(t, elapsed, 500*time.Millisecond, "会话已关闭或过期时应立即删除磁盘")
 
 		_, err = mgr.GetDisk(ctx, disk.DiskID)
 		require.ErrorIs(t, err, meta.ErrNotFound)
@@ -2429,7 +2411,7 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		var count int
 		err = pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id IN ($1, $2)", int64(sid1), int64(sid2)).Scan(&count)
 		require.NoError(t, err)
-		assert.Equal(t, 0, count, "disks ON DELETE CASCADE 应自动级联清理绑定该 disk_id 的残留会话")
+		assert.Equal(t, 0, count)
 	})
 }
 
@@ -3234,767 +3216,43 @@ func TestListDisks_PostgresIntegration(t *testing.T) {
 	assert.Equal(t, expectedOrder, collectedIDs, "游标逐页翻页结果必须按 created_at DESC, disk_id DESC 严格排列且无遗漏无重复")
 }
 
-// TestDeleteDisk_PreservesReplacementStream 验证同一会话在删盘探测期间完成流重连后，新流仍能响应探活，磁盘必须保留。
-func TestDeleteDisk_PreservesReplacementStream(t *testing.T) {
+// TestDeleteDisk_ExpiredSessionAndOrphanInodes 验证 DeleteDisk 在存在过期会话与孤儿节点时能够原子清理并级联删盘。
+func TestDeleteDisk_ExpiredSessionAndOrphanInodes(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
-	mgr := meta.New(db.NewStore(pool), meta.WithSessionProbeTimeout(200*time.Millisecond))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
+	mgr := meta.New(db.NewStore(pool))
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024 * 1024})
 	require.NoError(t, err)
 	sid := uint64(time.Now().UnixNano() & 0x7fffffffffffffff)
 	t.Cleanup(func() {
-		mgr.WatchHub().Evict(sid)
-		require.NoError(t, mgr.CloseSession(context.Background(), sid))
-		_, err := pool.Exec(context.Background(), "DELETE FROM disks WHERE disk_id = $1", disk.DiskID)
-		require.NoError(t, err)
-		_, err = pool.Exec(context.Background(), "DELETE FROM inodes WHERE root_ino = $1", int64(disk.RootIno))
-		require.NoError(t, err)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sid))
+		_, _ = pool.Exec(context.Background(), "DELETE FROM disks WHERE disk_id = $1", disk.DiskID)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM inodes WHERE root_ino = $1", int64(disk.RootIno))
 	})
 	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
 	require.NoError(t, err)
 
-	oldPing := make(chan struct{})
-	replacementReady := make(chan struct{})
-	_, unregisterOld := mgr.WatchHub().Register(sid, func(seq uint64) error {
-		close(oldPing)
-		select {
-		case <-replacementReady:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	})
-	defer unregisterOld()
-	deleteDone := make(chan error, 1)
-	go func() { deleteDone <- mgr.DeleteDisk(ctx, disk.DiskID) }()
-	select {
-	case <-oldPing:
-	case <-ctx.Done():
-		t.Fatal("未收到旧流探活")
-	}
-	var newStreamID uint64
-	newStreamID, unregisterNew := mgr.WatchHub().Register(sid, func(seq uint64) error {
-		mgr.WatchHub().HandlePong(sid, newStreamID, seq)
-		return nil
-	})
-	defer unregisterNew()
-	require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond))
-	close(replacementReady)
-	select {
-	case err := <-deleteDone:
-		assert.ErrorIs(t, err, meta.ErrBusy, "替换旧流不能成为删除存活挂载磁盘的依据")
-	case <-ctx.Done():
-		t.Fatal("删盘未在上下文期限内完成")
-	}
-	_, err = mgr.GetDisk(ctx, disk.DiskID)
-	assert.NoError(t, err, "已确认新流存活时磁盘必须保留")
-	var sessions int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	assert.Equal(t, 1, sessions, "新流所属会话必须保留")
-}
-
-// TestDeleteDisk_ReconnectAfterEviction 验证在旧流被驱逐、会话删除等待数据库行锁期间重连，新流的存活证据必须阻止删盘。
-func TestDeleteDisk_ReconnectAfterEviction(t *testing.T) {
-	pool, parent := setupMetaTestDB(t)
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-	mgr := meta.New(db.NewStore(pool), meta.WithSessionProbeTimeout(50*time.Millisecond))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	t.Cleanup(func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanCancel()
-		mgr.WatchHub().Evict(sid)
-		require.NoError(t, mgr.CloseSession(cleanCtx, sid))
-		_, cleanErr := pool.Exec(cleanCtx, "DELETE FROM disks WHERE disk_id = $1", disk.DiskID)
-		require.NoError(t, cleanErr)
-		_, cleanErr = pool.Exec(cleanCtx, "DELETE FROM inodes WHERE root_ino = $1", int64(disk.RootIno))
-		require.NoError(t, cleanErr)
-	})
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	_, unregisterOld := mgr.WatchHub().Register(sid, func(uint64) error { return nil })
-	defer unregisterOld()
-
-	blocker, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer func() { _ = blocker.Rollback(context.Background()) }()
-	_, err = blocker.Exec(ctx, "SELECT session_id FROM client_sessions WHERE session_id = $1 FOR UPDATE", int64(sid))
-	require.NoError(t, err)
-	deleteDone := make(chan error, 1)
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		deleteDone <- mgr.DeleteDisk(ctx, disk.DiskID)
-	}()
-	defer func() {
-		cancel()
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Error("删盘协程未响应取消")
-		}
-	}()
-	require.Eventually(t, func() bool { return !mgr.WatchHub().HasActiveStream(sid) }, time.Second, time.Millisecond, "旧流应在探活超时后被驱逐")
-
-	var streamID uint64
-	streamID, unregisterNew := mgr.WatchHub().Register(sid, func(seq uint64) error {
-		mgr.WatchHub().HandlePong(sid, streamID, seq)
-		return nil
-	})
-	defer unregisterNew()
-	require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "放行数据库回收前，新流已完成 Ping-Pong")
-	var sessions int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	require.Equal(t, 1, sessions, "重连时租约仍有效")
-	require.NoError(t, blocker.Commit(ctx))
-
-	select {
-	case deleteErr := <-deleteDone:
-		assert.ErrorIs(t, deleteErr, meta.ErrBusy, "已确认重连客户端存活，必须拒绝删盘")
-	case <-ctx.Done():
-		t.Fatal("删盘未在期限内结束")
-	}
-	_, err = mgr.GetDisk(ctx, disk.DiskID)
-	assert.NoError(t, err, "存活挂载的磁盘必须保留")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	assert.Equal(t, 1, sessions, "新流的租约必须保留")
-	assert.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "误删后新流仍能应答探活")
-}
-
-// TestWatchSession_ProbeEvictionDrainsBlockedHTTPSenders 验证客户端将 HTTP/2 接收窗口设为零导致流发送阻塞时，探活退出与流驱逐会释放发送协程。
-func TestWatchSession_ProbeEvictionDrainsBlockedHTTPSenders(t *testing.T) {
-	pool, testCtx := setupMetaTestDB(t)
-	mgr := meta.New(db.NewStore(pool))
-	disk, err := mgr.CreateDisk(testCtx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	t.Cleanup(func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cleanCancel()
-		mgr.WatchHub().Evict(sid)
-		require.NoError(t, mgr.CloseSession(cleanCtx, sid))
-		_, cleanErr := pool.Exec(cleanCtx, "DELETE FROM disks WHERE disk_id = $1", disk.DiskID)
-		require.NoError(t, cleanErr)
-		_, cleanErr = pool.Exec(cleanCtx, "DELETE FROM inodes WHERE root_ino = $1", int64(disk.RootIno))
-		require.NoError(t, cleanErr)
-	})
-	_, err = mgr.RenewSessionWithDisk(testCtx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	hub := mgr.WatchHub()
-	srv, err := server.New(server.Params{
-		Config:      config.ServerConfig{ServerHost: "127.0.0.1", ServerReadMaxBytes: config.DefaultServerReadMaxBytes},
-		MetaManager: mgr,
-	})
-	require.NoError(t, err)
-	ts := httptest.NewUnstartedServer(srv.Handler())
-	var protocols http.Protocols
-	protocols.SetHTTP1(true)
-	protocols.SetUnencryptedHTTP2(true)
-	ts.Config.Protocols = &protocols
-	ts.Start()
-	defer ts.Close()
-	conn, err := net.DialTimeout("tcp", ts.Listener.Addr().String(), time.Second)
-	require.NoError(t, err)
-	defer conn.Close()
-	require.NoError(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
-	framer := http2.NewFramer(conn, conn)
-	_, err = conn.Write([]byte(http2.ClientPreface))
-	require.NoError(t, err)
-	require.NoError(t, framer.WriteSettings(http2.Setting{ID: http2.SettingInitialWindowSize, Val: 0}))
-	var headers bytes.Buffer
-	encoder := hpack.NewEncoder(&headers)
-	for _, field := range []hpack.HeaderField{
-		{Name: ":method", Value: "POST"},
-		{Name: ":scheme", Value: "http"},
-		{Name: ":authority", Value: ts.Listener.Addr().String()},
-		{Name: ":path", Value: storagev1connect.StorageServiceWatchSessionProcedure},
-		{Name: "content-type", Value: "application/grpc"},
-		{Name: "te", Value: "trailers"},
-	} {
-		require.NoError(t, encoder.WriteField(field))
-	}
-	require.NoError(t, framer.WriteHeaders(http2.HeadersFrameParam{StreamID: 1, BlockFragment: headers.Bytes(), EndHeaders: true}))
-	payload, err := proto.Marshal(&storagev1.WatchSessionRequest{SessionId: sid, DiskId: &disk.DiskID})
-	require.NoError(t, err)
-	envelope := make([]byte, 5+len(payload))
-	binary.BigEndian.PutUint32(envelope[1:5], uint32(len(payload)))
-	copy(envelope[5:], payload)
-	require.NoError(t, framer.WriteData(1, false, envelope))
-	readerDone := make(chan struct{})
-	var writeMu sync.Mutex
-	go func() {
-		defer close(readerDone)
-		for {
-			frame, readErr := framer.ReadFrame()
-			if readErr != nil {
-				return
-			}
-			if settings, ok := frame.(*http2.SettingsFrame); ok && !settings.IsAck() {
-				writeMu.Lock()
-				ackErr := framer.WriteSettingsAck()
-				writeMu.Unlock()
-				if ackErr != nil {
-					return
-				}
-			}
-		}
-	}()
-	defer func() {
-		require.NoError(t, conn.Close())
-		select {
-		case <-readerDone:
-		case <-time.After(time.Second):
-			t.Error("HTTP/2 读协程未退出")
-		}
-	}()
-	require.Eventually(t, func() bool { return hub.HasActiveStream(sid) }, time.Second, time.Millisecond)
-
-	countSenders := func() int {
-		var stacks bytes.Buffer
-		require.NoError(t, pprof.Lookup("goroutine").WriteTo(&stacks, 2))
-		count := 0
-		for _, stack := range strings.Split(stacks.String(), "\n\n") {
-			if strings.Contains(stack, "meta.(*SessionWatchHub).ProbeStream") {
-				count++
-			}
-		}
-		return count
-	}
-	require.Zero(t, countSenders())
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	for i := 0; i < 8; i++ {
-		require.False(t, hub.Probe(ctx, sid, 10*time.Millisecond))
-	}
-	hub.Evict(sid)
-	require.False(t, hub.HasActiveStream(sid))
-	assert.Eventually(t, func() bool { return countSenders() == 0 }, 200*time.Millisecond, 5*time.Millisecond,
-		"流驱逐后仍遗留探活发送协程；当前数量=%d", countSenders())
-	writeMu.Lock()
-	windowErr := framer.WriteWindowUpdate(1, 1024)
-	writeMu.Unlock()
-	require.NoError(t, windowErr)
-	require.Eventually(t, func() bool { return countSenders() == 0 }, time.Second, time.Millisecond)
-}
-
-// TestWatchSession_DisconnectCleanupPreservesReconnectedSession 验证旧 HTTP/2 流断连后会话清理等待行锁期间，新流重连并应答探活使旧流清理失效。
-func TestWatchSession_DisconnectCleanupPreservesReconnectedSession(t *testing.T) {
-	pool, parent := setupIsolatedMetaTestDB(t, "disconnect_preserve_reconnect")
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-	mgr := meta.New(db.NewStore(pool))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
 	tmp, err := mgr.TmpFile(ctx, meta.TmpFileParams{
 		ParentIno: disk.RootIno, Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
 	})
 	require.NoError(t, err)
-	srv, err := server.New(server.Params{
-		Config: config.ServerConfig{ServerHost: "127.0.0.1", ServerReadMaxBytes: config.DefaultServerReadMaxBytes}, MetaManager: mgr,
-	})
-	require.NoError(t, err)
-	oldHandlerDone := make(chan struct{})
-	var requests atomic.Int32
-	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if requests.Add(1) == 1 {
-			defer close(oldHandlerDone)
-		}
-		srv.Handler().ServeHTTP(w, r)
-	}))
-	ts.EnableHTTP2 = true
-	ts.StartTLS()
-	defer func() {
-		ts.CloseClientConnections()
-		ts.Close()
-	}()
-	client := storagev1connect.NewStorageServiceClient(ts.Client(), ts.URL, connect.WithGRPC())
-	oldCtx, oldCancel := context.WithCancel(ctx)
-	defer oldCancel()
-	oldStream := client.WatchSession(oldCtx)
-	require.NoError(t, oldStream.Send(&storagev1.WatchSessionRequest{SessionId: sid, DiskId: &disk.DiskID}))
-	ack, err := oldStream.Receive()
-	require.NoError(t, err)
-	require.Zero(t, ack.GetPingSeq())
 
-	blocker, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer func() { _ = blocker.Rollback(context.Background()) }()
-	_, err = blocker.Exec(ctx, "SELECT session_id FROM client_sessions WHERE session_id = $1 FOR UPDATE", int64(sid))
-	require.NoError(t, err)
-	var blockerPID int32
-	require.NoError(t, blocker.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blockerPID))
-	require.NoError(t, oldStream.CloseRequest())
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := pool.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM pg_stat_activity
-			WHERE $1 = ANY(pg_blocking_pids(pid))
-			AND query LIKE '%DeleteClientSessionByID%'
-		)`, blockerPID).Scan(&waiting)
-		require.NoError(t, err)
-		return waiting
-	}, time.Second, time.Millisecond, "旧流清理应等待会话行锁")
-	require.False(t, mgr.WatchHub().HasActiveStream(sid))
+	// 会话存活时拒绝删盘
+	err = mgr.DeleteDisk(ctx, disk.DiskID)
+	require.ErrorIs(t, err, meta.ErrBusy)
 
-	newCtx, newCancel := context.WithCancel(ctx)
-	defer newCancel()
-	newStream := client.WatchSession(newCtx)
-	require.NoError(t, newStream.Send(&storagev1.WatchSessionRequest{SessionId: sid, DiskId: &disk.DiskID}))
-	ack, err = newStream.Receive()
-	require.NoError(t, err)
-	require.Zero(t, ack.GetPingSeq())
-	probeNew := func() {
-		probeDone := make(chan bool, 1)
-		go func() { probeDone <- mgr.WatchHub().Probe(ctx, sid, 300*time.Millisecond) }()
-		ping, recvErr := newStream.Receive()
-		require.NoError(t, recvErr)
-		require.Positive(t, ping.GetPingSeq())
-		require.NoError(t, newStream.Send(&storagev1.WatchSessionRequest{SessionId: sid, PongSeq: ping.GetPingSeq()}))
-		require.True(t, <-probeDone, "真实重连流必须完成 Ping-Pong")
-	}
-	probeNew()
-	require.NoError(t, blocker.Commit(ctx))
-	select {
-	case <-oldHandlerDone:
-	case <-ctx.Done():
-		t.Fatal("旧流清理未结束")
-	}
-	var sessions, handles int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	assert.Equal(t, 1, sessions, "旧流退出不得注销已重连的存活会话")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(tmp.Fh)).Scan(&handles))
-	assert.Equal(t, 1, handles, "旧流退出不得销毁已重连会话的文件句柄")
-	probeNew()
-}
-
-// TestDeleteDisk_ReconnectDuringOrphanQuotaReclaim 验证会话删除在孤儿回收退还配额等待磁盘行锁期间重连时，存活会话与磁盘均必须保留。
-func TestDeleteDisk_ReconnectDuringOrphanQuotaReclaim(t *testing.T) {
-	pool, parent := setupIsolatedMetaTestDB(t, "reconnect_orphan_quota")
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-	mgr := meta.New(db.NewStore(pool), meta.WithSessionProbeTimeout(300*time.Millisecond))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	tmp, err := mgr.TmpFile(ctx, meta.TmpFileParams{
-		ParentIno: disk.RootIno, Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
-	})
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, "INSERT INTO chunks (ino, indx, slices) VALUES ($1, 0, $2)", int64(tmp.Inode.Ino), make([]byte, 24))
+	// 推进会话过期后，DeleteDisk 在单次事务内清理过期会话、回收孤儿节点并删除磁盘
+	_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1", int64(sid))
 	require.NoError(t, err)
 
-	oldPing := make(chan struct{}, 1)
-	_, unregisterOld := mgr.WatchHub().Register(sid, func(uint64) error {
-		oldPing <- struct{}{}
-		return nil
-	})
-	defer unregisterOld()
-	deleteDone := make(chan error, 1)
-	finished := make(chan struct{})
-	go func() {
-		defer close(finished)
-		deleteDone <- mgr.DeleteDisk(ctx, disk.DiskID)
-	}()
-	defer func() {
-		cancel()
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Error("删盘协程未响应取消")
-		}
-	}()
-	select {
-	case <-oldPing:
-	case <-ctx.Done():
-		t.Fatal("未收到旧流探活")
-	}
-
-	blocker, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer func() { _ = blocker.Rollback(context.Background()) }()
-	_, err = blocker.Exec(ctx, "SELECT ino FROM chunks WHERE ino = $1 FOR UPDATE", int64(tmp.Inode.Ino))
-	require.NoError(t, err)
-	var blockerPID int32
-	require.NoError(t, blocker.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blockerPID))
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := pool.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM pg_stat_activity
-			WHERE $1 = ANY(pg_blocking_pids(pid))
-			AND query LIKE '%DeleteChunksByInos%'
-		)`, blockerPID).Scan(&waiting)
-		require.NoError(t, err)
-		return waiting
-	}, 2*time.Second, time.Millisecond, "会话回收应在流复核之后等待孤儿 Chunk 行锁")
-	require.False(t, mgr.WatchHub().HasActiveStream(sid))
-
-	var streamID uint64
-	streamID, unregisterNew := mgr.WatchHub().Register(sid, func(seq uint64) error {
-		mgr.WatchHub().HandlePong(sid, streamID, seq)
-		return nil
-	})
-	defer unregisterNew()
-	require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "事务提交前，新流已完成 Ping-Pong")
-	var sessions int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	require.Equal(t, 1, sessions, "重连时租约尚未提交删除")
-	require.NoError(t, blocker.Commit(ctx))
-
-	select {
-	case deleteErr := <-deleteDone:
-		assert.ErrorIs(t, deleteErr, meta.ErrBusy, "已确认重连客户端存活，必须拒绝删盘")
-	case <-ctx.Done():
-		t.Fatal("删盘未在期限内结束")
-	}
+	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
 	_, err = mgr.GetDisk(ctx, disk.DiskID)
-	assert.NoError(t, err, "存活挂载的磁盘必须保留")
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	assert.Equal(t, 1, sessions, "存活会话必须保留")
-	var handles int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(tmp.Fh)).Scan(&handles))
-	assert.Equal(t, 1, handles, "重连会话的已打开匿名文件句柄必须保留")
-	assert.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "新流仍可响应探活")
-}
+	assert.ErrorIs(t, err, meta.ErrNotFound)
 
-type commitBarrierStore struct {
-	db.Store
-	beforeCommit func(ctx context.Context) error
-}
-
-func (s *commitBarrierStore) ExecTxWithOptions(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-	return s.Store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-		if err := fn(q); err != nil {
-			return err
-		}
-		if s.beforeCommit != nil {
-			return s.beforeCommit(ctx)
-		}
-		return nil
-	}, opts...)
-}
-
-// TestCloseSession_AutoCloseGateBlocksRegisterUntilCommit 验证会话自动回收事务在获取 AcquireAutoCloseGate 后、真实 Commit 前严格阻塞同会话新流登记。
-func TestCloseSession_AutoCloseGateBlocksRegisterUntilCommit(t *testing.T) {
-	pool, parent := setupIsolatedMetaTestDB(t, "auto_close_commit_gate")
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-
-	atCommitBoundary := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	var (
-		interceptMu sync.Mutex
-		intercept   bool
-		barrierOnce sync.Once
-	)
-	store := &commitBarrierStore{
-		Store: db.NewStore(pool),
-		beforeCommit: func(txCtx context.Context) error {
-			interceptMu.Lock()
-			enabled := intercept
-			interceptMu.Unlock()
-			if !enabled {
-				return nil
-			}
-			barrierOnce.Do(func() {
-				close(atCommitBoundary)
-				select {
-				case <-releaseCommit:
-				case <-txCtx.Done():
-				}
-			})
-			return nil
-		},
-	}
-
-	mgr := meta.New(store, meta.WithSessionProbeTimeout(300*time.Millisecond))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	file, err := mgr.Create(ctx, meta.CreateParams{
-		ParentIno: disk.RootIno, Name: []byte("commit-boundary"), Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
-	})
-	require.NoError(t, err)
-
-	oldStreamID, unregisterOld := mgr.WatchHub().Register(sid, func(uint64) error { return nil })
-	unregisterOld()
-
-	interceptMu.Lock()
-	intercept = true
-	interceptMu.Unlock()
-
-	closeDone := make(chan error, 1)
-	go func() {
-		closeDone <- mgr.CloseSession(meta.WithDisconnectedStreamID(ctx, oldStreamID), sid)
-	}()
-
-	select {
-	case <-atCommitBoundary:
-	case <-ctx.Done():
-		t.Fatal("断连自动回收未到达事务提交边界")
-	}
-
-	regEntered := make(chan struct{})
-	regDone := make(chan struct{})
-	var (
-		newStreamID   uint64
-		unregisterNew func() bool
-	)
-	go func() {
-		close(regEntered)
-		newStreamID, unregisterNew = mgr.WatchHub().Register(sid, func(seq uint64) error {
-			mgr.WatchHub().HandlePong(sid, newStreamID, seq)
-			return nil
-		})
-		close(regDone)
-	}()
-	<-regEntered
-
-	var leakedBeforeCommit bool
-	select {
-	case <-regDone:
-		leakedBeforeCommit = true
-		require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "提前越过门控的新流已完成 Ping-Pong")
-	case <-time.After(50 * time.Millisecond):
-	}
-	assert.False(t, leakedBeforeCommit, "自动回收事务未 Commit 前，同会话的新流 Register 必须被门控阻塞")
-
-	close(releaseCommit)
-	require.NoError(t, <-closeDone)
-
-	select {
-	case <-regDone:
-	case <-ctx.Done():
-		t.Fatal("回收事务提交后新流 Register 仍未完成")
-	}
-	defer unregisterNew()
-
-	if !leakedBeforeCommit {
-		_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-		require.NoError(t, err)
-		_, err = mgr.Open(ctx, meta.OpenParams{Ino: file.Inode.Ino, Flags: meta.O_RDWR, SessionID: &sid})
-		require.NoError(t, err)
-	}
-
-	require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "新流必须可正常响应 Ping-Pong")
-	var sessions, handles int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE session_id = $1", int64(sid)).Scan(&handles))
-	assert.Equal(t, 1, sessions, "新流完成登记与探活后，所属会话租约不得被滞后的回收事务提交删空")
-	assert.Equal(t, 1, handles, "新流完成登记与探活后，所属打开句柄不得被滞后的回收事务提交删空")
-}
-
-// TestDeleteDisk_ReconnectDuringFinalCascade 验证最终删盘事务等待级联会话行锁期间，已完成 Ping-Pong 的重连流必须撤销删盘资格。
-func TestDeleteDisk_ReconnectDuringFinalCascade(t *testing.T) {
-	pool, parent := setupIsolatedMetaTestDB(t, "delete_final_cascade")
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-	mgr := meta.New(db.NewStore(pool))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	file, err := mgr.Create(ctx, meta.CreateParams{
-		ParentIno: disk.RootIno, Name: []byte("保留文件"), Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
-	})
-	require.NoError(t, err)
-	srv, err := server.New(server.Params{
-		Config: config.ServerConfig{ServerHost: "127.0.0.1", ServerReadMaxBytes: config.DefaultServerReadMaxBytes}, MetaManager: mgr,
-	})
-	require.NoError(t, err)
-	ts := httptest.NewUnstartedServer(srv.Handler())
-	ts.EnableHTTP2 = true
-	ts.StartTLS()
-	defer func() { ts.CloseClientConnections(); ts.Close() }()
-	client := storagev1connect.NewStorageServiceClient(ts.Client(), ts.URL, connect.WithGRPC())
-	old := client.WatchSession(ctx)
-	require.NoError(t, old.Send(&storagev1.WatchSessionRequest{SessionId: sid, DiskId: &disk.DiskID}))
-	_, err = old.Receive()
-	require.NoError(t, err)
-
-	blocker, err := pool.Begin(ctx)
-	require.NoError(t, err)
-	defer func() { _ = blocker.Rollback(context.Background()) }()
-	_, err = blocker.Exec(ctx, "SELECT session_id FROM client_sessions WHERE session_id = $1 FOR UPDATE", int64(sid))
-	require.NoError(t, err)
-	require.NoError(t, old.CloseRequest())
-	require.Eventually(t, func() bool { return !mgr.WatchHub().HasActiveStream(sid) }, time.Second, time.Millisecond)
-	deleteDone := make(chan error, 1)
-	finished := make(chan struct{})
-	go func() { defer close(finished); deleteDone <- mgr.DeleteDisk(ctx, disk.DiskID) }()
-	defer func() {
-		cancel()
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Error("删盘协程未退出")
-		}
-	}()
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := pool.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM pg_stat_activity
-			WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0
-			AND query LIKE '%name: DeleteDisk :execrows%'
-		)`).Scan(&waiting)
-		require.NoError(t, err)
-		return waiting
-	}, time.Second, time.Millisecond, "删盘应已越过流检查并等待级联会话行锁")
-
-	stream := client.WatchSession(ctx)
-	require.NoError(t, stream.Send(&storagev1.WatchSessionRequest{SessionId: sid, DiskId: &disk.DiskID}))
-	ack, err := stream.Receive()
-	require.NoError(t, err)
-	require.Zero(t, ack.GetPingSeq())
-	probeDone := make(chan bool, 1)
-	go func() { probeDone <- mgr.WatchHub().Probe(ctx, sid, 300*time.Millisecond) }()
-	ping, err := stream.Receive()
-	require.NoError(t, err)
-	require.Positive(t, ping.GetPingSeq())
-	require.NoError(t, stream.Send(&storagev1.WatchSessionRequest{SessionId: sid, PongSeq: ping.GetPingSeq()}))
-	require.True(t, <-probeDone, "放行删除前，新流已完成真实 Ping-Pong")
-	require.NoError(t, blocker.Commit(ctx))
-
-	select {
-	case deleteErr := <-deleteDone:
-		assert.ErrorIs(t, deleteErr, meta.ErrBusy, "重连流已确认存活，必须撤销最终删盘事务")
-	case <-ctx.Done():
-		t.Fatal("删盘未在期限内结束")
-	}
-	_, err = mgr.GetDisk(ctx, disk.DiskID)
-	assert.NoError(t, err, "存活挂载的磁盘必须保留")
 	var sessions, handles, inodes int
 	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(file.Fh)).Scan(&handles))
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM inodes WHERE ino = $1", int64(file.Inode.Ino)).Scan(&inodes))
-	assert.Equal(t, 1, sessions, "重连会话租约必须保留")
-	assert.Equal(t, 1, handles, "重连会话句柄必须保留")
-	assert.Equal(t, 1, inodes, "磁盘内文件必须保留")
-}
-
-// TestDeleteDisk_CommitGateBlocksRegisterUntilCommit 验证 DeleteDisk 在获取 AcquireSessionsCommitGate 后、真实 Commit 前严格阻塞同会话新流登记。
-func TestDeleteDisk_CommitGateBlocksRegisterUntilCommit(t *testing.T) {
-	pool, parent := setupIsolatedMetaTestDB(t, "delete_commit_gate")
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
-	defer cancel()
-
-	atCommitBoundary := make(chan struct{})
-	releaseCommit := make(chan struct{})
-	var (
-		interceptMu sync.Mutex
-		intercept   bool
-		barrierOnce sync.Once
-	)
-	store := &commitBarrierStore{
-		Store: db.NewStore(pool),
-		beforeCommit: func(txCtx context.Context) error {
-			interceptMu.Lock()
-			enabled := intercept
-			interceptMu.Unlock()
-			if !enabled {
-				return nil
-			}
-			barrierOnce.Do(func() {
-				close(atCommitBoundary)
-				select {
-				case <-releaseCommit:
-				case <-txCtx.Done():
-				}
-			})
-			return nil
-		},
-	}
-
-	mgr := meta.New(store, meta.WithSessionProbeTimeout(300*time.Millisecond))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name(), MaxBytes: 1024})
-	require.NoError(t, err)
-	sid := uint64(time.Now().UnixNano())
-	_, err = mgr.RenewSessionWithDisk(ctx, sid, &disk.DiskID)
-	require.NoError(t, err)
-	file, err := mgr.Create(ctx, meta.CreateParams{
-		ParentIno: disk.RootIno, Name: []byte("delete-commit-boundary"), Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
-	})
-	require.NoError(t, err)
-
-	interceptMu.Lock()
-	intercept = true
-	interceptMu.Unlock()
-
-	deleteDone := make(chan error, 1)
-	go func() {
-		deleteDone <- mgr.DeleteDisk(ctx, disk.DiskID)
-	}()
-
-	select {
-	case <-atCommitBoundary:
-	case <-ctx.Done():
-		t.Fatal("DeleteDisk 未到达事务提交边界")
-	}
-
-	regEntered := make(chan struct{})
-	regDone := make(chan struct{})
-	var (
-		newStreamID   uint64
-		unregisterNew func() bool
-	)
-	go func() {
-		close(regEntered)
-		newStreamID, unregisterNew = mgr.WatchHub().Register(sid, func(seq uint64) error {
-			mgr.WatchHub().HandlePong(sid, newStreamID, seq)
-			return nil
-		})
-		close(regDone)
-	}()
-	<-regEntered
-
-	var leakedBeforeCommit bool
-	select {
-	case <-regDone:
-		leakedBeforeCommit = true
-		require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "提前越过批量门控的新流已完成 Ping-Pong")
-	case <-time.After(50 * time.Millisecond):
-	}
-	assert.False(t, leakedBeforeCommit, "DeleteDisk 事务未 Commit 前，同会话的新流 Register 必须被批量提交门控阻塞")
-
-	close(releaseCommit)
-	require.NoError(t, <-deleteDone)
-
-	select {
-	case <-regDone:
-	case <-ctx.Done():
-		t.Fatal("DeleteDisk 事务提交后新流 Register 仍未完成")
-	}
-	defer unregisterNew()
-
-	targetFh := file.Fh
-	targetIno := file.Inode.Ino
-	if !leakedBeforeCommit {
-		newDisk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: t.Name() + "_recreated", MaxBytes: 1024})
-		require.NoError(t, err)
-		_, err = mgr.RenewSessionWithDisk(ctx, sid, &newDisk.DiskID)
-		require.NoError(t, err)
-		newFile, err := mgr.Create(ctx, meta.CreateParams{
-			ParentIno: newDisk.RootIno, Name: []byte("recreated-after-commit"), Mode: 0o600, Flags: meta.O_RDWR, SessionID: &sid,
-		})
-		require.NoError(t, err)
-		targetFh = newFile.Fh
-		targetIno = newFile.Inode.Ino
-	}
-
-	require.True(t, mgr.WatchHub().Probe(ctx, sid, 100*time.Millisecond), "新流必须可正常响应 Ping-Pong")
-	var sessions, handles, inodes int
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sid)).Scan(&sessions))
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(targetFh)).Scan(&handles))
-	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM inodes WHERE ino = $1", int64(targetIno)).Scan(&inodes))
-	assert.Equal(t, 1, sessions, "已完成登记与探活的会话租约不得被滞后的 DeleteDisk 提交删空")
-	assert.Equal(t, 1, handles, "已完成登记与探活的打开句柄不得被滞后的 DeleteDisk 提交删空")
-	assert.Equal(t, 1, inodes, "已完成登记与探活的磁盘内 Inode 不得被滞后的 DeleteDisk 提交删空")
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(tmp.Fh)).Scan(&handles))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM inodes WHERE root_ino = $1", int64(disk.RootIno)).Scan(&inodes))
+	assert.Zero(t, sessions)
+	assert.Zero(t, handles)
+	assert.Zero(t, inodes)
 }

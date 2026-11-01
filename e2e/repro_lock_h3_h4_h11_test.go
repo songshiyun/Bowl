@@ -114,6 +114,11 @@ func startSessionKeepalive(t *testing.T, ctx context.Context, client storagev1co
 				t.Errorf("后台会话保活续租失败: %v", err)
 			}
 		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		for _, sid := range sessionIDs {
+			_, _ = client.CloseSession(cleanupCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: sid}))
+		}
 	})
 
 	for _, sid := range sessionIDs {

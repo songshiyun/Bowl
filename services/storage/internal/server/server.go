@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,20 +16,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 	"github.com/starsrc/bowl/services/storage/internal/readbuf"
 )
-
-type responseControllerKey struct{}
-
-func withResponseController(ctx context.Context, w http.ResponseWriter) context.Context {
-	return context.WithValue(ctx, responseControllerKey{}, http.NewResponseController(w))
-}
-
-func responseControllerFromContext(ctx context.Context) *http.ResponseController {
-	if ctx == nil {
-		return nil
-	}
-	rc, _ := ctx.Value(responseControllerKey{}).(*http.ResponseController)
-	return rc
-}
 
 var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
 
@@ -134,7 +119,7 @@ func New(p Params) (*Server, error) {
 			defer release()
 			r = r.WithContext(ctx)
 		}
-		handler.ServeHTTP(w, r.WithContext(withResponseController(r.Context(), w)))
+		handler.ServeHTTP(w, r)
 	}))
 
 	httpServer := serverx.NewHTTPServer(p.Config.Addr(), mux, p.Config)

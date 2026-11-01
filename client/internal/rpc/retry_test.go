@@ -172,7 +172,6 @@ func TestIdempotentProceduresWhitelist(t *testing.T) {
 		storagev1connect.StorageServiceRemoveXattrProcedure,
 		storagev1connect.StorageServiceSetLkProcedure,
 		storagev1connect.StorageServiceSetLkwProcedure,
-		storagev1connect.StorageServiceWatchSessionProcedure,
 		storagev1connect.StorageServiceCreateDiskProcedure,
 		storagev1connect.StorageServiceUpdateDiskProcedure,
 		storagev1connect.StorageServiceDeleteDiskProcedure,

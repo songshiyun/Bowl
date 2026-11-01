@@ -192,6 +192,13 @@ func TestFileLock_POSIXAndFlock(t *testing.T) {
 	// 初始化两个独立的客户端会话
 	session1 := uint64(50001)
 	session2 := uint64(50002)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		for _, sid := range []uint64{session1, session2, 50003} {
+			_, _ = client.CloseSession(cleanupCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: sid}))
+		}
+	})
 
 	renew1, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: session1}))
 	require.NoError(t, err, "RenewSession session1 应成功")
@@ -738,6 +745,11 @@ func TestSession_LeaseExpirationAndOrphanReclamation(t *testing.T) {
 
 	// 6. 触发会话扫描与孤儿节点回收（调用任意活跃 session 的 RenewSession）
 	activeSessionID := uint64(99999)
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cleanupCancel()
+		_, _ = client.CloseSession(cleanupCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: activeSessionID}))
+	})
 	_, err = client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{
 		SessionId: activeSessionID,
 	}))

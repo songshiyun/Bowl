@@ -205,6 +205,11 @@ func TestE2E_H7_CrossTableLockOrderDeadlock(t *testing.T) {
 			SessionId: sessionID,
 		}))
 		require.NoError(t, err, "注册测试会话失败")
+		t.Cleanup(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = client.CloseSession(cleanupCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: sessionID}))
+		})
 
 		// 在磁盘根目录下预先创建 24 个子目录，使并发请求分散于不同父目录 Inode
 		const numDirs = 24

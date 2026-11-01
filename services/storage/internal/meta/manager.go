@@ -78,8 +78,6 @@ type Manager interface {
 	RenewSessionWithStatus(ctx context.Context, sessionID uint64) (RenewSessionResult, error)
 	RenewSessionWithDisk(ctx context.Context, sessionID uint64, diskID *string) (RenewSessionResult, error)
 	CloseSession(ctx context.Context, sessionID uint64) error
-	WatchHub() *SessionWatchHub
-	ValidateWatchSession(sessionID uint64, diskID *string) error
 	GetParents(ctx context.Context, ino uint64) (map[uint64]uint32, error)
 	CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error)
 	GetDisk(ctx context.Context, diskID string) (*Disk, error)
@@ -140,7 +138,6 @@ type manager struct {
 	openDirCache                bool
 	atimeMode                   AtimeMode
 	sessionLeaseTTL             time.Duration
-	sessionProbeTimeout         time.Duration
 	gcInterval                  time.Duration
 	gcBatchLimit                int32
 	gcOrphanGracePeriod         time.Duration
@@ -178,8 +175,6 @@ type manager struct {
 	deferredOrphanInos          map[int64]struct{}
 	quotaMu                     sync.Mutex
 	diskQuotas                  map[int64]*diskQuotaState
-	watchHubMu                  sync.Mutex
-	watchHub                    *SessionWatchHub
 }
 
 func (m *manager) markDeferredOrphan(ino int64) {
@@ -272,15 +267,6 @@ func WithSessionLeaseTTL(ttl time.Duration) Option {
 	return func(m *manager) {
 		if ttl > 0 {
 			m.sessionLeaseTTL = ttl
-		}
-	}
-}
-
-// WithSessionProbeTimeout 配置删盘时对活跃客户端会话流发送 Ping-Pong 探活的超时窗口（d > 0 时生效，默认 DefaultSessionProbeTimeout）。
-func WithSessionProbeTimeout(d time.Duration) Option {
-	return func(m *manager) {
-		if d > 0 {
-			m.sessionProbeTimeout = d
 		}
 	}
 }
@@ -410,7 +396,6 @@ func New(store db.Store, opts ...Option) Manager {
 		attrTimeout:               DefaultAttrTimeoutSeconds,
 		dirEntryTimeout:           DefaultEntryTimeoutSeconds,
 		sessionLeaseTTL:           DefaultSessionLeaseTTL,
-		sessionProbeTimeout:       DefaultSessionProbeTimeout,
 		gcInterval:                DefaultGCInterval,
 		gcBatchLimit:              DefaultGCBatchLimit,
 		gcOrphanGracePeriod:       DefaultGCOrphanGracePeriod,
@@ -427,7 +412,6 @@ func New(store db.Store, opts ...Option) Manager {
 		inFlightDirMutations:      make(map[uint64]int),
 		activeDirReads:            make(map[uint64]*inFlightDirRead),
 		inFlightGrants:            make(map[inFlightGrantKey]*inFlightGrant),
-		watchHub:                  NewSessionWatchHub(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -882,16 +866,6 @@ func newManagerFromParams(params ManagerParams) Manager {
 	return mgr
 }
 
-// WatchHub 返回会话流探活中心实例（懒初始化兜底，防止测试直接构造 &manager{} 时返回 nil）。
-func (m *manager) WatchHub() *SessionWatchHub {
-	m.watchHubMu.Lock()
-	defer m.watchHubMu.Unlock()
-	if m.watchHub == nil {
-		m.watchHub = NewSessionWatchHub()
-	}
-	return m.watchHub
-}
-
 // Module 提供 meta 依赖注入模块。
 var Module = fx.Module("meta",
 	fx.Provide(newManagerFromParams),
@@ -1241,115 +1215,49 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 	return res, nil
 }
 
-var errSessionHasActiveStream = errors.New("meta: session regained active watch stream before close")
-
 // CloseSession 立即注销指定客户端会话租约，级联释放关联的文件句柄、文件锁并回收孤儿节点。
 func (m *manager) CloseSession(ctx context.Context, sessionID uint64) error {
-	if streamID, ok := disconnectedStreamIDFromContext(ctx); ok {
-		_, err := m.closeSessionAfterStream(ctx, sessionID, true, streamID)
-		return err
-	}
-	return m.closeSession(ctx, sessionID, false)
-}
-
-func (m *manager) closeSessionIfNoActiveStream(ctx context.Context, sessionID uint64, evictedStreamID uint64) (abortedByActiveStream bool, err error) {
-	return m.closeSessionAfterStream(ctx, sessionID, true, evictedStreamID)
-}
-
-func (m *manager) closeSession(ctx context.Context, sessionID uint64, abortIfActiveStream bool) error {
-	_, err := m.closeSessionAfterStream(ctx, sessionID, abortIfActiveStream, 0)
-	return err
-}
-
-func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64, abortIfActiveStream bool, expectedMaxStreamID uint64) (abortedByActiveStream bool, err error) {
 	if sessionID == 0 || sessionID > math.MaxInt64 {
-		return false, ErrInvalidArgument
+		return ErrInvalidArgument
 	}
 
 	var (
-		shouldNotify   bool
-		reclaimedInos  []int64
-		autoCloseGate  func()
-		releaseGateNow = func() {
-			if autoCloseGate != nil {
-				autoCloseGate()
-				autoCloseGate = nil
-			}
-		}
+		expiredCount  int64
+		deletedCount  int64
+		reclaimedInos []int64
 	)
-	defer func() {
-		releaseGateNow()
-	}()
+	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+		expiredCount = 0
+		deletedCount = 0
+		reclaimedInos = nil
 
-	var buffered *quotaBufferedQuerier
-	err = tx.Retry(ctx, func(attemptCtx context.Context) error {
-		defer releaseGateNow()
-		if buffered != nil {
-			buffered.rollback()
-			buffered = nil
+		var txErr error
+		expiredCount, txErr = q.DeleteExpiredClientSessions(ctx)
+		if txErr != nil {
+			return fmt.Errorf("delete expired client sessions: %w", txErr)
 		}
-		return m.store.ExecTxWithOptions(attemptCtx, func(rawQ db.Querier) error {
-			buffered = &quotaBufferedQuerier{
-				Querier: rawQ,
-				m:       m,
-			}
-			q := buffered
-			shouldNotify = false
-			reclaimedInos = nil
-			expiredCount, err := q.DeleteExpiredClientSessions(ctx)
-			if err != nil {
-				return fmt.Errorf("delete expired client sessions: %w", err)
-			}
-			deletedCount, err := q.DeleteClientSessionByID(ctx, int64(sessionID))
-			if err != nil {
-				return fmt.Errorf("delete client session %d: %w", sessionID, err)
-			}
-			if abortIfActiveStream && m.WatchHub().HasActiveStream(sessionID) {
-				return errSessionHasActiveStream
-			}
-			if expiredCount > 0 || deletedCount > 0 {
-				shouldNotify = true
-			}
-			reclaimedInos, err = m.reclaimUnreferencedOrphansInTx(ctx, q)
-			if err != nil {
-				return err
-			}
-			if abortIfActiveStream {
-				allowed, unlock := m.WatchHub().AcquireAutoCloseGate(sessionID, expectedMaxStreamID)
-				if !allowed {
-					return errSessionHasActiveStream
-				}
-				autoCloseGate = unlock
-			}
-			return nil
-		})
-	}, tx.WithDefaultRetry(errRetryTx))
-	releaseGateNow()
-
+		deletedCount, txErr = q.DeleteClientSessionByID(ctx, int64(sessionID))
+		if txErr != nil {
+			return fmt.Errorf("delete client session %d: %w", sessionID, txErr)
+		}
+		reclaimedInos, txErr = m.reclaimUnreferencedOrphansInTx(ctx, q)
+		return txErr
+	})
 	if err != nil {
-		if buffered != nil {
-			buffered.rollback()
-		}
-		if errors.Is(err, errSessionHasActiveStream) {
-			return true, nil
-		}
 		if errors.Is(err, ErrInvalidArgument) {
-			return false, ErrInvalidArgument
+			return ErrInvalidArgument
 		}
-		return false, fmt.Errorf("close session tx: %w", err)
+		return fmt.Errorf("close session tx: %w", err)
 	}
 
-	if buffered != nil {
-		buffered.commit()
-	}
 	m.finalizeReclaimedOrphans(reclaimedInos)
 	m.cleanExpiredDirCursors(ctx)
-	if shouldNotify {
+	if expiredCount > 0 || deletedCount > 0 {
 		m.notifyAllLockWaiters()
 	}
 	m.invalidateDirCursorsBySession(sessionID)
 	m.clearWriteSessionTouch(sessionID)
-	return false, nil
+	return nil
 }
 
 func (m *manager) invalidateDirCursorsBySession(sessionID uint64) {

@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	// DefaultSessionLeaseTTL 默认客户端会话租约时长（60秒）。
-	DefaultSessionLeaseTTL = 60 * time.Second
+	// DefaultSessionLeaseTTL 默认客户端会话租约时长（15秒）。
+	DefaultSessionLeaseTTL = 15 * time.Second
 	// DefaultAtimeMode 默认访问时间更新策略（noatime）。
 	DefaultAtimeMode = "noatime"
 	// DefaultEntryTimeoutSeconds 默认非目录条目内核缓存时长（1.0秒）。
@@ -29,7 +29,7 @@ const (
 
 // MetaConfig 承载元数据与 FUSE 缓存相关配置。
 type MetaConfig struct {
-	SessionLeaseTTLVal        time.Duration `env:"STORAGE_SESSION_LEASE_TTL" envDefault:"60s"`
+	SessionLeaseTTLVal        time.Duration `env:"STORAGE_SESSION_LEASE_TTL" envDefault:"15s"`
 	AtimeModeVal              string        `env:"STORAGE_ATIME_MODE" envDefault:"noatime"`
 	EntryTimeoutSecondsVal    float64       `env:"STORAGE_ENTRY_TIMEOUT_SECONDS" envDefault:"1.0"`
 	AttrTimeoutSecondsVal     float64       `env:"STORAGE_ATTR_TIMEOUT_SECONDS" envDefault:"1.0"`
