@@ -6,7 +6,7 @@
 
 在相同的 2 台 `ecs.c9i.xlarge`（4 vCPU / 8 GiB / 120 GiB `cloud_essd`）节点上，同时对比三组挂载模式：
 
-1. **`bowl`**：Bowl 生产默认配置（PostgreSQL 16 + Server BlockStore，`noatime` + `1.0s` FUSE 内核缓存，无客户端本地盘缓存，同步直通落盘）。
+1. **`bowl`**：Bowl 生产默认配置（PostgreSQL 16 + Server BlockStore，`noatime` + `1.0s` FUSE 内核缓存，无客户端本地盘缓存，普通 Write 写入服务端页缓存，显式 Fsync 负责持久化（ADR-0024））。
 2. **`drive9_default`**：Drive9 默认模式（TiDB v8.5.5 + Drive9 Server Local S3，`--profile=coding-agent --durability=interactive --write-cache-size-mb=0`，启用本地 Write-Back 暂存、本地磁盘读缓存与 `.git`/构建目录 Local Overlay）。
 3. **`drive9_sync`**：Drive9 远端同步模式（`--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`，禁用 Local Overlay，对齐 `1.0s` 内核缓存与同步 `close`/`fsync` 落盘语义）。
 

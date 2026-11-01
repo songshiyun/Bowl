@@ -12,9 +12,9 @@
     "system_disk_size_gib": 120
   },
   "server_node": {
-    "instance_id": "i-rj9dcseepzra184oqk7y",
-    "public_ip": "43.110.148.114",
-    "private_ip": "172.16.1.195",
+    "instance_id": "i-rj9f3lh7wxbe35hkyhyt",
+    "public_ip": "43.110.149.71",
+    "private_ip": "172.16.1.191",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -22,13 +22,13 @@
     "os_release": "Ubuntu 24.04.5 LTS",
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "tidb_version": "v8.5.5",
-    "disk_seq_write_mib_s": 191.13,
-    "disk_seq_read_mib_s": 174.98
+    "disk_seq_write_mib_s": 192.61,
+    "disk_seq_read_mib_s": 184.19
   },
   "client_node": {
-    "instance_id": "i-rj9dcseepzra184oqk7z",
-    "public_ip": "47.89.249.207",
-    "private_ip": "172.16.1.194",
+    "instance_id": "i-rj9f3lh7wxbe35hkyhyu",
+    "public_ip": "43.110.149.21",
+    "private_ip": "172.16.1.190",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -40,15 +40,15 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.075/0.101/0.185/0.029 ms",
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.044/0.066/0.152/0.027 ms",
     "iperf3_gbps": 15.71
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": 191.13,
-    "local_seq_read_mib_s": 174.98
+    "local_seq_write_mib_s": 192.61,
+    "local_seq_read_mib_s": 184.19
   },
   "bowl_config": {
-    "git_commit": "f2676ca+dirty",
+    "git_commit": "7fbc2fe",
     "atime_mode": "noatime",
     "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)"
   },
@@ -58,11 +58,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9-bench-kp-20261101010738",
-    "server_instance_ids": "i-rj9dcseepzra184oqk7y",
-    "client_instance_ids": "i-rj9dcseepzra184oqk7z",
-    "instances_created_at": "2026-10-31T17:07:53Z",
-    "instances_deleted_at": "2026-10-31T17:32:34Z",
+    "key_pair_name": "bowl-d9-bench-kp-20261102015802",
+    "server_instance_ids": "i-rj9f3lh7wxbe35hkyhyt",
+    "client_instance_ids": "i-rj9f3lh7wxbe35hkyhyu",
+    "instances_created_at": "2026-11-01T18:01:13Z",
+    "instances_deleted_at": "2026-11-01T18:27:02Z",
     "remaining_benchmark_instances": 0
   }
 }
