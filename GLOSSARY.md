@@ -161,16 +161,12 @@ _Avoid_: TryLock, AcquireLock, LockNonBlock, UpdateLock
 _Avoid_: WaitLock, LockBlock, AcquireLockWait
 
 **RenewSession (会话续期)**:
-客户端显式延长其会话租约有效期的保活操作，同步触发已超期会话清理与无剩余活跃 FileHandle 的 Orphan Inode 物理回收。
+客户端显式注册或延长其 ClientSession 租约有效期的唯一保活操作，同步触发已超期会话清理与无剩余活跃 FileHandle 的 Orphan Inode 物理回收。
 _Avoid_: Heartbeat, PingSession, KeepAlive, TouchSession
 
 **CloseSession (会话关闭)**:
 客户端在正常卸载退出时显式注销其 ClientSession 租约，并同步释放关联活跃 FileHandle、FileLock 与 Orphan Inode 的生命周期终止操作。
 _Avoid_: EndSession, DestroySession, LogoutSession, DisconnectSession
-
-**WatchSession (会话探活流)**:
-客户端在挂载存续期间与服务端维持的双向长连接流，用于即时感知客户端进程终止并承载服务端按需发起的存活探测问答。
-_Avoid_: PingStream, SessionChannel, MonitorSession, KeepAliveStream
 
 **Disk (磁盘)**:
 对外交付的商业化独立文件系统实例，由全局唯一 UUID 标识，一对一绑定一个独立的根目录 Inode，并承载容量配额上限与已用空间及节点数核算。
@@ -193,7 +189,7 @@ _Avoid_: ScanDisks, GetAllDisks, EnumDisks, QueryDisks
 _Avoid_: ResizeDisk, ExpandDisk, ShrinkDisk, ModifyDisk, PatchDisk
 
 **DeleteDisk (磁盘删除)**:
-在确认目标 Disk 无存活客户端挂载会话（对未超期会话经双向流探活无响应后回收）的前提下，级联销毁该 Disk 实例及其下属全部 Inode、FileHandle、FileLock 与 Slice 引用的生命周期释放操作。
+在确认目标 Disk 无未超期 ClientSession 挂载会话的前提下，级联销毁该 Disk 实例及其下属全部 Inode、FileHandle、FileLock 与 Slice 引用的生命周期释放操作。
 _Avoid_: RemoveDisk, DestroyDisk, DropVolume, PurgeDisk
 
 **StatFS (文件系统状态查询)**:
