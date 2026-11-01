@@ -76,7 +76,7 @@ func TestMetaModule_DefaultInjection(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(30)).
+			GetInode(mock.Anything, int64(30)).
 			Return(regRow, nil).
 			Once()
 		mockQuerier.EXPECT().
@@ -93,7 +93,7 @@ func TestMetaModule_DefaultInjection(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(40)).
+			GetInode(mock.Anything, int64(40)).
 			Return(dirRow, nil).
 			Once()
 		mockQuerier.EXPECT().
@@ -179,7 +179,7 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 		// 2. OpenKeepCache 与 OpenDirCache
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(50)).
+			GetInode(mock.Anything, int64(50)).
 			Return(regRow, nil).
 			Once()
 		mockQuerier.EXPECT().
@@ -196,7 +196,7 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(60)).
+			GetInode(mock.Anything, int64(60)).
 			Return(dirRow, nil).
 			Once()
 		mockQuerier.EXPECT().

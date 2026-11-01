@@ -69,6 +69,12 @@ func (m *manager) tryThrottledSessionTouchReadOnly(ctx context.Context, sessionI
 	if !inWindow {
 		return false, nil
 	}
+	if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
+		return true, ErrBadFileHandle
+	}
+	if !m.hasDeferredOrphans() {
+		return true, nil
+	}
 
 	var sessionCreatedAt pgtype.Timestamptz
 	var alive, hasPendingCleanup bool
@@ -107,6 +113,25 @@ func (m *manager) tryThrottledSessionTouchReadOnly(ctx context.Context, sessionI
 		return true, nil
 	}
 	return false, nil
+}
+
+func (m *manager) canSkipHandleSessionTouchInWindow(ctx context.Context, sessionID uint64) bool {
+	if _, throttle := m.shouldThrottleSessionTouch(ctx); !throttle {
+		return false
+	}
+	if m.hasDeferredOrphans() {
+		return false
+	}
+	interval := m.writeSessionTouchInterval
+	if interval <= 0 {
+		interval = DefaultWriteSessionTouchInterval
+	}
+	now := time.Now()
+	m.writeSessionTouchMu.Lock()
+	prev, hadPrev := m.writeSessionTouches[sessionID]
+	inWindow := interval > 0 && hadPrev && !prev.lastTouchedAt.IsZero() && now.Sub(prev.lastTouchedAt) < interval
+	m.writeSessionTouchMu.Unlock()
+	return inWindow
 }
 
 func (m *manager) lookupHandleCreatedAt(ctx context.Context, q db.Querier, fh, ino, sessionID uint64) pgtype.Timestamptz {
@@ -485,8 +510,8 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 			return ErrIsDir
 		}
 
-		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
-		if params.SessionID != nil {
+		// 1. 校验会话有效性并原子续期（在 5s 内存节流窗口且无延迟孤儿时直接交由 DeleteFileHandle 内联校验；慢路径则先续期防止被 reclaimUnreferencedOrphans 抢先回收）
+		if params.SessionID != nil && !m.canSkipHandleSessionTouchInWindow(ctx, *params.SessionID) {
 			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
 			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err
@@ -655,8 +680,8 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 			}
 		}
 
-		// 1. 校验会话有效性并原子续期（若会话已过期则拒绝并回滚，严禁复活过期会话；此时句柄尚未删除，防止被 reclaimUnreferencedOrphans 抢先回收导致二次扣减配额）
-		if params.SessionID != nil {
+		// 1. 校验会话有效性并原子续期（在 5s 内存节流窗口且无延迟孤儿时直接交由 DeleteFileHandle 内联校验；慢路径则先续期防止被 reclaimUnreferencedOrphans 抢先回收）
+		if params.SessionID != nil && !m.canSkipHandleSessionTouchInWindow(ctx, *params.SessionID) {
 			handleCreatedAt := m.lookupHandleCreatedAt(ctx, q, params.Fh, params.Ino, *params.SessionID)
 			if err := m.touchActiveClientSessionForHandle(ctx, q, *params.SessionID, handleCreatedAt); err != nil {
 				return err

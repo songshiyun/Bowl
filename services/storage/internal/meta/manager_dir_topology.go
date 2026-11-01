@@ -146,6 +146,7 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 			if err := q.ClearTmpFileFlagByIno(ctx, int64(params.Ino)); err != nil {
 				return fmt.Errorf("clear tmpfile flag for inode %d: %w", params.Ino, err)
 			}
+			m.unmarkDeferredOrphan(int64(params.Ino))
 		}
 
 		// 刷新目标父目录 mtime 与 ctime (父目录 nlink 保持不变)

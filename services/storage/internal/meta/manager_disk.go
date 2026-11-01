@@ -110,6 +110,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		return nil, err
 	}
 
+	m.initDiskQuotaOnCreate(createdDisk)
 	return toDomainDisk(createdDisk), nil
 }
 
@@ -137,6 +138,9 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
+		return nil, err
+	}
+	if err := m.syncDiskRowWithQuotaState(ctx, &row); err != nil {
 		return nil, err
 	}
 
@@ -230,8 +234,11 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	}
 
 	disks := make([]*Disk, 0, len(rows))
-	for _, row := range rows {
-		disks = append(disks, toDomainDisk(row))
+	for i := range rows {
+		if err := m.syncDiskRowWithQuotaState(ctx, &rows[i]); err != nil {
+			return nil, err
+		}
+		disks = append(disks, toDomainDisk(rows[i]))
 	}
 
 	return &ListDisksResult{
@@ -263,6 +270,11 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		}
 	}
 
+	if err := m.FlushDiskQuotas(ctx); err != nil {
+		return nil, err
+	}
+
+	var updatedRow db.Disk
 	var result *Disk
 	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		current, err := q.GetDiskForUpdate(ctx, pgID)
@@ -297,6 +309,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 			return fmt.Errorf("update disk %s: %w", params.DiskID, err)
 		}
 
+		updatedRow = updated
 		result = toDomainDisk(updated)
 		return nil
 	})
@@ -304,6 +317,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil, err
 	}
 
+	m.updateDiskQuotaOnUpdate(updatedRow)
 	return result, nil
 }
 
@@ -491,6 +505,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 
 	inosToClean := make([]uint64, 0, len(deletedInos)+1)
 	if rootIno > 0 {
+		m.evictDiskQuota(rootIno)
 		inosToClean = append(inosToClean, uint64(rootIno))
 	}
 	for _, ino := range deletedInos {
@@ -528,6 +543,9 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get disk by root_ino %d: %w", inode.RootIno, err)
+	}
+	if err := m.syncDiskRowWithQuotaState(ctx, &row); err != nil {
+		return nil, err
 	}
 
 	// 3. 计算容量与 4096 字节块统计信息

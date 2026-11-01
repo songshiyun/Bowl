@@ -498,6 +498,7 @@ WITH deleted_handle AS (
               FROM client_sessions s
               WHERE s.session_id = fh.session_id
                 AND s.expires_at > clock_timestamp()
+                AND fh.created_at >= s.created_at
           )
       )
     RETURNING fh.fh, fh.ino, fh.session_id
@@ -900,7 +901,7 @@ LEFT JOIN client_sessions s ON fh.session_id = s.session_id
 WHERE fh.fh = $1
   AND fh.ino = $2
   AND fh.session_id IS NOT DISTINCT FROM $3
-  AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+  AND (fh.session_id IS NULL OR (s.expires_at > clock_timestamp() AND fh.created_at >= s.created_at))
 `
 
 type GetFileHandleParams struct {

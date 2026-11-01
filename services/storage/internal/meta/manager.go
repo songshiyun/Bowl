@@ -174,8 +174,47 @@ type manager struct {
 	inFlightGrantMu             sync.Mutex
 	inFlightGrants              map[inFlightGrantKey]*inFlightGrant
 	nextInFlightGrantID         uint64
+	deferredOrphansMu           sync.Mutex
+	deferredOrphanInos          map[int64]struct{}
+	diskQuotaFlushInterval      time.Duration
+	quotaMu                     sync.Mutex
+	quotaFlushExecMu            sync.Mutex
+	diskQuotas                  map[int64]*diskQuotaState
+	dirtyQuotaOps               int
+	quotaFlusherActive          bool
+	quotaFlushImmediateCh       chan struct{}
 	watchHubMu                  sync.Mutex
 	watchHub                    *SessionWatchHub
+}
+
+func (m *manager) markDeferredOrphan(ino int64) {
+	if ino <= 0 {
+		return
+	}
+	m.deferredOrphansMu.Lock()
+	if m.deferredOrphanInos == nil {
+		m.deferredOrphanInos = make(map[int64]struct{})
+	}
+	m.deferredOrphanInos[ino] = struct{}{}
+	m.deferredOrphansMu.Unlock()
+}
+
+func (m *manager) unmarkDeferredOrphan(inos ...int64) {
+	if len(inos) == 0 {
+		return
+	}
+	m.deferredOrphansMu.Lock()
+	for _, ino := range inos {
+		delete(m.deferredOrphanInos, ino)
+	}
+	m.deferredOrphansMu.Unlock()
+}
+
+func (m *manager) hasDeferredOrphans() bool {
+	m.deferredOrphansMu.Lock()
+	n := len(m.deferredOrphanInos)
+	m.deferredOrphansMu.Unlock()
+	return n > 0
 }
 
 type poolProvider interface {
@@ -811,6 +850,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 			WithOpenKeepCache(metaCfg.OpenKeepCache()),
 			WithOpenDirCache(metaCfg.OpenDirCache()),
 			WithGCInterval(metaCfg.GCInterval()),
+			WithDiskQuotaFlushInterval(DefaultDiskQuotaFlushInterval),
 		)
 	}
 
@@ -829,6 +869,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 				return nil
 			},
 			OnStop: func(stopCtx context.Context) error {
+				_ = mgr.FlushDiskQuotas(stopCtx)
 				if gcCancel != nil {
 					gcCancel()
 				}
@@ -981,13 +1022,34 @@ func isRetryableTxError(err error) bool {
 }
 
 func (m *manager) execWriteTxWithRetry(ctx context.Context, fn func(q db.Querier) error) error {
+	var buffered *quotaBufferedQuerier
 	err := tx.Retry(ctx, func(attemptCtx context.Context) error {
-		return m.store.ExecTxWithOptions(attemptCtx, fn)
+		if buffered != nil {
+			buffered.rollback()
+			buffered = nil
+		}
+		return m.store.ExecTxWithOptions(attemptCtx, func(q db.Querier) error {
+			if m.shouldUseAsyncDiskQuota(q) {
+				buffered = &quotaBufferedQuerier{
+					Querier: q,
+					m:       m,
+				}
+				return fn(buffered)
+			}
+			return fn(q)
+		})
 	}, tx.WithDefaultRetry(errRetryTx))
-	if err == nil {
-		m.cleanExpiredDirCursors(ctx)
+	if err != nil {
+		if buffered != nil {
+			buffered.rollback()
+		}
+		return err
 	}
-	return err
+	if buffered != nil {
+		buffered.commit()
+	}
+	m.cleanExpiredDirCursors(ctx)
+	return nil
 }
 
 // uniqueSortedInos 将一组 Inode 号按全局升序排列并去重，确保所有多 Inode 事务遵循单一全局加锁顺序。
@@ -1045,7 +1107,7 @@ func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, 
 		return nil
 	}
 	sid := *sessionID
-	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle {
+	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle && (m.writeSessionTouchConfigured || isNativeTxQuerier(q)) {
 		interval := m.writeSessionTouchInterval
 		if interval <= 0 {
 			interval = DefaultWriteSessionTouchInterval
@@ -1060,6 +1122,9 @@ func (m *manager) renewOptionalClientSession(ctx context.Context, q db.Querier, 
 		m.writeSessionTouchMu.Unlock()
 
 		if inWindow {
+			if !m.hasDeferredOrphans() {
+				return nil
+			}
 			dbtx := queryDBTX(q, pp)
 			if dbtx == nil {
 				return nil
@@ -1226,9 +1291,22 @@ func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64,
 		releaseGateNow()
 	}()
 
+	var buffered *quotaBufferedQuerier
 	err = tx.Retry(ctx, func(attemptCtx context.Context) error {
 		defer releaseGateNow()
-		return m.store.ExecTxWithOptions(attemptCtx, func(q db.Querier) error {
+		if buffered != nil {
+			buffered.rollback()
+			buffered = nil
+		}
+		return m.store.ExecTxWithOptions(attemptCtx, func(rawQ db.Querier) error {
+			q := rawQ
+			if m.shouldUseAsyncDiskQuota(rawQ) {
+				buffered = &quotaBufferedQuerier{
+					Querier: rawQ,
+					m:       m,
+				}
+				q = buffered
+			}
 			shouldNotify = false
 			reclaimedInos = nil
 			expiredCount, err := q.DeleteExpiredClientSessions(ctx)
@@ -1262,6 +1340,9 @@ func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64,
 	releaseGateNow()
 
 	if err != nil {
+		if buffered != nil {
+			buffered.rollback()
+		}
 		if errors.Is(err, errSessionHasActiveStream) {
 			return true, nil
 		}
@@ -1271,6 +1352,9 @@ func (m *manager) closeSessionAfterStream(ctx context.Context, sessionID uint64,
 		return false, fmt.Errorf("close session tx: %w", err)
 	}
 
+	if buffered != nil {
+		buffered.commit()
+	}
 	m.finalizeReclaimedOrphans(reclaimedInos)
 	m.cleanExpiredDirCursors(ctx)
 	if shouldNotify {
@@ -1372,6 +1456,7 @@ func (m *manager) finalizeReclaimedOrphans(deletedInos []int64) {
 	if len(deletedInos) == 0 {
 		return
 	}
+	m.unmarkDeferredOrphan(deletedInos...)
 	m.cleanLockWaitersForInos(deletedInos)
 	inos := make([]uint64, len(deletedInos))
 	for i, ino := range deletedInos {
@@ -1388,6 +1473,7 @@ func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, in
 		return fmt.Errorf("check remaining file handles for inode %d: %w", inode.Ino, err)
 	}
 	if hasRemaining {
+		m.markDeferredOrphan(inode.Ino)
 		return nil
 	}
 
@@ -1401,6 +1487,7 @@ func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, in
 	if err := q.DeleteInode(ctx, inode.Ino); err != nil {
 		return fmt.Errorf("delete orphan inode %d: %w", inode.Ino, err)
 	}
+	m.unmarkDeferredOrphan(inode.Ino)
 	m.notifyLockWaiters(uint64(inode.Ino))
 	m.clearDirCursorsForInos(uint64(inode.Ino))
 

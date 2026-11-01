@@ -49,7 +49,7 @@ func TestOpen_PositivePath(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseFileRow, nil).
 			Once()
 
@@ -85,7 +85,7 @@ func TestOpen_PositivePath(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseFileRow, nil).
 			Once()
 
@@ -135,7 +135,7 @@ func TestOpen_PositivePath(t *testing.T) {
 			specialRow.Rdev = int64(spec.rdev)
 
 			mockQuerier.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
+				GetInode(mock.Anything, int64(ino)).
 				Return(specialRow, nil).
 				Once()
 
@@ -172,7 +172,7 @@ func TestOpen_PositivePath(t *testing.T) {
 		// 第一次打开
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseFileRow, nil).
 			Once()
 		mockQuerier.EXPECT().
@@ -198,7 +198,7 @@ func TestOpen_PositivePath(t *testing.T) {
 		// 第二次打开
 		setupMockWriteTx(mockStore, mockQuerier)
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseFileRow, nil).
 			Once()
 
@@ -317,7 +317,7 @@ func TestOpen_TypeChecking(t *testing.T) {
 		}
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(dirRow, nil).
 			Once()
 
@@ -352,7 +352,7 @@ func TestOpen_TypeChecking(t *testing.T) {
 		}
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(symlinkRow, nil).
 			Once()
 
@@ -378,7 +378,7 @@ func TestOpen_NotFoundAndErrors(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, pgx.ErrNoRows).
 			Once()
 
@@ -400,7 +400,7 @@ func TestOpen_NotFoundAndErrors(t *testing.T) {
 
 		dbErr := errors.New("database connection lost")
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, dbErr).
 			Once()
 
@@ -442,6 +442,10 @@ func TestOpen_OrphanInodeAdmission(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanRow, nil).
+			Once()
+		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanRow, nil).
 			Once()
@@ -467,6 +471,10 @@ func TestOpen_OrphanInodeAdmission(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanRow, nil).
+			Once()
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanRow, nil).
@@ -508,6 +516,10 @@ func TestOpen_OrphanInodeAdmission(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanRow, nil).
+			Once()
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanRow, nil).
@@ -1131,7 +1143,7 @@ func TestOpen_CreateFileHandlePgErrors(t *testing.T) {
 			setupMockWriteTx(mockStore, mockQuerier)
 
 			mockQuerier.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
+				GetInode(mock.Anything, int64(ino)).
 				Return(baseFileRow, nil).
 				Once()
 

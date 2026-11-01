@@ -33,7 +33,7 @@ func queryFlushSnapshot(ctx context.Context, q db.DBTX, params FlushParams) (flu
 			LEFT JOIN client_sessions s ON fh.session_id = s.session_id
 			WHERE fh.fh = $2
 			  AND fh.session_id IS NOT DISTINCT FROM $3::bigint
-			  AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+			  AND (fh.session_id IS NULL OR (s.expires_at > clock_timestamp() AND fh.created_at >= s.created_at))
 		) h ON h.ino = i.ino
 		WHERE i.ino = $1
 	`

@@ -98,7 +98,7 @@ func TestOpenDir_PositivePath(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDirRow, nil).
 			Once()
 
@@ -136,6 +136,10 @@ func TestOpenDir_PositivePath(t *testing.T) {
 		orphanDirRow := baseDirRow
 		orphanDirRow.Nlink = 0
 
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDirRow, nil).
+			Once()
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanDirRow, nil).
@@ -198,7 +202,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, pgx.ErrNoRows).
 			Once()
 
@@ -223,7 +227,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		fileRow.Mode = int32(meta.S_IFREG | 0o644)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(fileRow, nil).
 			Once()
 
@@ -248,6 +252,10 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		deadOrphanRow.Nlink = 0
 
 		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(deadOrphanRow, nil).
+			Once()
+		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(deadOrphanRow, nil).
 			Once()
@@ -267,7 +275,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		assert.Nil(t, res)
 	})
 
-	t.Run("底层 GetInodeForUpdate 错误返回包装错误", func(t *testing.T) {
+	t.Run("底层 GetInode 错误返回包装错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -275,7 +283,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(db.Inode{}, errors.New("db error")).
 			Once()
 
@@ -286,7 +294,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, res)
-		assert.Contains(t, err.Error(), "get inode for update")
+		assert.Contains(t, err.Error(), "get inode")
 	})
 
 	t.Run("底层 HasFileHandlesByIno 错误返回包装错误", func(t *testing.T) {
@@ -299,6 +307,10 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		orphanDirRow := baseDirRow
 		orphanDirRow.Nlink = 0
 
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(orphanDirRow, nil).
+			Once()
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
 			Return(orphanDirRow, nil).
@@ -327,7 +339,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDirRow, nil).
 			Once()
 
@@ -357,7 +369,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
+			GetInode(mock.Anything, int64(ino)).
 			Return(baseDirRow, nil).
 			Once()
 
@@ -446,7 +458,7 @@ func TestOpenDir_CreateFileHandlePgErrors(t *testing.T) {
 			setupMockWriteTx(mockStore, mockQuerier)
 
 			mockQuerier.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
+				GetInode(mock.Anything, int64(ino)).
 				Return(baseDirRow, nil).
 				Once()
 

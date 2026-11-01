@@ -198,7 +198,8 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 			return fmt.Errorf("create inode: %w", err)
 		}
 
-		if parent.RootIno > 0 {
+		deferQuotaToEnd := isNativeTxQuerier(q)
+		if parent.RootIno > 0 && !deferQuotaToEnd {
 			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
 				RootIno:     parent.RootIno,
 				DeltaBytes:  0,
@@ -223,6 +224,16 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 
 		if err := q.IncrementInodeNlinkAndTouch(ctx, parent.Ino); err != nil {
 			return fmt.Errorf("increment parent inode %d nlink and touch: %w", parent.Ino, err)
+		}
+
+		if parent.RootIno > 0 && deferQuotaToEnd {
+			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
+				RootIno:     parent.RootIno,
+				DeltaBytes:  0,
+				DeltaInodes: 1,
+			}); err != nil {
+				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
+			}
 		}
 
 		result = m.newInode(newInode)
@@ -431,7 +442,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 			return err
 		}
 
-		if parent.RootIno > 0 {
+		deferQuotaToEnd := isNativeTxQuerier(q)
+		if parent.RootIno > 0 && !deferQuotaToEnd {
 			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
 				RootIno:     parent.RootIno,
 				DeltaBytes:  0,
@@ -465,6 +477,16 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 		})
 		if err != nil {
 			return fmt.Errorf("create file handle for inode %d: %w", newInode.Ino, err)
+		}
+
+		if parent.RootIno > 0 && deferQuotaToEnd {
+			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
+				RootIno:     parent.RootIno,
+				DeltaBytes:  0,
+				DeltaInodes: 1,
+			}); err != nil {
+				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
+			}
 		}
 
 		inode := m.newInode(newInode)
@@ -564,7 +586,8 @@ func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateRes
 			return fmt.Errorf("create tmpfile inode: %w", err)
 		}
 
-		if parent.RootIno > 0 {
+		deferQuotaToEnd := isNativeTxQuerier(q)
+		if parent.RootIno > 0 && !deferQuotaToEnd {
 			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
 				RootIno:     parent.RootIno,
 				DeltaBytes:  0,
@@ -582,6 +605,17 @@ func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateRes
 		if err != nil {
 			return fmt.Errorf("create file handle for tmpfile inode %d: %w", newInode.Ino, err)
 		}
+
+		if parent.RootIno > 0 && deferQuotaToEnd {
+			if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
+				RootIno:     parent.RootIno,
+				DeltaBytes:  0,
+				DeltaInodes: 1,
+			}); err != nil {
+				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
+			}
+		}
+		m.markDeferredOrphan(newInode.Ino)
 
 		inode := m.newInode(newInode)
 		var openFlags uint32
@@ -627,12 +661,28 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 
 	var result *OpenResult
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
+		var (
+			inode       db.Inode
+			err         error
+			lockedInode bool
+		)
+		if (params.Flags & O_TRUNC) != 0 {
+			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
 			}
-			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+			lockedInode = true
+		} else {
+			inode, err = q.GetInode(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode %d: %w", params.Ino, err)
+			}
 		}
 
 		fileType := uint32(inode.Mode) & S_IFMT
@@ -644,6 +694,16 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		}
 
 		if inode.Nlink == 0 {
+			if !lockedInode {
+				inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+				if err != nil {
+					if errors.Is(err, pgx.ErrNoRows) {
+						return ErrNotFound
+					}
+					return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+				}
+				lockedInode = true
+			}
 			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
 			if err != nil {
 				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)
@@ -746,12 +806,12 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 
 	var result *OpenDirResult
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		inode, err := q.GetInode(ctx, int64(params.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+			return fmt.Errorf("get inode %d: %w", params.Ino, err)
 		}
 
 		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
@@ -759,6 +819,16 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 		}
 
 		if inode.Nlink == 0 {
+			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrNotFound
+				}
+				return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+			}
+			if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
+				return ErrNotDir
+			}
 			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
 			if err != nil {
 				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)

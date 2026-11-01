@@ -2040,7 +2040,7 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 
 		// 3. Open（窗口内跳过续期）
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(100)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(100)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 12, Ino: 100}, nil).Once()
 
 		_, err = mgr.Open(ctx, meta.OpenParams{
@@ -2051,7 +2051,7 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 
 		// 4. OpenDir（窗口内跳过续期）
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
+		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentDir, nil).Once()
 		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 13, Ino: 1}, nil).Once()
 
 		_, err = mgr.OpenDir(ctx, meta.OpenDirParams{

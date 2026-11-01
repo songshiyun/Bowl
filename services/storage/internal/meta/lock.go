@@ -63,7 +63,7 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 		leaseTTL = DefaultSessionLeaseTTL
 	}
 
-	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle {
+	if pp, throttle := m.shouldThrottleSessionTouch(ctx); throttle && (m.writeSessionTouchConfigured || isNativeTxQuerier(q)) {
 		interval := m.writeSessionTouchInterval
 		if interval <= 0 {
 			interval = DefaultWriteSessionTouchInterval
@@ -78,11 +78,14 @@ func (m *manager) touchActiveClientSessionForHandle(ctx context.Context, q db.Qu
 		m.writeSessionTouchMu.Unlock()
 
 		if inWindow {
+			if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
+				return ErrBadFileHandle
+			}
+			if handleCreatedAt.Valid && !m.hasDeferredOrphans() {
+				return nil
+			}
 			dbtx := queryDBTX(q, pp)
 			if dbtx == nil {
-				if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
-					return ErrBadFileHandle
-				}
 				return nil
 			}
 

@@ -213,7 +213,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(100)).
+			GetInode(mock.Anything, int64(100)).
 			Return(fileInode, nil).
 			Once()
 		expectRenewSession(mockQuerier, sessID)
@@ -248,7 +248,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(1)).
+			GetInode(mock.Anything, int64(1)).
 			Return(dirInode, nil).
 			Once()
 		expectRenewSession(mockQuerier, sessID)
@@ -410,7 +410,7 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(100)).
+			GetInode(mock.Anything, int64(100)).
 			Return(fileInode, nil).
 			Once()
 		mockQuerier.EXPECT().

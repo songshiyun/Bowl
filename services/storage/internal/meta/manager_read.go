@@ -291,44 +291,10 @@ func (m *manager) tryThrottledReadSessionCheck(ctx context.Context, pp poolProvi
 	if !inWindow {
 		return false, nil
 	}
-
-	var sessionCreatedAt pgtype.Timestamptz
-	var alive, hasPendingCleanup bool
-	err = pp.Pool().QueryRow(ctx, `
-		SELECT
-			cs.created_at,
-			(cs.expires_at > clock_timestamp()) AS alive,
-			(
-				EXISTS (SELECT 1 FROM client_sessions e WHERE e.expires_at <= clock_timestamp())
-				OR EXISTS (
-					SELECT 1 FROM inodes i
-					WHERE i.nlink = 0
-					  AND NOT EXISTS (SELECT 1 FROM file_handles fh WHERE fh.ino = i.ino)
-				)
-			) AS has_pending_cleanup
-		FROM client_sessions cs
-		WHERE cs.session_id = $1
-	`, int64(sessionID)).Scan(&sessionCreatedAt, &alive, &hasPendingCleanup)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			m.clearWriteSessionTouch(sessionID)
-			return true, errExpiredSessionBadHandle
-		}
-		return true, fmt.Errorf("check active client session %d: %w", sessionID, err)
-	}
-	if !alive {
-		m.clearWriteSessionTouch(sessionID)
-		return true, errExpiredSessionBadHandle
-	}
-	if handleCreatedAt.Valid && sessionCreatedAt.Valid && handleCreatedAt.Time.Before(sessionCreatedAt.Time) {
-		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
+	if handleCreatedAt.Valid && prev.sessionCreatedAt.Valid && handleCreatedAt.Time.Before(prev.sessionCreatedAt.Time) {
 		return true, ErrBadFileHandle
 	}
-	if !hasPendingCleanup {
-		m.recordWriteSessionTouch(sessionID, time.Time{}, sessionCreatedAt)
-		return true, nil
-	}
-	return false, nil
+	return true, nil
 }
 
 func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRequest) (*ReadResponse, error) {
