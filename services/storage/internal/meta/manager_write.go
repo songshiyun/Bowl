@@ -57,15 +57,14 @@ type batchChunkAppendStat struct {
 }
 
 // Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
-// 遵循 ADR-0019 与 ADR-0022 RocksDB 式 WriteThread 两阶段流水线 Group Commit 架构：
+// 遵循 ADR-0019、ADR-0022 与 ADR-0024 RocksDB 式 WriteThread 两阶段流水线 Group Commit 架构：
 // 1. 静态边界校验：参数非空、(ino, fh, offset) 在正数范围内、len(data) <= 4 MiB、offset + len(data) <= MaxInt64；
 // 2. 零字节写入：在事务内锁定 Inode 校验常规文件类型与写句柄有效性，续期会话，不分配 slice_id 且不修改任何元数据；
 // 3. 两阶段流水线落盘与 Group Commit：
-//   - 阶段 1（无锁并行落盘）：从内存号段分配器领取 slice_id，将 data 写入底层物理块存储（支持 StageBlock 阶段化落盘）；失败立即清理物理块返回 ErrIO；
-//   - 阶段 2（WriteThread Leader-Follower 批量目录同步与单事务 Group Commit）：
-//   - 步骤 2a：Leader 收集批次内待同步父目录去重执行 1 次 SyncDirs（失败时逐任务隔离回退清理）；
-//   - 步骤 2b：在单个 PostgreSQL 事务内按 Inode 升序加锁、按句柄/会话去重校验、按 RootIno 升序锁盘并在内存中依次推演各请求偏移（含 O_APPEND）与配额增量、按 (ino, indx) 拼接追加 Slice、登记 slice_refs、更新 Inode 属性并全组共享 1 次事务 COMMIT；
-//   - 步骤 2c：对批次内被业务规则隔离剔除或事务回滚未提交的任务立即调用 DeleteBlock 清理物理块（零孤儿块残留），触发异步 Compaction 并批量唤醒 Follower。
+//   - 阶段 1（无锁并行写入页缓存）：从内存号段分配器领取 slice_id，将 data 写入底层物理块存储（StageBlock 写入同目录临时文件并 Rename 至正式路径，发布到 OS Page Cache）；失败立即清理物理块返回 ErrIO；
+//   - 阶段 2（WriteThread Leader-Follower 单事务 Group Commit）：
+//   - 步骤 2a：在单个 PostgreSQL 事务内启用 SET LOCAL synchronous_commit = off，按 Inode 升序加锁、按句柄/会话去重校验、按 RootIno 升序锁盘并在内存中依次推演各请求偏移（含 O_APPEND）与配额增量、按 (ino, indx) 拼接追加 Slice、登记 slice_refs、更新 Inode 属性并全组共享 1 次事务 COMMIT；
+//   - 步骤 2b：对批次内被业务规则隔离剔除或事务回滚未提交的任务立即调用 DeleteBlock 清理物理块（零孤儿块残留），触发异步 Compaction 并批量唤醒 Follower。
 func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error) {
 	if req == nil {
 		return nil, ErrInvalidArgument
@@ -299,19 +298,9 @@ func (m *manager) executeWriteBatch(batch []*writeBatchTask) {
 		}
 	}()
 
-	bs := m.getBlockStore()
-	stagedBS, hasStagedBS := bs.(StagedBlockStore)
-
 	// 单任务快速路径：直接使用原请求 ctx 执行，100% 保持单请求行为与错误文本
 	if len(batch) == 1 {
 		t := batch[0]
-		if hasStagedBS && len(t.stagedDirs) > 0 {
-			if err := stagedBS.SyncDirs(t.ctx, t.stagedDirs); err != nil {
-				t.cleanupBlocks()
-				t.err = fmt.Errorf("%w: sync block dir (slice_id=%d): %v", ErrIO, t.sliceID, err)
-				return
-			}
-		}
 		t.resp, t.err = m.executeSingleWriteTask(t)
 		return
 	}
@@ -329,42 +318,14 @@ func (m *manager) executeWriteBatch(batch []*writeBatchTask) {
 	if len(validTasks) == 0 {
 		return
 	}
-
-	batchCtx, batchCancel := buildBatchWriteContext(validTasks)
-	defer batchCancel()
-
-	// 步骤 2a：批次去重父目录同步
-	if hasStagedBS {
-		var allStagedDirs []string
-		for _, t := range validTasks {
-			allStagedDirs = append(allStagedDirs, t.stagedDirs...)
-		}
-		if len(allStagedDirs) > 0 {
-			if err := stagedBS.SyncDirs(batchCtx, allStagedDirs); err != nil {
-				surviving := make([]*writeBatchTask, 0, len(validTasks))
-				for _, t := range validTasks {
-					if len(t.stagedDirs) > 0 {
-						if sErr := stagedBS.SyncDirs(t.ctx, t.stagedDirs); sErr != nil {
-							t.cleanupBlocks()
-							t.err = fmt.Errorf("%w: sync block dir (slice_id=%d): %v", ErrIO, t.sliceID, sErr)
-							continue
-						}
-					}
-					surviving = append(surviving, t)
-				}
-				validTasks = surviving
-			}
-		}
-	}
-
-	if len(validTasks) == 0 {
-		return
-	}
 	if len(validTasks) == 1 {
 		t := validTasks[0]
 		t.resp, t.err = m.executeSingleWriteTask(t)
 		return
 	}
+
+	batchCtx, batchCancel := buildBatchWriteContext(validTasks)
+	defer batchCancel()
 
 	m.executeBatchWriteTasks(batchCtx, validTasks)
 }
@@ -381,6 +342,8 @@ func mapWriteBizError(err error) error {
 		return ErrBadFileHandle
 	case errors.Is(err, ErrNoSpace):
 		return ErrNoSpace
+	case errors.Is(err, ErrIO):
+		return err
 	default:
 		return fmt.Errorf("write commit tx: %w", err)
 	}
@@ -403,6 +366,11 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 		}
 		everReachedCommit = false
 		committedStats = nil
+		if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+			if _, err := r.RawDBTX().Exec(ctx, "SET LOCAL synchronous_commit = off"); err != nil {
+				return fmt.Errorf("%w: set local synchronous_commit: %v", ErrIO, err)
+			}
+		}
 		inode, err := q.GetInodeForUpdate(ctx, int64(req.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -457,23 +425,9 @@ func (m *manager) executeSingleWriteTask(t *writeBatchTask) (*WriteResponse, err
 		if newEnd > newSize {
 			newSize = newEnd
 			if inode.RootIno > 0 {
-				deltaBytes := uint64(newEnd - inode.Size)
-				diskRow, err := q.GetDiskByRootInoForUpdate(ctx, inode.RootIno)
-				if err != nil {
-					if !errors.Is(err, pgx.ErrNoRows) {
-						return fmt.Errorf("get disk by root_ino %d for update: %w", inode.RootIno, err)
-					}
-				} else {
-					if uint64(diskRow.UsedBytes) > uint64(diskRow.MaxBytes) || deltaBytes > uint64(diskRow.MaxBytes)-uint64(diskRow.UsedBytes) {
-						return ErrNoSpace
-					}
-					if err := q.AddDiskQuotaByRootIno(ctx, db.AddDiskQuotaByRootInoParams{
-						RootIno:     inode.RootIno,
-						DeltaBytes:  int64(deltaBytes),
-						DeltaInodes: 0,
-					}); err != nil {
-						return fmt.Errorf("add disk quota by root_ino %d: %w", inode.RootIno, err)
-					}
+				deltaBytes := newEnd - inode.Size
+				if err := m.reserveQuotaBytes(ctx, q, inode.RootIno, deltaBytes); err != nil {
+					return err
 				}
 			}
 		}
@@ -612,6 +566,11 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 		touchRollbacks = nil
 		everReachedCommit = false
 		committedStats = nil
+		if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+			if _, err := r.RawDBTX().Exec(batchCtx, "SET LOCAL synchronous_commit = off"); err != nil {
+				return fmt.Errorf("%w: set local synchronous_commit: %v", ErrIO, err)
+			}
+		}
 
 		for _, t := range validTasks {
 			t.resp = nil
@@ -752,27 +711,20 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 			}
 		}
 
-		// 3. 按 RootIno 升序锁定涉及扩容校验的 Disk 行，初始化内存配额账本
+		// 3. 按 RootIno 升序校验并预留涉及扩容任务的内存配额账本
 		slices.Sort(uniqueRootInos)
-		disks := make(map[int64]db.Disk, len(uniqueRootInos))
 		hasDisk := make(map[int64]bool, len(uniqueRootInos))
-		runningDiskUsed := make(map[int64]uint64, len(uniqueRootInos))
-		totalDiskDelta := make(map[int64]uint64, len(uniqueRootInos))
-
 		for _, rootIno := range uniqueRootInos {
-			diskRow, err := q.GetDiskByRootInoForUpdate(batchCtx, rootIno)
+			_, found, err := m.ensureDiskQuotaLoadedInTx(batchCtx, q, rootIno)
 			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					continue
-				}
-				return fmt.Errorf("get disk by root_ino %d for update: %w", rootIno, err)
+				return err
 			}
-			disks[rootIno] = diskRow
-			hasDisk[rootIno] = true
-			runningDiskUsed[rootIno] = uint64(diskRow.UsedBytes)
+			if found {
+				hasDisk[rootIno] = true
+			}
 		}
 
-		// 4. 按批次内任务到达顺序依次推演偏移、文件大小演进与配额扣减
+		// 4. 按批次内任务到达顺序依次推演偏移、文件大小演进与内存配额预留
 		acceptedTasks := make([]*writeBatchTask, 0, len(validTasks))
 		hasAcceptedForIno := make(map[uint64]bool, len(uniqueInos))
 
@@ -805,15 +757,13 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 			}
 
 			if taskDelta > 0 && inode.RootIno > 0 && hasDisk[inode.RootIno] {
-				diskRow := disks[inode.RootIno]
-				used := runningDiskUsed[inode.RootIno]
-				maxBytes := uint64(diskRow.MaxBytes)
-				if used > maxBytes || uint64(taskDelta) > maxBytes-used {
-					t.bizErr = ErrNoSpace
-					continue
+				if err := m.reserveQuotaBytes(batchCtx, q, inode.RootIno, taskDelta); err != nil {
+					if errors.Is(err, ErrNoSpace) {
+						t.bizErr = ErrNoSpace
+						continue
+					}
+					return err
 				}
-				runningDiskUsed[inode.RootIno] = used + uint64(taskDelta)
-				totalDiskDelta[inode.RootIno] += uint64(taskDelta)
 			}
 
 			if newEnd > curSize {
@@ -830,20 +780,7 @@ func (m *manager) executeBatchWriteTasks(batchCtx context.Context, validTasks []
 			return nil
 		}
 
-		// 5. 批量落库修改：按 RootIno 汇总扣减配额 -> 按 (ino, indx) 合并追加 Slice -> 登记 slice_refs -> 按 ino 更新 Inode
-		for _, rootIno := range uniqueRootInos {
-			delta := totalDiskDelta[rootIno]
-			if delta == 0 {
-				continue
-			}
-			if err := q.AddDiskQuotaByRootIno(batchCtx, db.AddDiskQuotaByRootInoParams{
-				RootIno:     rootIno,
-				DeltaBytes:  int64(delta),
-				DeltaInodes: 0,
-			}); err != nil {
-				return fmt.Errorf("add disk quota by root_ino %d: %w", rootIno, err)
-			}
-		}
+		// 5. 批量落库修改：按 (ino, indx) 合并追加 Slice -> 登记 slice_refs -> 按 ino 更新 Inode
 
 		chunkSlicesMap := make(map[chunkKey][]byte, len(acceptedTasks))
 		chunkKeyOrder := make([]chunkKey, 0, len(acceptedTasks))
