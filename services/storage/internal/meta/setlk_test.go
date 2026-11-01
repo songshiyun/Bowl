@@ -318,27 +318,6 @@ func TestSetLk_PosixLockAndUnlock(t *testing.T) {
 			}, nil).
 			Once()
 
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		beforeCall := time.Now()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == 10 &&
-					arg.ExpiresAt.Valid &&
-					arg.ExpiresAt.Time.After(beforeCall.Add(25*time.Second)) &&
-					arg.ExpiresAt.Time.Before(beforeCall.Add(35*time.Second))
-			})).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
 		// 已有另一持有者 (session=20, owner=2002) 在重叠区间 [0, 200] 持有 F_RDLCK，读读不冲突
 		mockQuerier.EXPECT().
 			ListActiveFileLocksByInoAndFlags(mock.Anything, db.ListActiveFileLocksByInoAndFlagsParams{
@@ -428,21 +407,6 @@ func TestSetLk_PosixLockAndUnlock(t *testing.T) {
 			Once()
 
 		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
-			Once()
-
-		mockQuerier.EXPECT().
 			ListActiveFileLocksByInoAndFlags(mock.Anything, db.ListActiveFileLocksByInoAndFlagsParams{
 				Ino:     int64(ino),
 				LkFlags: 0,
@@ -503,21 +467,6 @@ func TestSetLk_PosixLockAndUnlock(t *testing.T) {
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		// 同一 lock_owner 但不同 session_id 属于异主，写锁冲突返回 ErrAgain
@@ -586,21 +535,6 @@ func TestSetLk_PosixLockAndUnlock(t *testing.T) {
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.Anything).
-			Return(db.ClientSession{SessionID: 10}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -694,6 +628,10 @@ func TestSetLk_PostgresSemantics(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2, $3)", int64(session1), int64(session2), expiredSession)
 	}()
+	_, err = mgr.RenewSession(ctx, session1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, session2)
+	require.NoError(t, err)
 
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: uint64(rootDir.Ino),
@@ -832,10 +770,13 @@ func TestSetLk_PostgresSemantics(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	_, err = mgr.CollectGarbage(ctx, 100)
+	require.NoError(t, err)
+
 	var expiredCount int
 	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM client_sessions WHERE session_id = $1", expiredSession).Scan(&expiredCount)
 	require.NoError(t, err)
-	assert.Equal(t, 0, expiredCount, "expired session must be lazily evicted by SetLk")
+	assert.Equal(t, 0, expiredCount, "expired session must be evicted by CollectGarbage")
 
 	// 4. 多个不同 (session_id, lock_owner) 在同一区间并发持有共享读锁 (F_RDLCK)
 	err = mgr.SetLk(ctx, meta.SetLkParams{

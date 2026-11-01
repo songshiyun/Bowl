@@ -182,6 +182,9 @@ func TestFlush_PostgresSnapshotExpiredAndRecreatedSession(t *testing.T) {
 			}
 			require.ErrorIs(t, f.mgr.Flush(ctx, meta.FlushParams{Ino: f.ino, Fh: f.fh, LockOwner: &owner, SessionID: &f.session}), meta.ErrBadFileHandle)
 			if expired {
+				// ADR-0025: Flush 只读校验不触发会话续期或过期会话清理；由显式续期或 GC 回收过期会话与孤儿节点。
+				_, err := other.mgr.RenewSession(ctx, other.session)
+				require.NoError(t, err)
 				for _, query := range []string{`SELECT count(*) FROM file_handles WHERE fh = $1`, `SELECT count(*) FROM file_locks WHERE ino = $1`} {
 					id := int64(f.ino)
 					if query == `SELECT count(*) FROM file_handles WHERE fh = $1` {
@@ -189,14 +192,11 @@ func TestFlush_PostgresSnapshotExpiredAndRecreatedSession(t *testing.T) {
 					}
 					var count int
 					require.NoError(t, pool.QueryRow(ctx, query, id).Scan(&count))
-					require.Zero(t, count, "过期句柄及其锁必须清理")
+					require.Zero(t, count, "过期句柄及其锁必须被清理")
 				}
 				var expiredLocks int
 				require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM file_locks WHERE ino = $1`, int64(expiredLockIno)).Scan(&expiredLocks))
-				require.Zero(t, expiredLocks, "无锁目标的 Flush 仍应清理同一过期会话的其他节点锁")
-				// ADR-0023 由显式续期承担孤儿回收，Flush 不承诺立即回收孤儿。
-				_, err := other.mgr.RenewSession(ctx, other.session)
-				require.NoError(t, err)
+				require.Zero(t, expiredLocks, "过期会话在其他节点上的锁必须被级联清理")
 				var inodes int
 				require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM inodes WHERE ino = $1`, int64(f.ino)).Scan(&inodes))
 				require.Zero(t, inodes)

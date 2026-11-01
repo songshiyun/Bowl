@@ -1118,6 +1118,8 @@ func TestReadDir_P4_P5_ReproduceDefects(t *testing.T) {
 
 		// 客户端 session 打开具名目录
 		sessID := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessID)
+		require.NoError(t, err)
 		openRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dirP5.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1256,6 +1258,8 @@ func TestReadDir_P2_1_3_4_ReproduceDefects(t *testing.T) {
 		require.NoError(t, err)
 
 		sessID := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessID)
+		require.NoError(t, err)
 		openRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1332,6 +1336,8 @@ func TestReadDir_P2_1_3_4_ReproduceDefects(t *testing.T) {
 		require.NoError(t, err)
 
 		sessA := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessA)
+		require.NoError(t, err)
 		openRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1428,6 +1434,8 @@ func TestReadDir_P2_1_3_4_ReproduceDefects(t *testing.T) {
 		require.NoError(t, err)
 
 		sessA := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessA)
+		require.NoError(t, err)
 		openResA, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1446,6 +1454,8 @@ func TestReadDir_P2_1_3_4_ReproduceDefects(t *testing.T) {
 		require.Equal(t, 1, meta.DirCursorsLen(mgr), "会话 A 建立游标")
 
 		sessB := sessA + 1000
+		_, err = mgr.RenewSession(testCtx, sessB)
+		require.NoError(t, err)
 		openResB, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1536,6 +1546,8 @@ func TestReadDir_P2_1_3_4_ReproduceDefects(t *testing.T) {
 		require.NoError(t, err)
 
 		sessA := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessA)
+		require.NoError(t, err)
 		openRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,
@@ -1798,6 +1810,8 @@ func TestReadDir_MidPageCursorUnlinkAndReleaseDirRace(t *testing.T) {
 		}
 
 		sessA := uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		_, err = mgr.RenewSession(testCtx, sessA)
+		require.NoError(t, err)
 		openRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
 			Ino:       dir.Ino,
 			Flags:     meta.O_RDONLY,

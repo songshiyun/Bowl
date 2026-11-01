@@ -307,7 +307,6 @@ func formalActionOpenDir(ctx context.Context, t *testing.T, env *formalMainEnv) 
 	require.Greater(t, got.Fh, uint64(0), "OpenDir 分配的目录句柄 Fh 必须 > 0")
 	require.NotNil(t, targetDir)
 
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
 	env.Model.RecordNewHandle(&formalHandle{
 		Fh:        got.Fh,
 		Ino:       targetDir.Ino,
@@ -490,10 +489,8 @@ func formalActionReleaseDir(ctx context.Context, t *testing.T, env *formalMainEn
 	require.NotNil(t, targetHandle)
 
 	// 同步更新内存参考模型：
-	// 1. 同步可选会话续期；
-	// 2. 将目录句柄标记为已关闭并移入 ClosedHandles；
-	// 3. 若目标目录 nlink == 0，调用 ReclaimOrphanInModel（当且仅当再无任何有效句柄时物理删除孤儿目录并扣减 used_inodes - 1）。
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
+	// 1. 将目录句柄标记为已关闭并移入 ClosedHandles；
+	// 2. 若目标目录 nlink == 0，调用 ReclaimOrphanInModel（当且仅当再无任何有效句柄时物理删除孤儿目录并扣减 used_inodes - 1）。
 	targetHandle.Closed = true
 	env.Model.ClosedHandles[targetHandle.Fh] = targetHandle
 	delete(env.Model.Handles, targetHandle.Fh)
@@ -1217,6 +1214,9 @@ func TestFormalMain_T7_OpenDirReadDir(t *testing.T) {
 
 		// 4. 验证场景 A：rmdir-whilst-open（目录持有活跃 OpenDir 句柄期间被 Rmdir，延迟物理回收与配额扣减闭环）
 		sidOrphan := uint64(42401)
+		_, err = mgr.RenewSession(ctx, sidOrphan)
+		require.NoError(t, err)
+		modelSyncSessionRenewal(env.Model, &sidOrphan, env.LeaseTTL)
 		subFh1, err := mgr.OpenDir(ctx, meta.OpenDirParams{Ino: subDirModel.Ino, Flags: meta.O_RDONLY, SessionID: nil})
 		require.NoError(t, err)
 		env.Model.RecordNewHandle(&formalHandle{
@@ -1225,7 +1225,6 @@ func TestFormalMain_T7_OpenDirReadDir(t *testing.T) {
 
 		subFh2, err := mgr.OpenDir(ctx, meta.OpenDirParams{Ino: subDirModel.Ino, Flags: meta.O_RDONLY, SessionID: &sidOrphan})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &sidOrphan, env.LeaseTTL)
 		env.Model.RecordNewHandle(&formalHandle{
 			Fh: subFh2.Fh, Ino: subDirModel.Ino, Flags: meta.O_RDONLY, SessionID: modelCloneSessionID(&sidOrphan), IsDir: true,
 		})

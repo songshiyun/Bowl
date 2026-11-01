@@ -308,10 +308,6 @@ func formalActionTmpFile(ctx context.Context, t *testing.T, env *formalMainEnv) 
 	parentModel := env.Model.Inodes[params.ParentIno]
 	require.NotNil(t, parentModel)
 
-	// 注意顺序：先同步可选会话续期（对应事务内 renewOptionalClientSession 在 CreateInode 之前执行），
-	// 再登记 nlink=0 的新 TmpFile 节点与初始句柄，防止 modelSyncSessionRenewal 将尚未登记句柄的新节点误判为无引用孤儿
-	modelSyncSessionRenewal(env.Model, params.SessionID, env.LeaseTTL)
-
 	newTmpModel := &formalInode{
 		Ino:           got.Inode.Ino,
 		Generation:    got.Inode.Generation,
@@ -924,6 +920,9 @@ func TestFormalMain_T8_TmpFile(t *testing.T) {
 
 		// 4. 验证非 O_EXCL 的 TmpFile 一次性 Link 具名化、清除所有关联句柄的 O_TMPFILE 标志位、以及 Unlink 后严禁二次复活
 		sid1 := uint64(8425001)
+		_, err = mgr.RenewSession(ctx, sid1)
+		require.NoError(t, err)
+		modelSyncSessionRenewal(env.Model, &sid1, env.LeaseTTL)
 		tmp2Res, err := mgr.TmpFile(ctx, meta.TmpFileParams{
 			ParentIno: sgidDir.Ino,
 			Mode:      meta.S_IFREG | 0o640,
@@ -933,7 +932,6 @@ func TestFormalMain_T8_TmpFile(t *testing.T) {
 			SessionID: &sid1,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &sid1, env.LeaseTTL)
 		tmp2Model := &formalInode{
 			Ino: tmp2Res.Inode.Ino, Generation: tmp2Res.Inode.Generation, RootIno: root1, ParentIno: 0,
 			Mode: tmp2Res.Inode.Attr.Mode, UID: 1001, GID: 7777, Size: 0, Nlink: 0, IsTmpFile: true,

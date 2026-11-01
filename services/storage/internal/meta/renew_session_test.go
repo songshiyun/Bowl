@@ -560,6 +560,11 @@ func TestRenewSession_PostgresIntegration(t *testing.T) {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(sessKeepAlive), int64(sessExpired))
 		}()
 
+		_, err := mgr.RenewSession(ctx, sessKeepAlive)
+		require.NoError(t, err)
+		_, err = mgr.RenewSession(ctx, sessExpired)
+		require.NoError(t, err)
+
 		rootDir, err := store.CreateInode(ctx, db.CreateInodeParams{
 			Mode:  int32(meta.S_IFDIR | 0o755),
 			Nlink: 2,
@@ -770,6 +775,11 @@ func TestRenewSession_RowLockWaitAcrossExpiry_MustNotResurrectExpiredLocksAndMus
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(sessS), int64(sessC))
 	})
+	_, err = mgrShort.RenewSession(ctx, sessS)
+	require.NoError(t, err)
+	_, err = mgrLong.RenewSession(ctx, sessC)
+	require.NoError(t, err)
+	storeShort.skipDeleteExpired = true
 
 	// 2. 会话 sessS 打开两个文件 fileI 和 fileJ
 	fileIRes, err := mgrShort.Create(ctx, meta.CreateParams{
@@ -837,9 +847,14 @@ func TestRenewSession_RowLockWaitAcrossExpiry_MustNotResurrectExpiredLocksAndMus
 	err = txHold.QueryRow(ctx, "SELECT session_id FROM client_sessions WHERE session_id = $1 FOR UPDATE", int64(sessS)).Scan(&heldID)
 	require.NoError(t, err)
 
-	// 4. 在 sessS 尚未过期前，启动协程 F 调用 Flush 尝试续期
+	// 4. 在 sessS 尚未过期前，启动协程 F 调用 RenewSession 尝试续期（阻塞在 txHold 持有的行锁上）
 	flushDone := make(chan error, 1)
 	go func() {
+		_, rErr := mgrShort.RenewSession(ctx, sessS)
+		if rErr != nil {
+			flushDone <- rErr
+			return
+		}
 		flushDone <- mgrShort.Flush(ctx, meta.FlushParams{
 			Ino:       fileJ,
 			Fh:        fhJ,
@@ -1005,6 +1020,7 @@ type lockLeaseSyncBarrierStore struct {
 	db.Store
 	onDeleteExpiredClientSessions    func(ctx context.Context, q db.Querier) error
 	onDeleteUnreferencedOrphanInodes func(ctx context.Context, q db.Querier) ([]db.DeleteUnreferencedOrphanInodesRow, error)
+	onGetFileHandle                  func(ctx context.Context, q db.Querier, arg db.GetFileHandleParams) (db.FileHandle, error)
 }
 
 func (s *lockLeaseSyncBarrierStore) ExecTx(ctx context.Context, fn func(db.Querier) error) error {
@@ -1040,6 +1056,13 @@ func (q *lockLeaseSyncBarrierQuerier) DeleteUnreferencedOrphanInodes(ctx context
 		return q.store.onDeleteUnreferencedOrphanInodes(ctx, q.Querier)
 	}
 	return q.Querier.DeleteUnreferencedOrphanInodes(ctx)
+}
+
+func (q *lockLeaseSyncBarrierQuerier) GetFileHandle(ctx context.Context, arg db.GetFileHandleParams) (db.FileHandle, error) {
+	if q.store.onGetFileHandle != nil {
+		return q.store.onGetFileHandle(ctx, q.Querier, arg)
+	}
+	return q.Querier.GetFileHandle(ctx, arg)
 }
 
 // TestSetLk_UncommittedRenewalAcrossOldExpiry_MustNotGrantConflictingExclusiveLock 验证 Wave 0 / Issue #1 / Ch1-1：
@@ -1124,6 +1147,29 @@ func TestSetLk_UncommittedRenewalAcrossOldExpiry_MustNotGrantConflictingExclusiv
 			}
 			return q.DeleteUnreferencedOrphanInodes(ctx)
 		},
+		onGetFileHandle: func(ctx context.Context, q db.Querier, arg db.GetFileHandleParams) (db.FileHandle, error) {
+			fh, err := q.GetFileHandle(ctx, arg)
+			if err != nil {
+				return fh, err
+			}
+			tag, _ := ctx.Value(lockLeaseSyncTagKey{}).(string)
+			if tag == tagT2SetLk {
+				t2DeleteExpiredDone.Store(true)
+				for {
+					var isPast bool
+					qErr := pool.QueryRow(ctx, "SELECT clock_timestamp() >= $1", oldExpiresAt).Scan(&isPast)
+					if qErr == nil && isPast {
+						break
+					}
+					select {
+					case <-ctx.Done():
+						return fh, ctx.Err()
+					case <-time.After(2 * time.Millisecond):
+					}
+				}
+			}
+			return fh, nil
+		},
 	}
 
 	leaseTTL := 5 * time.Second
@@ -1139,6 +1185,10 @@ func TestSetLk_UncommittedRenewalAcrossOldExpiry_MustNotGrantConflictingExclusiv
 
 	sess1 := uint64(77101)
 	sess2 := uint64(77102)
+	_, err = mgr.RenewSession(ctx, sess1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, sess2)
+	require.NoError(t, err)
 
 	t.Cleanup(func() {
 		t1UpsertedOnce()
@@ -1781,8 +1831,10 @@ func TestRenewSessionWithDisk_And_CloseSession_PostgresIntegration(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, diskA.DiskID, gotDiskID)
 
-	// 激活对照会话 sess2
+	// 激活对照会话 sess2（先绑定 diskB 验证跨盘绑定，随后无盘续期或绑定 diskA 以打开 diskA 下的文件）
 	_, err = mgr.RenewSessionWithDisk(ctx, sess2, &diskB.DiskID)
+	require.NoError(t, err)
+	_, err = mgr.RenewSessionWithDisk(ctx, sess2, &diskA.DiskID)
 	require.NoError(t, err)
 
 	// 3. 在 diskA 下由 sess1 创建常规文件并 Unlink 形成孤儿节点（但仍被 sess1 的句柄引用）
@@ -1884,60 +1936,52 @@ func TestRenewSessionWithDisk_And_CloseSession_PostgresIntegration(t *testing.T)
 	require.NoError(t, mgr.CloseSession(ctx, sess1))
 }
 
-// TestSessionTouchThrottling_AllPaths_Unit 验证 STARSRC-536 (ADR-0023 Decision 1)：
-// 1. DefaultWriteSessionTouchInterval 默认为 5s，且在传入较短 SessionLeaseTTL 时自动按 ttl/3 钳制节流窗口；
-// 2. Create、TmpFile、Open、OpenDir 在节流窗口内仅首次请求执行 DeleteExpiredClientSessions + UpsertClientSession + DeleteUnreferencedOrphanInodes，后续请求跳过写库续期与全表扫描；
-// 3. Flush、Release、ReleaseDir、SetAttr、Fallocate、Read 在会话已处于节流窗口内时跳过 DeleteExpiredClientSessions + UpsertClientSession + DeleteUnreferencedOrphanInodes。
-func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
-	require.Equal(t, 5*time.Second, meta.DefaultWriteSessionTouchInterval)
-
+// TestUnidirectionalSessionCheck_AllPaths_Unit 验证 STARSRC-544 (ADR-0025 Decision 1)：
+// 1. Create、TmpFile、Open、OpenDir 与无句柄 SetAttr 传入有效 session_id 时，仅通过 HasActiveClientSession 只读校验会话活跃性，不执行 DeleteExpiredClientSessions / UpsertClientSession / DeleteUnreferencedOrphanInodes；当会话不存在或已过期时返回 ErrBadFileHandle；
+// 2. 携带句柄的操作（Flush、Release、ReleaseDir、SetAttr(fh!=nil)、Fallocate、Read、SetLk、SetLkw）仅通过 GetFileHandle / DeleteFileHandle 内联校验会话活跃性与代次时间戳，零次调用 UpsertClientSession 或 DeleteExpiredClientSessions。
+func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 	ctx := context.Background()
 	sessID := uint64(30086)
 	now := time.Now().Truncate(time.Microsecond)
-	sessionCreatedAt := pgtype.Timestamptz{Time: now.Add(-10 * time.Second), Valid: true}
-	sessionUpdatedAt := pgtype.Timestamptz{Time: now, Valid: true}
-	sessionExpiresAt := pgtype.Timestamptz{Time: now.Add(time.Minute), Valid: true}
 	handleCreatedAt := pgtype.Timestamptz{Time: now.Add(-5 * time.Second), Valid: true}
 
-	t.Run("Create/TmpFile/Open/OpenDir 节流窗口内跳过重复 UpsertClientSession 与孤儿扫描", func(t *testing.T) {
+	t.Run("Create/TmpFile/Open/OpenDir/SetAttr(fh==nil) 只读校验 HasActiveClientSession 且在会话不活跃时返回 ErrBadFileHandle", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
-		mgr := meta.New(mockStore, meta.WithWriteSessionTouchInterval(5*time.Second))
+		mgr := meta.New(mockStore)
 
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
 			RunAndReturn(func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				return fn(mockQuerier)
+				err := fn(mockQuerier)
+				mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
+				mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
+				mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
+				return err
 			}).
-			Times(4)
+			Times(6)
 
 		parentDir := db.Inode{
 			Ino:     1,
 			Mode:    int32(meta.S_IFDIR | 0o755),
 			Nlink:   2,
-			RootIno: 1,
+			RootIno: 0,
 		}
 		regInode := db.Inode{
 			Ino:     100,
 			Mode:    int32(meta.S_IFREG | 0o644),
 			Nlink:   1,
-			RootIno: 1,
+			RootIno: 0,
 		}
 
-		// 仅首次 Create 触发 1 次会话续期与孤儿扫描；后续 TmpFile、Open、OpenDir 在 5s 窗口内均不再调用！
-		mockQuerier.EXPECT().DeleteExpiredClientSessions(mock.Anything).Return(int64(0), nil).Once()
-		mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-			return arg.SessionID == int64(sessID)
-		})).Return(db.ClientSession{
+		expectedCheck := db.HasActiveClientSessionParams{
 			SessionID: int64(sessID),
-			CreatedAt: sessionCreatedAt,
-			UpdatedAt: sessionUpdatedAt,
-			ExpiresAt: sessionExpiresAt,
-		}, nil).Once()
-		mockQuerier.EXPECT().DeleteUnreferencedOrphanInodes(mock.Anything).Return(nil, nil).Once()
+			RootIno:   0,
+		}
 
-		// 1. Create
+		// 1. Create (active)
 		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
 		mockQuerier.EXPECT().CreateInode(mock.Anything, mock.Anything).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().CreateEntry(mock.Anything, mock.Anything).Return(nil).Once()
 		mockQuerier.EXPECT().TouchInodeTimestamps(mock.Anything, int64(1)).Return(nil).Once()
@@ -1952,9 +1996,10 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 2. TmpFile（窗口内跳过续期）
+		// 2. TmpFile (active)
 		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
-		mockQuerier.EXPECT().CreateInode(mock.Anything, mock.Anything).Return(db.Inode{Ino: 101, Mode: int32(meta.S_IFREG | 0o644), Nlink: 0, RootIno: 1}, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
+		mockQuerier.EXPECT().CreateInode(mock.Anything, mock.Anything).Return(db.Inode{Ino: 101, Mode: int32(meta.S_IFREG | 0o644), Nlink: 0, RootIno: 0}, nil).Once()
 		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 11, Ino: 101}, nil).Once()
 
 		_, err = mgr.TmpFile(ctx, meta.TmpFileParams{
@@ -1965,8 +2010,9 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 3. Open（窗口内跳过续期）
+		// 3. Open (active)
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(100)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
 		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 12, Ino: 100}, nil).Once()
 
 		_, err = mgr.Open(ctx, meta.OpenParams{
@@ -1976,8 +2022,9 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 4. OpenDir（窗口内跳过续期）
+		// 4. OpenDir (active)
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentDir, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
 		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 13, Ino: 1}, nil).Once()
 
 		_, err = mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -1986,19 +2033,61 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 			SessionID: &sessID,
 		})
 		require.NoError(t, err)
+
+		// 5. SetAttr without Fh (active)
+		newMode := uint32(0o600)
+		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(100)).Return(regInode, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
+		mockQuerier.EXPECT().UpdateInodeAttr(mock.Anything, mock.Anything).Return(regInode, nil).Once()
+
+		_, err = mgr.SetAttr(ctx, 100, meta.SetAttrInput{
+			Mode:      &newMode,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		// 6. Create with expired/missing session -> ErrBadFileHandle before CreateInode
+		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
+		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(false, nil).Once()
+		_, err = mgr.Create(ctx, meta.CreateParams{
+			ParentIno: 1,
+			Name:      []byte("rejected.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 	})
 
-	t.Run("Flush/SetAttr/Fallocate/Read/Release/ReleaseDir 节流窗口内跳过重复续期写库与孤儿扫描，且拦截旧代际句柄", func(t *testing.T) {
+	t.Run("Flush/SetAttr(fh!=nil)/Fallocate/Read/Release/ReleaseDir 仅通过句柄 SQL 内联校验且零次调用会话续期", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
-		mgr := meta.New(mockStore, meta.WithWriteSessionTouchInterval(5*time.Second))
+		mgr := meta.New(mockStore)
 
+		assertTxNotRenewing := func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+			err := fn(mockQuerier)
+			mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
+			mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
+			mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
+			mockQuerier.AssertNotCalled(t, "HasActiveClientSession", mock.Anything, mock.Anything)
+			return err
+		}
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error"), mock.Anything, mock.Anything).
+			RunAndReturn(assertTxNotRenewing).
+			Once()
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
-			RunAndReturn(func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				return fn(mockQuerier)
-			}).
-			Times(7)
+			RunAndReturn(assertTxNotRenewing).
+			Times(3)
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error"), mock.Anything, mock.Anything).
+			RunAndReturn(assertTxNotRenewing).
+			Once()
+		mockStore.EXPECT().
+			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
+			RunAndReturn(assertTxNotRenewing).
+			Times(2)
 
 		regInode := db.Inode{
 			Ino:   200,
@@ -2019,24 +2108,12 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 			CreatedAt: handleCreatedAt,
 		}
 
-		// 首次 Flush 触发慢路径续期并写入内存节流状态；随后 SetAttr、Fallocate、Read、Release、ReleaseDir 均命中节流窗口！
-		mockQuerier.EXPECT().DeleteExpiredClientSessions(mock.Anything).Return(int64(0), nil).Once()
-		mockQuerier.EXPECT().UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-			return arg.SessionID == int64(sessID)
-		})).Return(db.ClientSession{
-			SessionID: int64(sessID),
-			CreatedAt: sessionCreatedAt,
-			UpdatedAt: sessionUpdatedAt,
-			ExpiresAt: sessionExpiresAt,
-		}, nil).Once()
-		mockQuerier.EXPECT().DeleteUnreferencedOrphanInodes(mock.Anything).Return(nil, nil).Once()
-
-		// 1. Flush (触发首次慢路径)
+		// 1. Flush
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(validFh, nil).Once()
 		require.NoError(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
-		// 2. SetAttr (窗口内跳过续期)
+		// 2. SetAttr (with Fh)
 		newMode := uint32(0o600)
 		fhVal := uint64(20)
 		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(200)).Return(regInode, nil).Once()
@@ -2045,7 +2122,7 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		_, err := mgr.SetAttr(ctx, 200, meta.SetAttrInput{Mode: &newMode, Fh: &fhVal, SessionID: &sessID})
 		require.NoError(t, err)
 
-		// 3. Fallocate (窗口内跳过续期)
+		// 3. Fallocate
 		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(validFh, nil).Once()
 		mockQuerier.EXPECT().TouchInodeCtime(mock.Anything, int64(200)).Return(nil).Once()
@@ -2058,7 +2135,7 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 			SessionID: &sessID,
 		}))
 
-		// 4. Read (窗口内跳过续期)
+		// 4. Read
 		mockQuerier.EXPECT().GetInodeSizeAndChunksInRange(mock.Anything, mock.Anything).Return([]db.GetInodeSizeAndChunksInRangeRow{
 			{Ino: 200, Mode: int32(meta.S_IFREG | 0o644), Size: 0},
 		}, nil).Once()
@@ -2073,31 +2150,28 @@ func TestSessionTouchThrottling_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, readResp.Data)
 
-		// 5. 窗口内持旧代际句柄（handle.CreatedAt < session.CreatedAt）调用 Flush 必须立即返回 ErrBadFileHandle
-		staleFh := validFh
-		staleFh.CreatedAt = pgtype.Timestamptz{Time: sessionCreatedAt.Time.Add(-time.Second), Valid: true}
+		// 5. 持失效或旧代际句柄（GetFileHandle 返回 pgx.ErrNoRows）调用 Flush 必须立即返回 ErrBadFileHandle
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
-		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(staleFh, nil).Once()
+		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{}, pgx.ErrNoRows).Once()
 		require.ErrorIs(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}), meta.ErrBadFileHandle)
 
-		// 6. Release (窗口内跳过续期)
+		// 6. Release
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
 		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
-		// 7. ReleaseDir (窗口内跳过续期)
+		// 7. ReleaseDir
 		mockQuerier.EXPECT().GetInode(mock.Anything, int64(201)).Return(dirInode, nil).Once()
 		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
 		require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{Ino: 201, Fh: 21, SessionID: &sessID}))
 	})
 }
 
-// TestSessionTouchThrottling_PostgresIntegration 在真实 PostgreSQL 上验证 STARSRC-536 全部验收标准：
-// 1. Create、TmpFile、Open、OpenDir、Read、Flush、Release、ReleaseDir、SetAttr、Fallocate 在 5s 节流窗口内不改写 client_sessions.updated_at；
-// 2. 节流窗口内数据库中的 ClientSession 一旦过期或不存在，操作已有 FileHandle 的接口（Read、Flush、Release、ReleaseDir、SetAttr、Fallocate）立即拒绝并返回 ErrBadFileHandle，清除内存节流状态且绝不复活过期会话；
-// 3. 会话过期后被相同 session_id 重建（且再次续期使 updated_at > created_at）时，旧代际句柄（handle.CreatedAt < session.CreatedAt）在节流窗口内外发起的 Read、Flush、Release、ReleaseDir、SetAttr、Fallocate 均严格返回 ErrBadFileHandle，且绝不误删新重建的活跃会话；
-// 4. 短 SessionLeaseTTL（如 150ms）自动钳制节流窗口为 ttl/3，使高频操作在短租约下仍能按时续期保活。
-func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
+// TestUnidirectionalSessionCheck_PostgresIntegration 在真实 PostgreSQL 上验证 STARSRC-544 (ADR-0025 Decision 1)：
+// 1. Create、TmpFile、Open、OpenDir、Read、Write、Flush、Release、ReleaseDir、SetAttr、Fallocate、SetLk、SetLkw 全程绝不执行 UpsertClientSession 改写 client_sessions.updated_at 或 expires_at；
+// 2. 当数据库中的 ClientSession 已过期或不存在时，Create、TmpFile、Open、OpenDir、SetAttr(fh==nil) 与所有句柄操作立即拒绝并返回 ErrBadFileHandle，且绝不创建或复活过期会话；
+// 3. 会话过期后被相同 session_id 重建（且再次续期使 updated_at > created_at）时，旧代际句柄（handle.CreatedAt < session.CreatedAt）发起的 Read、Flush、Release、ReleaseDir、SetAttr、Fallocate 均严格返回 ErrBadFileHandle，且绝不误删新重建的活跃会话。
+func TestUnidirectionalSessionCheck_PostgresIntegration(t *testing.T) {
 	pool := setupFormalPostgresPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -2106,7 +2180,7 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 	mgr := meta.New(baseStore)
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
-		Name:     fmt.Sprintf("disk-536-throttle-%d", time.Now().UnixNano()),
+		Name:     fmt.Sprintf("disk-544-unidirectional-%d", time.Now().UnixNano()),
 		MaxBytes: 100 * 1024 * 1024,
 	})
 	require.NoError(t, err)
@@ -2116,22 +2190,20 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 		_ = mgr.DeleteDisk(cleanCtx, disk.DiskID)
 	})
 
-	t.Run("AC1_AC2_全路径5s节流窗口内不执行UpsertClientSession写库", func(t *testing.T) {
+	t.Run("AC1_全路径存储操作绝不推进client_sessions的updated_at或expires_at", func(t *testing.T) {
 		sessID := uint64(536001)
 		t.Cleanup(func() {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
 		})
 
-		// 确保无遗留过期会话或孤儿节点，使测试处于稳态
 		_, err := mgr.RenewSession(ctx, sessID)
 		require.NoError(t, err)
 
-		var initialUpdatedAt time.Time
-		require.NoError(t, pool.QueryRow(ctx, "SELECT updated_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&initialUpdatedAt))
+		var initialUpdatedAt, initialExpiresAt time.Time
+		require.NoError(t, pool.QueryRow(ctx, "SELECT updated_at, expires_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&initialUpdatedAt, &initialExpiresAt))
 
 		time.Sleep(10 * time.Millisecond)
 
-		// 依次在 5s 窗口内执行 Create、TmpFile、Open、OpenDir、SetAttr、Fallocate、Read、Flush、Release、ReleaseDir
 		createRes, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: disk.RootIno,
 			Name:      []byte("throttled_file.bin"),
@@ -2167,6 +2239,12 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 		_, err = mgr.SetAttr(ctx, createRes.Inode.Ino, meta.SetAttrInput{
 			Mode:      &newMode,
 			Fh:        &createRes.Fh,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		_, err = mgr.SetAttr(ctx, createRes.Inode.Ino, meta.SetAttrInput{
+			Mode:      &newMode,
 			SessionID: &sessID,
 		})
 		require.NoError(t, err)
@@ -2217,13 +2295,27 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 			SessionID: &sessID,
 		}))
 
-		var afterUpdatedAt time.Time
-		require.NoError(t, pool.QueryRow(ctx, "SELECT updated_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&afterUpdatedAt))
-		assert.True(t, initialUpdatedAt.Equal(afterUpdatedAt), "5s 节流窗口内的全路径操作不得执行 UpsertClientSession 推进 client_sessions.updated_at")
+		var afterUpdatedAt, afterExpiresAt time.Time
+		require.NoError(t, pool.QueryRow(ctx, "SELECT updated_at, expires_at FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&afterUpdatedAt, &afterExpiresAt))
+		assert.True(t, initialUpdatedAt.Equal(afterUpdatedAt), "全路径存储操作绝不能推进 client_sessions.updated_at")
+		assert.True(t, initialExpiresAt.Equal(afterExpiresAt), "全路径存储操作绝不能推进 client_sessions.expires_at")
 	})
 
-	t.Run("AC3_节流窗口内会话超期后各句柄接口立即拒绝并清理过期会话绝不复活", func(t *testing.T) {
-		for idx, opName := range []string{"Read", "Flush", "Release", "ReleaseDir", "SetAttr", "Fallocate"} {
+	t.Run("AC2_会话不存在或超期时Create_TmpFile_Open_OpenDir_SetAttr与句柄操作立即返回ErrBadFileHandle且绝不复活会话", func(t *testing.T) {
+		nonExistentSess := uint64(536999)
+		_, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("no_sess.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &nonExistentSess,
+		})
+		require.ErrorIs(t, err, meta.ErrBadFileHandle)
+		var count int64
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(nonExistentSess)).Scan(&count))
+		assert.Zero(t, count, "不存在的 session_id 调用 Create 绝不能在 client_sessions 中创建记录")
+
+		for idx, opName := range []string{"Create", "TmpFile", "Open", "OpenDir", "SetAttrNoFh", "Read", "Flush", "Release", "ReleaseDir", "SetAttr", "Fallocate"} {
 			t.Run(opName, func(t *testing.T) {
 				sessID := uint64(536100 + idx)
 				t.Cleanup(func() {
@@ -2235,7 +2327,7 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 
 				createRes, err := mgr.Create(ctx, meta.CreateParams{
 					ParentIno: disk.RootIno,
-					Name:      []byte(fmt.Sprintf("ac3_%s_%d.bin", opName, time.Now().UnixNano())),
+					Name:      []byte(fmt.Sprintf("ac2_%s_%d.bin", opName, time.Now().UnixNano())),
 					Mode:      meta.S_IFREG | 0o644,
 					Flags:     meta.O_RDWR,
 					SessionID: &sessID,
@@ -2249,12 +2341,45 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 				})
 				require.NoError(t, err)
 
-				// 此时 sessID 处于 5s 内存节流窗口内，将底表会话设为已超期
+				// 将底表会话设为已超期
 				_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(sessID))
 				require.NoError(t, err)
 
 				var opErr error
 				switch opName {
+				case "Create":
+					_, opErr = mgr.Create(ctx, meta.CreateParams{
+						ParentIno: disk.RootIno,
+						Name:      []byte(fmt.Sprintf("ac2_new_%d.bin", time.Now().UnixNano())),
+						Mode:      meta.S_IFREG | 0o644,
+						Flags:     meta.O_RDWR,
+						SessionID: &sessID,
+					})
+				case "TmpFile":
+					_, opErr = mgr.TmpFile(ctx, meta.TmpFileParams{
+						ParentIno: disk.RootIno,
+						Mode:      meta.S_IFREG | 0o644,
+						Flags:     meta.O_RDWR,
+						SessionID: &sessID,
+					})
+				case "Open":
+					_, opErr = mgr.Open(ctx, meta.OpenParams{
+						Ino:       createRes.Inode.Ino,
+						Flags:     meta.O_RDWR,
+						SessionID: &sessID,
+					})
+				case "OpenDir":
+					_, opErr = mgr.OpenDir(ctx, meta.OpenDirParams{
+						Ino:       disk.RootIno,
+						Flags:     meta.O_RDONLY,
+						SessionID: &sessID,
+					})
+				case "SetAttrNoFh":
+					newMode := uint32(0o600)
+					_, opErr = mgr.SetAttr(ctx, createRes.Inode.Ino, meta.SetAttrInput{
+						Mode:      &newMode,
+						SessionID: &sessID,
+					})
 				case "Read":
 					_, opErr = mgr.Read(ctx, &meta.ReadRequest{
 						Ino:       createRes.Inode.Ino,
@@ -2300,14 +2425,15 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 				}
 				require.ErrorIs(t, opErr, meta.ErrBadFileHandle)
 
-				var sessCount int64
-				require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&sessCount))
-				assert.Zero(t, sessCount, "%s 遇到超期会话后必须清理过期会话且绝不复活", opName)
+				var stillExpired bool
+				err = pool.QueryRow(ctx, "SELECT COALESCE((SELECT expires_at <= clock_timestamp() FROM client_sessions WHERE session_id = $1), true)", int64(sessID)).Scan(&stillExpired)
+				require.NoError(t, err)
+				assert.True(t, stillExpired, "%s 遇到超期会话后绝不能将其复活为活跃会话", opName)
 			})
 		}
 	})
 
-	t.Run("AC4_会话过期被同名session_id重建且续期后旧代际句柄在节流窗口内外均返回ErrBadFileHandle且不误删活跃会话", func(t *testing.T) {
+	t.Run("AC3_会话过期被同名session_id重建且续期后旧代际句柄均返回ErrBadFileHandle且不误删活跃会话", func(t *testing.T) {
 		sessID := uint64(536200)
 		t.Cleanup(func() {
 			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
@@ -2344,7 +2470,6 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 		`, int64(sessID))
 		require.NoError(t, err)
 
-		// 在节流窗口内验证 Read、Flush、SetAttr、Fallocate、Release、ReleaseDir 均拦截旧代际句柄
 		_, err = mgr.Read(ctx, &meta.ReadRequest{
 			Ino:       createRes.Inode.Ino,
 			Fh:        oldFileFh,
@@ -2393,37 +2518,5 @@ func TestSessionTouchThrottling_PostgresIntegration(t *testing.T) {
 		var alive bool
 		require.NoError(t, pool.QueryRow(ctx, "SELECT expires_at > clock_timestamp() FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&alive))
 		assert.True(t, alive, "新重建的活跃会话绝不能被旧代际句柄操作误删")
-	})
-
-	t.Run("短SessionLeaseTTL自动按三分之一钳制节流窗口确保高频请求持续保活", func(t *testing.T) {
-		shortTTL := 150 * time.Millisecond
-		mgrShort := meta.New(baseStore, meta.WithSessionLeaseTTL(shortTTL))
-
-		sessID := uint64(536300)
-		t.Cleanup(func() {
-			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
-		})
-
-		_, err := mgrShort.RenewSession(ctx, sessID)
-		require.NoError(t, err)
-
-		createRes, err := mgrShort.Create(ctx, meta.CreateParams{
-			ParentIno: disk.RootIno,
-			Name:      []byte(fmt.Sprintf("short_ttl_%d.bin", time.Now().UnixNano())),
-			Mode:      meta.S_IFREG | 0o644,
-			Flags:     meta.O_RDWR,
-			SessionID: &sessID,
-		})
-		require.NoError(t, err)
-
-		// 每隔 60ms（大于 ttl/3 = 50ms，小于 ttl = 150ms）调用 Flush，持续 4 轮共 240ms > 150ms，会话必须始终存活
-		for i := 0; i < 4; i++ {
-			time.Sleep(60 * time.Millisecond)
-			require.NoError(t, mgrShort.Flush(ctx, meta.FlushParams{
-				Ino:       createRes.Inode.Ino,
-				Fh:        createRes.Fh,
-				SessionID: &sessID,
-			}))
-		}
 	})
 }

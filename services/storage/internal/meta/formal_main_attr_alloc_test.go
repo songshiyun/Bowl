@@ -281,7 +281,7 @@ func applyFormalSetAttrToModel(
 	input meta.SetAttrInput,
 	leaseTTL time.Duration,
 ) {
-	modelSyncSessionRenewal(m, input.SessionID, leaseTTL)
+	_ = leaseTTL
 	inode := pred.TargetNode
 	if inode == nil || inode.Deleted {
 		return
@@ -317,7 +317,8 @@ func applyFormalFallocateToModel(
 	params meta.FallocateParams,
 	leaseTTL time.Duration,
 ) {
-	modelSyncSessionRenewal(m, params.SessionID, leaseTTL)
+	_ = params
+	_ = leaseTTL
 	inode := pred.TargetNode
 	if inode == nil || inode.Deleted {
 		return
@@ -1198,13 +1199,15 @@ func TestFormalMain_T9_SetAttrFallocate(t *testing.T) {
 
 		// 同时为 reg_file 打开一个只读句柄 roFh (绑定 SessionID = 5001)
 		sid5001 := uint64(5001)
+		_, err = mgr.RenewSession(ctx, sid5001)
+		require.NoError(t, err)
+		modelSyncSessionRenewal(env.Model, &sid5001, env.LeaseTTL)
 		roOpenRes, err := mgr.Open(ctx, meta.OpenParams{
 			Ino:       regModel.Ino,
 			Flags:     meta.O_RDONLY,
 			SessionID: &sid5001,
 		})
 		require.NoError(t, err)
-		modelSyncSessionRenewal(env.Model, &sid5001, env.LeaseTTL)
 		roFh := roOpenRes.Fh
 		env.Model.RecordNewHandle(&formalHandle{
 			Fh: roFh, Ino: regModel.Ino, Flags: meta.O_RDONLY, SessionID: modelCloneSessionID(&sid5001),

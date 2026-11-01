@@ -46,6 +46,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
+		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, meta.DefaultGCBatchLimit).
 			Return(nil, nil).
 			Once()
@@ -69,6 +77,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 			{SliceID: 10, Size: 0, Refs: 0},
 		}
 
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
 		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, int32(50)).
 			Return(garbageRows, nil).
@@ -106,6 +122,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 			{SliceID: sliceID, Size: sliceSize, Refs: 0},
 		}
 
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
 		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, meta.DefaultGCBatchLimit).
 			Return(garbageRows, nil).
@@ -152,6 +176,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 			{SliceID: 103, Size: 4096, Refs: 0},
 		}
 
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
 		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, int32(10)).
 			Return(garbageRows, nil).
@@ -205,6 +237,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 		}
 
 		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
+		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, int32(10)).
 			Return(garbageRows, nil).
 			Once()
@@ -233,6 +273,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 
 		dbErr := errors.New("db connection failure")
 		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
+		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, int32(10)).
 			Return(nil, dbErr).
 			Once()
@@ -252,6 +300,14 @@ func TestCollectGarbage_Unit(t *testing.T) {
 		mgr := meta.New(mockStore, meta.WithBlockStore(localBS), meta.WithGCOrphanGracePeriod(customGrace))
 
 		setupMockWriteTx(mockStore, mockQuerier)
+		mockQuerier.EXPECT().
+			DeleteExpiredClientSessions(mock.Anything).
+			Return(int64(0), nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteUnreferencedOrphanInodes(mock.Anything).
+			Return(nil, nil).
+			Once()
 		mockQuerier.EXPECT().
 			ListGarbageSliceRefs(mock.Anything, int32(20)).
 			Return(nil, nil).
@@ -311,6 +367,14 @@ func TestStartGCWorker_Unit(t *testing.T) {
 		}).
 		Maybe()
 
+	mockQuerier.EXPECT().
+		DeleteExpiredClientSessions(mock.Anything).
+		Return(int64(0), nil).
+		Maybe()
+	mockQuerier.EXPECT().
+		DeleteUnreferencedOrphanInodes(mock.Anything).
+		Return(nil, nil).
+		Maybe()
 	mockQuerier.EXPECT().
 		ListGarbageSliceRefs(mock.Anything, int32(5)).
 		Return(nil, nil).
@@ -922,6 +986,90 @@ func TestGC_PostgresIntegration(t *testing.T) {
 		_ = rawBlockStore.DeleteBlock(context.Background(), registeredSliceID, 0, uint32(len(registeredPayload)))
 		_ = store.DeleteSliceRef(context.Background(), int64(registeredSliceID))
 	})
+
+	t.Run("生命周期场景 7: 客户端失联不再触发 RenewSession 时，CollectGarbage 自动清理过期会话、级联释放锁并物理回收孤儿 Inode 与物理块", func(t *testing.T) {
+		diskName := fmt.Sprintf("test_gc_expired_session_%d", time.Now().UnixNano())
+		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: diskName, MaxBytes: 100 * 1024 * 1024})
+		require.NoError(t, err)
+		defer func() { _ = mgr.DeleteDisk(context.Background(), disk.DiskID) }()
+
+		sessID := uint64(770091)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
+		})
+
+		_, err = mgr.RenewSession(ctx, sessID)
+		require.NoError(t, err)
+
+		// 1) 创建文件并绑定 sessID，写入 4096 字节数据，然后加排他文件锁，再 Unlink 使其成为孤儿 Inode
+		fRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("orphan_session_gc.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+		orphanIno := fRes.Inode.Ino
+
+		payload := bytes.Repeat([]byte("S"), 4096)
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       orphanIno,
+			Fh:        fRes.Fh,
+			Offset:    0,
+			Data:      payload,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		require.NoError(t, mgr.SetLk(ctx, meta.SetLkParams{
+			Ino:       orphanIno,
+			Fh:        fRes.Fh,
+			SessionID: sessID,
+			LockOwner: 1001,
+			LkFlags:   0,
+			Lk: meta.FileLock{
+				Start: 0,
+				End:   100,
+				Type:  meta.F_WRLCK,
+				PID:   1234,
+			},
+		}))
+
+		chunkRow, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(orphanIno), Indx: 0})
+		require.NoError(t, err)
+		slices, err := meta.DecodeSlices(chunkRow.Slices)
+		require.NoError(t, err)
+		require.NotEmpty(t, slices)
+		sliceID := slices[0].ID
+		pPath := blockFilePath(sliceID, 0, uint32(len(payload)))
+		require.FileExists(t, pPath)
+
+		require.NoError(t, mgr.Unlink(ctx, disk.RootIno, []byte("orphan_session_gc.bin")))
+
+		// 2) 模拟客户端失联且租约超期（后续不再有任何 RenewSession 调用）
+		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(sessID))
+		require.NoError(t, err)
+
+		// 3) 执行 CollectGarbage：同一事务内清理过期会话 -> 级联删除句柄与文件锁 -> 物理回收孤儿 Inode 并扣减 slice_refs -> 立即物理删除 Block 文件并清除 slice_refs
+		reclaimed, err := mgr.CollectGarbage(ctx, 100)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, reclaimed, 1)
+
+		var sessCnt, fhCnt, lockCnt, inodeCnt int64
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&sessCnt))
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(fRes.Fh)).Scan(&fhCnt))
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM file_locks WHERE session_id = $1", int64(sessID)).Scan(&lockCnt))
+		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM inodes WHERE ino = $1", int64(orphanIno)).Scan(&inodeCnt))
+
+		assert.Zero(t, sessCnt, "CollectGarbage 必须清理过期 client_sessions")
+		assert.Zero(t, fhCnt, "CollectGarbage 必须级联清理过期会话关联的 file_handles")
+		assert.Zero(t, lockCnt, "CollectGarbage 必须级联清理过期会话关联的 file_locks")
+		assert.Zero(t, inodeCnt, "CollectGarbage 必须物理回收不再被有效句柄引用的孤儿 Inode")
+		assert.NoFileExists(t, pPath, "孤儿 Inode 释放的物理块必须在本次 CollectGarbage 中被物理删除")
+		_, err = store.GetSliceRef(ctx, int64(sliceID))
+		assert.ErrorIs(t, err, pgx.ErrNoRows, "slice_refs 记录必须在本次 CollectGarbage 中被彻底清除")
+	})
 }
 
 // TestCollectGarbage_ScanProgressPastReferencedPrefixAndWrapAround 验证已引用的首批物理块不会阻挡后续扫描推进到同目录、同桶跨二级目录及跨散列桶的未登记孤儿块，并在到达目录树末尾后回绕回收新老化的前缀孤儿块。
@@ -954,6 +1102,8 @@ func TestCollectGarbage_ScanProgressPastReferencedPrefixAndWrapAround(t *testing
 	store := dbmock.NewMockStore(t)
 	q := dbmock.NewMockQuerier(t)
 	setupMockGCTxRepeated(store, q)
+	q.EXPECT().DeleteExpiredClientSessions(mock.Anything).Return(int64(0), nil)
+	q.EXPECT().DeleteUnreferencedOrphanInodes(mock.Anything).Return(nil, nil)
 	q.EXPECT().ListGarbageSliceRefs(mock.Anything, int32(1)).Return(nil, nil)
 	store.EXPECT().GetSliceRef(mock.Anything, int64(liveID)).Return(db.SliceRef{SliceID: int64(liveID), Size: 4, Refs: 1}, nil).Maybe()
 	store.EXPECT().GetSliceRef(mock.Anything, int64(sameDirOrphanID)).Return(db.SliceRef{}, pgx.ErrNoRows).Maybe()

@@ -748,6 +748,12 @@ func TestSetLkw_PostgresAcceptanceCriteria(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2, $3)", int64(s1), int64(s2), int64(s3))
 	}()
+	_, err = mgr.RenewSession(ctx, s1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, s2)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, s3)
+	require.NoError(t, err)
 
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: uint64(rootDir.Ino),
@@ -3990,6 +3996,10 @@ func TestSetLkw_ExpiredSessionCancel_LeavesDirtyFileLock(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 0, lockCount, "回滚后 file_locks 底表绝不能残留脏记录")
 
+		// 触发 GC 回收过期会话与孤儿节点
+		_, err = mgr.CollectGarbage(parentCtx, 100)
+		require.NoError(t, err)
+
 		// 5. 断言该孤儿 inodes 记录已被物理删除 (记录数为 0)
 		var inodeCount int
 		err = pool.QueryRow(parentCtx, "SELECT COUNT(*) FROM inodes WHERE ino = $1", int64(orphanIno)).Scan(&inodeCount)
@@ -4151,6 +4161,10 @@ func TestSetLkw_ExpiredSessionCancel_LeavesDirtyFileLock(t *testing.T) {
 		err = pool.QueryRow(parentCtx, "SELECT COUNT(*) FROM file_lock_waiters WHERE session_id = $1", int64(sess2)).Scan(&waiterCount)
 		require.NoError(t, err)
 		assert.Equal(t, 0, waiterCount, "cleanupCancelledWaiter 后 file_lock_waiters 底表绝不能残留等待记录")
+
+		// 触发 GC 回收过期会话与孤儿节点
+		_, err = mgr.CollectGarbage(parentCtx, 100)
+		require.NoError(t, err)
 
 		// 6. 断言会话 2 持有的孤儿 inodes 记录已被物理回收 (记录数为 0)
 		var orphanCount int

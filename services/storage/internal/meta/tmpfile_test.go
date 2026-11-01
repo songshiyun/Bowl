@@ -288,6 +288,14 @@ func TestTmpFile_PositiveAndParentInvariants(t *testing.T) {
 		}
 
 		mockQuerier.EXPECT().
+			HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
+				SessionID: int64(sessID),
+				RootIno:   0,
+			}).
+			Return(true, nil).
+			Once()
+
+		mockQuerier.EXPECT().
 			CreateInode(mock.Anything, db.CreateInodeParams{
 				Mode:  int32(meta.S_IFREG | 0o640),
 				Nlink: 0,
@@ -296,21 +304,6 @@ func TestTmpFile_PositiveAndParentInvariants(t *testing.T) {
 				Rdev:  0,
 			}).
 			Return(createdInodeRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteExpiredClientSessions(mock.Anything).
-			Return(int64(0), nil).
-			Once()
-		mockQuerier.EXPECT().
-			UpsertClientSession(mock.Anything, mock.MatchedBy(func(arg db.UpsertClientSessionParams) bool {
-				return arg.SessionID == int64(sessID) && arg.ExpiresAt.Valid
-			})).
-			Return(db.ClientSession{SessionID: int64(sessID)}, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteUnreferencedOrphanInodes(mock.Anything).
-			Return([]db.DeleteUnreferencedOrphanInodesRow(nil), nil).
 			Once()
 
 		mockQuerier.EXPECT().
@@ -471,6 +464,10 @@ func TestTmpFileAndLinkMaterialization_PostgresIntegration(t *testing.T) {
 	defer func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2)", int64(s1), int64(s2))
 	}()
+	_, err = mgr.RenewSession(ctx, s1)
+	require.NoError(t, err)
+	_, err = mgr.RenewSession(ctx, s2)
+	require.NoError(t, err)
 
 	// AC2: TmpFile 成功创建 nlink == 0 的常规文件 Inode 与携带 O_TMPFILE 的 FileHandle，entries 表无记录，父目录 mtime/ctime 未被修改，且 S_ISGID 继承父目录 gid
 	t.Run("AC2_TmpFile创建nlink0匿名文件且不修改父目录时间戳并继承S_ISGID属组", func(t *testing.T) {
@@ -567,21 +564,12 @@ func TestTmpFileAndLinkMaterialization_PostgresIntegration(t *testing.T) {
 		})
 		assert.ErrorIs(t, err, meta.ErrNotFound, "所属会话已过期的 TmpFile 严禁被 Link 具名化")
 
-		// 会话 s2 执行写操作触发 renewClientSession 物理回收该孤儿 TmpFile
-		dirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{
-			Ino:       rootIno,
-			Flags:     meta.O_RDONLY,
-			SessionID: &s2,
-		})
+		// 会话 s2 调用 RenewSession 触发物理回收该孤儿 TmpFile
+		_, err = mgr.RenewSession(ctx, s2)
 		require.NoError(t, err)
-		require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
-			Ino:       rootIno,
-			Fh:        dirRes.Fh,
-			SessionID: &s2,
-		}))
 
 		_, err = store.GetInode(ctx, int64(tmpIno))
-		assert.ErrorIs(t, err, pgx.ErrNoRows, "会话过期的未具名化 TmpFile 应被 renewClientSession 物理删除")
+		assert.ErrorIs(t, err, pgx.ErrNoRows, "会话过期的未具名化 TmpFile 应被 RenewSession 物理删除")
 	})
 
 	// AC4 & AC5(d): 非 O_EXCL TmpFile 成功 Link 具名化（nlink 0->1 且清除 O_TMPFILE），具名化后再次 Unlink 严禁二次 Link 复活

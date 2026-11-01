@@ -403,6 +403,10 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 			gid = uint32(parent.Gid)
 		}
 
+		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, parent.RootIno); err != nil {
+			return err
+		}
+
 		newInode, err := q.CreateInode(ctx, db.CreateInodeParams{
 			Mode:    int32(targetMode),
 			Nlink:   1,
@@ -413,10 +417,6 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 		})
 		if err != nil {
 			return fmt.Errorf("create inode: %w", err)
-		}
-
-		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
-			return err
 		}
 
 		err = q.CreateEntry(ctx, db.CreateEntryParams{
@@ -476,6 +476,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 			return nil, ErrNotDir
 		case errors.Is(err, ErrAlreadyExists):
 			return nil, ErrAlreadyExists
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("create tx: %w", err)
 		}
@@ -532,7 +534,7 @@ func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateRes
 			gid = uint32(parent.Gid)
 		}
 
-		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, parent.RootIno); err != nil {
 			return err
 		}
 
@@ -585,6 +587,8 @@ func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateRes
 			return nil, ErrNotFound
 		case errors.Is(err, ErrNotDir):
 			return nil, ErrNotDir
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("tmpfile tx: %w", err)
 		}
@@ -660,7 +664,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			}
 		}
 
-		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, inode.RootIno); err != nil {
 			return err
 		}
 
@@ -730,6 +734,8 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			return nil, ErrIsDir
 		case errors.Is(err, ErrInvalidArgument):
 			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("open tx: %w", err)
 		}
@@ -781,7 +787,7 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 			}
 		}
 
-		if err := m.renewOptionalClientSession(ctx, q, params.SessionID); err != nil {
+		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, inode.RootIno); err != nil {
 			return err
 		}
 
@@ -817,6 +823,8 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 			return nil, ErrNotDir
 		case errors.Is(err, ErrInvalidArgument):
 			return nil, ErrInvalidArgument
+		case errors.Is(err, ErrBadFileHandle):
+			return nil, ErrBadFileHandle
 		default:
 			return nil, fmt.Errorf("opendir tx: %w", err)
 		}
