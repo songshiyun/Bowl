@@ -6,8 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-RESULTS_DIR="${SCRIPT_DIR}/results"
-REPORT_FILE="${SCRIPT_DIR}/REPORT.md"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 
 # Aliyun Configuration (Silicon Valley us-west-1a)
 REGION_ID="${REGION_ID:-us-west-1}"
@@ -41,6 +41,13 @@ log() {
 cleanup() {
   local exit_code=$?
   set +e
+
+  # 失败时先回传原始输出，避免释放实例后丢失失败证据。
+  if [[ "${exit_code}" != "0" && -n "${CLIENT_SSH_HOST:-}" ]]; then
+    scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
+    ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
+  fi
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."

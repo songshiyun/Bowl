@@ -22,10 +22,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 DRIVE9_REPO="${DRIVE9_REPO:-/Users/fanxing/code/other/filesystem/drive9}"
-RESULTS_DIR="${SCRIPT_DIR}/results"
-REPORT_FILE="${SCRIPT_DIR}/REPORT.md"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 SUMMARY_JSON="${RESULTS_DIR}/summary.json"
-BUILD_DIR="${SCRIPT_DIR}/.build_linux_amd64"
+BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/.build_linux_amd64}"
 
 REGION="us-west-1"
 ZONE="us-west-1a"

@@ -6,8 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-RESULTS_DIR="${SCRIPT_DIR}/results"
-REPORT_FILE="${SCRIPT_DIR}/REPORT.md"
+RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
+REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 
 # Aliyun Configuration (Silicon Valley us-west-1a)
 REGION_ID="${REGION_ID:-us-west-1}"
