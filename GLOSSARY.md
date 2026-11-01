@@ -89,7 +89,7 @@ _Avoid_: OpenFile, AcquireHandle, ConnectFile
 _Avoid_: Close, SyncHandle, Drain
 
 **Fsync (文件同步)**:
-确认目标 Inode 及其活跃 FileHandle 关联状态（支持完整同步与仅数据同步语义）已持久化的同步操作。
+确认目标 Inode 及其活跃 FileHandle 关联的数据块与元数据（支持完整同步与仅数据同步语义）已持久化至底层非易失存储介质的同步屏障操作。
 _Avoid_: Sync, CommitFile, FlushDisk
 
 **Release (句柄释放)**:
@@ -109,7 +109,7 @@ _Avoid_: ListDir, ReadEntries, FetchDir, ScanDir
 _Avoid_: ReadDirWithAttr, BatchLookup, ScanDirPlus
 
 **FsyncDir (目录同步)**:
-确认目标目录 Inode 及其活跃目录 FileHandle 关联状态（支持完整同步与仅数据同步语义）已持久化的同步操作。
+确认目标目录 Inode 及其活跃目录 FileHandle 关联的目录项与状态（支持完整同步与仅数据同步语义）已持久化至底层非易失存储介质的同步屏障操作。
 _Avoid_: SyncDir, CommitDir, FlushDir
 
 **ReleaseDir (目录句柄释放)**:
@@ -219,7 +219,7 @@ _Avoid_: Blob, Page, Cell, Sector, ObjectFile
 _Avoid_: FetchData, GetBytes, ReadFile, PullStream
 
 **Write (文件数据写入)**:
-根据目标常规文件 Inode、活跃可写 FileHandle、字节偏移量与待写字节序列，将载荷持久化为底层 Block、追加 Slice 元数据映射并同步更新文件大小与配额的写入操作。
+根据目标常规文件 Inode、活跃可写 FileHandle、字节偏移量与待写字节序列，将载荷原子发布为底层 Block、追加 Slice 元数据映射并同步更新文件大小与配额的写入操作。
 _Avoid_: PutData, WriteBytes, AppendFile, PushStream
 
 **Compaction (切片合并)**:
