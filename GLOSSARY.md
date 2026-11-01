@@ -89,7 +89,7 @@ _Avoid_: OpenFile, AcquireHandle, ConnectFile
 _Avoid_: Close, SyncHandle, Drain
 
 **Fsync (文件同步)**:
-确认目标 Inode 及其活跃 FileHandle 关联的数据块与元数据（支持完整同步与仅数据同步语义）已持久化至底层非易失存储介质的同步屏障操作。
+校验目标常规文件 Inode 与活跃 FileHandle 归属有效性，并确认已提交的文件元数据已持久化落盘的同步屏障操作。
 _Avoid_: Sync, CommitFile, FlushDisk
 
 **Release (句柄释放)**:
@@ -109,7 +109,7 @@ _Avoid_: ListDir, ReadEntries, FetchDir, ScanDir
 _Avoid_: ReadDirWithAttr, BatchLookup, ScanDirPlus
 
 **FsyncDir (目录同步)**:
-确认目标目录 Inode 及其活跃目录 FileHandle 关联的目录项与状态（支持完整同步与仅数据同步语义）已持久化至底层非易失存储介质的同步屏障操作。
+校验目标目录 Inode 与活跃目录 FileHandle 归属有效性，并确认已提交的目录项与状态元数据已持久化落盘的同步屏障操作。
 _Avoid_: SyncDir, CommitDir, FlushDir
 
 **ReleaseDir (目录句柄释放)**:
