@@ -165,12 +165,12 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append(
         "本报告记录了 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）真实开启 2 台按量计费云服务器"
-        "（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下同时运行 "
+        "（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下依次运行 "
         "**`juicefs bench` 基础测试套件**、**Drive9 内置 [`drive9_fuse_bench.py`](drive9_fuse_bench.py) 微观与宏观基准套件（冷缓存 + 热缓存）** 以及 "
         "**Drive9 内置 [`fuse_perf_baseline.py`](fuse_perf_baseline.py)（SHA-256 完整性校验读写 + SQLite `DELETE`/`WAL` 事务基准）** 的实测对比结果。"
     )
     lines.append("")
-    lines.append("由于 Drive9 默认采用客户端本地 Write-Back 缓存 + 本地 `.git`/构建目录 Overlay（`--profile=coding-agent --durability=interactive`），而 Bowl 采用无客户端本地盘缓存的跨机同步直通持久化契约，为兼顾「默认开箱体验对比」与「同持久化语义公平对比」，本次评测在同台机器上同时测试了三组目标：")
+    lines.append("由于 Drive9 默认采用客户端本地 Write-Back 缓存 + 本地 `.git`/构建目录 Overlay（`--profile=coding-agent --durability=interactive`），而 Bowl 采用无客户端本地盘缓存的跨机同步直通持久化契约，为兼顾「默认开箱体验对比」与「同步提交模式对比」，本次评测在同台机器上依次测试了三组目标：")
     lines.append("")
     lines.append("1. **Bowl (`bowl`)**：PostgreSQL 16 + Server BlockStore，采用生产默认配置（`noatime` + `1.0s` FUSE 内核属性/目录项缓存，客户端零本地盘缓存、每次写入直通服务端落盘）。")
     lines.append("2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3，客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。")
@@ -650,38 +650,19 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append(f"| **{label}** | `{unit}` | `{sb}` | `{sd}` | `{ss}` | **{rd}** | **{rs}** |")
     lines.append("")
 
-    # Section 6: Architectural Analysis
-    lines.append("---")
+    # 本节从当轮结果生成，历史数值不能作为当前结果输出。
+    lines.extend(["---", "", "## 6. 本轮观测与比较边界", ""])
+    for item, unit, _ in BENCH_ITEMS:
+        value = get_bench_val(b_bench, item)
+        other = get_bench_val(d9s_bench, item)
+        if value is not None and other is not None:
+            lines.append(f"- `{item}`：Bowl `{value:.2f} {unit}`，Drive9 Sync `{other:.2f} {unit}`，吞吐比 `{fmt_throughput_ratio(value, other)}`。")
     lines.append("")
-    lines.append("## 6. 性能特征与存储层架构差异深度剖析（基于第一性原理与实测数据）")
+    lines.append("Drive9 Default 使用 `interactive`，Drive9 Sync 使用 `close-sync`，两者的写入确认条件不同。表内数值保留各自配置，吞吐比较不等于持久化契约相同。")
     lines.append("")
-    lines.append("### 6.1 跨机同步持久化路径：Bowl (`bowl`) vs Drive9 远端同步模式 (`drive9_sync`)")
+    lines.append("冷缓存准备命令仅清理客户端内核页缓存；未重启 FUSE 进程、清理 Drive9 用户态或磁盘读缓存，也未清理服务端页缓存。因此本报告的 cold 表示该命令下的缓存状态，不能解释为完整远端冷读。")
     lines.append("")
-    lines.append("在同样禁用客户端本地 Write-Back 伪装、要求每次 `close`/`fsync` 真正跨越 VPC 落盘至服务端存储节点的公平对比（`bowl` vs `drive9_sync`）下：")
-    lines.append("")
-    lines.append("1. **大文件与小文件并发同步写吞吐（Bowl 达 `drive9_sync` 的 `3.09x` ~ `3.22x`）**：")
-    lines.append("   - 在 `juicefs bench -p 4` 中，Bowl 大文件并发写达 **`179.17 MiB/s`**（为 `drive9_sync` `58.01 MiB/s` 的 **`3.09x`**），小文件并发写达 **`317.40 files/s`**（为 `drive9_sync` `98.60 files/s` 的 **`3.22x`**），小文件并发读达 **`467.10 files/s`**（为 `drive9_sync` `137.60 files/s` 的 **`3.39x`**），并发 `Stat` 达 **`5,541.50 files/s`**（为 `drive9_sync` `483.50 files/s` 的 **`11.46x`**）。")
-    lines.append("   - **根因机制**：Bowl 将大文件切分为 `64 MiB` Chunk 与 `4 MiB` Block，客户端在 `Write` 时流式直通服务端 `BlockStore` 配合 RocksDB 式 `WriteThread` 两阶段 Group Commit（ADR-0022）；而在 `--durability=close-sync` 模式下，Drive9 客户端需先写入本地 Shadow Staging 存储，再在 `close`/`fsync` 时通过 HTTP/S3 协议上传至 `drive9-server` 并在 TiDB 中执行版本事务提交，承受了本地 Staging 写与远端上传写的双重开销。")
-    lines.append("2. **单流大文件冷缓存顺序读写与随机 4K 读（Bowl 顺序写 `1.18x`、顺序读 `1.72x`、随机读 `1.08x`）**：")
-    lines.append("   - 在 `drive9_fuse_bench.py` 冷缓存测试中，Bowl 单流 256 MiB 顺序写达 **`226.09 MiB/s`**（`drive9_sync` 为 `191.09 MiB/s`，Bowl 为 **`1.18x`**），冷缓存 256 MiB 顺序读达 **`141.13 MiB/s`**（`drive9_sync` 为 `82.27 MiB/s`，Bowl 为 **`1.72x`**），随机 4K 读达 **`5.52 MiB/s`**（对比 `drive9_default` `2.83 MiB/s` 为 **`1.96x`**，对比 `drive9_sync` `5.11 MiB/s` 为 **`1.08x`**）。")
-    lines.append("   - 得益于 ADR-0023 的服务端 `BlockStore` 无锁并发读块与客户端 `FileHandle` 顺序预读窗口（Sequential Read-Ahead），Bowl 在无客户端本地磁盘缓存的前提下，冷缓存顺序读与 4K 随机读均超越 Drive9。")
-    lines.append("3. **目录与命名空间同步变更操作（`mkdir` / `rename` / `unlink`：Bowl 达 `1.71x` ~ `9.17x`）**：")
-    lines.append("   - 无论在冷缓存还是热缓存下，Drive9 的目录结构变更（`mkdir`、`rename`、`unlink`）均需同步请求远端服务端：冷缓存下 Bowl 的 `mkdir`（**`423.72 ops/s`**）、`rename`（**`345.50 ops/s`**）、`unlink`（**`373.07 ops/s`**）分别为 `drive9_default` 的 **`1.71x`、`3.59x`、`3.80x`**，分别为 `drive9_sync` 的 **`1.71x`、`5.62x`、`7.31x`**（热缓存下更达到 `drive9_sync` 的 **`2.06x`、`8.66x`、`9.17x`**）。")
-    lines.append("   - 经过 ADR-0023 优化后，Bowl 消除了非孤儿文件 `Release` 路径上的 `Inode` 排他锁竞争与每次 RPC 的会话心跳行锁更新，使 PostgreSQL 16 单跳事务的命名空间变更吞吐大幅领先于 Drive9 的 HTTP REST + TiDB 链路。")
-    lines.append("4. **Git 研发工作流（`macro_git_clone` / `git status` / `git diff`）**：")
-    lines.append("   - 在同步持久化契约（`bowl` vs `drive9_sync`）下，Bowl 完成 200 文件 / 20 MiB 仓库的 `git clone --no-local` 仅需 **`5.153s`**，比 `drive9_sync`（`6.290s`）快 **`1.22x`**。")
-    lines.append("   - 在冷缓存 `git status --porcelain`（dirty 工作区）与 `git diff --name-only` 中，Bowl 耗时分别为 **`0.361s`** 与 **`0.147s`**，比 `drive9_default`（`2.081s` 与 `0.782s`）快 **`5.76x`** 与 **`5.31x`**（因为 `drive9_default` 在 `coding-agent` 模式下首次访问工作区会触发 Git Workspace / Ignore 规则链扫描与本地状态核验开销）。")
-    lines.append("")
-    lines.append("### 6.2 客户端本地缓存与专用优化对比：Drive9 的优势场景与架构取舍")
-    lines.append("")
-    lines.append("1. **客户端本地 Write-Back 异步暂存（`drive9_default` 的 `interactive` 模式）**：")
-    lines.append("   - 在 `drive9_default`（`--durability=interactive`）下，`write`、`fsync` 与 `close` 仅写入客户端本地 NVMe/ESSD Staging 目录即立即返回，后台 `CommitQueue` 异步排队上传。这使 `drive9_default` 在单机突发小文件写入（`juicefs bench` 小文件写 `2,268.50 files/s`、`small_write_4k_fsync` `1,035.92 ops/s`）及 `git clone`（`1.908s`）上接近本地磁盘速度。")
-    lines.append("   - **架构代价**：`fsync` 返回时尚未完成服务端持久化（客户端崩溃或断电存在未 Drain 队列丢失风险），且后台 `CommitQueue` 未完成前多客户端无法共享一致视图；此外在未 Drain 状态下若紧接执行包含硬链接（`link`）的操作（如 `git clone` 的 packfile 落盘），极易触发本地 `writeBack` 与远端 `syncOpenSourceForHardlink` 的版本冲突。")
-    lines.append("2. **客户端用户态内存/磁盘读缓存与目录全量缓存（`readCache` / `diskReadCache` / `dirCache`）**：")
-    lines.append("   - Drive9 在客户端进程内维护了 128 MiB 内存读缓存、1024 MiB 本地磁盘读缓存以及用户态全量目录项缓存（`dirCache`，`Lookup`/`GetAttr` 直接命中客户端进程内存而不发网络 RPC）。因此当数据已进入客户端读缓存（如热缓存 `sequential_read` `2,339.87 MiB/s`、`readdir_large`、`stat` 以及 `juicefs bench` 刚写完同一批文件后的 `Read big file`）时，Drive9 直接从客户端本地内存/本地盘返回。")
-    lines.append("   - **演进启示**：Bowl 目前坚持客户端零本地磁盘缓存与严格的 `1.0s` 内核缓存过期策略（1s 后 `stat`/`readdir` 均跨越 VPC 发起 RPC），以换取多节点共享挂载的强一致性；后续若为单客户端独占挂载场景引入可选的用户态 `DirCache` / 属性租约（Lease），可进一步消除热路径上的跨机 `Lookup`/`Readdir` 往返。")
-    lines.append("3. **SQLite 专用日志路径优化（`fuse_perf_baseline.py`）**：")
-    lines.append("   - Drive9 针对 SQLite `-wal`/`-journal` 路径内置了专用的 Append-Log / Batch Coalescing 与客户端读缓存驻留路径，因此在单客户端 SQLite 连续事务微基准中吞吐较高；而 Bowl 将 SQLite 数据库与日志文件均作为标准 POSIX 文件通过服务端 `BlockStore` 强一致落盘，依然在 `DELETE` 与 `WAL`（`PRAGMA synchronous=FULL`）双模式下 100% 通过 SHA-256 指纹校验、`PRAGMA integrity_check` 与 `PRAGMA wal_checkpoint(TRUNCATE)`。")
+    lines.append("微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。")
     lines.append("")
 
     # Section 7: Cloud Resource Audit

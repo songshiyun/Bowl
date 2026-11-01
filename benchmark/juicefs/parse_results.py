@@ -13,8 +13,8 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TARGETS = [
     ("bowl", "Bowl (PG 16 + BlockStore)"),
-    ("jfs_pg", "JuiceFS (PG 16 + MinIO)"),
-    ("jfs_redis", "JuiceFS (Redis 7 + MinIO)"),
+    ("jfs_pg", "JuiceFS (PG 16 + rclone S3)"),
+    ("jfs_redis", "JuiceFS (Redis 7 + rclone S3)"),
 ]
 
 BENCH_ITEMS = [
@@ -318,8 +318,8 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("为确保对比的严谨性与公平性，本次评测在**完全相同的双机硬件、VPC 私网与 120 GiB `cloud_essd` 云盘**上依次测试了三组存储架构，并同步对照 JuiceFS 官方文档基线：")
     lines.append("")
     lines.append("1. **Bowl (PostgreSQL 16 + Server BlockStore)**：采用 Bowl 生产默认配置（`noatime` + `1.0s` FUSE 内核属性/目录项缓存，ConnectRPC 跨机直通读写）。")
-    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：与 Bowl 使用同台 Server 上的同一个 PostgreSQL 16 实例作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 MinIO S3 服务（关闭回收站 `--trash-days 0`）。")
-    lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 MinIO S3 存储（`--trash-days 0`）。")
+    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：与 Bowl 使用同台 Server 上的同一个 PostgreSQL 16 实例作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
+    lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 rclone S3 存储（`--trash-days 0`）。")
     lines.append("")
 
     # Core Headline Summary Table
@@ -520,7 +520,7 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **元数据引擎 (Server 节点)** | {srv.get('pg_version', '')} (`bowl` 库) | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
     )
     lines.append(
-        f"| **数据块存储 (Server 节点)** | `storage-service` 本地 BlockStore (`/var/lib/bowl/data`) | MinIO S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | MinIO S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
+        f"| **数据块存储 (Server 节点)** | `storage-service` 本地 BlockStore (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
     )
     lines.append(
         f"| **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |"
@@ -668,74 +668,21 @@ def render_report(summary: dict[str, Any]) -> str:
         )
     lines.append("")
 
-    # Section 6: Architectural Analysis
-    bw_write_big = get_bench_val(b_bench, "Write big file") or 0.0
-    bw_read_big = get_bench_val(b_bench, "Read big file") or 0.0
-    bw_write_small = get_bench_val(b_bench, "Write small file") or 0.0
-    bw_read_small = get_bench_val(b_bench, "Read small file") or 0.0
-    bw_stat = get_bench_val(b_bench, "Stat file") or 0.0
-    jpg_write_big = get_bench_val(pg_bench, "Write big file") or 0.0
-    jpg_read_big = get_bench_val(pg_bench, "Read big file") or 0.0
-    jpg_write_small = get_bench_val(pg_bench, "Write small file") or 0.0
-    jpg_read_small = get_bench_val(pg_bench, "Read small file") or 0.0
-
-    fio_sw1 = get_fio_bw(b_fio, "seq_write_1job") or 0.0
-    fio_sr1 = get_fio_bw(b_fio, "seq_read_1job") or 0.0
-    fio_sw16 = get_fio_bw(b_fio, "seq_write_16jobs") or 0.0
-    fio_sr16 = get_fio_bw(b_fio, "seq_read_16jobs") or 0.0
-    fio_dw4 = get_fio_bw(b_fio, "direct_write_4jobs") or 0.0
-    fio_dr4 = get_fio_bw(b_fio, "direct_read_4jobs") or 0.0
-    fio_drw4 = get_fio_bw(b_fio, "direct_randwrite_4jobs") or 0.0
-    fio_drr4 = get_fio_bw(b_fio, "direct_randread_4jobs") or 0.0
-
-    md1_dc = get_md_mean(b_md1, "Directory creation") or 0.0
-    md1_ds = get_md_mean(b_md1, "Directory stat") or 0.0
-    md1_fc = get_md_mean(b_md1, "File creation") or 0.0
-    md1_fs = get_md_mean(b_md1, "File stat") or 0.0
-    md1_fr = get_md_mean(b_md1, "File read") or 0.0
-    md1_frem = get_md_mean(b_md1, "File removal") or 0.0
-
-    md4_dc = get_md_mean(b_md4, "Directory creation") or 0.0
-    md4_ds = get_md_mean(b_md4, "Directory stat") or 0.0
-    md4_fc = get_md_mean(b_md4, "File creation") or 0.0
-    md4_fr = get_md_mean(b_md4, "File read") or 0.0
-
-    lines.append("---")
+    # 本节仅引用当轮结果，避免重跑时保留旧数值或未经实验验证的归因。
+    lines.extend(["---", "", "## 6. 本轮观测与比较边界", ""])
+    for key, label in [("seq_write_1job", "单流顺序写"),
+                       ("seq_read_1job", "单流顺序读"),
+                       ("seq_write_16jobs", "16 并发顺序写"),
+                       ("seq_read_16jobs", "16 并发顺序读")]:
+        value = get_fio_bw(b_fio, key)
+        if value is not None:
+            lines.append(f"- Bowl {label}：`{value:.2f} MiB/s`；同轮 JuiceFS(PG) 为 `{get_fio_bw(pg_fio, key) or 0:.2f} MiB/s`。")
     lines.append("")
-    lines.append("## 6. 性能特征与存储层架构差异深度剖析（基于实证数据）")
+    lines.append("服务端顺序读写物理基线、请求大小与并发数见第 2、4 节。不同请求大小与持久化路径的吞吐不能直接解释为云盘利用率。")
     lines.append("")
-    lines.append("### 6.1 Bowl 领先或跑满云盘物理极限的场景剖析（ADR-0022 + ADR-0023 实证）")
+    lines.append("`juicefs bench` 内部清理内核页缓存，但不清理 JuiceFS 客户端本地块缓存；同轮小文件与大文件读取包含缓存行为差异。套件之间的缓存清理不能改变这一边界。")
     lines.append("")
-    lines.append("1. **大文件顺序写、顺序读与 Direct I/O 全面逼近或跑满 `cloud_essd` 云盘物理带宽上限（ADR-0022 + ADR-0023 实证）**：")
-    lines.append(
-        f"   - **写入链路（ADR-0022）**：经过服务端 RocksDB 式 `WriteThread` 两阶段流水线 Group Commit、`CompactChunk` 无重叠大块前缀跳过 `skipSome` 与 `BlockStore` 目录缓存优化，在客户端坚守 100% 零缓存同步直通契约的前提下，Bowl 的 `juicefs bench` 大文件并发写（**`{bw_write_big:.2f} MiB/s`**）、`fio` 单流顺序写（**`{fio_sw1:.2f} MiB/s`**）、`fio` 16 并发顺序写（**`{fio_sw16:.2f} MiB/s`**）及 Direct 顺序写（**`{fio_dw4:.2f} MiB/s`**）均 **100% 跑满 Server 节点 120 GiB `cloud_essd` (PL1) 的物理顺序写上限（`{disk_base.get('local_seq_write_mib_s', '')} MiB/s`）**。"
-    )
-    lines.append(
-        f"   - **读取链路（ADR-0023）**：新增服务端 `Read` 无锁并发读块（校验后释放 `Inode` 锁并发读取 `BlockStore`）与客户端文件级顺序预读窗口（Sequential Read-Ahead）后，Bowl 的多流顺序读吞吐实现翻倍跃升：`juicefs bench` 4 并发大文件读从 `63.65 MiB/s` 提升至 **`{bw_read_big:.2f} MiB/s`**（**2.00x**），`fio` 16 并发顺序读从 `72.42 MiB/s` 提升至 **`{fio_sr16:.2f} MiB/s`**（**2.06x**，已达同机 JuiceFS `{get_fio_bw(pg_fio, 'seq_read_16jobs') or 0:.2f} MiB/s` 物理云盘上限的 **85%**），Direct 顺序读达到 **`{fio_dr4:.2f} MiB/s`**，Direct 随机读达到 **`{fio_drr4:.2f} MiB/s`**。"
-    )
-    lines.append("2. **会话心跳节流与无锁句柄关闭带来元数据与小文件吞吐全面跃升（ADR-0023 实证）**：")
-    lines.append(
-        f"   - 经过 ADR-0023（全路径会话心跳 30s 内存节流 `touchSessionThrottled`、`Flush` 无锁快速路径、`Release`/`ReleaseDir` 非孤儿句柄免除 `Inode` 排他锁、`Lookup` 单语句免事务包装）优化后，高频 `open -> read/write -> flush -> release` 路径上的数据库写放大被大幅消除："
-    )
-    lines.append(
-        f"   - **`juicefs bench -p 4` 小文件与 Stat**：小文件并发写达到 **`{bw_write_small:.2f} files/s`**（是 JuiceFS 官方 AWS S3+PG 基线 `86.40 files/s` 的 **{bw_write_small / 86.40:.2f} 倍**），小文件并发读达到 **`{bw_read_small:.2f} files/s`**，小文件并发 Stat 达到 **`{bw_stat:.2f} files/s`**。"
-    )
-    lines.append(
-        f"   - **`mdtest` 单流与 4 并发 MPI 压测**：单流 `Directory creation` 达到 **`{md1_dc:,.1f} ops/s`**，`Directory stat` 达到 **`{md1_ds:,.1f} ops/s`**，`File creation` 达到 **`{md1_fc:,.1f} ops/s`**，`File stat` 达到 **`{md1_fs:,.1f} ops/s`**，`File read` 达到 **`{md1_fr:,.1f} ops/s`**，`File removal` 达到 **`{md1_frem:,.1f} ops/s`**；4 进程 MPI 并发下 `Directory creation` 达到 **`{md4_dc:,.1f} ops/s`**，`Directory stat` 达到 **`{md4_ds:,.1f} ops/s`**，`File creation` 达到 **`{md4_fc:,.1f} ops/s`**，`File read` 达到 **`{md4_fr:,.1f} ops/s`**。"
-    )
-    lines.append("")
-    lines.append("### 6.2 差距根因与 Bowl 存储层演进方向（第一性原理追溯）")
-    lines.append("")
-    lines.append("基于实测日志（见 `results/bench_*.log`、`results/fio_*.json`、`results/mdtest_*.log`），当前 Bowl 与同机 JuiceFS 在剩余场景的差异根因如下：")
-    lines.append("")
-    lines.append("1. **客户端本地 SSD 缓存 vs 跨网直通访问**：")
-    lines.append(
-        f"   - `juicefs bench` 内部仅执行 `echo 3 > /proc/sys/vm/drop_caches` 清理内核页缓存，未清理 JuiceFS 客户端本地磁盘缓存目录 `/var/jfsCache`（`bench_jfs_pg.log` 记录 `Read from cache: 400 operations`），因此 `juicefs bench` 中的小文件读直接命中了 Client 本地 SSD 缓存；而 Bowl 为无本地磁盘缓存的纯远端直通架构。"
-    )
-    lines.append("2. **空文件高频 `open/close` 的持久化句柄事务开销**：")
-    lines.append(
-        f"   - JuiceFS 对未写入数据的空文件在客户端内存内直接短路 `Flush` 与 `Release`（0 次远端 RPC）；而 Bowl 为守护跨客户端 Open-Unlink 孤儿保活契约，在每次 `Open/Create` 时执行 PostgreSQL `INSERT INTO file_handles` 写事务，在 `Release` 时执行 `DELETE FROM file_handles` 写事务。若后续将活跃文件句柄收敛至服务端内存租约表（仅在节点发生 `Unlink` 转为 `nlink=0` 孤儿状态时落盘持久化），可进一步将空文件 `create/read` IOPS 提升数倍。"
-    )
+    lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")
     lines.append("")
 
     # Section 7: Cloud Resource Audit

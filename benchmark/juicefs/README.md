@@ -5,15 +5,15 @@
 测试在与 [`benchmark/pjdfstest`](../pjdfstest) 完全相同的**阿里云硅谷地域（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比，同时对照 JuiceFS 官方文档基线数据：
 
 1. **Bowl (PostgreSQL 16 + Server BlockStore)**：Bowl 生产默认配置（`noatime` + `1.0s` FUSE 属性/目录项缓存，ConnectRPC 跨机直通）。
-2. **JuiceFS (PostgreSQL 16 + Server MinIO S3)**：与 Bowl 同款的 PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 MinIO 对象存储（`--trash-days 0`）。
-3. **JuiceFS (Redis 7 + Server MinIO S3)**：JuiceFS 官方常规测试默认的 Redis 元数据引擎（`appendonly yes`, `appendfsync everysec`）+ Server 节点 `cloud_essd` 上的 MinIO 对象存储（`--trash-days 0`）。
+2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：与 Bowl 同款的 PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
+3. **JuiceFS (Redis 7 + Server rclone S3)**：JuiceFS 官方常规测试默认的 Redis 元数据引擎（`appendonly yes`, `appendfsync everysec`）+ Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
 
 ## 目录结构
 
 | 文件 / 目录 | 说明 |
 | :--- | :--- |
-| [`REPORT.md`](./REPORT.md) | 阿里云硅谷（`us-west-1a`）双机内网 Bowl vs JuiceFS 完整性能基准测试报告（含环境拓扑、内网与磁盘基线、`juicefs bench`、`fio` 8 组负载、`mdtest` 单流与多并发对比、架构瓶颈剖析及云资源销毁审计） |
-| [`run_aliyun_benchmark.sh`](./run_aliyun_benchmark.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云硅谷双机按量开通 -> 部署 Bowl / PostgreSQL / Redis / MinIO / JuiceFS -> 串行执行三大基准测试套件 -> 回传日志生成报告 -> 自动强制释放云服务器 |
+| [`REPORT.md`](./REPORT.md) | 阿里云硅谷（`us-west-1a`）双机内网 Bowl vs JuiceFS 完整性能基准测试报告（含环境拓扑、内网与磁盘基线、`juicefs bench`、`fio` 8 组负载、`mdtest` 单流与多并发对比、性能观测、比较边界及云资源销毁审计） |
+| [`run_aliyun_benchmark.sh`](./run_aliyun_benchmark.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云硅谷双机按量开通 -> 部署 Bowl / PostgreSQL / Redis / rclone S3 / JuiceFS -> 串行执行三大基准测试套件 -> 回传日志生成报告 -> 自动强制释放云服务器 |
 | [`parse_results.py`](./parse_results.py) | `juicefs bench`、`fio` JSON 与 `mdtest` 输出解析器及 `REPORT.md` 渲染工具 |
 | [`results/summary.json`](./results/summary.json) | 结构化测试汇总数据（三大存储栈在全部测试套件中的吞吐量、IOPS、延迟及相对倍数） |
 | [`results/env_metadata.json`](./results/env_metadata.json) | 双机硬件规格、软件版本、VPC 内网 RTT / `iperf3` 带宽基线、云盘本地基线及云资源销毁审计元数据 |
