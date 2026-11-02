@@ -531,8 +531,8 @@ func TestDataLifecycle_FullFlow(t *testing.T) {
 		assert.Equal(t, crossBlockData, readCrossBlock.Msg.GetData(), "跨 4 MiB Block 边界回读必须一致")
 	})
 
-	// 4. 跨 64 MiB Chunk 边界写入与回读
-	t.Run("跨 64 MiB Chunk 边界 (64 MiB - 2048 写入 4096 字节) 并逐字节校验", func(t *testing.T) {
+	// 4. 跨 4 MiB Chunk 边界写入与回读
+	t.Run("跨 4 MiB Chunk 边界 (4 MiB - 2048 写入 4096 字节) 并逐字节校验", func(t *testing.T) {
 		createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
 			ParentIno: rootIno,
 			Name:      []byte("cross_chunk.dat"),
@@ -549,7 +549,7 @@ func TestDataLifecycle_FullFlow(t *testing.T) {
 			}))
 		}()
 
-		chunkSize := uint64(64 * 1024 * 1024)
+		chunkSize := uint64(meta.ChunkSize)
 		crossOffset := chunkSize - 2048
 		crossData := make([]byte, 4096)
 		for i := range crossData {
@@ -572,7 +572,7 @@ func TestDataLifecycle_FullFlow(t *testing.T) {
 			Size:   uint32(len(crossData)),
 		}))
 		require.NoError(t, err)
-		assert.Equal(t, crossData, readCross.Msg.GetData(), "跨 64 MiB 边界读取数据必须逐字节完全一致")
+		assert.Equal(t, crossData, readCross.Msg.GetData(), "跨 4 MiB 边界读取数据必须逐字节完全一致")
 
 		// 检查跨 Chunk 前部的稀疏区间全为 0x00
 		sparseBefore, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
@@ -583,6 +583,55 @@ func TestDataLifecycle_FullFlow(t *testing.T) {
 		}))
 		require.NoError(t, err)
 		assert.Equal(t, make([]byte, 4096), sparseBefore.Msg.GetData(), "跨块前部未写稀疏区间必须为 0x00")
+
+		// 在非对齐偏移 (ChunkSize / 2 = 2 MiB) 处写入完整 4 MiB 最大单次负载，验证跨 4 MiB 边界回读与跨界 Fallocate 打洞
+		maxPayload := make([]byte, meta.ChunkSize)
+		for i := range maxPayload {
+			maxPayload[i] = byte((i*13 + 5) % 251)
+		}
+		halfChunk := chunkSize / 2
+		_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+			Ino:    ccIno,
+			Fh:     ccFh,
+			Offset: halfChunk,
+			Data:   maxPayload,
+		}))
+		require.NoError(t, err)
+
+		readMaxCross, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+			Ino:    ccIno,
+			Fh:     ccFh,
+			Offset: halfChunk,
+			Size:   uint32(meta.ChunkSize),
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, maxPayload, readMaxCross.Msg.GetData(), "RPC 层非对齐最大 4 MiB 负载跨 4 MiB Chunk 边界回读必须 100% 一致")
+
+		// 跨 4 MiB 边界执行 Fallocate 打洞 [chunkSize - 1024, chunkSize + 1024)
+		_, err = client.Fallocate(ctx, connect.NewRequest(&storagev1.FallocateRequest{
+			Ino:    ccIno,
+			Fh:     ccFh,
+			Offset: chunkSize - 1024,
+			Length: 2048,
+			Mode:   fallocPunchHole | fallocKeepSize,
+		}))
+		require.NoError(t, err)
+
+		readHoleCross, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+			Ino:    ccIno,
+			Fh:     ccFh,
+			Offset: chunkSize - 2048,
+			Size:   4096,
+		}))
+		require.NoError(t, err)
+		gotHoleCross := readHoleCross.Msg.GetData()
+		require.Len(t, gotHoleCross, 4096)
+		// 前 1024B 来自 maxPayload[halfChunk-2048 : halfChunk-1024]
+		assert.Equal(t, maxPayload[halfChunk-2048:halfChunk-1024], gotHoleCross[:1024])
+		// 中间 2048B 跨 4 MiB 边界打洞区域必须全为 0x00
+		assert.Equal(t, make([]byte, 2048), gotHoleCross[1024:3072], "跨 4 MiB 边界 Fallocate 打洞区域必须返回全零")
+		// 后 1024B 来自 maxPayload[halfChunk+1024 : halfChunk+2048]
+		assert.Equal(t, maxPayload[halfChunk+1024:halfChunk+2048], gotHoleCross[3072:4096])
 	})
 
 	// 5. 多层随机覆盖 Write (连续覆写 >= 4 次触发 CompactChunk)

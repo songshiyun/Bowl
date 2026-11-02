@@ -25,7 +25,8 @@ import (
 	metamock "github.com/starsrc/bowl/services/storage/internal/meta/mock"
 )
 
-// TestRead_CrossBlockBoundary 验证单次 Read 命中的有效 Slice 跨越 4 MiB 物理 Block 边界时的分块读取与拼接。
+// TestRead_CrossBlockBoundary 验证单次跨 4 MiB Chunk 边界写入共享同一 4 MiB 物理 Block (slice_id) 时，
+// 单次 Read 跨越 4 MiB Chunk 边界从同一物理 Block 的不同片段读取并精确拼接。
 func TestRead_CrossBlockBoundary(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
@@ -35,13 +36,13 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 	fileRow := db.Inode{
 		Ino:   int64(ino),
 		Mode:  int32(meta.S_IFREG | 0o644),
-		Size:  8 * 1024 * 1024, // 8 MiB 文件大小
+		Size:  8 * 1024 * 1024, // 8 MiB 文件大小 (覆盖 2 个 4 MiB Chunk)
 		Atime: pgtype.Timestamptz{Time: now, Valid: true},
 		Mtime: pgtype.Timestamptz{Time: now, Valid: true},
 		Ctime: pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("跨越 4 MiB Block 边界读取 2 MiB 数据拼接验证", func(t *testing.T) {
+	t.Run("跨越 4 MiB Chunk/Block 边界读取共享物理 Block 的 2 MiB 数据拼接验证", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -50,20 +51,29 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		sliceID := uint64(9001)
-		// 构造一个 8 MiB 大小的单个 Slice，包含两个 4 MiB Block (Block 0 与 Block 1)
-		sliceDesc := meta.Slice{
+		// 模拟跨 4 MiB 边界写入 4 MiB 数据 (Offset = 2 MiB..6 MiB) 拆分出的两个相邻 Chunk 共享切片：
+		// Chunk 0: Pos = 2 MiB, Off = 0, Len = 2 MiB, Size = 4 MiB
+		// Chunk 1: Pos = 0, Off = 2 MiB, Len = 2 MiB, Size = 4 MiB
+		slice0 := meta.Slice{
+			Pos:  2 * 1024 * 1024,
+			ID:   sliceID,
+			Size: uint32(meta.BlockSize),
+			Off:  0,
+			Len:  2 * 1024 * 1024,
+		}
+		slice1 := meta.Slice{
 			Pos:  0,
 			ID:   sliceID,
-			Size: 8 * 1024 * 1024,
-			Off:  0,
-			Len:  8 * 1024 * 1024,
+			Size: uint32(meta.BlockSize),
+			Off:  2 * 1024 * 1024,
+			Len:  2 * 1024 * 1024,
 		}
 
 		mockQuerier.EXPECT().
 			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
 				Ino:       int64(ino),
 				StartIndx: 0,
-				EndIndx:   0,
+				EndIndx:   1,
 			}).
 			Return([]db.GetInodeSizeAndChunksInRangeRow{
 				{
@@ -74,7 +84,17 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 					Mtime:       fileRow.Mtime,
 					Ctime:       fileRow.Ctime,
 					ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
-					ChunkSlices: meta.EncodeSlice(sliceDesc),
+					ChunkSlices: meta.EncodeSlice(slice0),
+				},
+				{
+					Ino:         fileRow.Ino,
+					Mode:        fileRow.Mode,
+					Size:        fileRow.Size,
+					Atime:       fileRow.Atime,
+					Mtime:       fileRow.Mtime,
+					Ctime:       fileRow.Ctime,
+					ChunkIndx:   pgtype.Int8{Int64: 1, Valid: true},
+					ChunkSlices: meta.EncodeSlice(slice1),
 				},
 			}, nil).
 			Once()
@@ -97,14 +117,14 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 			Once()
 
 		// 读取区间 [3 MiB, 5 MiB)，长度 2 MiB:
-		// 跨越 4 MiB Block 边界：
-		// - Block 0 (BlockIdx=0, BlockSize=4 MiB): BlockOff = 3 MiB, Length = 1 MiB
-		// - Block 1 (BlockIdx=1, BlockSize=4 MiB): BlockOff = 0, Length = 1 MiB
+		// 跨越 4 MiB Chunk 边界，命中同一共享物理 Block (BlockIdx=0, BlockSize=4 MiB)：
+		// - Chunk 0 尾部 [3 MiB, 4 MiB): 对应物理块内偏移 Off = 1 MiB, Length = 1 MiB
+		// - Chunk 1 头部 [4 MiB, 5 MiB): 对应物理块内偏移 Off = 2 MiB, Length = 1 MiB
 		part1 := bytes.Repeat([]byte{0xAA}, 1024*1024)
 		part2 := bytes.Repeat([]byte{0xBB}, 1024*1024)
 
 		mockBS.EXPECT().
-			GetBlock(mock.Anything, sliceID, uint32(0), uint32(meta.BlockSize), uint32(3*1024*1024), mock.Anything).
+			GetBlock(mock.Anything, sliceID, uint32(0), uint32(meta.BlockSize), uint32(1024*1024), mock.Anything).
 			RunAndReturn(func(ctx context.Context, sid uint64, bIdx, bSize, off uint32, dst []byte) error {
 				require.Len(t, dst, 1024*1024)
 				copy(dst, part1)
@@ -113,7 +133,7 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 			Once()
 
 		mockBS.EXPECT().
-			GetBlock(mock.Anything, sliceID, uint32(1), uint32(meta.BlockSize), uint32(0), mock.Anything).
+			GetBlock(mock.Anything, sliceID, uint32(0), uint32(meta.BlockSize), uint32(2*1024*1024), mock.Anything).
 			RunAndReturn(func(ctx context.Context, sid uint64, bIdx, bSize, off uint32, dst []byte) error {
 				require.Len(t, dst, 1024*1024)
 				copy(dst, part2)
@@ -134,24 +154,24 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 	})
 }
 
-// TestRead_CrossChunkBoundary 验证单次 Read 跨越 64 MiB Chunk 边界 (startIndx != endIndx) 时的拼接。
+// TestRead_CrossChunkBoundary 验证单次 Read 跨越 4 MiB Chunk 边界 (startIndx != endIndx) 时的拼接。
 func TestRead_CrossChunkBoundary(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
 	ino := uint64(802)
 	fh := uint64(82)
 
-	// 文件总大小 128 MiB (覆盖 2 个 64 MiB Chunk)
+	// 文件总大小 8 MiB (覆盖 2 个 4 MiB Chunk)
 	fileRow := db.Inode{
 		Ino:   int64(ino),
 		Mode:  int32(meta.S_IFREG | 0o644),
-		Size:  128 * 1024 * 1024,
+		Size:  8 * 1024 * 1024,
 		Atime: pgtype.Timestamptz{Time: now, Valid: true},
 		Mtime: pgtype.Timestamptz{Time: now, Valid: true},
 		Ctime: pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("跨 64 MiB 边界读取 1 MiB (左右各 512 KiB) 正常拼接返回", func(t *testing.T) {
+	t.Run("跨 4 MiB 边界读取 1 MiB (左右各 512 KiB) 正常拼接返回", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -464,7 +484,7 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 		assert.Equal(t, make([]byte, 512*1024), resp.Data)
 	})
 
-	t.Run("跨 64 MiB 边界叠加多次随机覆写精确读取", func(t *testing.T) {
+	t.Run("跨 4 MiB 边界叠加多次随机覆写精确读取", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -642,7 +662,7 @@ func TestRead_CrossChunk_PostgresIntegration(t *testing.T) {
 		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
 	}()
 
-	// 1. 在 64 MiB - 512 KiB 处跨界写入 1 MiB 数据 (跨越 Chunk 0 和 Chunk 1)
+	// 1. 在 4 MiB - 512 KiB 处跨界写入 1 MiB 数据 (跨越 Chunk 0 和 Chunk 1)
 	crossOffset := uint64(meta.ChunkSize - 512*1024)
 	payload := make([]byte, 1024*1024)
 	for i := range payload {
@@ -659,7 +679,7 @@ func TestRead_CrossChunk_PostgresIntegration(t *testing.T) {
 	require.NotNil(t, writeRes)
 	assert.Equal(t, uint32(len(payload)), writeRes.Size)
 
-	// 2. 从 64 MiB - 512 KiB 处完整读取 1 MiB，逐字节校验
+	// 2. 从 4 MiB - 512 KiB 处完整读取 1 MiB，逐字节校验
 	readRes, err := mgr.Read(ctx, &meta.ReadRequest{
 		Ino:    ino,
 		Fh:     fh,
@@ -670,7 +690,7 @@ func TestRead_CrossChunk_PostgresIntegration(t *testing.T) {
 	require.NotNil(t, readRes)
 	assert.Equal(t, payload, readRes.Data)
 
-	// 3. 从 64 MiB - 256 KiB 处跨界读取 512 KiB (局部跨界读取)
+	// 3. 从 4 MiB - 256 KiB 处跨界读取 512 KiB (局部跨界读取)
 	readSub, err := mgr.Read(ctx, &meta.ReadRequest{
 		Ino:    ino,
 		Fh:     fh,
@@ -681,7 +701,7 @@ func TestRead_CrossChunk_PostgresIntegration(t *testing.T) {
 	require.NotNil(t, readSub)
 	assert.Equal(t, payload[256*1024:256*1024+512*1024], readSub.Data)
 
-	// 4. 左空洞读取：从 64 MiB - 768 KiB 处读取 512 KiB
+	// 4. 左空洞读取：从 4 MiB - 768 KiB 处读取 512 KiB
 	// [ChunkSize-768KiB, ChunkSize-512KiB) 为 256 KiB 空洞全零
 	// [ChunkSize-512KiB, ChunkSize-256KiB) 为 payload 的前 256 KiB
 	readLeftHole, err := mgr.Read(ctx, &meta.ReadRequest{
@@ -753,7 +773,7 @@ func TestRead_CrossChunk_PostgresIntegration(t *testing.T) {
 	expectedRightHole := append(tailPayload, make([]byte, 256*1024)...)
 	assert.Equal(t, expectedRightHole, readRightHole.Data)
 
-	// 6. 跨 64 MiB 边界叠加多次随机覆写后的跨界读取
+	// 6. 跨 4 MiB 边界叠加多次随机覆写后的跨界读取
 	// 在 ino 上的原 payload 基础上：
 	// 在 Chunk 0 尾部 [ChunkSize-128KiB, ChunkSize) 覆写 128 KiB
 	overChunk0 := bytes.Repeat([]byte{0xC0}, 128*1024)
@@ -888,7 +908,7 @@ func TestRead_CrossChunk_ConcurrentWriteAtomicSnapshot_NoTornRead(t *testing.T) 
 		_ = baseMgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
 	})
 
-	// 在跨 64 MiB 边界的 [meta.ChunkSize-1, meta.ChunkSize+1) 写入初始 2 字节 "AB"
+	// 在跨 4 MiB 边界的 [meta.ChunkSize-1, meta.ChunkSize+1) 写入初始 2 字节 "AB"
 	crossOffset := uint64(meta.ChunkSize - 1)
 	_, err = baseMgr.Write(ctx, &meta.WriteRequest{
 		Ino:    ino,

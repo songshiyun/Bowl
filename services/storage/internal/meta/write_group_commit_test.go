@@ -103,7 +103,7 @@ func countRegularFilesInDir(t *testing.T, dir string) int {
 }
 
 // TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration 验证高并发 Group Commit 批次聚合与账本守恒：
-// 覆盖同一 Inode 并发写、同一 Disk 下多 Inode 并发扩容写、跨 64 MiB Chunk 边界写，
+// 覆盖同一 Inode 并发写、同一 Disk 下多 Inode 并发扩容写、跨 4 MiB Chunk 边界写，
 // 断言阶段 2 将多个并发请求合并进极少次数的数据库事务，且全文件 Read 数据视图、Inode 属性（含 S_ISUID/S_ISGID 剥离）及 Disk.used_bytes 100% 精确守恒。
 func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
@@ -145,7 +145,7 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
 	})
 
-	// 创建 2 个带 S_ISUID | S_ISGID 特权位的文件（覆盖同一 Disk 下多 Inode 并发写与跨 64 MiB Chunk 边界写）
+	// 创建 2 个带 S_ISUID | S_ISGID 特权位的文件（覆盖同一 Disk 下多 Inode 并发写与跨 4 MiB Chunk 边界写）
 	createFile := func(name string) (uint64, uint64) {
 		res, cErr := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: disk.RootIno,
@@ -176,7 +176,7 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 	// 规划 12 个并发写请求：
 	// - 前 8 个写 ino1 的不重叠 4096B 分段 [0, 32768)
 	// - 第 9..11 个写 ino2 的前 3 个 4096B 分段 [0, 12288)
-	// - 第 12 个写 ino2 跨越 64 MiB Chunk 边界的区间 [ChunkSize - 2048, ChunkSize + 2048)
+	// - 第 12 个写 ino2 跨越 4 MiB Chunk 边界的区间 [ChunkSize - 2048, ChunkSize + 2048)
 	const segSize = 4096
 	crossChunkOffset := uint64(meta.ChunkSize - 2048)
 

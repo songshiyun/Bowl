@@ -1166,8 +1166,11 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 		assert.Equal(t, subExpectedData, readRes.Data)
 	})
 
-	t.Run("MultiBlockPutBlockErrorWithCanceledContext_CleansUpBlocks", func(t *testing.T) {
-		// 构造 5 MiB 数据（跨 2 个 4 MiB 物理块：BlockIdx 0 4 MiB，BlockIdx 1 1 MiB）
+	t.Run("MultiSegmentPutBlockErrorWithCanceledContext_CleansUpBlocks", func(t *testing.T) {
+		// 构造同一 4 MiB Chunk 内的 2 个不相邻有效数据段（中间隔开稀疏空洞）：
+		// Segment 0: [0, 64 KiB)
+		// Segment 1: [128 KiB, 192 KiB)
+		// 当第 2 个 Segment 的 PutBlock 报错且同时取消上下文时，第 1 个 Segment 已落盘的物理块必须被立即清理干净。
 		fileRow2, err := store.CreateInode(ctx, db.CreateInodeParams{
 			Mode:  int32(meta.S_IFREG | 0o755),
 			Nlink: 1,
@@ -1193,7 +1196,7 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 			})
 		})
 
-		part1 := bytes.Repeat([]byte{0x55}, 3*1024*1024)
+		part1 := bytes.Repeat([]byte{0x55}, 64*1024)
 		_, err = initMgr.Write(ctx, &meta.WriteRequest{
 			Ino:    ino2,
 			Fh:     fh2,
@@ -1202,11 +1205,11 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 		})
 		require.NoError(t, err)
 
-		part2 := bytes.Repeat([]byte{0x66}, 3*1024*1024)
+		part2 := bytes.Repeat([]byte{0x66}, 64*1024)
 		_, err = initMgr.Write(ctx, &meta.WriteRequest{
 			Ino:    ino2,
 			Fh:     fh2,
-			Offset: 2 * 1024 * 1024,
+			Offset: 128 * 1024,
 			Data:   part2,
 		})
 		require.NoError(t, err)
@@ -1220,12 +1223,14 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 		})
 
 		reqCtx, reqCancel := context.WithCancel(ctx)
+		var putCall int
 		wrappedBS := &multiBlockCancelBlockStore{
 			BlockStore: bs,
 			onPutBlock: func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
-				if blockIdx == 1 {
+				putCall++
+				if putCall == 2 {
 					reqCancel()
-					return errors.New("simulated put block 1 disk error")
+					return errors.New("simulated put segment 1 disk error")
 				}
 				return nil
 			},
@@ -1242,7 +1247,7 @@ func TestCompactChunk_CommitAckErrorAfterServerCommit_DoesNotDeleteCompactedBloc
 			}
 			return nil
 		})
-		assert.Equal(t, initialFiles, currentFiles, "即使上下文取消，多块合并中 Block 1 失败时 Block 0 必须被立即清理干净")
+		assert.Equal(t, initialFiles, currentFiles, "即使上下文取消，多段合并中第 2 段 PutBlock 失败时第 1 段物理块必须被立即清理干净")
 	})
 }
 
@@ -1872,8 +1877,8 @@ func readFullFileForCompactTest(t *testing.T, ctx context.Context, mgr meta.Mana
 }
 
 // TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite 验收标准 1：
-// 64 个无重叠 1 MiB 实心 Slice 顺序填满 64 MiB Chunk 触发 Compaction 时，
-// skipSome 将全部 64 个 Slice 跳过，零物理 Block 读取/新写，chunks.slices 与 slice_refs 不变，Read 完整读回 64 MiB 数据。
+// 4 个无重叠 1 MiB 实心 Slice 顺序填满 4 MiB Chunk 触发 Compaction 时，
+// skipSome 将全部 4 个 Slice 跳过，零物理 Block 读取/新写，chunks.slices 与 slice_refs 不变，Read 完整读回 4 MiB 数据。
 func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
 	ctx := context.Background()
 	store, realBS, _, _, _ := setupPostgresForCompact(t)
@@ -1882,7 +1887,7 @@ func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
 	}
 
 	recBS := &recordingBlockStore{realBS: realBS}
-	mgr := meta.New(store, meta.WithBlockStore(recBS), meta.WithCompactSliceThreshold(64))
+	mgr := meta.New(store, meta.WithBlockStore(recBS), meta.WithCompactSliceThreshold(4))
 
 	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
 		Mode:  int32(meta.S_IFREG | 0o644),
@@ -1906,8 +1911,8 @@ func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
 		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
 	})
 
-	const sliceLen = int(meta.CompactSkipSliceMinSize) // 1 MiB
-	const sliceCount = 64
+	const sliceLen = int(meta.CompactSkipSliceMinSize)                    // 1 MiB
+	const sliceCount = int(meta.ChunkSize / meta.CompactSkipSliceMinSize) // 4 (4 MiB / 1 MiB)
 	expected := make([]byte, sliceCount*sliceLen)
 
 	for i := 0; i < sliceCount; i++ {
@@ -1933,21 +1938,21 @@ func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
 	err = mgr.CompactChunk(ctx, ino, 0)
 	require.NoError(t, err)
 
-	// 断言 Compaction 期间零 GetBlock 读取、零额外 PutBlock 重写（总 PutBlock 仅等于 64 次前台 Write）
+	// 断言 Compaction 期间零 GetBlock 读取、零额外 PutBlock 重写（总 PutBlock 仅等于 4 次前台 Write）
 	recBS.mu.Lock()
 	getsCount := len(recBS.gets)
 	putsCount := len(recBS.puts)
 	deletesCount := len(recBS.deletes)
 	recBS.mu.Unlock()
 
-	assert.Equal(t, 0, getsCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次读取物理 Block")
-	assert.Equal(t, sliceCount, putsCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次新增写入物理 Block")
-	assert.Equal(t, 0, deletesCount, "64 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次删除物理 Block")
+	assert.Equal(t, 0, getsCount, "4 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次读取物理 Block")
+	assert.Equal(t, sliceCount, putsCount, "4 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次新增写入物理 Block")
+	assert.Equal(t, 0, deletesCount, "4 个无重叠 1 MiB 切片触发 Compaction 时必须 0 次删除物理 Block")
 
-	// 断言 chunks.slices 与原 64 个切片完全一致，且所有 slice_refs.refs == 1
+	// 断言 chunks.slices 与原 4 个切片完全一致，且所有 slice_refs.refs == 1
 	chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
 	require.NoError(t, err)
-	assert.Equal(t, chunkBefore.Slices, chunkAfter.Slices, "chunks.slices 必须原样保留 64 条 1 MiB 切片")
+	assert.Equal(t, chunkBefore.Slices, chunkAfter.Slices, "chunks.slices 必须原样保留 4 条 1 MiB 切片")
 
 	for _, s := range slicesBefore {
 		ref, err := store.GetSliceRef(ctx, int64(s.ID))
@@ -1955,9 +1960,9 @@ func TestCompactChunk_SkipSome_64x1MiBSequentialZeroRewrite(t *testing.T) {
 		assert.Equal(t, int32(1), ref.Refs, "slice_id=%d 的引用计数必须保持为 1", s.ID)
 	}
 
-	// 验证 Read 完整读回 64 MiB 数据（此时 Read 会调用 GetBlock，在断言零 Compaction 读写之后执行）
+	// 验证 Read 完整读回 4 MiB 数据（此时 Read 会调用 GetBlock，在断言零 Compaction 读写之后执行）
 	readData := readFullFileForCompactTest(t, ctx, mgr, ino, fh, len(expected))
-	assert.Equal(t, expected, readData, "Read 必须完整读回 64 MiB 顺序写入数据")
+	assert.Equal(t, expected, readData, "Read 必须完整读回 4 MiB 顺序写入数据")
 }
 
 // TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted 验收标准 2：
@@ -1972,7 +1977,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 	}
 
 	recBS := &recordingBlockStore{realBS: realBS}
-	// 使用默认阈值 64：验证前部 4 个 1 MiB 整洁大块 + 60 个小碎片时不触发重写，补满 64 个小碎片后自动增量合并尾部
+	// 使用默认阈值 64：验证前部 2 个 1 MiB 整洁大块 + 62 个小碎片时不触发重写，补满 64 个小碎片后自动增量合并尾部
 	mgr := meta.New(store, meta.WithBlockStore(recBS), meta.WithCompactSliceThreshold(64))
 
 	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
@@ -1997,7 +2002,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
 	})
 
-	const prefixCount = 4
+	const prefixCount = 2
 	const prefixSliceLen = int(meta.CompactSkipSliceMinSize) // 1 MiB
 	const tailCount = 64
 	const tailStep = 8 * 1024 // 8 KiB 步进
@@ -2005,7 +2010,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 	totalSize := prefixCount*prefixSliceLen + (tailCount-1)*tailStep + tailLen
 	expected := make([]byte, totalSize)
 
-	// 1. 写入前部 4 个 1 MiB 无重叠大块
+	// 1. 写入前部 2 个 1 MiB 无重叠大块
 	for i := 0; i < prefixCount; i++ {
 		data := bytes.Repeat([]byte{byte(0x10 + i)}, prefixSliceLen)
 		off := i * prefixSliceLen
@@ -2026,9 +2031,9 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 	recBS.deletes = nil
 	recBS.mu.Unlock()
 
-	// 2. 先写入 60 个尾部小碎片（总切片数 4+60=64 触发后台检查，但尾部 60 < 64 应短路不重写）
+	// 2. 先写入 62 个尾部小碎片（总切片数 2+62=64 触发后台检查，但尾部 62 < 64 应短路不重写）
 	tailBase := prefixCount * prefixSliceLen
-	for j := 0; j < 60; j++ {
+	for j := 0; j < 62; j++ {
 		data := bytes.Repeat([]byte{byte(0x40 + (j % 60))}, tailLen)
 		off := tailBase + j*tailStep
 		_, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -2041,24 +2046,24 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 		copy(expected[off:off+tailLen], data)
 	}
 
-	chunkAt60, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	chunkAt62, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
 	require.NoError(t, err)
-	slicesAt60, err := meta.DecodeSlices(chunkAt60.Slices)
+	slicesAt62, err := meta.DecodeSlices(chunkAt62.Slices)
 	require.NoError(t, err)
-	require.Len(t, slicesAt60, prefixCount+60)
+	require.Len(t, slicesAt62, prefixCount+62)
 
-	prefixSliceDesc := append([]meta.Slice(nil), slicesAt60[:prefixCount]...)
+	prefixSliceDesc := append([]meta.Slice(nil), slicesAt62[:prefixCount]...)
 	prefixSliceIDs := make(map[uint64]bool, prefixCount)
 	for i := 0; i < prefixCount; i++ {
 		prefixSliceIDs[prefixSliceDesc[i].ID] = true
 	}
 	var tailOldSliceIDs []int64
-	for i := prefixCount; i < len(slicesAt60); i++ {
-		tailOldSliceIDs = append(tailOldSliceIDs, int64(slicesAt60[i].ID))
+	for i := prefixCount; i < len(slicesAt62); i++ {
+		tailOldSliceIDs = append(tailOldSliceIDs, int64(slicesAt62[i].ID))
 	}
 
-	// 3. 继续补齐最后 4 个尾部小碎片（尾部达 64 条 >= 阈值 64）
-	for j := 60; j < tailCount; j++ {
+	// 3. 继续补齐最后 2 个尾部小碎片（尾部达 64 条 >= 阈值 64）
+	for j := 62; j < tailCount; j++ {
 		data := bytes.Repeat([]byte{byte(0x40 + (j % 60))}, tailLen)
 		off := tailBase + j*tailStep
 		_, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -2071,7 +2076,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 		copy(expected[off:off+tailLen], data)
 	}
 
-	// 等待后台或显式 Compaction 完成尾部增量合并（总切片数收敛至 4 + 1 = 5）
+	// 等待后台或显式 Compaction 完成尾部增量合并（总切片数收敛至 2 + 1 = 3）
 	require.Eventually(t, func() bool {
 		c, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
 		if gErr != nil {
@@ -2080,7 +2085,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 		return len(c.Slices)/meta.SliceBytes == prefixCount+1
 	}, 3*time.Second, 20*time.Millisecond, "尾部满 64 条碎片后应自动增量合并收敛至 prefixCount+1 条")
 
-	// 断言 Compaction 期间绝未读取前部 4 个 1 MiB 物理块，且仅额外写入了 1 个合并后的尾部块（64 次前台尾部写 + 1 次尾部合并写 = 65）
+	// 断言 Compaction 期间绝未读取前部 2 个 1 MiB 物理块，且仅额外写入了 1 个合并后的尾部块（64 次前台尾部写 + 1 次尾部合并写 = 65）
 	recBS.mu.Lock()
 	compactedGets := append([]uint64(nil), recBS.gets...)
 	compactedPuts := append([]uint64(nil), recBS.puts...)
@@ -2091,7 +2096,7 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 	}
 	assert.Len(t, compactedPuts, tailCount+1, "64 次尾部写入加 1 次尾部增量合并应仅产生 65 次 PutBlock")
 
-	// 断言合并后 chunks.slices 精确为 4 条原样保留的前部大块 + 1 条新合并尾部块
+	// 断言合并后 chunks.slices 精确为 2 条原样保留的前部大块 + 1 条新合并尾部块
 	chunkAfter, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
 	require.NoError(t, err)
 	slicesAfter, err := meta.DecodeSlices(chunkAfter.Slices)

@@ -181,14 +181,14 @@ func TestFallocatePunchHole_LocalChunk_ReadHoleZero(t *testing.T) {
 	assert.True(t, bytes.Equal(readResp.Data[3072:4096], bytes.Repeat([]byte("A"), 1024)))
 }
 
-// TestFallocatePunchHole_CrossChunkBoundary_ReadHoleZero 验证跨越 64 MiB Chunk 边界的打洞操作：
+// TestFallocatePunchHole_CrossChunkBoundary_ReadHoleZero 验证跨越 4 MiB Chunk 边界的打洞操作：
 // 自动在相邻的 Chunk 0 尾部和 Chunk 1 头部追加局部空洞 Slice，Read 读取时跨界打洞区域全部返回 0x00。
 func TestFallocatePunchHole_CrossChunkBoundary_ReadHoleZero(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
 	ino := uint64(5002)
 	fh := uint64(502)
-	fileSize := int64(2 * meta.ChunkSize) // 128 MiB
+	fileSize := int64(2 * meta.ChunkSize) // 8 MiB
 
 	fileRow := db.Inode{
 		Ino:        int64(ino),
@@ -372,18 +372,18 @@ func TestFallocatePunchHole_CrossChunkBoundary_ReadHoleZero(t *testing.T) {
 	// [1024, 4096) 共 3072 字节全为 0x00（跨界打洞区域）
 	// [4096, 6144) 共 2048 字节为 'Y'（Chunk 1 未打洞区域）
 	assert.True(t, bytes.Equal(readResp.Data[0:1024], bytes.Repeat([]byte("X"), 1024)))
-	assert.True(t, bytes.Equal(readResp.Data[1024:4096], make([]byte, 3072)), "跨越 64 MiB 边界的打洞区间必须全为 0x00")
+	assert.True(t, bytes.Equal(readResp.Data[1024:4096], make([]byte, 3072)), "跨越 4 MiB 边界的打洞区间必须全为 0x00")
 	assert.True(t, bytes.Equal(readResp.Data[4096:6144], bytes.Repeat([]byte("Y"), 2048)))
 }
 
-// TestFallocatePunchHole_FullChunk_DeletesChunkAndDecrementsRefs 验证整块 64 MiB 打洞时：
+// TestFallocatePunchHole_FullChunk_DeletesChunkAndDecrementsRefs 验证整块 4 MiB 打洞时：
 // 直接调用 DeleteChunk 删除整块 chunks 记录并级联递减引用计数 slice_refs.refs。
 func TestFallocatePunchHole_FullChunk_DeletesChunkAndDecrementsRefs(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
 	ino := uint64(5003)
 	fh := uint64(503)
-	fileSize := int64(3 * meta.ChunkSize) // 192 MiB
+	fileSize := int64(3 * meta.ChunkSize) // 12 MiB
 
 	fileRow := db.Inode{
 		Ino:        int64(ino),

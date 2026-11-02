@@ -45,7 +45,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 
 		filePath := filepath.Join(mountpoint, "large-66m.bin")
 
-		const totalSize = 66 * 1024 * 1024 // 66 MiB: 跨 4 MiB Block 与跨 64 MiB Chunk 边界
+		const totalSize = 66 * 1024 * 1024 // 66 MiB: 跨多个 4 MiB Block 与 4 MiB Chunk 边界
 		fullBuf := make([]byte, totalSize)
 		prng := rand.New(rand.NewSource(123456789))
 		_, err := prng.Read(fullBuf)
@@ -67,7 +67,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 		}
 		require.NoError(t, f.Close())
 
-		// 2. 随机偏移覆盖写（包含跨 Block 与跨 64 MiB Chunk 边界）
+		// 2. 随机偏移覆盖写（包含跨 4 MiB Block / Chunk 边界）
 		f, err = os.OpenFile(filePath, os.O_WRONLY, 0644)
 		require.NoError(t, err)
 
@@ -76,6 +76,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 			data   []byte
 		}{
 			{offset: 2 * 1024 * 1024, data: []byte("OVERWRITE_AT_2MIB_BLOCK")},
+			{offset: 4*1024*1024 - 10, data: []byte("STRADDLE_FIRST_4MIB_CHUNK_BOUNDARY_123456")},
 			{offset: 63*1024*1024 + 900*1024, data: bytes.Repeat([]byte("CHUNK0_EDGE_"), 1000)},
 			{offset: 64*1024*1024 - 10, data: []byte("STRADDLE_CHUNK_BOUNDARY_1234567890")},
 			{offset: 64*1024*1024 + 500*1024, data: bytes.Repeat([]byte("CHUNK1_BODY_"), 1000)},
