@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -100,22 +103,17 @@ func TestRelease_InputValidation(t *testing.T) {
 
 	t.Run("允许携带 FuseReleaseFlush (0x1) 标志位正常销毁文件句柄", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(10)).
-			Return(db.Inode{Ino: 10, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:  1,
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
 				Ino: 10,
+				Fh:  1,
 			}).
-			Return(int64(1), nil).
+			Return(db.ReleaseFileFastRow{
+				Status: "ok",
+				Nlink:  1,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -147,24 +145,19 @@ func TestRelease_PositivePath(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("正常节点释放 (nlink > 0): 销毁句柄且保留 Inode 行 (免除 GetInodeForUpdate)", func(t *testing.T) {
+	t.Run("正常节点释放 (nlink > 0): 走 ReleaseFileFast 单语句 CTE 销毁句柄且免除显式事务", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseInode, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:  int64(fh),
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
 				Ino: int64(ino),
+				Fh:  int64(fh),
 			}).
-			Return(int64(fh), nil).
+			Return(db.ReleaseFileFastRow{
+				Status: "ok",
+				Nlink:  1,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -259,15 +252,21 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -299,15 +298,21 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -349,17 +354,23 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 8192
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -401,17 +412,23 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 8192
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -443,18 +460,25 @@ func TestRelease_PositivePath(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		sessionID := uint64(888)
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 		orphanInode.RootIno = 10
 		orphanInode.Size = 4096
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino:       int64(ino),
+				Fh:        int64(fh),
+				SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -518,14 +542,17 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("目标节点不存在返回 ErrNotFound", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(db.Inode{}, pgx.ErrNoRows).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "not_found",
+				Nlink:  0,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -538,17 +565,17 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("目标节点为目录返回 ErrIsDir", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		dirInode := baseInode
-		dirInode.Mode = int32(meta.S_IFDIR | 0o755)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(dirInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "is_dir",
+				Nlink:  2,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -561,22 +588,17 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("句柄不存在或归属不匹配返回 ErrBadFileHandle", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseInode, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:  int64(fh),
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
 				Ino: int64(ino),
+				Fh:  int64(fh),
 			}).
-			Return(int64(0), pgx.ErrNoRows).
+			Return(db.ReleaseFileFastRow{
+				Status: "bad_handle",
+				Nlink:  1,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -589,22 +611,17 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("二次重复释放同一句柄返回 ErrBadFileHandle", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseInode, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:  int64(fh),
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
 				Ino: int64(ino),
+				Fh:  int64(fh),
 			}).
-			Return(int64(0), pgx.ErrNoRows).
+			Return(db.ReleaseFileFastRow{
+				Status: "bad_handle",
+				Nlink:  1,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -615,17 +632,17 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		assert.True(t, errors.Is(err, meta.ErrBadFileHandle))
 	})
 
-	t.Run("GetInode 底层数据库错误", func(t *testing.T) {
+	t.Run("ReleaseFileFast 底层数据库错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		dbErr := errors.New("db query failed")
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(db.Inode{}, dbErr).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{}, dbErr).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
@@ -637,16 +654,30 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		assert.True(t, errors.Is(err, dbErr))
 	})
 
-	t.Run("DeleteFileHandle 底层数据库错误", func(t *testing.T) {
+	t.Run("孤儿慢路径 DeleteFileHandle 底层数据库错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
+		orphanInode := baseInode
+		orphanInode.Nlink = 0
+
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
+			Once()
+
 		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseInode, nil).
+			GetInodeForUpdate(mock.Anything, int64(ino)).
+			Return(orphanInode, nil).
 			Once()
 
 		dbErr := errors.New("db delete handle failed")
@@ -672,15 +703,21 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -715,15 +752,21 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
 		orphanInode := baseInode
 		orphanInode.Nlink = 0
 
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanInode, nil).
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			Return(db.ReleaseFileFastRow{
+				Status: "orphan",
+				Nlink:  0,
+			}, nil).
 			Once()
+
+		setupMockWriteTx(mockStore, mockQuerier)
 
 		mockQuerier.EXPECT().
 			GetInodeForUpdate(mock.Anything, int64(ino)).
@@ -761,6 +804,65 @@ func TestRelease_NegativeAndErrorPaths(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "release tx")
 		assert.True(t, errors.Is(err, dbErr))
+	})
+
+	t.Run("ReleaseFileFast 遇到 40001/40P01 自动重试并在成功后返回 nil", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mgr := meta.New(mockStore)
+
+		attempts := 0
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+				Ino: int64(ino),
+				Fh:  int64(fh),
+			}).
+			RunAndReturn(func(ctx context.Context, arg db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error) {
+				attempts++
+				if attempts == 1 {
+					return db.ReleaseFileFastRow{}, &pgconn.PgError{Code: "40001"}
+				}
+				if attempts == 2 {
+					return db.ReleaseFileFastRow{}, &pgconn.PgError{Code: "40P01"}
+				}
+				return db.ReleaseFileFastRow{Status: "ok", Nlink: 1}, nil
+			}).
+			Times(3)
+
+		err := mgr.Release(ctx, meta.ReleaseParams{
+			Ino: ino,
+			Fh:  fh,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 3, attempts)
+	})
+
+	t.Run("目标 Inode 有 POSIX 锁活动时回退到写事务慢路径", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore)
+
+		meta.RecordPosixLockActivityForTest(mgr, ino)
+
+		setupMockWriteTx(mockStore, mockQuerier)
+
+		mockQuerier.EXPECT().
+			GetInodeForUpdate(mock.Anything, int64(ino)).
+			Return(baseInode, nil).
+			Once()
+
+		mockQuerier.EXPECT().
+			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
+				Fh:  int64(fh),
+				Ino: int64(ino),
+			}).
+			Return(int64(fh), nil).
+			Once()
+
+		err := mgr.Release(ctx, meta.ReleaseParams{
+			Ino: ino,
+			Fh:  fh,
+		})
+		require.NoError(t, err)
 	})
 }
 
@@ -1312,7 +1414,7 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		assert.True(t, errors.Is(err, meta.ErrNotFound), "物理回收后目录 Inode 应不可见")
 	})
 
-	t.Run("正常节点 (nlink > 0) Release 与 ReleaseDir 免除 Inode 排他锁：外部事务持有 FOR UPDATE 时不阻塞", func(t *testing.T) {
+	t.Run("正常节点 (nlink > 0) Release 使用 FOR SHARE 协同锁，ReleaseDir 免除 Inode 排他锁", func(t *testing.T) {
 		diskName := fmt.Sprintf("test_release_lockless_non_orphan_%d", time.Now().UnixNano())
 		disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
 			Name:     diskName,
@@ -1352,7 +1454,7 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 外部事务持有目标文件与目录 Inode 的 FOR UPDATE 排他锁
+		// 外部事务持有目标文件 FOR SHARE（兼容并发 ReleaseFileFast 的 FOR SHARE）与目录 Inode 的 FOR UPDATE 排他锁
 		extTx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 		defer func() {
@@ -1360,7 +1462,7 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		}()
 
 		var lockedFileIno, lockedDirIno int64
-		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(createRes.Inode.Ino)).Scan(&lockedFileIno))
+		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR SHARE`, int64(createRes.Inode.Ino)).Scan(&lockedFileIno))
 		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(subDir.Ino)).Scan(&lockedDirIno))
 
 		opCtx, opCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
@@ -1376,5 +1478,398 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 			Fh:        openDirRes.Fh,
 			SessionID: &sessID,
 		}))
+	})
+}
+
+type releaseFastQueryTraceKey struct{}
+
+type releaseFastQueryTracer struct {
+	mu      sync.Mutex
+	queries []string
+}
+
+func (t *releaseFastQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if ctx.Value(releaseFastQueryTraceKey{}) != nil {
+		t.mu.Lock()
+		t.queries = append(t.queries, strings.TrimSpace(data.SQL))
+		t.mu.Unlock()
+	}
+	return ctx
+}
+
+func (t *releaseFastQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func (t *releaseFastQueryTracer) reset() {
+	t.mu.Lock()
+	t.queries = nil
+	t.mu.Unlock()
+}
+
+func (t *releaseFastQueryTracer) snapshot() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.queries))
+	copy(out, t.queries)
+	return out
+}
+
+func TestRelease_FastPathSingleStatementAndOrphanFallback_PostgresIntegration(t *testing.T) {
+	tracer := &releaseFastQueryTracer{}
+	pool, ctx := setupMetaTestDBWithTracer(t, tracer)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	mgr := meta.New(store)
+
+	diskName := fmt.Sprintf("test_release_fast_cte_%d", time.Now().UnixNano())
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
+		Name:     diskName,
+		MaxBytes: 32 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+	})
+
+	sessID := uint64(time.Now().UnixNano() & 0x7fffffff)
+	_, err = mgr.RenewSession(ctx, sessID)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM client_sessions WHERE session_id = $1`, int64(sessID))
+	})
+
+	t.Run("常规 Release 快速路径仅触发 1 条 SQL 语句且复用连接 SHOW synchronous_commit 保持 on", func(t *testing.T) {
+		cfg := pool.Config().Copy()
+		cfg.MaxConns = 1
+		cfg.MinConns = 1
+		cfg.ConnConfig.Tracer = tracer
+		singlePool, err := pgxpool.NewWithConfig(ctx, cfg)
+		require.NoError(t, err)
+		defer singlePool.Close()
+
+		createRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("fast_single_stmt.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		singleStore := db.NewStore(singlePool)
+		singleMgr := meta.New(singleStore)
+
+		// 登记一条同句柄的锁等待者，验证单语句 CTE 同步清理 file_lock_waiters
+		_, err = singleStore.UpsertFileLockWaiter(ctx, db.UpsertFileLockWaiterParams{
+			SessionID:   int64(sessID),
+			RequestID:   1,
+			Ino:         int64(createRes.Inode.Ino),
+			Fh:          int64(createRes.Fh),
+			LockOwner:   100,
+			LkFlags:     0,
+			StartOffset: 0,
+			EndOffset:   64,
+			LockType:    int16(meta.F_WRLCK),
+			Pid:         1234,
+			Status:      1,
+		})
+		require.NoError(t, err)
+
+		tracer.reset()
+		tracedCtx := context.WithValue(ctx, releaseFastQueryTraceKey{}, true)
+		err = singleMgr.Release(tracedCtx, meta.ReleaseParams{
+			Ino:       createRes.Inode.Ino,
+			Fh:        createRes.Fh,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		sqls := tracer.snapshot()
+		require.Len(t, sqls, 1, "常规 Release 快速路径必须且仅执行 1 条 SQL 语句，实际: %v", sqls)
+		assert.Contains(t, sqls[0], "ReleaseFileFast")
+		for _, q := range sqls {
+			upper := strings.ToUpper(q)
+			assert.NotEqual(t, "BEGIN", upper)
+			assert.NotEqual(t, "COMMIT", upper)
+			assert.False(t, strings.HasPrefix(upper, "SET LOCAL"))
+		}
+
+		// 验证同连接复用后 synchronous_commit 仍为 "on"
+		var syncCommit string
+		require.NoError(t, singlePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommit))
+		assert.Equal(t, "on", syncCommit, "内联 set_config(..., true) 仅在当前语句隐式事务生效，连接归还后必须保持 on")
+
+		// 验证句柄与关联锁等待者均已被删除
+		var handleCount, waiterCount int
+		require.NoError(t, singlePool.QueryRow(ctx, `SELECT COUNT(*) FROM file_handles WHERE fh = $1`, int64(createRes.Fh)).Scan(&handleCount))
+		assert.Zero(t, handleCount)
+		require.NoError(t, singlePool.QueryRow(ctx, `SELECT COUNT(*) FROM file_lock_waiters WHERE ino = $1 AND fh = $2`, int64(createRes.Inode.Ino), int64(createRes.Fh)).Scan(&waiterCount))
+		assert.Zero(t, waiterCount)
+	})
+
+	t.Run("目录拒绝 (ErrIsDir)、不存在节点 (ErrNotFound) 与无效/过期会话拒绝 (ErrBadFileHandle)", func(t *testing.T) {
+		subDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("dir_reject"),
+			Mode:      0o755,
+		})
+		require.NoError(t, err)
+
+		err = mgr.Release(ctx, meta.ReleaseParams{
+			Ino: subDir.Ino,
+			Fh:  999999,
+		})
+		require.ErrorIs(t, err, meta.ErrIsDir)
+
+		err = mgr.Release(ctx, meta.ReleaseParams{
+			Ino: 1 << 60,
+			Fh:  999999,
+		})
+		require.ErrorIs(t, err, meta.ErrNotFound)
+
+		expSess := sessID + 100
+		_, err = mgr.RenewSession(ctx, expSess)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = pool.Exec(context.Background(), `DELETE FROM client_sessions WHERE session_id = $1`, int64(expSess))
+		})
+
+		fRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("expired_sess.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &expSess,
+		})
+		require.NoError(t, err)
+
+		// 1. 传错误 sessionID 拒绝
+		wrongSess := expSess + 1
+		require.ErrorIs(t, mgr.Release(ctx, meta.ReleaseParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        fRes.Fh,
+			SessionID: &wrongSess,
+		}), meta.ErrBadFileHandle)
+
+		// 2. 不传 sessionID 关闭带会话句柄拒绝
+		require.ErrorIs(t, mgr.Release(ctx, meta.ReleaseParams{
+			Ino: fRes.Inode.Ino,
+			Fh:  fRes.Fh,
+		}), meta.ErrBadFileHandle)
+
+		// 3. 将会话置为过期后拒绝
+		_, err = pool.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '5 seconds' WHERE session_id = $1`, int64(expSess))
+		require.NoError(t, err)
+		require.ErrorIs(t, mgr.Release(ctx, meta.ReleaseParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        fRes.Fh,
+			SessionID: &expSess,
+		}), meta.ErrBadFileHandle)
+	})
+
+	t.Run("多句柄并发关闭与 Open -> Unlink -> Release 最后一个句柄回收", func(t *testing.T) {
+		fRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("multi_handle_orphan.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		const extraHandles = 5
+		fhs := make([]uint64, 0, extraHandles+1)
+		fhs = append(fhs, fRes.Fh)
+		for i := 0; i < extraHandles; i++ {
+			oRes, err := mgr.Open(ctx, meta.OpenParams{
+				Ino:       fRes.Inode.Ino,
+				Flags:     meta.O_RDWR,
+				SessionID: &sessID,
+			})
+			require.NoError(t, err)
+			fhs = append(fhs, oRes.Fh)
+		}
+
+		// 先并发关闭前 extraHandles 个句柄（nlink > 0 快速路径）
+		var wg sync.WaitGroup
+		for _, h := range fhs[:extraHandles] {
+			wg.Add(1)
+			go func(fh uint64) {
+				defer wg.Done()
+				require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+					Ino:       fRes.Inode.Ino,
+					Fh:        fh,
+					SessionID: &sessID,
+				}))
+			}(h)
+		}
+		wg.Wait()
+
+		// Unlink 使文件变为孤儿 (nlink == 0)，此时仍剩最后一个句柄 fhs[extraHandles]
+		require.NoError(t, mgr.Unlink(ctx, disk.RootIno, []byte("multi_handle_orphan.txt")))
+
+		var nlink int32
+		require.NoError(t, pool.QueryRow(ctx, `SELECT nlink FROM inodes WHERE ino = $1`, int64(fRes.Inode.Ino)).Scan(&nlink))
+		assert.Zero(t, nlink)
+
+		// 关闭最后一个句柄：ReleaseFileFast 返回 orphan，无缝进入慢路径完成物理回收
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        fhs[extraHandles],
+			SessionID: &sessID,
+		}))
+
+		var inodeCount, handleCount int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM inodes WHERE ino = $1`, int64(fRes.Inode.Ino)).Scan(&inodeCount))
+		assert.Zero(t, inodeCount, "最后一个句柄 Release 后孤儿 Inode 必须被物理删除")
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM file_handles WHERE ino = $1`, int64(fRes.Inode.Ino)).Scan(&handleCount))
+		assert.Zero(t, handleCount)
+	})
+
+	t.Run("并发 Unlink 与多句柄 Release 交错执行零孤儿泄漏", func(t *testing.T) {
+		const rounds = 16
+		const handlesPerFile = 3
+		recordedInos := make([]int64, 0, rounds)
+
+		for r := 0; r < rounds; r++ {
+			name := []byte(fmt.Sprintf("race_unlink_release_%d.txt", r))
+			cRes, err := mgr.Create(ctx, meta.CreateParams{
+				ParentIno: disk.RootIno,
+				Name:      name,
+				Mode:      meta.S_IFREG | 0o644,
+				Flags:     meta.O_RDWR,
+				SessionID: &sessID,
+			})
+			require.NoError(t, err)
+			recordedInos = append(recordedInos, int64(cRes.Inode.Ino))
+
+			fhs := make([]uint64, 0, handlesPerFile)
+			fhs = append(fhs, cRes.Fh)
+			for i := 1; i < handlesPerFile; i++ {
+				oRes, err := mgr.Open(ctx, meta.OpenParams{
+					Ino:       cRes.Inode.Ino,
+					Flags:     meta.O_RDWR,
+					SessionID: &sessID,
+				})
+				require.NoError(t, err)
+				fhs = append(fhs, oRes.Fh)
+			}
+
+			startCh := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(1 + len(fhs))
+
+			go func() {
+				defer wg.Done()
+				<-startCh
+				require.NoError(t, mgr.Unlink(ctx, disk.RootIno, name))
+			}()
+
+			for _, fh := range fhs {
+				go func(h uint64) {
+					defer wg.Done()
+					<-startCh
+					require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+						Ino:       cRes.Inode.Ino,
+						Fh:        h,
+						SessionID: &sessID,
+					}))
+				}(fh)
+			}
+
+			close(startCh)
+			wg.Wait()
+		}
+
+		// 直接查表校验：所有并发 Unlink + Release 的文件均无残留 inodes 或 file_handles
+		var remainingInodes, remainingHandles int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM inodes WHERE ino = ANY($1)`, recordedInos).Scan(&remainingInodes))
+		assert.Zero(t, remainingInodes, "并发 Unlink 与 Release 交错后不得残留任何孤儿 Inode")
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM file_handles WHERE ino = ANY($1)`, recordedInos).Scan(&remainingHandles))
+		assert.Zero(t, remainingHandles, "并发 Unlink 与 Release 交错后不得残留任何文件句柄")
+	})
+
+	t.Run("FuseReleaseFlockUnlock 与 POSIX 锁活动回退慢路径验证", func(t *testing.T) {
+		fRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("lock_fallback.txt"),
+			Mode:      meta.S_IFREG | 0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		oRes, err := mgr.Open(ctx, meta.OpenParams{
+			Ino:       fRes.Inode.Ino,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		// 在 fRes.Fh 上加 BSD flock 锁
+		require.NoError(t, mgr.SetLk(ctx, meta.SetLkParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        fRes.Fh,
+			LockOwner: 1,
+			LkFlags:   meta.FuseLkFlock,
+			Lk: meta.FileLock{
+				Start: 0,
+				End:   meta.OffsetMax,
+				Type:  meta.F_WRLCK,
+				PID:   100,
+			},
+			SessionID: sessID,
+		}))
+
+		// 携带 FuseReleaseFlockUnlock 关闭 fRes.Fh：回退慢路径清理 flock 锁
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+			Ino:          fRes.Inode.Ino,
+			Fh:           fRes.Fh,
+			ReleaseFlags: meta.FuseReleaseFlockUnlock,
+			SessionID:    &sessID,
+		}))
+
+		var flockCount int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM file_locks WHERE ino = $1 AND lk_flags = $2`, int64(fRes.Inode.Ino), int32(meta.FuseLkFlock)).Scan(&flockCount))
+		assert.Zero(t, flockCount)
+
+		// 在 oRes.Fh 上申请 POSIX 记录锁，触发 RecordPosixLockActivity(ino)
+		require.NoError(t, mgr.SetLk(ctx, meta.SetLkParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        oRes.Fh,
+			LockOwner: 2002,
+			LkFlags:   0,
+			Lk: meta.FileLock{
+				Start: 0,
+				End:   128,
+				Type:  meta.F_WRLCK,
+				PID:   200,
+			},
+			SessionID: sessID,
+		}))
+
+		tracer.reset()
+		tracedCtx := context.WithValue(ctx, releaseFastQueryTraceKey{}, true)
+		require.NoError(t, mgr.Release(tracedCtx, meta.ReleaseParams{
+			Ino:       fRes.Inode.Ino,
+			Fh:        oRes.Fh,
+			SessionID: &sessID,
+		}))
+
+		// 验证因 hasPosixLockActivity 为 true 走了显式写事务慢路径（包含 GetInodeForUpdate 与 DeleteFileHandle）
+		sqls := tracer.snapshot()
+		var sawForUpdate, sawDeleteHandle bool
+		for _, q := range sqls {
+			if strings.Contains(q, "GetInodeForUpdate") {
+				sawForUpdate = true
+			}
+			if strings.Contains(q, "DeleteFileHandle") {
+				sawDeleteHandle = true
+			}
+		}
+		assert.True(t, sawForUpdate, "POSIX 锁活动节点 Release 应走慢路径执行 GetInodeForUpdate")
+		assert.True(t, sawDeleteHandle, "POSIX 锁活动节点 Release 应走慢路径执行 DeleteFileHandle")
 	})
 }

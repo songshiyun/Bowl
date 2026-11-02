@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -60,6 +61,7 @@ func (m *manager) initDiskQuotaOnCreate(row db.GetDiskRow) {
 	if row.RootIno <= 0 {
 		return
 	}
+	m.recordInodeRootIno(uint64(row.RootIno), row.RootIno)
 	m.quotaMu.Lock()
 	st := m.getOrCreateDiskQuotaStateLocked(row.RootIno)
 	st.diskID = row.DiskID
@@ -357,4 +359,80 @@ func (q *quotaBufferedQuerier) commit() {
 	clear(q.txReservedBytes)
 	clear(q.txUnreservedBytes)
 	clear(q.txInodes)
+}
+
+func (m *manager) commitDirectQuotaDelta(ctx context.Context, rootIno int64, deltaBytes int64, deltaInodes int64) {
+	if rootIno <= 0 || (deltaBytes == 0 && deltaInodes == 0) {
+		return
+	}
+	if m.hasPool() {
+		m.quotaMu.Lock()
+		st, ok := m.diskQuotas[rootIno]
+		loaded := ok && st.loaded
+		m.quotaMu.Unlock()
+		if !loaded {
+			// 冷启动首次从 DB 加载时，SQL 查询 SUM(inodes.size) 已包含刚刚提交的本次 deltaBytes，
+			// 因此无需重复累加 deltaBytes。
+			_, _, _ = m.ensureDiskQuotaLoaded(ctx, rootIno)
+			return
+		}
+	}
+	m.quotaMu.Lock()
+	st := m.getOrCreateDiskQuotaStateLocked(rootIno)
+	if st.loaded {
+		st.usedBytes = max(int64(0), st.usedBytes+deltaBytes)
+		st.usedInodes = max(int64(0), st.usedInodes+deltaInodes)
+	} else {
+		st.pendingBytes += deltaBytes
+		st.pendingInodes += deltaInodes
+	}
+	m.quotaMu.Unlock()
+}
+
+func (m *manager) recordInodeRootIno(ino uint64, rootIno int64) {
+	if m == nil || ino == 0 {
+		return
+	}
+	m.inoRootInos.Store(ino, rootIno)
+}
+
+func (m *manager) getWriteQuotaAvailBytes(ino uint64) int64 {
+	if m == nil {
+		return math.MaxInt64
+	}
+	if val, ok := m.inoRootInos.Load(ino); ok {
+		rootIno := val.(int64)
+		if rootIno <= 0 {
+			return math.MaxInt64
+		}
+		m.quotaMu.Lock()
+		st, exists := m.diskQuotas[rootIno]
+		if exists && st.loaded {
+			avail := max(int64(0), st.maxBytes-st.effectiveUsedBytesWithReserved())
+			m.quotaMu.Unlock()
+			return avail
+		}
+		m.quotaMu.Unlock()
+		if m.hasPool() {
+			return -1
+		}
+		return math.MaxInt64
+	}
+
+	m.quotaMu.Lock()
+	if len(m.diskQuotas) == 1 {
+		for _, st := range m.diskQuotas {
+			if st.loaded {
+				avail := max(int64(0), st.maxBytes-st.effectiveUsedBytesWithReserved())
+				m.quotaMu.Unlock()
+				return avail
+			}
+		}
+	}
+	m.quotaMu.Unlock()
+
+	if m.hasPool() {
+		return -1
+	}
+	return math.MaxInt64
 }

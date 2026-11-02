@@ -486,10 +486,20 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		return 0, status
 	}
 
+	if cancel != nil {
+		select {
+		case <-cancel:
+			return 0, fuse.EINTR
+		default:
+		}
+	}
+
 	fs.invalidateReadAheadByIno(ino)
 	defer fs.invalidateReadAheadByIno(ino)
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	// Write 为非幂等变更（尤其在 O_APPEND 下），一旦在途发出 RPC 则忽略中途 FUSE_INTERRUPT（如 Go SIGURG 抢占信号），
+	// 避免服务端已提交追加但客户端因中断返回 EINTR 触发调用方重试造成重复追加。
+	ctx, cancelFunc := fs.RPCContext(nil)
 	defer cancelFunc()
 
 	dataLen := len(data)
@@ -502,13 +512,24 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			SessionId: &sid,
 		}))
 		if err != nil {
-			return 0, fs.ToStatusWithSession(err, cancel)
+			return 0, fs.ToStatusWithSession(err, nil)
 		}
 		return resp.Msg.GetSize(), fuse.OK
 	}
 
 	var totalWritten uint32
 	for totalWritten < uint32(dataLen) {
+		if cancel != nil {
+			select {
+			case <-cancel:
+				if totalWritten > 0 {
+					return totalWritten, fuse.OK
+				}
+				return 0, fuse.EINTR
+			default:
+			}
+		}
+
 		chunkSize := uint32(dataLen) - totalWritten
 		if chunkSize > MaxRPCChunkSize {
 			chunkSize = MaxRPCChunkSize
@@ -530,7 +551,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			if totalWritten > 0 {
 				return totalWritten, fuse.OK
 			}
-			return 0, fs.ToStatusWithSession(err, cancel)
+			return 0, fs.ToStatusWithSession(err, nil)
 		}
 
 		n := resp.Msg.GetSize()

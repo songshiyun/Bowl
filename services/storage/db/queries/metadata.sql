@@ -258,6 +258,60 @@ deleted_waiters AS (
 )
 SELECT fh FROM deleted_handle;
 
+-- name: ReleaseFileFast :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+target_inode AS (
+    SELECT ino, mode, nlink
+    FROM inodes
+    WHERE inodes.ino = @ino::bigint
+    FOR SHARE
+),
+deleted_handle AS (
+    DELETE FROM file_handles fh
+    USING target_inode ti
+    WHERE fh.fh = @fh::bigint
+      AND fh.ino = ti.ino
+      AND (ti.mode & 61440) <> 16384
+      AND ti.nlink > 0
+      AND (
+          (sqlc.narg('session_id')::bigint IS NULL AND fh.session_id IS NULL)
+          OR (
+              sqlc.narg('session_id')::bigint IS NOT NULL
+              AND fh.session_id = sqlc.narg('session_id')::bigint
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_sessions s
+                  WHERE s.session_id = fh.session_id
+                    AND s.expires_at > clock_timestamp()
+                    AND fh.created_at >= s.created_at
+              )
+          )
+      )
+    RETURNING fh.fh, fh.ino, fh.session_id
+),
+cleaned_waiters AS (
+    DELETE FROM file_lock_waiters w
+    USING deleted_handle dh
+    WHERE dh.session_id IS NOT NULL
+      AND w.session_id = dh.session_id
+      AND w.ino = dh.ino
+      AND w.fh = dh.fh
+)
+SELECT
+    CASE
+        WHEN ti.ino IS NULL THEN 'not_found'
+        WHEN (ti.mode & 61440) = 16384 THEN 'is_dir'
+        WHEN ti.nlink = 0 THEN 'orphan'
+        WHEN dh.fh IS NULL THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ti.nlink, 0)::int4 AS nlink
+FROM async_wal
+LEFT JOIN target_inode ti ON true
+LEFT JOIN deleted_handle dh ON true;
+
 -- name: DeleteInode :exec
 DELETE FROM inodes
 WHERE ino = $1;
@@ -828,4 +882,115 @@ FROM inodes p
 LEFT JOIN entries e ON e.parent_ino = p.ino AND e.name = $2
 LEFT JOIN inodes c ON c.ino = e.ino
 WHERE p.ino = $1;
+
+-- name: CreateFileAtomic :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+locked_parent AS (
+    SELECT ino, mode, nlink, gid, root_ino
+    FROM inodes
+    WHERE inodes.ino = @parent_ino::bigint
+    FOR UPDATE
+),
+valid_session AS (
+    SELECT s.session_id
+    FROM client_sessions s
+    CROSS JOIN locked_parent lp
+    WHERE sqlc.narg('session_id')::bigint IS NOT NULL
+      AND s.session_id = sqlc.narg('session_id')::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR lp.root_ino <= 0
+          OR EXISTS (
+              SELECT 1
+              FROM disks d
+              WHERE d.root_ino = lp.root_ino
+                AND d.disk_id = s.disk_id
+          )
+      )
+),
+can_create AS (
+    SELECT
+        lp.ino AS parent_ino,
+        lp.gid AS parent_gid,
+        lp.mode AS parent_mode,
+        lp.root_ino
+    FROM locked_parent lp
+    WHERE (lp.mode & 61440) = 16384
+      AND lp.nlink > 0
+      AND @name::bytea NOT IN ('\x2e'::bytea, '\x2e2e'::bytea)
+      AND (
+          sqlc.narg('session_id')::bigint IS NULL
+          OR EXISTS (SELECT 1 FROM valid_session)
+      )
+),
+inserted_inode AS (
+    INSERT INTO inodes (
+        mode, size, nlink, uid, gid, rdev, flags, parent_ino, root_ino
+    )
+    SELECT
+        @mode::int4,
+        0,
+        1,
+        @uid::int4,
+        CASE WHEN (cc.parent_mode & 1024) <> 0 THEN cc.parent_gid ELSE @gid::int4 END,
+        0,
+        0,
+        0,
+        cc.root_ino
+    FROM can_create cc
+    RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target, flags, parent_ino, root_ino
+),
+inserted_entry AS (
+    INSERT INTO entries (parent_ino, name, ino)
+    SELECT cc.parent_ino, @name::bytea, ii.ino
+    FROM can_create cc
+    CROSS JOIN inserted_inode ii
+),
+touched_parent AS (
+    UPDATE inodes p
+    SET mtime = clock_timestamp(),
+        ctime = clock_timestamp()
+    FROM can_create cc
+    CROSS JOIN inserted_inode ii
+    WHERE p.ino = cc.parent_ino
+),
+inserted_handle AS (
+    INSERT INTO file_handles (ino, flags, session_id)
+    SELECT ii.ino, @flags::int4, sqlc.narg('session_id')::bigint
+    FROM inserted_inode ii
+    RETURNING fh
+)
+SELECT
+    CASE
+        WHEN lp.ino IS NULL THEN 'not_found'
+        WHEN (lp.mode & 61440) <> 16384 THEN 'not_dir'
+        WHEN lp.nlink = 0 THEN 'not_found'
+        WHEN @name::bytea IN ('\x2e'::bytea, '\x2e2e'::bytea) THEN 'already_exists'
+        WHEN sqlc.narg('session_id')::bigint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM valid_session) THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ih.fh, 0)::bigint AS fh,
+    COALESCE(ii.ino, 0)::bigint AS ino,
+    COALESCE(ii.generation, 0)::bigint AS generation,
+    COALESCE(ii.mode, 0)::int4 AS mode,
+    COALESCE(ii.size, 0)::bigint AS size,
+    COALESCE(ii.nlink, 0)::int4 AS nlink,
+    COALESCE(ii.uid, 0)::int4 AS uid,
+    COALESCE(ii.gid, 0)::int4 AS gid,
+    COALESCE(ii.rdev, 0)::bigint AS rdev,
+    ii.atime AS atime,
+    ii.mtime AS mtime,
+    ii.ctime AS ctime,
+    ii.symlink_target AS symlink_target,
+    COALESCE(ii.flags, 0)::int4 AS flags,
+    COALESCE(ii.parent_ino, 0)::bigint AS parent_ino,
+    COALESCE(ii.root_ino, 0)::bigint AS root_ino
+FROM async_wal
+LEFT JOIN locked_parent lp ON true
+LEFT JOIN inserted_inode ii ON true
+LEFT JOIN inserted_handle ih ON true;
+
 

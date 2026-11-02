@@ -577,6 +577,112 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 		_, err = unix.Getxattr(xattrFileB, attrName, destBuf)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, unix.ENODATA) || errors.Is(err, syscall.ENODATA), "删除后客户端 B 必须返回 ENODATA")
+
+		// 1.7 ADR-0028 智能内核缓存保留（FOPEN_KEEP_CACHE / FOPEN_CACHE_DIR）与跨客户端修改强一致失效验收
+		// 1.7.1 单客户端 Create -> Write -> Close -> Open -> Read 命中 FOPEN_KEEP_CACHE 且读回完整最新内容
+		keepCacheFile := "adr0028_keep_cache.bin"
+		keepCachePathA := filepath.Join(mpA, keepCacheFile)
+		keepCachePathB := filepath.Join(mpB, keepCacheFile)
+
+		payloadInit := bytes.Repeat([]byte("ADR0028_KEEP_CACHE_V1_"), 256) // 5632 bytes
+		fCreateA, err := os.OpenFile(keepCachePathA, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		require.NoError(t, err, "客户端 A Create 文件失败")
+		nWritten, err := fCreateA.Write(payloadInit)
+		require.NoError(t, err, "客户端 A Write 文件失败")
+		require.Equal(t, len(payloadInit), nWritten)
+		require.NoError(t, fCreateA.Close(), "客户端 A Close 文件失败")
+
+		for round := 0; round < 2; round++ {
+			fOpenA, err := os.Open(keepCachePathA)
+			require.NoError(t, err, "客户端 A 重新 Open 文件失败")
+			readBufA := make([]byte, len(payloadInit)+128)
+			nReadA, err := fOpenA.Read(readBufA)
+			require.NoError(t, err, "客户端 A Read 文件失败")
+			require.Equal(t, len(payloadInit), nReadA)
+			require.Equal(t, payloadInit, readBufA[:nReadA], "单客户端 Open -> Read 必须读回完整最新内容 (round=%d)", round)
+			require.NoError(t, fOpenA.Close())
+		}
+
+		// 1.7.2 跨客户端修改后重开：客户端 A 已建立内核页缓存后，客户端 B 依次执行覆盖写、追加写、截断，
+		// 客户端 A 每次重新打开并读取文件时绝不读到旧页缓存，必须立即读到客户端 B 写入的最新字节。
+		// (a) 客户端 B 原地等长覆盖写（仅改变 mtime，不改变 size）
+		overwriteByB := bytes.Repeat([]byte("CLIENT_B_OVERWRITE_V2_"), 256) // 同样 5632 bytes
+		require.Equal(t, len(payloadInit), len(overwriteByB))
+		fOverB, err := os.OpenFile(keepCachePathB, os.O_WRONLY, 0)
+		require.NoError(t, err, "客户端 B 打开覆盖写失败")
+		nOverB, err := fOverB.WriteAt(overwriteByB, 0)
+		require.NoError(t, err, "客户端 B 覆盖写失败")
+		require.Equal(t, len(overwriteByB), nOverB)
+		require.NoError(t, fOverB.Close())
+
+		reopenAfterOverA, err := os.ReadFile(keepCachePathA)
+		require.NoError(t, err, "客户端 A 在 B 覆盖写后重开读取失败")
+		require.Equal(t, overwriteByB, reopenAfterOverA, "客户端 A 重开读取不得命中陈旧页缓存，必须读到客户端 B 等长覆盖写的新字节")
+
+		// (b) 客户端 B 追加写（O_APPEND）
+		appendSuffixB := bytes.Repeat([]byte("CLIENT_B_APPEND_TAIL_"), 64) // 1344 bytes
+		fAppendB, err := os.OpenFile(keepCachePathB, os.O_WRONLY|os.O_APPEND, 0)
+		require.NoError(t, err, "客户端 B 打开追加写失败")
+		nAppB, err := fAppendB.Write(appendSuffixB)
+		require.NoError(t, err, "客户端 B 追加写失败")
+		require.Equal(t, len(appendSuffixB), nAppB)
+		require.NoError(t, fAppendB.Close())
+
+		expectedAfterAppend := append(append([]byte(nil), overwriteByB...), appendSuffixB...)
+		reopenAfterAppendA, err := os.ReadFile(keepCachePathA)
+		require.NoError(t, err, "客户端 A 在 B 追加写后重开读取失败")
+		require.Equal(t, expectedAfterAppend, reopenAfterAppendA, "客户端 A 重开读取必须立即读到客户端 B 追加后的完整最新字节")
+
+		// (c) 客户端 B 截断（Truncate 缩容至 2048 字节）
+		require.NoError(t, os.Truncate(keepCachePathB, 2048), "客户端 B 截断文件失败")
+		reopenAfterTruncA, err := os.ReadFile(keepCachePathA)
+		require.NoError(t, err, "客户端 A 在 B 截断后重开读取失败")
+		require.Equal(t, expectedAfterAppend[:2048], reopenAfterTruncA, "客户端 A 重开读取必须立即感知客户端 B 的截断，不得残留旧尾部缓存")
+
+		// 1.7.3 目录缓存与跨客户端目录变更：
+		// 客户端 A 重复打开并遍历未变更目录结果一致；当客户端 B 在目录内新增文件、删除文件或重命名文件（即使客户端 B 已先行遍历目录）后，
+		// 客户端 A 重新打开并 os.ReadDir 必须立即看到客户端 B 修改后的最新目录项列表。
+		cacheDirName := "adr0028_dir_cache_test"
+		dirPathA := filepath.Join(mpA, cacheDirName)
+		dirPathB := filepath.Join(mpB, cacheDirName)
+		require.NoError(t, os.Mkdir(dirPathA, 0755), "客户端 A 创建测试目录失败")
+		require.NoError(t, os.WriteFile(filepath.Join(dirPathA, "a_init.txt"), []byte("a"), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(dirPathA, "b_init.txt"), []byte("b"), 0644))
+
+		readDirNames := func(dirPath string) []string {
+			entries, rErr := os.ReadDir(dirPath)
+			require.NoError(t, rErr)
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			return names
+		}
+
+		// 客户端 A 重复打开并遍历未变更目录（触发 FOPEN_CACHE_DIR），结果完全一致
+		namesA1 := readDirNames(dirPathA)
+		namesA2 := readDirNames(dirPathA)
+		require.Equal(t, []string{"a_init.txt", "b_init.txt"}, namesA1)
+		require.Equal(t, namesA1, namesA2, "客户端 A 重复遍历未变更目录结果必须一致")
+
+		// 客户端 B 在目录内新增文件 c_added_by_b.txt，且客户端 B 先行遍历该目录
+		require.NoError(t, os.WriteFile(filepath.Join(dirPathB, "c_added_by_b.txt"), []byte("c"), 0644))
+		require.Equal(t, []string{"a_init.txt", "b_init.txt", "c_added_by_b.txt"}, readDirNames(dirPathB))
+		// 客户端 A 重新打开并 os.ReadDir 必须立即看到新增后的最新列表
+		require.Equal(t, []string{"a_init.txt", "b_init.txt", "c_added_by_b.txt"}, readDirNames(dirPathA),
+			"客户端 B 新增文件并先行遍历后，客户端 A 重新 ReadDir 必须立即看到最新目录项")
+
+		// 客户端 B 在目录内删除文件 a_init.txt，且客户端 B 先行遍历该目录
+		require.NoError(t, os.Remove(filepath.Join(dirPathB, "a_init.txt")))
+		require.Equal(t, []string{"b_init.txt", "c_added_by_b.txt"}, readDirNames(dirPathB))
+		require.Equal(t, []string{"b_init.txt", "c_added_by_b.txt"}, readDirNames(dirPathA),
+			"客户端 B 删除文件并先行遍历后，客户端 A 重新 ReadDir 必须立即看到删除后的最新目录项")
+
+		// 客户端 B 在目录内重命名文件 b_init.txt -> b_renamed_by_b.txt，且客户端 B 先行遍历该目录
+		require.NoError(t, os.Rename(filepath.Join(dirPathB, "b_init.txt"), filepath.Join(dirPathB, "b_renamed_by_b.txt")))
+		require.Equal(t, []string{"b_renamed_by_b.txt", "c_added_by_b.txt"}, readDirNames(dirPathB))
+		require.Equal(t, []string{"b_renamed_by_b.txt", "c_added_by_b.txt"}, readDirNames(dirPathA),
+			"客户端 B 重命名文件并先行遍历后，客户端 A 重新 ReadDir 必须立即看到重命名后的最新目录项")
 	})
 
 	// 场景 2：跨客户端并发追加与分布式文件锁互斥

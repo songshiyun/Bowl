@@ -2516,44 +2516,41 @@ func TestWriteOps_DeadlockRetry_Unit(t *testing.T) {
 
 	t.Run("Create 与并发事务死锁(40P01)时自动重试并成功创建", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		parentDir := baseInode
-		parentDir.Ino = 1
-		parentDir.Mode = int32(meta.S_IFDIR | 0o755)
-		parentDir.Nlink = 2
-
-		newFile := baseInode
-		newFile.Ino = 200
-		newFile.Size = 0
-
-		attempts := mockDeadlockOnce(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(1)).
-			Return(parentDir, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateInode(mock.Anything, mock.Anything).
-			Return(newFile, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateEntry(mock.Anything, mock.Anything).
-			Return(nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			TouchInodeTimestamps(mock.Anything, mock.Anything).
-			Return(nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, mock.Anything).
-			Return(db.FileHandle{Fh: 1, Ino: 200}, nil).
-			Once()
+		attempts := 0
+		mockStore.EXPECT().
+			CreateFileAtomic(mock.Anything, db.CreateFileAtomicParams{
+				Name:      []byte("newfile.txt"),
+				ParentIno: 1,
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Uid:       1000,
+				Gid:       1000,
+				Flags:     int32(meta.O_CREAT | meta.O_RDWR),
+			}).
+			RunAndReturn(func(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error) {
+				attempts++
+				if attempts == 1 {
+					return db.CreateFileAtomicRow{}, deadlockErr
+				}
+				return db.CreateFileAtomicRow{
+					Status:     "ok",
+					Fh:         1,
+					Ino:        200,
+					Generation: baseInode.Generation,
+					Mode:       int32(meta.S_IFREG | 0o644),
+					Size:       0,
+					Nlink:      1,
+					Uid:        1000,
+					Gid:        1000,
+					Rdev:       0,
+					Atime:      baseInode.Atime,
+					Mtime:      baseInode.Mtime,
+					Ctime:      baseInode.Ctime,
+					RootIno:    1,
+				}, nil
+			}).
+			Twice()
 
 		res, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: 1,
@@ -2566,7 +2563,7 @@ func TestWriteOps_DeadlockRetry_Unit(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.Equal(t, uint64(200), res.Inode.Ino)
-		assert.Equal(t, 2, *attempts)
+		assert.Equal(t, 2, attempts)
 	})
 
 	t.Run("SetLk 与并发事务死锁(40P01)时自动重试并最终成功", func(t *testing.T) {

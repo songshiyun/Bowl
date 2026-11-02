@@ -474,6 +474,72 @@ func (_c *MockQuerier_CreateEntry_Call) RunAndReturn(run func(ctx context.Contex
 	return _c
 }
 
+// CreateFileAtomic provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) CreateFileAtomic(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateFileAtomic")
+	}
+
+	var r0 db.CreateFileAtomicRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileAtomicParams) db.CreateFileAtomicRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.CreateFileAtomicRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.CreateFileAtomicParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_CreateFileAtomic_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateFileAtomic'
+type MockQuerier_CreateFileAtomic_Call struct {
+	*mock.Call
+}
+
+// CreateFileAtomic is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.CreateFileAtomicParams
+func (_e *MockQuerier_Expecter) CreateFileAtomic(ctx any, arg any) *MockQuerier_CreateFileAtomic_Call {
+	return &MockQuerier_CreateFileAtomic_Call{Call: _e.mock.On("CreateFileAtomic", ctx, arg)}
+}
+
+func (_c *MockQuerier_CreateFileAtomic_Call) Run(run func(ctx context.Context, arg db.CreateFileAtomicParams)) *MockQuerier_CreateFileAtomic_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.CreateFileAtomicParams
+		if args[1] != nil {
+			arg1 = args[1].(db.CreateFileAtomicParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_CreateFileAtomic_Call) Return(createFileAtomicRow db.CreateFileAtomicRow, err error) *MockQuerier_CreateFileAtomic_Call {
+	_c.Call.Return(createFileAtomicRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_CreateFileAtomic_Call) RunAndReturn(run func(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error)) *MockQuerier_CreateFileAtomic_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateFileHandle provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) CreateFileHandle(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error) {
 	ret := _mock.Called(ctx, arg)
@@ -4919,6 +4985,72 @@ func (_c *MockQuerier_NextSliceID_Call) RunAndReturn(run func(ctx context.Contex
 	return _c
 }
 
+// ReleaseFileFast provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) ReleaseFileFast(ctx context.Context, arg db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReleaseFileFast")
+	}
+
+	var r0 db.ReleaseFileFastRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ReleaseFileFastParams) db.ReleaseFileFastRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.ReleaseFileFastRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.ReleaseFileFastParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_ReleaseFileFast_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReleaseFileFast'
+type MockQuerier_ReleaseFileFast_Call struct {
+	*mock.Call
+}
+
+// ReleaseFileFast is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.ReleaseFileFastParams
+func (_e *MockQuerier_Expecter) ReleaseFileFast(ctx any, arg any) *MockQuerier_ReleaseFileFast_Call {
+	return &MockQuerier_ReleaseFileFast_Call{Call: _e.mock.On("ReleaseFileFast", ctx, arg)}
+}
+
+func (_c *MockQuerier_ReleaseFileFast_Call) Run(run func(ctx context.Context, arg db.ReleaseFileFastParams)) *MockQuerier_ReleaseFileFast_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.ReleaseFileFastParams
+		if args[1] != nil {
+			arg1 = args[1].(db.ReleaseFileFastParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_ReleaseFileFast_Call) Return(releaseFileFastRow db.ReleaseFileFastRow, err error) *MockQuerier_ReleaseFileFast_Call {
+	_c.Call.Return(releaseFileFastRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_ReleaseFileFast_Call) RunAndReturn(run func(ctx context.Context, arg db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error)) *MockQuerier_ReleaseFileFast_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // TouchInodeAtime provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) TouchInodeAtime(ctx context.Context, ino int64) error {
 	ret := _mock.Called(ctx, ino)
@@ -5758,6 +5890,72 @@ func (_c *MockQuerier_UpsertInodeXattr_Call) Return(err error) *MockQuerier_Upse
 }
 
 func (_c *MockQuerier_UpsertInodeXattr_Call) RunAndReturn(run func(ctx context.Context, arg db.UpsertInodeXattrParams) error) *MockQuerier_UpsertInodeXattr_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// WriteFileAtomic provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) WriteFileAtomic(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WriteFileAtomic")
+	}
+
+	var r0 db.WriteFileAtomicRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.WriteFileAtomicParams) db.WriteFileAtomicRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.WriteFileAtomicRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.WriteFileAtomicParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_WriteFileAtomic_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WriteFileAtomic'
+type MockQuerier_WriteFileAtomic_Call struct {
+	*mock.Call
+}
+
+// WriteFileAtomic is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.WriteFileAtomicParams
+func (_e *MockQuerier_Expecter) WriteFileAtomic(ctx any, arg any) *MockQuerier_WriteFileAtomic_Call {
+	return &MockQuerier_WriteFileAtomic_Call{Call: _e.mock.On("WriteFileAtomic", ctx, arg)}
+}
+
+func (_c *MockQuerier_WriteFileAtomic_Call) Run(run func(ctx context.Context, arg db.WriteFileAtomicParams)) *MockQuerier_WriteFileAtomic_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.WriteFileAtomicParams
+		if args[1] != nil {
+			arg1 = args[1].(db.WriteFileAtomicParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_WriteFileAtomic_Call) Return(writeFileAtomicRow db.WriteFileAtomicRow, err error) *MockQuerier_WriteFileAtomic_Call {
+	_c.Call.Return(writeFileAtomicRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_WriteFileAtomic_Call) RunAndReturn(run func(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error)) *MockQuerier_WriteFileAtomic_Call {
 	_c.Call.Return(run)
 	return _c
 }

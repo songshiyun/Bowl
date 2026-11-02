@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,14 +20,13 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	dbmock "github.com/starsrc/bowl/services/storage/internal/db/mock"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
 // gateBlockStore 包装 BlockStore，用于在测试中同步汇聚指定数量的并发请求完成阶段 1 PutBlock，
-// 确保它们确定性地进入同一个阶段 2 WriteThread 批次，同时统计 PutBlock 与 DeleteBlock 调用次数。
+// 同时统计 PutBlock 与 DeleteBlock 调用次数。
 type gateBlockStore struct {
 	meta.BlockStore
 	gateCount   int
@@ -102,9 +100,26 @@ func countRegularFilesInDir(t *testing.T, dir string) int {
 	return count
 }
 
-// TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration 验证高并发 Group Commit 批次聚合与账本守恒：
+type writeCountingStore struct {
+	db.Store
+	pool                *pgxpool.Pool
+	onWriteFileAtomicFn func()
+}
+
+func (s *writeCountingStore) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
+func (s *writeCountingStore) WriteFileAtomic(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+	if s.onWriteFileAtomicFn != nil {
+		s.onWriteFileAtomicFn()
+	}
+	return s.Store.WriteFileAtomic(ctx, arg)
+}
+
+// TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration 验证高并发单语句 CTE Write 与账本守恒：
 // 覆盖同一 Inode 并发写、同一 Disk 下多 Inode 并发扩容写、跨 4 MiB Chunk 边界写，
-// 断言阶段 2 将多个并发请求合并进极少次数的数据库事务，且全文件 Read 数据视图、Inode 属性（含 S_ISUID/S_ISGID 剥离）及 Disk.used_bytes 100% 精确守恒。
+// 断言阶段 2 每个并发请求各自通过 1 次 WriteFileAtomic 单语句完成，且全文件 Read 数据视图、Inode 属性（含 S_ISUID/S_ISGID 剥离）及 Disk.used_bytes 100% 精确守恒。
 func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
 	if pool == nil {
@@ -113,12 +128,12 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 	acquireTestSliceGCAdvisoryLock(t, pool)
 
 	baseStore := db.NewStore(pool)
-	var txCalls atomic.Int64
-	countingStore := &commitAckErrorStore{
+	var atomicWriteCalls atomic.Int64
+	countingStore := &writeCountingStore{
 		Store: baseStore,
-		onExecTxWithOptions: func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-			txCalls.Add(1)
-			return baseStore.ExecTxWithOptions(attemptCtx, fn, opts...)
+		pool:  pool,
+		onWriteFileAtomicFn: func() {
+			atomicWriteCalls.Add(1)
 		},
 	}
 
@@ -133,7 +148,6 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		countingStore,
 		meta.WithBlockStore(gatedBS),
 		meta.WithSliceIDBatchSize(64),
-		meta.WithWriteGroupMaxBatchSize(64),
 	)
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
@@ -170,8 +184,7 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		cleanupWriteTestInoAndSlices(t, baseStore, mgr, int64(ino2), fh2)
 	})
 
-	// 重置事务计数（排除建盘与建文件阶段的调用）
-	txCalls.Store(0)
+	atomicWriteCalls.Store(0)
 
 	// 规划 12 个并发写请求：
 	// - 前 8 个写 ino1 的不重叠 4096B 分段 [0, 32768)
@@ -242,8 +255,8 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		assert.Equal(t, uint32(meta.S_IFREG|0o755), resps[i].Inode.Attr.Mode)
 	}
 
-	// 1. 验证 Group Commit 事务合并：12 个并发请求在阶段 1 汇合后应合并为 1 次 PG 写事务（远小于 12 次）
-	assert.LessOrEqual(t, txCalls.Load(), int64(2), "12 个并发 Write 请求必须通过 WriteThread 合并进单次或极少次数据库事务")
+	// 1. 验证 12 个并发请求各自执行 1 次 WriteFileAtomic 与 1 次 PutBlock
+	assert.Equal(t, int64(numWriters), atomicWriteCalls.Load(), "12 个并发 Write 请求各自调用 1 次 WriteFileAtomic")
 	assert.Equal(t, int64(numWriters), gatedBS.putCalls.Load(), "12 个并发请求各自完成阶段 1 PutBlock")
 
 	// 2. 验证 ino1 的大小与全量数据读取视图
@@ -296,8 +309,8 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 	assert.Equal(t, expectedIno1Size+expectedIno2Size, diskInfo.UsedBytes)
 }
 
-// TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres 验证同一批次内多句柄/多协程 O_APPEND 偏移演进：
-// 同一批次内多个 O_APPEND 请求严格按序从最新演进 Inode 大小依次累加偏移，零覆盖、零丢失，
+// TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres 验证并发多句柄/多协程 O_APPEND 偏移演进：
+// 多个 O_APPEND 请求严格按行锁顺序从最新演进 Inode 大小依次累加偏移，零覆盖、零丢失，
 // 且各调用方收到的 WriteResponse.Inode.Attr.Size 精确对应其自身写入完成时刻的演进大小快照。
 func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) {
 	ctx := context.Background()
@@ -321,78 +334,46 @@ func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) 
 		Return(int64(7001), nil).
 		Once()
 
-	var txCount atomic.Int64
+	var mu sync.Mutex
+	currentSize := int64(initialSize)
 	var recordedSlices []meta.Slice
 	var finalInodeSizeRecorded int64
 
+	// 先通过 GetInode 将初始配额或文件状态同步，模拟已有 initialSize
 	mockStore.EXPECT().
-		ExecTxWithOptions(mock.Anything, mock.Anything).
-		RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-			txCount.Add(1)
-			q := dbmock.NewMockQuerier(t)
+		WriteFileAtomic(mock.Anything, mock.Anything).
+		RunAndReturn(func(attemptCtx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+			mu.Lock()
+			defer mu.Unlock()
 
-			// 同一批次内对唯一 Inode 仅调用 1 次 GetInodeForUpdate
-			q.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
-				Return(db.Inode{
-					Ino:     int64(ino),
-					Mode:    int32(meta.S_IFREG | 0o644),
-					Size:    initialSize,
-					Nlink:   1,
-					RootIno: rootIno,
-				}, nil).
-				Once()
+			oldSize := currentSize
+			actualOff := uint64(oldSize)
+			newSize := oldSize + arg.DataLen
+			currentSize = newSize
+			finalInodeSizeRecorded = newSize
 
-			// 两个不同的 O_APPEND 句柄在单批次内各自仅查询 1 次 GetFileHandle
-			q.EXPECT().
-				GetFileHandle(mock.Anything, db.GetFileHandleParams{Fh: int64(fh1), Ino: int64(ino)}).
-				Return(db.FileHandle{Fh: int64(fh1), Ino: int64(ino), Flags: int32(meta.O_WRONLY | meta.O_APPEND)}, nil).
-				Once()
-			q.EXPECT().
-				GetFileHandle(mock.Anything, db.GetFileHandleParams{Fh: int64(fh2), Ino: int64(ino)}).
-				Return(db.FileHandle{Fh: int64(fh2), Ino: int64(ino), Flags: int32(meta.O_RDWR | meta.O_APPEND)}, nil).
-				Once()
+			recordedSlices = append(recordedSlices, meta.Slice{
+				Pos:  uint32(actualOff),
+				ID:   uint64(arg.SliceID),
+				Size: uint32(arg.DataLen),
+				Off:  0,
+				Len:  uint32(arg.DataLen),
+			})
 
-			// 同一批次内对唯一 RootIno 仅调用 1 次 GetDiskByRootInoForUpdate
-			q.EXPECT().
-				GetDiskByRootInoForUpdate(mock.Anything, rootIno).
-				Return(db.GetDiskByRootInoForUpdateRow{RootIno: rootIno, MaxBytes: 100000, UsedBytes: initialSize}, nil).
-				Once()
-
-			// 同一 (ino, indx=0) 仅调用 1 次 AppendChunkSlice（拼接 8 条 24B Slice）
-			q.EXPECT().
-				AppendChunkSlice(mock.Anything, mock.Anything).
-				RunAndReturn(func(ctx context.Context, arg db.AppendChunkSliceParams) (int64, error) {
-					decoded, err := meta.DecodeSlices(arg.Slices)
-					if err != nil {
-						return 0, err
-					}
-					recordedSlices = append(recordedSlices, decoded...)
-					return int64(len(arg.Slices)), nil
-				}).
-				Once()
-
-			q.EXPECT().
-				InsertSliceRef(mock.Anything, mock.Anything).
-				Return(nil).
-				Times(numAppendTasks)
-
-			q.EXPECT().
-				UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
-				RunAndReturn(func(ctx context.Context, arg db.UpdateInodeSizeAndTouchForWriteParams) (db.Inode, error) {
-					finalInodeSizeRecorded = arg.Size
-					return db.Inode{
-						Ino:   arg.Ino,
-						Mode:  arg.Mode,
-						Size:  arg.Size,
-						Nlink: 1,
-					}, nil
-				}).
-				Once()
-
-			return fn(q)
+			return db.WriteFileAtomicRow{
+				Status:    "ok",
+				OldSize:   oldSize,
+				NewSize:   newSize,
+				StartIndx: 0,
+				EndIndx:   0,
+				OctetLen1: int64(len(recordedSlices) * meta.SliceBytes),
+				Ino:       arg.Ino,
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Nlink:     1,
+				RootIno:   rootIno,
+			}, nil
 		}).
-		Once()
+		Times(numAppendTasks)
 
 	mgr := meta.New(mockStore, meta.WithBlockStore(gatedBS))
 
@@ -412,7 +393,7 @@ func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) 
 			resps[idx], errs[idx] = mgr.Write(ctx, &meta.WriteRequest{
 				Ino:    ino,
 				Fh:     useFh,
-				Offset: uint64(idx * 9999), // 客户端传入任意偏移，O_APPEND 必须强制按批次内演进大小追加
+				Offset: uint64(idx * 9999),
 				Data:   payload,
 			})
 		}(i)
@@ -427,8 +408,6 @@ func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) 
 		returnedSizes = append(returnedSizes, resps[i].Inode.Attr.Size)
 	}
 
-	// 1. 断言 8 个并发 O_APPEND 请求在单次事务中完成
-	assert.Equal(t, int64(1), txCount.Load(), "8 个并发 O_APPEND 请求应合并为 1 次事务")
 	assert.Equal(t, int64(initialSize+numAppendTasks*writeLen), finalInodeSizeRecorded, "最终 Inode.Size 必须精确等于 1024 + 8 * 512")
 
 	// 验证内存配额状态已精确更新为 initialSize + 8 * 512
@@ -438,29 +417,29 @@ func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) 
 		Once()
 	mockStore.EXPECT().
 		GetDiskByRootIno(mock.Anything, int64(rootIno)).
-		Return(db.GetDiskByRootInoRow{RootIno: rootIno, MaxBytes: 100000}, nil).
+		Return(db.GetDiskByRootInoRow{RootIno: rootIno, MaxBytes: 100000, UsedBytes: initialSize}, nil).
 		Once()
 	statRes, statErr := mgr.StatFS(ctx, ino)
 	require.NoError(t, statErr)
 	assert.Equal(t, uint64(initialSize+numAppendTasks*writeLen), statRes.UsedBytes, "Disk 内存配额必须精确反映 1024 + 8 * 512")
 
-	// 2. 断言 8 条 Slice 的 Pos 严格按 [1024, 1536, 2048, ..., 4608] 顺序演进，零重叠、零跳空
+	// 断言 8 条 Slice 的 Pos 严格按 [1024, 1536, 2048, ..., 4608] 顺序演进，零重叠、零跳空
 	require.Len(t, recordedSlices, numAppendTasks)
 	for i, s := range recordedSlices {
 		assert.Equal(t, uint32(initialSize+i*writeLen), s.Pos, "第 %d 条追加 Slice 的起始偏移必须严格紧随前一条", i)
 		assert.Equal(t, uint32(writeLen), s.Len)
 	}
 
-	// 3. 断言 8 个调用方收到的 WriteResponse.Inode.Attr.Size 排序后恰好是 [1536, 2048, 2560, ..., 5120]
+	// 断言 8 个调用方收到的 WriteResponse.Inode.Attr.Size 排序后恰好是 [1536, 2048, 2560, ..., 5120]
 	slices.Sort(returnedSizes)
 	for i, sz := range returnedSizes {
 		assert.Equal(t, uint64(initialSize+(i+1)*writeLen), sz, "每个 O_APPEND 调用方必须收到其自身完成时刻的精确演进文件大小")
 	}
 }
 
-// TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup 验证批次内混入无效句柄/只读句柄/超期会话（EBADF）时的异常隔离：
+// TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup 验证并发混入无效句柄/只读句柄/超期会话（EBADF）时的异常隔离：
 // 违规请求单独返回 ErrBadFileHandle 且其阶段 1 物理 Block 文件被彻底删除（零孤儿块残留），
-// 同批次其余合法请求在同一数据库事务中正常提交且数据完整可读。
+// 其余合法请求正常提交且数据完整可读。
 func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
 	if pool == nil {
@@ -469,28 +448,14 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	acquireTestSliceGCAdvisoryLock(t, pool)
 
 	baseStore := db.NewStore(pool)
-	var txCalls atomic.Int64
-	countingStore := &commitAckErrorStore{
-		Store: baseStore,
-		onExecTxWithOptions: func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-			txCalls.Add(1)
-			return baseStore.ExecTxWithOptions(attemptCtx, fn, opts...)
-		},
-	}
-
 	dataDir := t.TempDir()
 	localBS := meta.NewLocalFSBlockStore(dataDir)
 
-	// 共 6 个并发请求进入同一批次：
-	// - 请求 0, 1, 2: 合法读写句柄写入
-	// - 请求 3: 不存在的无效句柄 (nonExistentFh) -> ErrBadFileHandle
-	// - 请求 4: 只读句柄 (readOnlyFh, O_RDONLY) -> ErrBadFileHandle
-	// - 请求 5: 已超期的 ClientSession 句柄 (expiredFh) -> ErrBadFileHandle
 	const totalReqs = 6
 	gatedBS := newGateBlockStore(localBS, totalReqs)
 	t.Cleanup(gatedBS.releaseGate)
 
-	mgr := meta.New(countingStore, meta.WithBlockStore(gatedBS))
+	mgr := meta.New(baseStore, meta.WithBlockStore(gatedBS))
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
 		Name:     fmt.Sprintf("group-commit-ebadf-%d", time.Now().UnixNano()),
@@ -548,8 +513,6 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(expiredSess))
 	require.NoError(t, err)
 
-	txCalls.Store(0)
-
 	const blockLen = 2048
 	type reqSpec struct {
 		fh        uint64
@@ -592,7 +555,7 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 			require.ErrorIs(t, errs[i], sp.wantErr, "请求 %d 应返回 %v", i, sp.wantErr)
 			assert.Nil(t, resps[i])
 		} else {
-			require.NoError(t, errs[i], "合法请求 %d 不应受同批次违规请求牵连", i)
+			require.NoError(t, errs[i], "合法请求 %d 不应受并发违规请求牵连", i)
 			require.NotNil(t, resps[i])
 			assert.Equal(t, uint32(blockLen), resps[i].Size)
 		}
@@ -626,9 +589,9 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	assert.Equal(t, bytes.Repeat([]byte{'C'}, blockLen), readRes.Data[2*blockLen:3*blockLen])
 }
 
-// TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup 验证批次内部分请求超出 Disk 配额（ENOSPC）时的异常隔离：
-// 超出剩余配额的扩容请求准确返回 ErrNoSpace、不推进 evolvedSize 与 runningDiskUsed，且其阶段 1 物理 Block 被彻底清理；
-// 同批次内未超配额的扩容请求及原地覆盖写（delta_bytes == 0）正常提交成功，Disk.used_bytes 绝不突破 max_bytes。
+// TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup 验证并发部分请求超出 Disk 配额（ENOSPC）时的异常隔离：
+// 超出剩余配额的扩容请求准确返回 ErrNoSpace 且其阶段 1 物理 Block 被彻底清理；
+// 未超配额的扩容请求及原地覆盖写（delta_bytes == 0）正常提交成功，Disk.used_bytes 绝不突破 max_bytes。
 func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
 	if pool == nil {
@@ -677,11 +640,6 @@ func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 现在构造同一个批次内的 4 个并发写请求（总计已有 1 个块文件在 dataDir）：
-	// - 请求 A (扩容 2000B: offset=4000, len=2000): delta=2000 > 剩余 1000 -> 必须返回 ErrNoSpace 并删除物理块！
-	// - 请求 B (扩容 1500B: offset=4000, len=1500): delta=1500 > 剩余 1000 -> 必须返回 ErrNoSpace 并删除物理块！
-	// - 请求 C (原地覆写 2000B: offset=0, len=2000): newEnd=2000 <= 4000, delta=0 -> 不占新配额，必须成功！
-	// - 请求 D (小扩容 800B: offset=4000, len=800): 因 A/B 未推进 evolvedSize，delta=800 <= 剩余 1000 -> 必须成功！
 	const batchReqs = 4
 	gatedBS := newGateBlockStore(localBS, batchReqs)
 	t.Cleanup(gatedBS.releaseGate)
@@ -723,7 +681,7 @@ func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 			require.ErrorIs(t, errs[i], qt.wantErr, "%s 必须返回 ErrNoSpace", qt.name)
 			assert.Nil(t, resps[i])
 		} else {
-			require.NoError(t, errs[i], "%s 必须在同批次中隔离成功", qt.name)
+			require.NoError(t, errs[i], "%s 必须成功", qt.name)
 			require.NotNil(t, resps[i])
 			assert.Equal(t, uint32(len(qt.data)), resps[i].Size)
 		}
@@ -756,13 +714,13 @@ func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 }
 
 // TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit 验证：
-//  1. 阶段 1 PutBlock 发布至页缓存后，阶段 2 直接提交数据库事务；
-//  2. 步骤 2b 批次内混入不存在的 Inode (ErrNotFound)、目录 Inode (ErrIsDir)、FIFO 节点 (ErrInvalidArgument) 及 O_APPEND 溢出 MaxInt64 时，
-//     各异常请求精确返回对应哨兵错误并清理物理块，不影响同批次合法 Inode 正常提交。
+//  1. 阶段 1 PutBlock 发布至页缓存后，阶段 2 直接执行 WriteFileAtomic 提交；
+//  2. 混入不存在的 Inode (ErrNotFound)、目录 Inode (ErrIsDir)、FIFO 节点 (ErrInvalidArgument) 及 O_APPEND 溢出 MaxInt64 时，
+//     各异常请求精确返回对应哨兵错误并清理物理块，不影响合法 Inode 正常提交。
 func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("阶段 1 PutBlock 发布至页缓存后阶段 2 所有合法任务正常合并提交", func(t *testing.T) {
+	t.Run("阶段 1 PutBlock 发布至页缓存后阶段 2 所有合法任务正常提交", func(t *testing.T) {
 		dataDir := t.TempDir()
 		localBS := meta.NewLocalFSBlockStore(dataDir)
 		gatedBS := newGateBlockStore(localBS, 3)
@@ -778,31 +736,19 @@ func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing
 		fh := uint64(30)
 
 		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.Anything).
-			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				q := dbmock.NewMockQuerier(t)
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(db.Inode{
-					Ino:   int64(ino),
-					Mode:  int32(meta.S_IFREG | 0o644),
-					Size:  0,
-					Nlink: 1,
-				}, nil).Once()
-				q.EXPECT().GetFileHandle(mock.Anything, db.GetFileHandleParams{Fh: int64(fh), Ino: int64(ino)}).Return(db.FileHandle{
-					Fh:    int64(fh),
-					Ino:   int64(ino),
-					Flags: int32(meta.O_RDWR),
-				}, nil).Once()
-				q.EXPECT().AppendChunkSlice(mock.Anything, mock.Anything).Return(int64(72), nil).Once()
-				q.EXPECT().InsertSliceRef(mock.Anything, mock.Anything).Return(nil).Times(3)
-				q.EXPECT().UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).Return(db.Inode{
-					Ino:   int64(ino),
-					Mode:  int32(meta.S_IFREG | 0o644),
-					Size:  300,
-					Nlink: 1,
-				}, nil).Once()
-				return fn(q)
-			}).
-			Once()
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			Return(db.WriteFileAtomicRow{
+				Status:    "ok",
+				OldSize:   0,
+				NewSize:   300,
+				StartIndx: 0,
+				EndIndx:   0,
+				OctetLen1: 24,
+				Ino:       int64(ino),
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Nlink:     1,
+			}, nil).
+			Times(3)
 
 		mgr := meta.New(mockStore, meta.WithBlockStore(gatedBS))
 
@@ -830,7 +776,7 @@ func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing
 		assert.Equal(t, 3, countRegularFilesInDir(t, dataDir), "数据目录中应保留全部 3 个成功任务的物理块")
 	})
 
-	t.Run("步骤 2b 批次内混入 ErrNotFound、ErrIsDir、FIFO 与 O_APPEND 溢出时逐一隔离并清理物理块", func(t *testing.T) {
+	t.Run("并发混入 ErrNotFound、ErrIsDir、FIFO 与 O_APPEND 溢出时逐一隔离并清理物理块", func(t *testing.T) {
 		dataDir := t.TempDir()
 		localBS := meta.NewLocalFSBlockStore(dataDir)
 		const numTasks = 5
@@ -851,55 +797,30 @@ func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing
 		fh := uint64(11)
 
 		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.Anything).
-			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				q := dbmock.NewMockQuerier(t)
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(inoMissing)).Return(db.Inode{}, pgx.ErrNoRows).Once()
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(inoDir)).Return(db.Inode{
-					Ino:  int64(inoDir),
-					Mode: int32(meta.S_IFDIR | 0o755),
-				}, nil).Once()
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(inoFifo)).Return(db.Inode{
-					Ino:  int64(inoFifo),
-					Mode: int32(meta.S_IFIFO | 0o644),
-				}, nil).Once()
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(inoOverflow)).Return(db.Inode{
-					Ino:  int64(inoOverflow),
-					Mode: int32(meta.S_IFREG | 0o644),
-					Size: math.MaxInt64 - 5,
-				}, nil).Once()
-				q.EXPECT().GetInodeForUpdate(mock.Anything, int64(inoValid)).Return(db.Inode{
-					Ino:  int64(inoValid),
-					Mode: int32(meta.S_IFREG | 0o644),
-					Size: 0,
-				}, nil).Once()
-
-				q.EXPECT().GetFileHandle(mock.Anything, db.GetFileHandleParams{Fh: int64(fh), Ino: int64(inoOverflow)}).Return(db.FileHandle{
-					Fh:    int64(fh),
-					Ino:   int64(inoOverflow),
-					Flags: int32(meta.O_WRONLY | meta.O_APPEND),
-				}, nil).Once()
-				q.EXPECT().GetFileHandle(mock.Anything, db.GetFileHandleParams{Fh: int64(fh), Ino: int64(inoValid)}).Return(db.FileHandle{
-					Fh:    int64(fh),
-					Ino:   int64(inoValid),
-					Flags: int32(meta.O_WRONLY),
-				}, nil).Once()
-
-				q.EXPECT().AppendChunkSlice(mock.Anything, mock.Anything).Return(int64(24), nil).Once()
-				q.EXPECT().InsertSliceRef(mock.Anything, mock.Anything).Return(nil).Once()
-				q.EXPECT().UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-					Ino:  int64(inoValid),
-					Size: 64,
-					Mode: int32(meta.S_IFREG | 0o644),
-				}).Return(db.Inode{
-					Ino:  int64(inoValid),
-					Mode: int32(meta.S_IFREG | 0o644),
-					Size: 64,
-				}, nil).Once()
-
-				return fn(q)
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			RunAndReturn(func(attemptCtx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+				switch uint64(arg.Ino) {
+				case inoMissing:
+					return db.WriteFileAtomicRow{Status: "not_found"}, nil
+				case inoDir:
+					return db.WriteFileAtomicRow{Status: "is_dir"}, nil
+				case inoFifo, inoOverflow:
+					return db.WriteFileAtomicRow{Status: "invalid_arg"}, nil
+				default:
+					return db.WriteFileAtomicRow{
+						Status:    "ok",
+						OldSize:   0,
+						NewSize:   64,
+						StartIndx: 0,
+						EndIndx:   0,
+						OctetLen1: 24,
+						Ino:       arg.Ino,
+						Mode:      int32(meta.S_IFREG | 0o644),
+						Nlink:     1,
+					}, nil
+				}
 			}).
-			Once()
+			Times(numTasks)
 
 		mgr := meta.New(mockStore, meta.WithBlockStore(gatedBS))
 
@@ -970,8 +891,8 @@ func (s *orderSpyBlockStore) PutBlock(ctx context.Context, sliceID uint64, block
 	return s.BlockStore.PutBlock(ctx, sliceID, blockIdx, data)
 }
 
-// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0026：
-//  1. 普通 Write（含单任务与多任务批次）统一调用 BlockStore.PutBlock 写入 OS Page Cache，且在真实数据库事务内启用 SET LOCAL synchronous_commit = off；
+// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0026 与 ADR-0028：
+//  1. 普通 Write 阶段 1 调用 BlockStore.PutBlock 写入 OS Page Cache，阶段 2 仅发送 1 条包含 set_config('synchronous_commit', 'off', true) 的单语句 CTE SQL（零显式 BEGIN/COMMIT），且执行后连接会话级 SHOW synchronous_commit 仍为 'on'；
 //  2. Write 返回后立即发起 Read、GetAttr、Lookup 100% 读到最新数据与最新属性；
 //  3. Fsync 与 FsyncDir 句柄校验失败时不触发 WAL 刷盘；
 //  4. Fsync 与 FsyncDir 句柄校验通过后仅执行 SELECT pg_current_wal_flush_lsn()::text 刷 PG WAL；
@@ -995,7 +916,7 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	mgr := meta.New(store, meta.WithBlockStore(spyBS))
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
-		Name:     fmt.Sprintf("adr0026-barrier-%d", time.Now().UnixNano()),
+		Name:     fmt.Sprintf("adr0028-barrier-%d", time.Now().UnixNano()),
 		MaxBytes: 100 * 1024 * 1024,
 	})
 	require.NoError(t, err)
@@ -1030,7 +951,17 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino), fh)
 	})
 
-	// 1. 验证 Write 统一调用 PutBlock，事务内执行了 SET LOCAL synchronous_commit = off
+	// 预先消费 1 次 NextSliceID 以填满 slice_id 内存预取队列，从而精确测量热路径单次 Write 的 SQL 条数
+	warmupData := []byte("w")
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 0,
+		Data:   warmupData,
+	})
+	require.NoError(t, err)
+
+	// 1. 验证 Write 热路径统一调用 PutBlock，阶段 2 仅发送 1 条包含 set_config('synchronous_commit', 'off', true) 的单语句 CTE SQL（零 BEGIN/COMMIT）
 	tracer.reset()
 	spyBS.putBlockCalls.Store(0)
 
@@ -1046,17 +977,14 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	assert.Equal(t, int64(1), spyBS.putBlockCalls.Load(), "Write 阶段 1 必须统一调用 PutBlock")
 
 	queries := tracer.snapshot()
-	var hasAsyncCommitSQL, hasWalFlushSQLOnWrite bool
-	for _, q := range queries {
-		if strings.Contains(q, "SET LOCAL synchronous_commit = off") {
-			hasAsyncCommitSQL = true
-		}
-		if strings.Contains(q, "pg_current_wal_flush_lsn") {
-			hasWalFlushSQLOnWrite = true
-		}
-	}
-	assert.True(t, hasAsyncCommitSQL, "普通 Write 数据库事务必须执行 SET LOCAL synchronous_commit = off")
-	assert.False(t, hasWalFlushSQLOnWrite, "普通 Write 不得触发 pg_current_wal_flush_lsn")
+	require.Len(t, queries, 1, "Write 热路径在 slice_id 预取命中时必须仅向数据库发送 1 条 SQL 语句（1 RTT，零显式 BEGIN/COMMIT）")
+	assert.Contains(t, queries[0], "set_config('synchronous_commit', 'off', true)", "普通 Write 单语句 CTE 必须内联 set_config('synchronous_commit', 'off', true)")
+	assert.False(t, strings.Contains(queries[0], "pg_current_wal_flush_lsn"), "普通 Write 不得触发 pg_current_wal_flush_lsn")
+
+	// 验证单语句 CTE 执行完毕后，连接池中连接的会话级 synchronous_commit 仍恢复为 'on'（零污染后续事务）
+	var syncCommitVal string
+	require.NoError(t, pool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommitVal))
+	assert.Equal(t, "on", syncCommitVal, "set_config('synchronous_commit', 'off', true) 仅在单语句隐式事务内生效，结束后会话级配置必须仍为 on")
 
 	// 2. Write 返回后立即发起 Read、GetAttr、Lookup，100% 读到最新内容与属性
 	readRes, err := mgr.Read(ctx, &meta.ReadRequest{

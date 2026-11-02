@@ -1959,7 +1959,7 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 				mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
 				return err
 			}).
-			Times(6)
+			Times(4)
 
 		parentDir := db.Inode{
 			Ino:     1,
@@ -1980,12 +1980,22 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		}
 
 		// 1. Create (active)
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
-		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
-		mockQuerier.EXPECT().CreateInode(mock.Anything, mock.Anything).Return(regInode, nil).Once()
-		mockQuerier.EXPECT().CreateEntry(mock.Anything, mock.Anything).Return(nil).Once()
-		mockQuerier.EXPECT().TouchInodeTimestamps(mock.Anything, int64(1)).Return(nil).Once()
-		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 10, Ino: 100}, nil).Once()
+		mockStore.EXPECT().
+			CreateFileAtomic(mock.Anything, db.CreateFileAtomicParams{
+				Name:      []byte("a.txt"),
+				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+				ParentIno: 1,
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Flags:     int32(meta.O_RDWR),
+			}).
+			Return(db.CreateFileAtomicRow{
+				Status: "ok",
+				Fh:     10,
+				Ino:    100,
+				Mode:   int32(meta.S_IFREG | 0o644),
+				Nlink:  1,
+			}, nil).
+			Once()
 
 		_, err := mgr.Create(ctx, meta.CreateParams{
 			ParentIno: 1,
@@ -2047,8 +2057,18 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 
 		// 6. Create with expired/missing session -> ErrBadFileHandle before CreateInode
-		mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(1)).Return(parentDir, nil).Once()
-		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(false, nil).Once()
+		mockStore.EXPECT().
+			CreateFileAtomic(mock.Anything, db.CreateFileAtomicParams{
+				Name:      []byte("rejected.txt"),
+				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+				ParentIno: 1,
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Flags:     int32(meta.O_RDWR),
+			}).
+			Return(db.CreateFileAtomicRow{
+				Status: "bad_handle",
+			}, nil).
+			Once()
 		_, err = mgr.Create(ctx, meta.CreateParams{
 			ParentIno: 1,
 			Name:      []byte("rejected.txt"),
@@ -2087,7 +2107,7 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
 			RunAndReturn(assertTxNotRenewing).
-			Times(2)
+			Once()
 
 		regInode := db.Inode{
 			Ino:   200,
@@ -2156,8 +2176,11 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.ErrorIs(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}), meta.ErrBadFileHandle)
 
 		// 6. Release
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
-		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
+		mockStore.EXPECT().ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+			Ino:       200,
+			Fh:        20,
+			SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+		}).Return(db.ReleaseFileFastRow{Status: "ok", Nlink: 1}, nil).Once()
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
 		// 7. ReleaseDir

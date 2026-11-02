@@ -284,6 +284,12 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 			return fmt.Errorf("get disk for update %s: %w", params.DiskID, err)
 		}
 
+		if params.MaxBytes != nil && current.RootIno > 0 && m.hasPool() {
+			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+				_, _ = r.RawDBTX().Exec(ctx, `SELECT 1 FROM inodes WHERE root_ino = $1 AND (mode & 61440) = 32768 FOR SHARE`, current.RootIno)
+			}
+		}
+
 		newName := current.Name
 		if params.Name != nil {
 			newName = *params.Name

@@ -19,6 +19,7 @@ type Querier interface {
 	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
 	CreateDisk(ctx context.Context, arg CreateDiskParams) (CreateDiskRow, error)
 	CreateEntry(ctx context.Context, arg CreateEntryParams) error
+	CreateFileAtomic(ctx context.Context, arg CreateFileAtomicParams) (CreateFileAtomicRow, error)
 	CreateFileHandle(ctx context.Context, arg CreateFileHandleParams) (FileHandle, error)
 	CreateFileLock(ctx context.Context, arg CreateFileLockParams) (FileLock, error)
 	CreateInode(ctx context.Context, arg CreateInodeParams) (Inode, error)
@@ -88,6 +89,7 @@ type Querier interface {
 	LockValidSliceRefsKeyShare(ctx context.Context, sliceIds []int64) ([]int64, error)
 	LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error)
 	NextSliceID(ctx context.Context) (int64, error)
+	ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error)
 	TouchInodeAtime(ctx context.Context, ino int64) error
 	TouchInodeCtime(ctx context.Context, ino int64) error
 	TouchInodeTimestamps(ctx context.Context, ino int64) error
@@ -102,6 +104,7 @@ type Querier interface {
 	UpsertClientSession(ctx context.Context, arg UpsertClientSessionParams) (ClientSession, error)
 	UpsertFileLockWaiter(ctx context.Context, arg UpsertFileLockWaiterParams) (FileLockWaiter, error)
 	UpsertInodeXattr(ctx context.Context, arg UpsertInodeXattrParams) error
+	WriteFileAtomic(ctx context.Context, arg WriteFileAtomicParams) (WriteFileAtomicRow, error)
 }
 
 var _ Querier = (*Queries)(nil)
