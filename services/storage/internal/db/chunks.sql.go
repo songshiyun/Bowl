@@ -296,6 +296,130 @@ func (q *Queries) GetChunksInRange(ctx context.Context, arg GetChunksInRangePara
 	return items, nil
 }
 
+const getInodeChunksAndHandleForRead = `-- name: GetInodeChunksAndHandleForRead :many
+SELECT
+    i.ino,
+    i.generation,
+    i.mode,
+    i.size,
+    i.nlink,
+    i.uid,
+    i.gid,
+    i.rdev,
+    i.atime,
+    i.mtime,
+    i.ctime,
+    i.symlink_target,
+    i.flags,
+    i.parent_ino,
+    i.root_ino,
+    (vh.fh IS NOT NULL)::boolean AS fh_found,
+    COALESCE(vh.flags, 0)::int4 AS fh_flags,
+    c.indx AS chunk_indx,
+    c.slices AS chunk_slices
+FROM inodes i
+LEFT JOIN LATERAL (
+    SELECT fh.fh, fh.flags
+    FROM file_handles fh
+    WHERE fh.fh = $1::bigint
+      AND fh.ino = i.ino
+      AND (
+          ($2::bigint IS NULL AND fh.session_id IS NULL)
+          OR (
+              $2::bigint IS NOT NULL
+              AND fh.session_id = $2::bigint
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_sessions s
+                  WHERE s.session_id = fh.session_id
+                    AND s.expires_at > clock_timestamp()
+                    AND fh.created_at >= s.created_at
+              )
+          )
+      )
+    LIMIT 1
+) vh ON true
+LEFT JOIN chunks c ON c.ino = i.ino AND c.indx >= $3::bigint AND c.indx <= $4::bigint
+WHERE i.ino = $5::bigint
+ORDER BY c.indx ASC
+`
+
+type GetInodeChunksAndHandleForReadParams struct {
+	Fh        int64       `json:"fh"`
+	SessionID pgtype.Int8 `json:"session_id"`
+	StartIndx int64       `json:"start_indx"`
+	EndIndx   int64       `json:"end_indx"`
+	Ino       int64       `json:"ino"`
+}
+
+type GetInodeChunksAndHandleForReadRow struct {
+	Ino           int64              `json:"ino"`
+	Generation    int64              `json:"generation"`
+	Mode          int32              `json:"mode"`
+	Size          int64              `json:"size"`
+	Nlink         int32              `json:"nlink"`
+	Uid           int32              `json:"uid"`
+	Gid           int32              `json:"gid"`
+	Rdev          int64              `json:"rdev"`
+	Atime         pgtype.Timestamptz `json:"atime"`
+	Mtime         pgtype.Timestamptz `json:"mtime"`
+	Ctime         pgtype.Timestamptz `json:"ctime"`
+	SymlinkTarget []byte             `json:"symlink_target"`
+	Flags         int32              `json:"flags"`
+	ParentIno     int64              `json:"parent_ino"`
+	RootIno       int64              `json:"root_ino"`
+	FhFound       bool               `json:"fh_found"`
+	FhFlags       int32              `json:"fh_flags"`
+	ChunkIndx     pgtype.Int8        `json:"chunk_indx"`
+	ChunkSlices   []byte             `json:"chunk_slices"`
+}
+
+func (q *Queries) GetInodeChunksAndHandleForRead(ctx context.Context, arg GetInodeChunksAndHandleForReadParams) ([]GetInodeChunksAndHandleForReadRow, error) {
+	rows, err := q.db.Query(ctx, getInodeChunksAndHandleForRead,
+		arg.Fh,
+		arg.SessionID,
+		arg.StartIndx,
+		arg.EndIndx,
+		arg.Ino,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetInodeChunksAndHandleForReadRow
+	for rows.Next() {
+		var i GetInodeChunksAndHandleForReadRow
+		if err := rows.Scan(
+			&i.Ino,
+			&i.Generation,
+			&i.Mode,
+			&i.Size,
+			&i.Nlink,
+			&i.Uid,
+			&i.Gid,
+			&i.Rdev,
+			&i.Atime,
+			&i.Mtime,
+			&i.Ctime,
+			&i.SymlinkTarget,
+			&i.Flags,
+			&i.ParentIno,
+			&i.RootIno,
+			&i.FhFound,
+			&i.FhFlags,
+			&i.ChunkIndx,
+			&i.ChunkSlices,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getInodeSizeAndChunksInRange = `-- name: GetInodeSizeAndChunksInRange :many
 SELECT
     i.ino,

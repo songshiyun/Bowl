@@ -2123,7 +2123,7 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
 			RunAndReturn(assertTxNotRenewing).
-			Times(3)
+			Times(2)
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error"), mock.Anything, mock.Anything).
 			RunAndReturn(assertTxNotRenewing).
@@ -2171,10 +2171,15 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		}))
 
 		// 4. Read
-		mockQuerier.EXPECT().GetInodeSizeAndChunksInRange(mock.Anything, mock.Anything).Return([]db.GetInodeSizeAndChunksInRangeRow{
-			{Ino: 200, Mode: int32(meta.S_IFREG | 0o644), Size: 0},
+		mockStore.EXPECT().GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
+			Ino:       200,
+			Fh:        20,
+			SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			StartIndx: 0,
+			EndIndx:   0,
+		}).Return([]db.GetInodeChunksAndHandleForReadRow{
+			{Ino: 200, Mode: int32(meta.S_IFREG | 0o644), Size: 0, FhFound: true, FhFlags: validFh.Flags},
 		}, nil).Once()
-		mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(validFh, nil).Once()
 		readResp, err := mgr.Read(ctx, &meta.ReadRequest{
 			Ino:       200,
 			Fh:        20,

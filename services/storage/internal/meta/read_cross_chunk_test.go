@@ -44,11 +44,8 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 
 	t.Run("跨越 4 MiB Chunk/Block 边界读取共享物理 Block 的 2 MiB 数据拼接验证", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		setupMockWriteTx(mockStore, mockQuerier)
 
 		sliceID := uint64(9001)
 		// 模拟跨 4 MiB 边界写入 4 MiB 数据 (Offset = 2 MiB..6 MiB) 拆分出的两个相邻 Chunk 共享切片：
@@ -69,51 +66,17 @@ func TestRead_CrossBlockBoundary(t *testing.T) {
 			Len:  2 * 1024 * 1024,
 		}
 
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice0),
-				},
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 1, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice1),
-				},
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 0, Valid: true}, meta.EncodeSlice(slice0)),
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 1, Valid: true}, meta.EncodeSlice(slice1)),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			LockValidSliceRefsKeyShare(mock.Anything, []int64{int64(sliceID)}).
-			Return([]int64{int64(sliceID)}, nil).
 			Once()
 
 		// 读取区间 [3 MiB, 5 MiB)，长度 2 MiB:
@@ -173,11 +136,8 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("跨 4 MiB 边界读取 1 MiB (左右各 512 KiB) 正常拼接返回", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		setupMockWriteTx(mockStore, mockQuerier)
 
 		sliceID1 := uint64(1001)
 		sliceID2 := uint64(1002)
@@ -200,51 +160,17 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 			Len:  512 * 1024,
 		}
 
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice0),
-				},
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 1, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice1),
-				},
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 0, Valid: true}, meta.EncodeSlice(slice0)),
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 1, Valid: true}, meta.EncodeSlice(slice1)),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			LockValidSliceRefsKeyShare(mock.Anything, []int64{int64(sliceID1), int64(sliceID2)}).
-			Return([]int64{int64(sliceID1), int64(sliceID2)}, nil).
 			Once()
 
 		part1 := bytes.Repeat([]byte{0x11}, 512*1024)
@@ -283,11 +209,8 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("左空洞跨界读取：Chunk 0 不存在 (读零)，Chunk 1 有数据", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		setupMockWriteTx(mockStore, mockQuerier)
 
 		sliceID2 := uint64(1003)
 		slice1 := meta.Slice{
@@ -298,41 +221,16 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 			Len:  512 * 1024,
 		}
 
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 1, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice1),
-				},
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 1, Valid: true}, meta.EncodeSlice(slice1)),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			LockValidSliceRefsKeyShare(mock.Anything, []int64{int64(sliceID2)}).
-			Return([]int64{int64(sliceID2)}, nil).
 			Once()
 
 		part2 := bytes.Repeat([]byte{0x33}, 512*1024)
@@ -359,11 +257,8 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("右空洞跨界读取：Chunk 0 有数据，Chunk 1 不存在 (读零)", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		setupMockWriteTx(mockStore, mockQuerier)
 
 		// Chunk 0: [ChunkSize-512KiB, ChunkSize)
 		sliceID1 := uint64(1004)
@@ -375,41 +270,16 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 			Len:  512 * 1024,
 		}
 
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
-					ChunkSlices: meta.EncodeSlice(slice0),
-				},
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 0, Valid: true}, meta.EncodeSlice(slice0)),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			LockValidSliceRefsKeyShare(mock.Anything, []int64{int64(sliceID1)}).
-			Return([]int64{int64(sliceID1)}, nil).
 			Once()
 
 		part1 := bytes.Repeat([]byte{0x44}, 512*1024)
@@ -436,40 +306,18 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("双侧均为稀疏空洞跨界读取全零", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:       fileRow.Ino,
-					Mode:      fileRow.Mode,
-					Size:      fileRow.Size,
-					Atime:     fileRow.Atime,
-					Mtime:     fileRow.Mtime,
-					Ctime:     fileRow.Ctime,
-					ChunkIndx: pgtype.Int8{Valid: false},
-				},
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Valid: false}, nil),
 			}, nil).
 			Once()
 
@@ -486,11 +334,8 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("跨 4 MiB 边界叠加多次随机覆写精确读取", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		setupMockWriteTx(mockStore, mockQuerier)
 
 		// Chunk 0 包含底图 [ChunkSize-512KiB, ChunkSize) 与后续尾部覆写 [ChunkSize-128KiB, ChunkSize)
 		baseSliceID0 := uint64(2001)
@@ -508,51 +353,17 @@ func TestRead_CrossChunkBoundary(t *testing.T) {
 			{Pos: 0, ID: overSliceID1, Size: 64 * 1024, Off: 0, Len: 64 * 1024},
 		}
 
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   1,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
-					ChunkSlices: meta.EncodeSlices(chunk0Slices),
-				},
-				{
-					Ino:         fileRow.Ino,
-					Mode:        fileRow.Mode,
-					Size:        fileRow.Size,
-					Atime:       fileRow.Atime,
-					Mtime:       fileRow.Mtime,
-					Ctime:       fileRow.Ctime,
-					ChunkIndx:   pgtype.Int8{Int64: 1, Valid: true},
-					ChunkSlices: meta.EncodeSlices(chunk1Slices),
-				},
+			Return([]db.GetInodeChunksAndHandleForReadRow{
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 0, Valid: true}, meta.EncodeSlices(chunk0Slices)),
+				inodeToReadRow(fileRow, true, int32(meta.O_RDONLY), pgtype.Int8{Int64: 1, Valid: true}, meta.EncodeSlices(chunk1Slices)),
 			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			LockValidSliceRefsKeyShare(mock.Anything, []int64{int64(baseSliceID0), int64(overSliceID0), int64(baseSliceID1), int64(overSliceID1)}).
-			Return([]int64{int64(baseSliceID0), int64(overSliceID0), int64(baseSliceID1), int64(overSliceID1)}, nil).
 			Once()
 
 		dataBase0 := bytes.Repeat([]byte{0x55}, 384*1024)

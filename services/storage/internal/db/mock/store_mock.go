@@ -3339,6 +3339,74 @@ func (_c *MockStore_GetInodeByEntry_Call) RunAndReturn(run func(ctx context.Cont
 	return _c
 }
 
+// GetInodeChunksAndHandleForRead provides a mock function for the type MockStore
+func (_mock *MockStore) GetInodeChunksAndHandleForRead(ctx context.Context, arg db.GetInodeChunksAndHandleForReadParams) ([]db.GetInodeChunksAndHandleForReadRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetInodeChunksAndHandleForRead")
+	}
+
+	var r0 []db.GetInodeChunksAndHandleForReadRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetInodeChunksAndHandleForReadParams) ([]db.GetInodeChunksAndHandleForReadRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetInodeChunksAndHandleForReadParams) []db.GetInodeChunksAndHandleForReadRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]db.GetInodeChunksAndHandleForReadRow)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.GetInodeChunksAndHandleForReadParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetInodeChunksAndHandleForRead_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetInodeChunksAndHandleForRead'
+type MockStore_GetInodeChunksAndHandleForRead_Call struct {
+	*mock.Call
+}
+
+// GetInodeChunksAndHandleForRead is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.GetInodeChunksAndHandleForReadParams
+func (_e *MockStore_Expecter) GetInodeChunksAndHandleForRead(ctx any, arg any) *MockStore_GetInodeChunksAndHandleForRead_Call {
+	return &MockStore_GetInodeChunksAndHandleForRead_Call{Call: _e.mock.On("GetInodeChunksAndHandleForRead", ctx, arg)}
+}
+
+func (_c *MockStore_GetInodeChunksAndHandleForRead_Call) Run(run func(ctx context.Context, arg db.GetInodeChunksAndHandleForReadParams)) *MockStore_GetInodeChunksAndHandleForRead_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.GetInodeChunksAndHandleForReadParams
+		if args[1] != nil {
+			arg1 = args[1].(db.GetInodeChunksAndHandleForReadParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetInodeChunksAndHandleForRead_Call) Return(getInodeChunksAndHandleForReadRows []db.GetInodeChunksAndHandleForReadRow, err error) *MockStore_GetInodeChunksAndHandleForRead_Call {
+	_c.Call.Return(getInodeChunksAndHandleForReadRows, err)
+	return _c
+}
+
+func (_c *MockStore_GetInodeChunksAndHandleForRead_Call) RunAndReturn(run func(ctx context.Context, arg db.GetInodeChunksAndHandleForReadParams) ([]db.GetInodeChunksAndHandleForReadRow, error)) *MockStore_GetInodeChunksAndHandleForRead_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetInodeForUpdate provides a mock function for the type MockStore
 func (_mock *MockStore) GetInodeForUpdate(ctx context.Context, ino int64) (db.Inode, error) {
 	ret := _mock.Called(ctx, ino)
