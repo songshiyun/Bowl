@@ -22,7 +22,7 @@ import (
 const DefaultReleaseRetryInterval = 200 * time.Millisecond
 
 // DefaultRPCTimeout 是 FUSE 常规请求（不含阻塞锁 SetLkw）的默认单请求超时预算。
-const DefaultRPCTimeout = 5 * time.Second
+const DefaultRPCTimeout = 30 * time.Second
 
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
@@ -161,7 +161,7 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 	return fuse.OK
 }
 
-// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 5s 超时保护。
+// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
 	timeout := fs.cfg.RPCTimeout
 	if timeout <= 0 {

@@ -899,9 +899,10 @@ func TestRetry_HangingServer_BoundedByMaxElapsedTime(t *testing.T) {
 // Slice 5: 默认配置与禁用配置
 func TestRetry_ConfigDefaultsAndDisable(t *testing.T) {
 	t.Run("default RetryConfig values", func(t *testing.T) {
+		require.Equal(t, 30*time.Second, DefaultMaxElapsedTime)
 		cfg := RetryConfig{}
 		normalized := cfg.withDefaults()
-		require.Equal(t, 5*time.Second, normalized.MaxElapsedTime)
+		require.Equal(t, 30*time.Second, normalized.MaxElapsedTime)
 		require.Equal(t, 100*time.Millisecond, normalized.InitialInterval)
 		require.Equal(t, 2.0, normalized.Multiplier)
 		require.Equal(t, 1*time.Second, normalized.MaxInterval)
