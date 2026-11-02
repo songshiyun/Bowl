@@ -1376,6 +1376,15 @@ func (s *lockOrderTrackingStore) ExecTxWithOptions(ctx context.Context, fn func(
 	}, opts...)
 }
 
+func (s *lockOrderTrackingStore) CreateFileAtomic(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error) {
+	if arg.SessionID.Valid {
+		s.mu.Lock()
+		s.recordedOps = append(s.recordedOps, "client_sessions")
+		s.mu.Unlock()
+	}
+	return s.Store.CreateFileAtomic(ctx, arg)
+}
+
 func (s *lockOrderTrackingStore) getResourceSequence() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

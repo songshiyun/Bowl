@@ -141,43 +141,22 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 
 	t.Run("Create 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(1)).
-			Return(dirInode, nil).
-			Once()
-		expectVerifyActiveSession(mockQuerier, sessID)
-		mockQuerier.EXPECT().
-			CreateInode(mock.Anything, mock.Anything).
-			Return(fileInode, nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateEntry(mock.Anything, db.CreateEntryParams{
-				ParentIno: 1,
+		mockStore.EXPECT().
+			CreateFileAtomic(mock.Anything, db.CreateFileAtomicParams{
 				Name:      []byte("created.txt"),
-				Ino:       100,
-			}).
-			Return(nil).
-			Once()
-		mockQuerier.EXPECT().
-			TouchInodeTimestamps(mock.Anything, int64(1)).
-			Return(nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
-				Ino:       100,
-				Flags:     int32(meta.O_RDWR),
 				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
-			}).
-			Return(db.FileHandle{
-				Fh:        501,
-				Ino:       100,
+				ParentIno: 1,
+				Mode:      int32(meta.S_IFREG | 0o644),
 				Flags:     int32(meta.O_RDWR),
-				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			}).
+			Return(db.CreateFileAtomicRow{
+				Status: "ok",
+				Fh:     501,
+				Ino:    100,
+				Mode:   int32(meta.S_IFREG | 0o644),
+				Nlink:  1,
 			}, nil).
 			Once()
 

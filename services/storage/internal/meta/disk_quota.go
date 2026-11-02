@@ -358,3 +358,22 @@ func (q *quotaBufferedQuerier) commit() {
 	clear(q.txUnreservedBytes)
 	clear(q.txInodes)
 }
+
+func (m *manager) commitDirectQuotaDelta(ctx context.Context, rootIno int64, deltaBytes int64, deltaInodes int64) {
+	if rootIno <= 0 || (deltaBytes == 0 && deltaInodes == 0) {
+		return
+	}
+	if m.hasPool() {
+		_, _, _ = m.ensureDiskQuotaLoaded(ctx, rootIno)
+	}
+	m.quotaMu.Lock()
+	st := m.getOrCreateDiskQuotaStateLocked(rootIno)
+	if st.loaded {
+		st.usedBytes = max(int64(0), st.usedBytes+deltaBytes)
+		st.usedInodes = max(int64(0), st.usedInodes+deltaInodes)
+	} else {
+		st.pendingBytes += deltaBytes
+		st.pendingInodes += deltaInodes
+	}
+	m.quotaMu.Unlock()
+}

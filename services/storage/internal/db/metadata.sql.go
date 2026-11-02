@@ -144,6 +144,180 @@ func (q *Queries) CreateEntry(ctx context.Context, arg CreateEntryParams) error 
 	return err
 }
 
+const createFileAtomic = `-- name: CreateFileAtomic :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+locked_parent AS (
+    SELECT ino, mode, nlink, gid, root_ino
+    FROM inodes
+    WHERE inodes.ino = $3::bigint
+    FOR UPDATE
+),
+valid_session AS (
+    SELECT s.session_id
+    FROM client_sessions s
+    CROSS JOIN locked_parent lp
+    WHERE $2::bigint IS NOT NULL
+      AND s.session_id = $2::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR lp.root_ino <= 0
+          OR EXISTS (
+              SELECT 1
+              FROM disks d
+              WHERE d.root_ino = lp.root_ino
+                AND d.disk_id = s.disk_id
+          )
+      )
+),
+can_create AS (
+    SELECT
+        lp.ino AS parent_ino,
+        lp.gid AS parent_gid,
+        lp.mode AS parent_mode,
+        lp.root_ino
+    FROM locked_parent lp
+    WHERE (lp.mode & 61440) = 16384
+      AND lp.nlink > 0
+      AND $1::bytea NOT IN ('\x2e'::bytea, '\x2e2e'::bytea)
+      AND (
+          $2::bigint IS NULL
+          OR EXISTS (SELECT 1 FROM valid_session)
+      )
+),
+inserted_inode AS (
+    INSERT INTO inodes (
+        mode, size, nlink, uid, gid, rdev, flags, parent_ino, root_ino
+    )
+    SELECT
+        $4::int4,
+        0,
+        1,
+        $5::int4,
+        CASE WHEN (cc.parent_mode & 1024) <> 0 THEN cc.parent_gid ELSE $6::int4 END,
+        0,
+        0,
+        0,
+        cc.root_ino
+    FROM can_create cc
+    RETURNING ino, generation, mode, size, nlink, uid, gid, rdev, atime, mtime, ctime, symlink_target, flags, parent_ino, root_ino
+),
+inserted_entry AS (
+    INSERT INTO entries (parent_ino, name, ino)
+    SELECT cc.parent_ino, $1::bytea, ii.ino
+    FROM can_create cc
+    CROSS JOIN inserted_inode ii
+),
+touched_parent AS (
+    UPDATE inodes p
+    SET mtime = clock_timestamp(),
+        ctime = clock_timestamp()
+    FROM can_create cc
+    CROSS JOIN inserted_inode ii
+    WHERE p.ino = cc.parent_ino
+),
+inserted_handle AS (
+    INSERT INTO file_handles (ino, flags, session_id)
+    SELECT ii.ino, $7::int4, $2::bigint
+    FROM inserted_inode ii
+    RETURNING fh
+)
+SELECT
+    CASE
+        WHEN lp.ino IS NULL THEN 'not_found'
+        WHEN (lp.mode & 61440) <> 16384 THEN 'not_dir'
+        WHEN lp.nlink = 0 THEN 'not_found'
+        WHEN $1::bytea IN ('\x2e'::bytea, '\x2e2e'::bytea) THEN 'already_exists'
+        WHEN $2::bigint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM valid_session) THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ih.fh, 0)::bigint AS fh,
+    COALESCE(ii.ino, 0)::bigint AS ino,
+    COALESCE(ii.generation, 0)::bigint AS generation,
+    COALESCE(ii.mode, 0)::int4 AS mode,
+    COALESCE(ii.size, 0)::bigint AS size,
+    COALESCE(ii.nlink, 0)::int4 AS nlink,
+    COALESCE(ii.uid, 0)::int4 AS uid,
+    COALESCE(ii.gid, 0)::int4 AS gid,
+    COALESCE(ii.rdev, 0)::bigint AS rdev,
+    ii.atime AS atime,
+    ii.mtime AS mtime,
+    ii.ctime AS ctime,
+    ii.symlink_target AS symlink_target,
+    COALESCE(ii.flags, 0)::int4 AS flags,
+    COALESCE(ii.parent_ino, 0)::bigint AS parent_ino,
+    COALESCE(ii.root_ino, 0)::bigint AS root_ino
+FROM async_wal
+LEFT JOIN locked_parent lp ON true
+LEFT JOIN inserted_inode ii ON true
+LEFT JOIN inserted_handle ih ON true
+`
+
+type CreateFileAtomicParams struct {
+	Name      []byte      `json:"name"`
+	SessionID pgtype.Int8 `json:"session_id"`
+	ParentIno int64       `json:"parent_ino"`
+	Mode      int32       `json:"mode"`
+	Uid       int32       `json:"uid"`
+	Gid       int32       `json:"gid"`
+	Flags     int32       `json:"flags"`
+}
+
+type CreateFileAtomicRow struct {
+	Status        string             `json:"status"`
+	Fh            int64              `json:"fh"`
+	Ino           int64              `json:"ino"`
+	Generation    int64              `json:"generation"`
+	Mode          int32              `json:"mode"`
+	Size          int64              `json:"size"`
+	Nlink         int32              `json:"nlink"`
+	Uid           int32              `json:"uid"`
+	Gid           int32              `json:"gid"`
+	Rdev          int64              `json:"rdev"`
+	Atime         pgtype.Timestamptz `json:"atime"`
+	Mtime         pgtype.Timestamptz `json:"mtime"`
+	Ctime         pgtype.Timestamptz `json:"ctime"`
+	SymlinkTarget []byte             `json:"symlink_target"`
+	Flags         int32              `json:"flags"`
+	ParentIno     int64              `json:"parent_ino"`
+	RootIno       int64              `json:"root_ino"`
+}
+
+func (q *Queries) CreateFileAtomic(ctx context.Context, arg CreateFileAtomicParams) (CreateFileAtomicRow, error) {
+	row := q.db.QueryRow(ctx, createFileAtomic,
+		arg.Name,
+		arg.SessionID,
+		arg.ParentIno,
+		arg.Mode,
+		arg.Uid,
+		arg.Gid,
+		arg.Flags,
+	)
+	var i CreateFileAtomicRow
+	err := row.Scan(
+		&i.Status,
+		&i.Fh,
+		&i.Ino,
+		&i.Generation,
+		&i.Mode,
+		&i.Size,
+		&i.Nlink,
+		&i.Uid,
+		&i.Gid,
+		&i.Rdev,
+		&i.Atime,
+		&i.Mtime,
+		&i.Ctime,
+		&i.SymlinkTarget,
+		&i.Flags,
+		&i.ParentIno,
+		&i.RootIno,
+	)
+	return i, err
+}
+
 const createFileHandle = `-- name: CreateFileHandle :one
 INSERT INTO file_handles (ino, flags, session_id, created_at)
 VALUES ($1, $2, $3, clock_timestamp())

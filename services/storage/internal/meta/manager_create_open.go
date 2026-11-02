@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
 
@@ -371,120 +372,88 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 		return nil, ErrInvalidArgument
 	}
 
-	targetMode := S_IFREG | ((params.Mode & PermMask) &^ (params.Umask & PermMask))
+	effectivePerm := (params.Mode & PermMask) &^ (params.Umask & (PermMask & 0o777))
+	mode := S_IFREG | effectivePerm
 
 	mutationTracker := m.newDirMutationTracker()
 	defer mutationTracker.done()
 
-	var result *CreateResult
-	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		parent, err := q.GetInodeForUpdate(ctx, int64(params.ParentIno))
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get parent inode for update %d: %w", params.ParentIno, err)
-		}
-
-		if (uint32(parent.Mode) & S_IFMT) != S_IFDIR {
-			return ErrNotDir
-		}
-
-		if parent.Nlink == 0 {
-			return ErrNotFound
-		}
-
-		if isDotOrDotDot(params.Name) {
-			return ErrAlreadyExists
-		}
-
-		gid := params.GID
-		if (uint32(parent.Mode) & S_ISGID) != 0 {
-			gid = uint32(parent.Gid)
-		}
-
-		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, parent.RootIno); err != nil {
-			return err
-		}
-
-		newInode, err := q.CreateInode(ctx, db.CreateInodeParams{
-			Mode:    int32(targetMode),
-			Nlink:   1,
-			Uid:     int32(params.UID),
-			Gid:     int32(gid),
-			Rdev:    0,
-			RootIno: parent.RootIno,
-		})
-		if err != nil {
-			return fmt.Errorf("create inode: %w", err)
-		}
-
-		err = q.CreateEntry(ctx, db.CreateEntryParams{
-			ParentIno: int64(params.ParentIno),
+	var row db.CreateFileAtomicRow
+	err := tx.Retry(ctx, func(attemptCtx context.Context) error {
+		var callErr error
+		row, callErr = m.store.CreateFileAtomic(attemptCtx, db.CreateFileAtomicParams{
 			Name:      params.Name,
-			Ino:       newInode.Ino,
-		})
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return ErrAlreadyExists
-			}
-			return fmt.Errorf("create entry: %w", err)
-		}
-
-		if err := q.TouchInodeTimestamps(ctx, parent.Ino); err != nil {
-			return fmt.Errorf("touch parent inode %d timestamps: %w", parent.Ino, err)
-		}
-
-		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
-			Ino:       newInode.Ino,
-			Flags:     int32(params.Flags),
 			SessionID: toPgSessionID(params.SessionID),
+			ParentIno: int64(params.ParentIno),
+			Mode:      int32(mode),
+			Uid:       int32(params.UID),
+			Gid:       int32(params.GID),
+			Flags:     int32(params.Flags),
 		})
-		if err != nil {
-			return fmt.Errorf("create file handle for inode %d: %w", newInode.Ino, err)
-		}
-
-		if parent.RootIno > 0 {
-			if err := m.recordQuotaDelta(ctx, q, parent.RootIno, 0, 1); err != nil {
-				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
-			}
-		}
-
-		inode := m.newInode(newInode)
-		var openFlags uint32
-		if m.openKeepCache {
-			openFlags = FOPEN_KEEP_CACHE
-		}
-		result = &CreateResult{
-			Inode:               inode,
-			Fh:                  uint64(handle.Fh),
-			OpenFlags:           openFlags,
-			EntryTimeoutSeconds: inode.EntryTimeoutSeconds,
-			AttrTimeoutSeconds:  inode.AttrTimeoutSeconds,
-		}
-		mutationTracker.track(params.ParentIno)
-		m.onDirEntryMutated(params.ParentIno)
-		return nil
-	})
+		return callErr
+	}, tx.WithDefaultRetry())
 
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrNotFound):
-			return nil, ErrNotFound
-		case errors.Is(err, ErrNotDir):
-			return nil, ErrNotDir
-		case errors.Is(err, ErrAlreadyExists):
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, ErrAlreadyExists
-		case errors.Is(err, ErrBadFileHandle):
-			return nil, ErrBadFileHandle
-		default:
-			return nil, fmt.Errorf("create tx: %w", err)
 		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("create tx: %w", err)
 	}
 
+	switch row.Status {
+	case "ok":
+	case "not_found":
+		return nil, ErrNotFound
+	case "not_dir":
+		return nil, ErrNotDir
+	case "already_exists":
+		return nil, ErrAlreadyExists
+	case "bad_handle":
+		return nil, ErrBadFileHandle
+	default:
+		return nil, fmt.Errorf("create tx: unexpected status %q", row.Status)
+	}
+
+	if row.RootIno > 0 {
+		m.commitDirectQuotaDelta(ctx, row.RootIno, 0, 1)
+	}
+
+	mutationTracker.track(params.ParentIno)
 	m.onDirEntryMutated(params.ParentIno)
-	return result, nil
+
+	createdInode := db.Inode{
+		Ino:           row.Ino,
+		Generation:    row.Generation,
+		Mode:          row.Mode,
+		Size:          row.Size,
+		Nlink:         row.Nlink,
+		Uid:           row.Uid,
+		Gid:           row.Gid,
+		Rdev:          row.Rdev,
+		Atime:         row.Atime,
+		Mtime:         row.Mtime,
+		Ctime:         row.Ctime,
+		SymlinkTarget: row.SymlinkTarget,
+		Flags:         row.Flags,
+		ParentIno:     row.ParentIno,
+		RootIno:       row.RootIno,
+	}
+	inode := m.newInode(createdInode)
+	var openFlags uint32
+	if m.openKeepCache {
+		openFlags = FOPEN_KEEP_CACHE
+	}
+	return &CreateResult{
+		Inode:               inode,
+		Fh:                  uint64(row.Fh),
+		OpenFlags:           openFlags,
+		EntryTimeoutSeconds: inode.EntryTimeoutSeconds,
+		AttrTimeoutSeconds:  inode.AttrTimeoutSeconds,
+	}, nil
 }
 
 // TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄。

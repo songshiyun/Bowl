@@ -19,6 +19,7 @@ type Querier interface {
 	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
 	CreateDisk(ctx context.Context, arg CreateDiskParams) (CreateDiskRow, error)
 	CreateEntry(ctx context.Context, arg CreateEntryParams) error
+	CreateFileAtomic(ctx context.Context, arg CreateFileAtomicParams) (CreateFileAtomicRow, error)
 	CreateFileHandle(ctx context.Context, arg CreateFileHandleParams) (FileHandle, error)
 	CreateFileLock(ctx context.Context, arg CreateFileLockParams) (FileLock, error)
 	CreateInode(ctx context.Context, arg CreateInodeParams) (Inode, error)

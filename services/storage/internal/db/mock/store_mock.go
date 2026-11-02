@@ -475,6 +475,72 @@ func (_c *MockStore_CreateEntry_Call) RunAndReturn(run func(ctx context.Context,
 	return _c
 }
 
+// CreateFileAtomic provides a mock function for the type MockStore
+func (_mock *MockStore) CreateFileAtomic(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateFileAtomic")
+	}
+
+	var r0 db.CreateFileAtomicRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateFileAtomicParams) db.CreateFileAtomicRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.CreateFileAtomicRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.CreateFileAtomicParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CreateFileAtomic_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateFileAtomic'
+type MockStore_CreateFileAtomic_Call struct {
+	*mock.Call
+}
+
+// CreateFileAtomic is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.CreateFileAtomicParams
+func (_e *MockStore_Expecter) CreateFileAtomic(ctx any, arg any) *MockStore_CreateFileAtomic_Call {
+	return &MockStore_CreateFileAtomic_Call{Call: _e.mock.On("CreateFileAtomic", ctx, arg)}
+}
+
+func (_c *MockStore_CreateFileAtomic_Call) Run(run func(ctx context.Context, arg db.CreateFileAtomicParams)) *MockStore_CreateFileAtomic_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.CreateFileAtomicParams
+		if args[1] != nil {
+			arg1 = args[1].(db.CreateFileAtomicParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CreateFileAtomic_Call) Return(createFileAtomicRow db.CreateFileAtomicRow, err error) *MockStore_CreateFileAtomic_Call {
+	_c.Call.Return(createFileAtomicRow, err)
+	return _c
+}
+
+func (_c *MockStore_CreateFileAtomic_Call) RunAndReturn(run func(ctx context.Context, arg db.CreateFileAtomicParams) (db.CreateFileAtomicRow, error)) *MockStore_CreateFileAtomic_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateFileHandle provides a mock function for the type MockStore
 func (_mock *MockStore) CreateFileHandle(ctx context.Context, arg db.CreateFileHandleParams) (db.FileHandle, error) {
 	ret := _mock.Called(ctx, arg)
