@@ -145,7 +145,8 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 }
 
 // Flush 实现文件描述符关闭时的冲刷操作，对应 Linux FUSE FUSE_FLUSH 协议。
-// 携带 lock_owner 与 session_id 触发服务端清理对应进程所持有的全部 POSIX 记录锁。
+// 若目标服务端 Inode 在当前会话下未发生过任何 POSIX 记录锁活动，本地校验通过后直接短路返回 fuse.OK；
+// 若已发生过 POSIX 记录锁活动，携带 lock_owner 与 session_id 触发服务端清理对应进程所持有的全部 POSIX 记录锁与等待队列。
 func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -155,6 +156,10 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status 
 	sid, status := fs.ResolveHandle(input.Fh)
 	if status != fuse.OK {
 		return status
+	}
+
+	if !fs.hasPosixLockActivity(sid, ino) {
+		return fuse.OK
 	}
 
 	ctx, cancelFunc := fs.RPCContext(cancel)

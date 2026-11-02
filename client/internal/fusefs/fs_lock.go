@@ -149,6 +149,10 @@ func (fs *RawFS) SetLk(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 		return status
 	}
 
+	if lkFlags == 0 {
+		fs.markPosixLockActivity(sid, ino)
+	}
+
 	ctx, cancelRPC := fs.RPCContext(cancel)
 	defer cancelRPC()
 
@@ -194,6 +198,10 @@ func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
 	start, end, status := NormalizeLockRange(lkFlags, input.Lk.Start, input.Lk.End)
 	if status != fuse.OK {
 		return status
+	}
+
+	if lkFlags == 0 {
+		fs.markPosixLockActivity(sid, ino)
 	}
 
 	reqID := fs.NextRequestID()
