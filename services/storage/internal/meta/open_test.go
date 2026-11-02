@@ -1118,3 +1118,496 @@ func TestOpen_CreateFileHandlePgErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestOpen_SmartKeepCache_Unit(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Microsecond)
+	ino := uint64(100)
+
+	baseFileRow := db.Inode{
+		Ino:        int64(ino),
+		Generation: 1,
+		Mode:       int32(meta.S_IFREG | 0o644),
+		Size:       1024,
+		Nlink:      1,
+		Uid:        1000,
+		Gid:        1000,
+		Rdev:       0,
+		Atime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+	}
+
+	t.Run("默认配置下首次 Open 返回 0，未修改再次 Open 返回 FOPEN_KEEP_CACHE，mtime/size 变更或 O_TRUNC 后返回 0 再恢复", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore)
+
+		expectOpen := func(row db.Inode, flags uint32, fh int64) {
+			setupMockWriteTx(mockStore, mockQuerier)
+			mockQuerier.EXPECT().
+				GetInode(mock.Anything, int64(ino)).
+				Return(row, nil).
+				Once()
+			mockQuerier.EXPECT().
+				CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+					Ino:   int64(ino),
+					Flags: int32(flags),
+				}).
+				Return(db.FileHandle{
+					Fh:        fh,
+					Ino:       int64(ino),
+					Flags:     int32(flags),
+					CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				}, nil).
+				Once()
+		}
+
+		// 1. 首次 Open -> 返回 0
+		expectOpen(baseFileRow, meta.O_RDONLY, 1)
+		res1, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), res1.OpenFlags)
+
+		// 2. 未修改第二次 Open -> 返回 FOPEN_KEEP_CACHE
+		expectOpen(baseFileRow, meta.O_RDONLY, 2)
+		res2, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, res2.OpenFlags)
+
+		// 3. 未修改第三次 Open -> 持续返回 FOPEN_KEEP_CACHE
+		expectOpen(baseFileRow, meta.O_RDWR, 3)
+		res3, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, res3.OpenFlags)
+
+		// 4. 等长覆盖写仅刷新 mtime -> 返回 0
+		mtimeRow := baseFileRow
+		mtimeRow.Mtime = pgtype.Timestamptz{Time: now.Add(time.Millisecond), Valid: true}
+		expectOpen(mtimeRow, meta.O_RDONLY, 4)
+		res4, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), res4.OpenFlags)
+
+		// 5. 再次未修改 Open -> 恢复返回 FOPEN_KEEP_CACHE
+		expectOpen(mtimeRow, meta.O_RDONLY, 5)
+		res5, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, res5.OpenFlags)
+
+		// 6. size 发生变化 -> 返回 0
+		sizeRow := mtimeRow
+		sizeRow.Size = 2048
+		expectOpen(sizeRow, meta.O_RDONLY, 6)
+		res6, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), res6.OpenFlags)
+
+		// 7. 再次未修改 Open -> 恢复返回 FOPEN_KEEP_CACHE
+		expectOpen(sizeRow, meta.O_RDONLY, 7)
+		res7, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, res7.OpenFlags)
+
+		// 8. 携带 O_TRUNC 打开 -> 不设置 FOPEN_KEEP_CACHE（返回 0），并更新版本为截断后的 (mtime, size=0)
+		truncatedRow := sizeRow
+		truncatedRow.Size = 0
+		truncatedRow.Mtime = pgtype.Timestamptz{Time: now.Add(2 * time.Millisecond), Valid: true}
+		setupMockWriteTx(mockStore, mockQuerier)
+		mockQuerier.EXPECT().
+			GetInodeForUpdate(mock.Anything, int64(ino)).
+			Return(sizeRow, nil).
+			Once()
+		mockQuerier.EXPECT().
+			UpdateInodeAttr(mock.Anything, mock.MatchedBy(func(p db.UpdateInodeAttrParams) bool {
+				return p.Ino == int64(ino) && p.Size == 0
+			})).
+			Return(truncatedRow, nil).
+			Once()
+		mockQuerier.EXPECT().
+			DeleteChunksByIno(mock.Anything, int64(ino)).
+			Return(nil, nil).
+			Once()
+		mockQuerier.EXPECT().
+			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+				Ino:   int64(ino),
+				Flags: int32(meta.O_RDWR | meta.O_TRUNC),
+			}).
+			Return(db.FileHandle{
+				Fh:        8,
+				Ino:       int64(ino),
+				Flags:     int32(meta.O_RDWR | meta.O_TRUNC),
+				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
+			Once()
+
+		res8, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR | meta.O_TRUNC})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), res8.OpenFlags)
+
+		// 9. O_TRUNC 之后未再修改，再次普通 Open -> 因 O_TRUNC 已记录截断后版本，本次直接命中 FOPEN_KEEP_CACHE
+		expectOpen(truncatedRow, meta.O_RDONLY, 9)
+		res9, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, res9.OpenFlags)
+	})
+
+	t.Run("单客户端 Create -> Write -> Open 版本追踪命中 FOPEN_KEEP_CACHE", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore, meta.WithBlockStore(meta.NewLocalFSBlockStore(t.TempDir())))
+
+		sessID := uint64(5001)
+		pgSid := pgtype.Int8{Int64: int64(sessID), Valid: true}
+		createTime := now
+		writeTime := now.Add(10 * time.Millisecond)
+
+		// 1. Create 记录初始版本 (createTime, size=0)
+		mockStore.EXPECT().
+			CreateFileAtomic(mock.Anything, mock.MatchedBy(func(p db.CreateFileAtomicParams) bool {
+				return p.ParentIno == 1 && string(p.Name) == "new.txt" && p.SessionID == pgSid
+			})).
+			Return(db.CreateFileAtomicRow{
+				Status: "ok",
+				Ino:    int64(ino),
+				Mode:   int32(meta.S_IFREG | 0o644),
+				Size:   0,
+				Nlink:  1,
+				Mtime:  pgtype.Timestamptz{Time: createTime, Valid: true},
+				Ctime:  pgtype.Timestamptz{Time: createTime, Valid: true},
+				Atime:  pgtype.Timestamptz{Time: createTime, Valid: true},
+				Fh:     10,
+			}, nil).
+			Once()
+
+		createRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: 1,
+			Name:      []byte("new.txt"),
+			Mode:      0o644,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), createRes.OpenFlags)
+
+		// 2. Write 更新本会话已知版本为 (writeTime, size=5)
+		mockStore.EXPECT().
+			NextSliceID(mock.Anything).
+			Return(int64(1), nil).
+			Once()
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, mock.MatchedBy(func(p db.WriteFileAtomicParams) bool {
+				return p.Ino == int64(ino) && p.Fh == 10 && p.SessionID == pgSid && p.DataLen == 5
+			})).
+			Return(db.WriteFileAtomicRow{
+				Status:  "ok",
+				Ino:     int64(ino),
+				Mode:    int32(meta.S_IFREG | 0o644),
+				OldSize: 0,
+				NewSize: 5,
+				Nlink:   1,
+				Mtime:   pgtype.Timestamptz{Time: writeTime, Valid: true},
+				Ctime:   pgtype.Timestamptz{Time: writeTime, Valid: true},
+				Atime:   pgtype.Timestamptz{Time: createTime, Valid: true},
+			}, nil).
+			Once()
+
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:       ino,
+			Fh:        10,
+			Offset:    0,
+			Data:      []byte("hello"),
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+
+		// 3. 同一客户端 SessionID 再次 Open，因 Write 已记录最新 (writeTime, size=5)，直接返回 FOPEN_KEEP_CACHE
+		writtenRow := baseFileRow
+		writtenRow.Size = 5
+		writtenRow.Mtime = pgtype.Timestamptz{Time: writeTime, Valid: true}
+
+		setupMockWriteTx(mockStore, mockQuerier)
+		mockQuerier.EXPECT().
+			GetInode(mock.Anything, int64(ino)).
+			Return(writtenRow, nil).
+			Once()
+		mockQuerier.EXPECT().
+			HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
+				SessionID: int64(sessID),
+				RootIno:   writtenRow.RootIno,
+			}).
+			Return(true, nil).
+			Once()
+		mockQuerier.EXPECT().
+			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+				Ino:       int64(ino),
+				Flags:     int32(meta.O_RDONLY),
+				SessionID: pgSid,
+			}).
+			Return(db.FileHandle{
+				Fh:        11,
+				Ino:       int64(ino),
+				Flags:     int32(meta.O_RDONLY),
+				SessionID: pgSid,
+				CreatedAt: pgtype.Timestamptz{Time: writeTime, Valid: true},
+			}, nil).
+			Once()
+
+		openRes, err := mgr.Open(ctx, meta.OpenParams{
+			Ino:       ino,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, openRes.OpenFlags)
+	})
+
+	t.Run("多客户端 SessionID 交错打开隔离：客户端 B 修改并先行 Open 后，客户端 A 随后 Open 仍返回 0", func(t *testing.T) {
+		mockStore := dbmock.NewMockStore(t)
+		mockQuerier := dbmock.NewMockQuerier(t)
+		mgr := meta.New(mockStore)
+
+		sessA := uint64(2001)
+		sessB := uint64(2002)
+
+		expectSessionOpen := func(row db.Inode, fh int64, sessID uint64) {
+			setupMockWriteTx(mockStore, mockQuerier)
+			mockQuerier.EXPECT().
+				GetInode(mock.Anything, int64(ino)).
+				Return(row, nil).
+				Once()
+			mockQuerier.EXPECT().
+				HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
+					SessionID: int64(sessID),
+					RootIno:   row.RootIno,
+				}).
+				Return(true, nil).
+				Once()
+			pgSid := pgtype.Int8{Int64: int64(sessID), Valid: true}
+			mockQuerier.EXPECT().
+				CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+					Ino:       int64(ino),
+					Flags:     int32(meta.O_RDONLY),
+					SessionID: pgSid,
+				}).
+				Return(db.FileHandle{
+					Fh:        fh,
+					Ino:       int64(ino),
+					Flags:     int32(meta.O_RDONLY),
+					SessionID: pgSid,
+					CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				}, nil).
+				Once()
+		}
+
+		// 客户端 A 连续两次 Open -> 0, FOPEN_KEEP_CACHE
+		expectSessionOpen(baseFileRow, 10, sessA)
+		resA1, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessA})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), resA1.OpenFlags)
+
+		expectSessionOpen(baseFileRow, 11, sessA)
+		resA2, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessA})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, resA2.OpenFlags)
+
+		// 客户端 B 连续两次 Open -> 0, FOPEN_KEEP_CACHE
+		expectSessionOpen(baseFileRow, 20, sessB)
+		resB1, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessB})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), resB1.OpenFlags)
+
+		expectSessionOpen(baseFileRow, 21, sessB)
+		resB2, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessB})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, resB2.OpenFlags)
+
+		// 文件被修改（mtime 推进），客户端 B 先行连续两次 Open -> 0, FOPEN_KEEP_CACHE
+		mutatedRow := baseFileRow
+		mutatedRow.Mtime = pgtype.Timestamptz{Time: now.Add(time.Second), Valid: true}
+
+		expectSessionOpen(mutatedRow, 22, sessB)
+		resB3, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessB})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), resB3.OpenFlags)
+
+		expectSessionOpen(mutatedRow, 23, sessB)
+		resB4, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessB})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, resB4.OpenFlags)
+
+		// 客户端 A 随后 Open：必须返回 0（绝不被客户端 B 的 Open 掩盖变更），再次 Open 恢复返回 FOPEN_KEEP_CACHE
+		expectSessionOpen(mutatedRow, 12, sessA)
+		resA3, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessA})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), resA3.OpenFlags)
+
+		expectSessionOpen(mutatedRow, 13, sessA)
+		resA4, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDONLY, SessionID: &sessA})
+		require.NoError(t, err)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, resA4.OpenFlags)
+	})
+}
+
+func TestOpen_PostgresIntegration_SmartKeepCache(t *testing.T) {
+	pool, testCtx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	mgr := meta.New(store, meta.WithBlockStore(meta.NewLocalFSBlockStore(t.TempDir())))
+
+	disk, err := mgr.CreateDisk(testCtx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("disk-open-keep-cache-%d", time.Now().UnixNano()),
+		MaxBytes: 100 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = mgr.DeleteDisk(cleanupCtx, disk.DiskID)
+	})
+
+	sessA := uint64(time.Now().UnixNano() & 0x3FFFFFFF)
+	sessB := sessA + 100
+	_, err = mgr.RenewSessionWithDisk(testCtx, sessA, &disk.DiskID)
+	require.NoError(t, err)
+	_, err = mgr.RenewSessionWithDisk(testCtx, sessB, &disk.DiskID)
+	require.NoError(t, err)
+
+	// 1. 验证单客户端 Create -> Write -> Release -> Open 返回 FOPEN_KEEP_CACHE
+	createRes, err := mgr.Create(testCtx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("file1.txt"),
+		Mode:      0o644,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), createRes.OpenFlags)
+	fileIno := createRes.Inode.Ino
+
+	_, err = mgr.Write(testCtx, &meta.WriteRequest{
+		Ino:       fileIno,
+		Fh:        createRes.Fh,
+		Offset:    0,
+		Data:      []byte("hello-world"),
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Release(testCtx, meta.ReleaseParams{
+		Ino:       fileIno,
+		Fh:        createRes.Fh,
+		SessionID: &sessA,
+	}))
+
+	openAndClose := func(sessID uint64, flags uint32) uint32 {
+		res, openErr := mgr.Open(testCtx, meta.OpenParams{
+			Ino:       fileIno,
+			Flags:     flags,
+			SessionID: &sessID,
+		})
+		require.NoError(t, openErr)
+		require.NotNil(t, res)
+		require.NoError(t, mgr.Release(testCtx, meta.ReleaseParams{
+			Ino:       fileIno,
+			Fh:        res.Fh,
+			SessionID: &sessID,
+		}))
+		return res.OpenFlags
+	}
+
+	assert.Equal(t, meta.FOPEN_KEEP_CACHE, openAndClose(sessA, meta.O_RDONLY), "单客户端 Create -> Write -> Release -> Open 应返回 FOPEN_KEEP_CACHE")
+	assert.Equal(t, meta.FOPEN_KEEP_CACHE, openAndClose(sessA, meta.O_RDONLY), "未修改再次 Open 应持续返回 FOPEN_KEEP_CACHE")
+
+	// 2. 验证默认配置下客户端 B 首次 Open 既有文件返回 0，未修改再次 Open 返回 FOPEN_KEEP_CACHE
+	assert.Equal(t, uint32(0), openAndClose(sessB, meta.O_RDONLY), "客户端 B 首次 Open 既有文件应返回 0")
+	assert.Equal(t, meta.FOPEN_KEEP_CACHE, openAndClose(sessB, meta.O_RDONLY), "客户端 B 未修改再次 Open 应返回 FOPEN_KEEP_CACHE")
+
+	// 辅助断言：客户端 B 修改文件并由客户端 B 先行 Open 后，客户端 A 随后 Open 依然返回 0，再下一次未修改重开恢复返回 FOPEN_KEEP_CACHE
+	assertClientBMutationInvalidatesClientA := func(step string, mutateByB func(), expectBFirstOpenFlags uint32) {
+		t.Helper()
+		mutateByB()
+
+		assert.Equal(t, expectBFirstOpenFlags, openAndClose(sessB, meta.O_RDONLY), "%s: 客户端 B 先行 Open 校验", step)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, openAndClose(sessB, meta.O_RDONLY), "%s: 客户端 B 次轮 Open 应返回 FOPEN_KEEP_CACHE", step)
+
+		assert.Equal(t, uint32(0), openAndClose(sessA, meta.O_RDONLY), "%s: 客户端 B 修改并先行 Open 后，客户端 A 随后 Open 必返回 0", step)
+		assert.Equal(t, meta.FOPEN_KEEP_CACHE, openAndClose(sessA, meta.O_RDONLY), "%s: 客户端 A 再次未修改 Open 恢复返回 FOPEN_KEEP_CACHE", step)
+	}
+
+	// 3. 客户端 B 等长覆盖写（刷新 mtime，size 不变）
+	// 客户端 B 自己通过 Write 更新了自身的已知版本，故客户端 B 随后 Open 命中 FOPEN_KEEP_CACHE；而客户端 A 的已知版本仍为旧 mtime，必返回 0
+	assertClientBMutationInvalidatesClientA("客户端 B 等长覆盖写", func() {
+		bOpen, oErr := mgr.Open(testCtx, meta.OpenParams{
+			Ino:       fileIno,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessB,
+		})
+		require.NoError(t, oErr)
+		_, wErr := mgr.Write(testCtx, &meta.WriteRequest{
+			Ino:       fileIno,
+			Fh:        bOpen.Fh,
+			Offset:    0,
+			Data:      []byte("HELLO-WORLD"), // 同样 11 字节，等长覆盖
+			SessionID: &sessB,
+		})
+		require.NoError(t, wErr)
+		require.NoError(t, mgr.Release(testCtx, meta.ReleaseParams{
+			Ino:       fileIno,
+			Fh:        bOpen.Fh,
+			SessionID: &sessB,
+		}))
+	}, meta.FOPEN_KEEP_CACHE)
+
+	// 4. 客户端 B 扩容写（刷新 mtime 与 size）
+	assertClientBMutationInvalidatesClientA("客户端 B 扩容写", func() {
+		bOpen, oErr := mgr.Open(testCtx, meta.OpenParams{
+			Ino:       fileIno,
+			Flags:     meta.O_RDWR,
+			SessionID: &sessB,
+		})
+		require.NoError(t, oErr)
+		_, wErr := mgr.Write(testCtx, &meta.WriteRequest{
+			Ino:       fileIno,
+			Fh:        bOpen.Fh,
+			Offset:    11,
+			Data:      []byte("-extended"),
+			SessionID: &sessB,
+		})
+		require.NoError(t, wErr)
+		require.NoError(t, mgr.Release(testCtx, meta.ReleaseParams{
+			Ino:       fileIno,
+			Fh:        bOpen.Fh,
+			SessionID: &sessB,
+		}))
+	}, meta.FOPEN_KEEP_CACHE)
+
+	// 5. SetAttr 截断 size（刷新 mtime 与 size） -> 客户端 B 与客户端 A 在 SetAttr 后的首次 Open 均返回 0
+	assertClientBMutationInvalidatesClientA("SetAttr 截断文件", func() {
+		newSize := uint64(5)
+		_, sErr := mgr.SetAttr(testCtx, fileIno, meta.SetAttrInput{
+			Size:      &newSize,
+			SessionID: &sessB,
+		})
+		require.NoError(t, sErr)
+	}, uint32(0))
+
+	// 6. SetAttr 显式修改 mtime -> 客户端 B 与客户端 A 在 SetAttr 后的首次 Open 均返回 0
+	assertClientBMutationInvalidatesClientA("SetAttr 修改 mtime", func() {
+		newMtime := time.Now().Add(10 * time.Second).Truncate(time.Microsecond)
+		_, sErr := mgr.SetAttr(testCtx, fileIno, meta.SetAttrInput{
+			Mtime:     &newMtime,
+			SessionID: &sessB,
+		})
+		require.NoError(t, sErr)
+	}, uint32(0))
+
+	// 7. 客户端 B 执行 Open(O_TRUNC)：本次 Open(O_TRUNC) 自身返回 0 并记录客户端 B 截断后版本；
+	// 客户端 B 紧接着普通 Open 返回 FOPEN_KEEP_CACHE；客户端 A 随后 Open 返回 0，再次 Open 恢复返回 FOPEN_KEEP_CACHE
+	assertClientBMutationInvalidatesClientA("客户端 B Open(O_TRUNC)", func() {
+		truncFlags := openAndClose(sessB, meta.O_RDWR|meta.O_TRUNC)
+		assert.Equal(t, uint32(0), truncFlags, "Open(O_TRUNC) 本身必须返回 OpenFlags == 0")
+	}, meta.FOPEN_KEEP_CACHE)
+}

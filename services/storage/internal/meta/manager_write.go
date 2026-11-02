@@ -187,6 +187,8 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		RootIno:       row.RootIno,
 	}
 
+	m.recordKnownFileVersion(req.SessionID, req.Ino, updatedInode.Mtime.Time, updatedInode.Size)
+
 	return &WriteResponse{
 		Size:  uint32(dataLen),
 		Inode: m.newInode(updatedInode),

@@ -443,6 +443,7 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 		RootIno:       row.RootIno,
 	}
 	inode := m.newInode(createdInode)
+	m.recordKnownFileVersion(params.SessionID, uint64(row.Ino), row.Mtime.Time, row.Size)
 	var openFlags uint32
 	if m.openKeepCache {
 		openFlags = FOPEN_KEEP_CACHE
@@ -579,7 +580,10 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		return nil, ErrInvalidArgument
 	}
 
-	var result *OpenResult
+	var (
+		result  *OpenResult
+		txInode db.Inode
+	)
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		var (
 			inode       db.Inode
@@ -643,7 +647,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			}
 			if fileType == S_IFREG {
 				truncatedMode := uint32(inode.Mode) &^ (S_ISUID | S_ISGID)
-				_, err = q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
+				updatedInode, err := q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
 					Ino:         inode.Ino,
 					Mode:        int32(truncatedMode),
 					Size:        0,
@@ -668,6 +672,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 						return fmt.Errorf("delete all chunks on open truncate for inode %d: %w", inode.Ino, err)
 					}
 				}
+				inode = updatedInode
 			}
 		}
 
@@ -685,13 +690,9 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		}
 
 		m.recordInodeRootIno(uint64(inode.Ino), inode.RootIno)
-		var openFlags uint32
-		if m.openKeepCache {
-			openFlags = FOPEN_KEEP_CACHE
-		}
+		txInode = inode
 		result = &OpenResult{
-			Fh:        uint64(handle.Fh),
-			OpenFlags: openFlags,
+			Fh: uint64(handle.Fh),
 		}
 		return nil
 	})
@@ -710,6 +711,24 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			return nil, fmt.Errorf("open tx: %w", err)
 		}
 	}
+
+	inode := txInode
+	curVer := fileKnownVersion{
+		mtimeNano: inode.Mtime.Time.UnixNano(),
+		size:      inode.Size,
+	}
+	key := sessionInoKey{
+		sessionID: sessionKeyFromPtr(params.SessionID),
+		ino:       params.Ino,
+	}
+	prevVal, hadPrev := m.fileKnownVersions.Swap(key, curVer)
+	var openFlags uint32
+	if m.openKeepCache {
+		openFlags |= FOPEN_KEEP_CACHE
+	} else if (params.Flags&O_TRUNC) == 0 && hadPrev && prevVal.(fileKnownVersion) == curVer {
+		openFlags |= FOPEN_KEEP_CACHE
+	}
+	result.OpenFlags = openFlags
 
 	return result, nil
 }

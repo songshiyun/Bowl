@@ -119,11 +119,27 @@ type dirKnownVersion struct {
 	mutSeq    uint64
 }
 
+type fileKnownVersion struct {
+	mtimeNano int64
+	size      int64
+}
+
 func sessionKeyFromPtr(sessionID *uint64) uint64 {
 	if sessionID == nil {
 		return 0
 	}
 	return *sessionID
+}
+
+func (m *manager) recordKnownFileVersion(sessionID *uint64, ino uint64, mtime time.Time, size int64) {
+	key := sessionInoKey{
+		sessionID: sessionKeyFromPtr(sessionID),
+		ino:       ino,
+	}
+	m.fileKnownVersions.Store(key, fileKnownVersion{
+		mtimeNano: mtime.UnixNano(),
+		size:      size,
+	})
 }
 
 type inFlightDirRead struct {
@@ -185,6 +201,7 @@ type manager struct {
 	activeDirReads        map[uint64]*inFlightDirRead
 	nextDirReadID         uint64
 	dirKnownVersions      sync.Map // map[sessionInoKey]dirKnownVersion
+	fileKnownVersions     sync.Map // map[sessionInoKey]fileKnownVersion
 	inFlightGrantMu       sync.Mutex
 	inFlightGrants        map[inFlightGrantKey]*inFlightGrant
 	nextInFlightGrantID   uint64
