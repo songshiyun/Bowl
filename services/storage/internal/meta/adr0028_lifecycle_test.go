@@ -289,7 +289,9 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("LifecycleStep[%d]", idx+1), q)
 	}
 
-	// 3. 同一客户端会话 (sessA) 执行 Open -> Read，验证智能命中 FOPEN_KEEP_CACHE、数据一致与配额账本精确
+	// 3. 同一客户端会话 (sessA) 执行 Open -> Read -> Release，验证锁无关无重试全链路 3 次数据库往返、智能命中 FOPEN_KEEP_CACHE、数据一致与配额账本精确
+	var readLifecycleQueries []string
+	tracer.reset()
 	openResA1, err := mgr.Open(ctx, meta.OpenParams{
 		Ino:       createdIno,
 		Flags:     meta.O_RDONLY,
@@ -297,7 +299,13 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint32(meta.FOPEN_KEEP_CACHE), openResA1.OpenFlags, "同一客户端会话在文件未发生外部修改时重新 Open 必须返回 FOPEN_KEEP_CACHE")
+	openQueriesA1 := tracer.snapshot()
+	require.Len(t, openQueriesA1, 1, "Open(O_RDONLY) 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "Open(O_RDONLY)", openQueriesA1[0])
+	assert.Contains(t, openQueriesA1[0], "set_config('synchronous_commit', 'off', true)", "Open CTE 必须内联异步 WAL 提交")
+	readLifecycleQueries = append(readLifecycleQueries, openQueriesA1...)
 
+	tracer.reset()
 	readResA1, err := mgr.Read(ctx, &meta.ReadRequest{
 		Ino:       createdIno,
 		Fh:        openResA1.Fh,
@@ -307,12 +315,30 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, payload4K, readResA1.Data, "Read 读出字节必须与写入的 4 KiB 载荷逐字节一致")
+	readQueriesA1 := tracer.snapshot()
+	require.Len(t, readQueriesA1, 1, "Read 必须精确仅触发 1 条只读合并 SQL 查询（GetInodeChunksAndHandleForRead，无独立 GetFileHandle）")
+	assertNoExplicitTxOrSetLocalSQL(t, "Read", readQueriesA1[0])
+	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "from inodes", "Read 合并 SQL 必须查询 inodes")
+	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
+	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
+	readLifecycleQueries = append(readLifecycleQueries, readQueriesA1...)
 
+	tracer.reset()
 	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
 		Ino:       createdIno,
 		Fh:        openResA1.Fh,
 		SessionID: &sessA,
 	}))
+	releaseQueriesA1 := tracer.snapshot()
+	require.Len(t, releaseQueriesA1, 1, "Release 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "Release(Read)", releaseQueriesA1[0])
+	assert.Contains(t, releaseQueriesA1[0], "set_config('synchronous_commit', 'off', true)", "Release CTE 必须内联异步 WAL 提交")
+	readLifecycleQueries = append(readLifecycleQueries, releaseQueriesA1...)
+
+	require.Len(t, readLifecycleQueries, 3, "Open -> Read -> Release 全程服务端必须精确总计 3 次数据库往返")
+	for idx, q := range readLifecycleQueries {
+		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("ReadLifecycleStep[%d]", idx+1), q)
+	}
 
 	// 校验磁盘配额：UsedBytes == 4096，UsedInodes == 2（根目录 + 新文件）
 	diskAfterWrite, err := mgr.GetDisk(ctx, disk.DiskID)
@@ -386,6 +412,368 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 		Fh:        openResA3.Fh,
 		SessionID: &sessA,
 	}))
+}
+
+// TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim 验证：
+//  1. 小文件读全生命周期（锁无关无重试）：对已写入 4 KiB 数据的文件执行 Open(O_RDONLY) -> Read(4096) -> Release，
+//     服务端精确触发 3 次数据库往返（Open 1 条单语句 CTE、Read 1 条只读合并查询 GetInodeChunksAndHandleForRead、Release 1 条单语句 CTE），
+//     零 BEGIN / COMMIT / SET LOCAL，命中 FOPEN_KEEP_CACHE 且读出字节与写入载荷一致；
+//  2. 目录遍历与 FOPEN_CACHE_DIR 生命周期：执行 Mkdir 创建子目录并写入文件，OpenDir 与常规目录 ReleaseDir 均精确触发 1 条单语句 CTE SQL；
+//     同一会话重复 OpenDir（目录未变）返回 FOPEN_CACHE_DIR，发生子项增删后再次 OpenDir 自动作废 FOPEN_CACHE_DIR；
+//  3. 孤儿目录生命周期：在持有目录句柄期间执行 Rmdir 将目录解链为孤儿（nlink == 0），随后调用 ReleaseDir 识别 orphan 信号，
+//     无缝转入写事务慢路径回收孤儿目录 Inode、精确退还磁盘 UsedInodes 配额，且 inodes 与 file_handles 无残留。
+func TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim(t *testing.T) {
+	tracer := &adr0028QueryTracer{}
+	pool, ctx := setupMetaTestDBWithTracer(t, tracer)
+	if pool == nil {
+		return
+	}
+	acquireTestSliceGCAdvisoryLock(t, pool)
+
+	store := db.NewStore(pool)
+	dataDir := t.TempDir()
+	localBS := meta.NewLocalFSBlockStore(dataDir)
+	mgr := meta.New(
+		store,
+		meta.WithBlockStore(localBS),
+		meta.WithSliceIDBatchSize(128),
+	)
+
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("adr0028-read-dir-lifecycle-%d", time.Now().UnixNano()),
+		MaxBytes: 100 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+
+	sessA := uint64(time.Now().UnixNano() & 0x3fffffffffffffff)
+	var readFileIno, subDirFileIno, addedFileIno uint64
+
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		for _, ino := range []uint64{readFileIno, subDirFileIno, addedFileIno} {
+			if ino > 0 {
+				cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino))
+			}
+		}
+		_, _ = pool.Exec(cleanupCtx, "DELETE FROM client_sessions WHERE session_id = $1", int64(sessA))
+		_ = mgr.DeleteDisk(cleanupCtx, disk.DiskID)
+	})
+
+	_, err = mgr.RenewSessionWithDisk(ctx, sessA, &disk.DiskID)
+	require.NoError(t, err)
+
+	// 1. 准备 4 KiB 小文件并验证 Open(O_RDONLY) -> Read(4096) -> Release 全链路 3 次数据库往返
+	payload4K := bytes.Repeat([]byte("READ_LIFECYCLE_4K_"), 256)[:4096]
+	createRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("read_target_4k.bin"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	readFileIno = createRes.Inode.Ino
+
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:       readFileIno,
+		Fh:        createRes.Fh,
+		Offset:    0,
+		Data:      payload4K,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       readFileIno,
+		Fh:        createRes.Fh,
+		SessionID: &sessA,
+	}))
+
+	var allReadQueries []string
+
+	// Read Step 1: Open(O_RDONLY) -> 精确 1 条单语句 CTE SQL，命中 FOPEN_KEEP_CACHE
+	tracer.reset()
+	openRes, err := mgr.Open(ctx, meta.OpenParams{
+		Ino:       readFileIno,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint32(meta.FOPEN_KEEP_CACHE), openRes.OpenFlags, "Open(O_RDONLY) 必须命中 FOPEN_KEEP_CACHE")
+	openQueries := tracer.snapshot()
+	require.Len(t, openQueries, 1, "Open 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "Open", openQueries[0])
+	assert.Contains(t, openQueries[0], "set_config('synchronous_commit', 'off', true)", "Open CTE 必须内联异步 WAL 提交")
+	allReadQueries = append(allReadQueries, openQueries...)
+
+	// Read Step 2: Read(4096) -> 精确 1 条只读合并 SQL（GetInodeChunksAndHandleForRead，无独立 GetFileHandle）
+	tracer.reset()
+	readRes, err := mgr.Read(ctx, &meta.ReadRequest{
+		Ino:       readFileIno,
+		Fh:        openRes.Fh,
+		Offset:    0,
+		Size:      4096,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, payload4K, readRes.Data, "Read 返回字节必须与写入载荷完全一致")
+	readQueries := tracer.snapshot()
+	require.Len(t, readQueries, 1, "Read 必须精确仅触发 1 条只读合并 SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "Read", readQueries[0])
+	assert.Contains(t, strings.ToLower(readQueries[0]), "from inodes", "Read 合并 SQL 必须查询 inodes")
+	assert.Contains(t, strings.ToLower(readQueries[0]), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
+	assert.Contains(t, strings.ToLower(readQueries[0]), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
+	allReadQueries = append(allReadQueries, readQueries...)
+
+	// Read Step 3: Release -> 精确 1 条单语句 CTE SQL
+	tracer.reset()
+	err = mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       readFileIno,
+		Fh:        openRes.Fh,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	releaseQueries := tracer.snapshot()
+	require.Len(t, releaseQueries, 1, "Release 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "Release", releaseQueries[0])
+	assert.Contains(t, releaseQueries[0], "set_config('synchronous_commit', 'off', true)", "Release CTE 必须内联异步 WAL 提交")
+	allReadQueries = append(allReadQueries, releaseQueries...)
+
+	// 汇总断言：Open -> Read -> Release 全程总计精确 3 次数据库往返
+	require.Len(t, allReadQueries, 3, "Open -> Read -> Release 全程必须精确总计 3 次数据库往返")
+	for idx, q := range allReadQueries {
+		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("ReadLifecycle[%d]", idx+1), q)
+	}
+
+	// 2. 目录遍历与 FOPEN_CACHE_DIR 生命周期验证
+	subDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("dir_lifecycle"),
+		Mode:      0o755,
+		UID:       1000,
+		GID:       1000,
+	})
+	require.NoError(t, err)
+
+	subChildRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: subDir.Ino,
+		Name:      []byte("entry_a.txt"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	subDirFileIno = subChildRes.Inode.Ino
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:       subDirFileIno,
+		Fh:        subChildRes.Fh,
+		Offset:    0,
+		Data:      []byte("dir-child-payload"),
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       subDirFileIno,
+		Fh:        subChildRes.Fh,
+		SessionID: &sessA,
+	}))
+
+	// 首次 OpenDir：精确 1 条单语句 CTE SQL，记录该会话下已知目录版本
+	tracer.reset()
+	openDir1, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       subDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	openDirQueries1 := tracer.snapshot()
+	require.Len(t, openDirQueries1, 1, "OpenDir 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "OpenDir(1)", openDirQueries1[0])
+	assert.Contains(t, openDirQueries1[0], "set_config('synchronous_commit', 'off', true)", "OpenDir CTE 必须内联异步 WAL 提交")
+
+	// ReadDir 与 ReadDirPlus 遍历验证
+	dirEntries, err := mgr.ReadDir(ctx, meta.ReadDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir1.Fh,
+		Offset:    0,
+		Limit:     16,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirEntries, 3, "ReadDir 必须返回 '.', '..' 与 'entry_a.txt' 共 3 项")
+	assert.Equal(t, []byte("."), dirEntries[0].Name)
+	assert.Equal(t, []byte(".."), dirEntries[1].Name)
+	assert.Equal(t, []byte("entry_a.txt"), dirEntries[2].Name)
+	assert.Equal(t, subDirFileIno, dirEntries[2].Ino)
+
+	dirEntriesPlus, err := mgr.ReadDirPlus(ctx, meta.ReadDirPlusParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir1.Fh,
+		Offset:    0,
+		Limit:     16,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	require.Len(t, dirEntriesPlus, 3, "ReadDirPlus 必须返回 '.', '..' 与 'entry_a.txt' 共 3 项")
+	assert.Equal(t, []byte("entry_a.txt"), dirEntriesPlus[2].Name)
+	require.NotNil(t, dirEntriesPlus[2].Inode)
+	assert.Equal(t, uint64(len("dir-child-payload")), dirEntriesPlus[2].Inode.Attr.Size)
+
+	// 常规目录 ReleaseDir：精确 1 条单语句 CTE SQL（ReleaseDirFast）
+	tracer.reset()
+	err = mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir1.Fh,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	releaseDirQueries1 := tracer.snapshot()
+	require.Len(t, releaseDirQueries1, 1, "常规目录 ReleaseDir 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "ReleaseDir(Normal)", releaseDirQueries1[0])
+	assert.Contains(t, releaseDirQueries1[0], "set_config('synchronous_commit', 'off', true)", "ReleaseDirFast CTE 必须内联异步 WAL 提交")
+
+	// 同一会话重复 OpenDir（目录未发生修改）：命中 FOPEN_CACHE_DIR
+	tracer.reset()
+	openDir2, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       subDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	openDirQueries2 := tracer.snapshot()
+	require.Len(t, openDirQueries2, 1, "重复 OpenDir 必须精确仅触发 1 条单语句 CTE SQL 查询")
+	assertNoExplicitTxOrSetLocalSQL(t, "OpenDir(2)", openDirQueries2[0])
+	assert.NotZero(t, openDir2.OpenFlags&meta.FOPEN_CACHE_DIR, "同一会话在目录未变时重复 OpenDir 必须返回 FOPEN_CACHE_DIR")
+	require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir2.Fh,
+		SessionID: &sessA,
+	}))
+
+	// 在目录内新增子项后，再次 OpenDir 必须作废 FOPEN_CACHE_DIR
+	addedRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: subDir.Ino,
+		Name:      []byte("entry_b.txt"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	addedFileIno = addedRes.Inode.Ino
+	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       addedFileIno,
+		Fh:        addedRes.Fh,
+		SessionID: &sessA,
+	}))
+
+	openDir3, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       subDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, openDir3.OpenFlags&meta.FOPEN_CACHE_DIR, "目录发生子项新增后 OpenDir 必须作废 FOPEN_CACHE_DIR")
+	require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir3.Fh,
+		SessionID: &sessA,
+	}))
+
+	// 删除新增子项后，再次 OpenDir 同样作废 FOPEN_CACHE_DIR，随后无修改再次 OpenDir 重新命中 FOPEN_CACHE_DIR
+	openDir4, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       subDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.NotZero(t, openDir4.OpenFlags&meta.FOPEN_CACHE_DIR, "已知目录版本更新后未再修改时 OpenDir 必须重新命中 FOPEN_CACHE_DIR")
+	require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir4.Fh,
+		SessionID: &sessA,
+	}))
+
+	require.NoError(t, mgr.Unlink(ctx, subDir.Ino, []byte("entry_b.txt")))
+	addedFileIno = 0
+
+	openDir5, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       subDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, openDir5.OpenFlags&meta.FOPEN_CACHE_DIR, "目录发生子项删除后 OpenDir 必须作废 FOPEN_CACHE_DIR")
+	require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       subDir.Ino,
+		Fh:        openDir5.Fh,
+		SessionID: &sessA,
+	}))
+
+	// 3. 孤儿目录生命周期验证：持有目录句柄期间执行 Rmdir 解链为孤儿（nlink == 0），ReleaseDir 识别 orphan 信号并转入慢路径回收
+	diskBeforeOrphanDir, err := mgr.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+
+	orphanDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("orphan_dir_target"),
+		Mode:      0o755,
+		UID:       1000,
+		GID:       1000,
+	})
+	require.NoError(t, err)
+
+	diskAfterMkdirOrphan, err := mgr.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	assert.Equal(t, diskBeforeOrphanDir.UsedInodes+1, diskAfterMkdirOrphan.UsedInodes, "Mkdir 后磁盘 UsedInodes 必须增加 1")
+
+	openOrphanDir, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:       orphanDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+
+	// 在持有目录句柄 openOrphanDir.Fh 期间执行 Rmdir：目录解链为孤儿（nlink == 0），但因仍有活跃句柄暂不物理删除
+	require.NoError(t, mgr.Rmdir(ctx, disk.RootIno, []byte("orphan_dir_target")))
+
+	var orphanNlink int32
+	require.NoError(t, pool.QueryRow(ctx, "SELECT nlink FROM inodes WHERE ino = $1", int64(orphanDir.Ino)).Scan(&orphanNlink))
+	assert.Equal(t, int32(0), orphanNlink, "持有目录句柄期间 Rmdir 后目录必须处于 nlink == 0 的孤儿状态")
+
+	var handleCountBeforeRelease int64
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM file_handles WHERE ino = $1 AND fh = $2", int64(orphanDir.Ino), int64(openOrphanDir.Fh)).Scan(&handleCountBeforeRelease))
+	assert.Equal(t, int64(1), handleCountBeforeRelease, "ReleaseDir 前孤儿目录句柄必须仍存在于 file_handles")
+
+	diskWhileOrphanOpen, err := mgr.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	assert.Equal(t, diskBeforeOrphanDir.UsedInodes+1, diskWhileOrphanOpen.UsedInodes, "孤儿目录句柄未释放前磁盘 UsedInodes 不得提前退还")
+
+	// 调用 ReleaseDir：ReleaseDirFast 返回 orphan 信号，无缝转入慢路径删除句柄、物理回收孤儿目录 Inode 并退还 UsedInodes 配额
+	tracer.reset()
+	err = mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino:       orphanDir.Ino,
+		Fh:        openOrphanDir.Fh,
+		SessionID: &sessA,
+	})
+	require.NoError(t, err)
+	orphanReleaseDirQueries := tracer.snapshot()
+	require.Greater(t, len(orphanReleaseDirQueries), 1, "孤儿目录 ReleaseDir 必须在 ReleaseDirFast 返回 orphan 后转入多语句写事务慢路径")
+
+	var remainingInodeRows, remainingHandleRows int64
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM inodes WHERE ino = $1", int64(orphanDir.Ino)).Scan(&remainingInodeRows))
+	require.NoError(t, pool.QueryRow(ctx, "SELECT COUNT(*) FROM file_handles WHERE ino = $1", int64(orphanDir.Ino)).Scan(&remainingHandleRows))
+	assert.Equal(t, int64(0), remainingInodeRows, "孤儿目录 ReleaseDir 后 inodes 表必须无残留")
+	assert.Equal(t, int64(0), remainingHandleRows, "孤儿目录 ReleaseDir 后 file_handles 表必须无残留")
+
+	diskAfterOrphanReclaim, err := mgr.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	assert.Equal(t, diskBeforeOrphanDir.UsedInodes, diskAfterOrphanReclaim.UsedInodes, "孤儿目录 ReleaseDir 物理回收后必须精确退还磁盘 UsedInodes 配额")
 }
 
 // TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit 验证：
@@ -472,6 +860,48 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 		Fh:  fh,
 	}))
 	assertPoolSyncCommitOn("Release")
+
+	// 单语句 Open（非 O_TRUNC）、OpenDir 与常规目录 ReleaseDir 在 MaxConns = 1 连接池上同样不污染 SHOW synchronous_commit
+	tracer.reset()
+	openNonTruncRes, err := mgr.Open(ctx, meta.OpenParams{
+		Ino:   ino,
+		Flags: meta.O_RDONLY,
+	})
+	require.NoError(t, err)
+	openNonTruncQueries := tracer.snapshot()
+	require.Len(t, openNonTruncQueries, 1, "单语句 Open(非 O_TRUNC) 必须精确仅触发 1 条 CTE SQL")
+	assertNoExplicitTxOrSetLocalSQL(t, "Open(non-O_TRUNC)", openNonTruncQueries[0])
+	assert.Contains(t, openNonTruncQueries[0], "set_config('synchronous_commit', 'off', true)")
+	assertPoolSyncCommitOn("Open(non-O_TRUNC)")
+
+	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+		Ino: ino,
+		Fh:  openNonTruncRes.Fh,
+	}))
+	assertPoolSyncCommitOn("Release(after Open non-O_TRUNC)")
+
+	tracer.reset()
+	openDirSingleRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+		Ino:   disk.RootIno,
+		Flags: meta.O_RDONLY,
+	})
+	require.NoError(t, err)
+	openDirSingleQueries := tracer.snapshot()
+	require.Len(t, openDirSingleQueries, 1, "单语句 OpenDir 必须精确仅触发 1 条 CTE SQL")
+	assertNoExplicitTxOrSetLocalSQL(t, "OpenDir", openDirSingleQueries[0])
+	assert.Contains(t, openDirSingleQueries[0], "set_config('synchronous_commit', 'off', true)")
+	assertPoolSyncCommitOn("OpenDir")
+
+	tracer.reset()
+	require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+		Ino: disk.RootIno,
+		Fh:  openDirSingleRes.Fh,
+	}))
+	releaseDirSingleQueries := tracer.snapshot()
+	require.Len(t, releaseDirSingleQueries, 1, "常规目录 ReleaseDir 必须精确仅触发 1 条 CTE SQL")
+	assertNoExplicitTxOrSetLocalSQL(t, "ReleaseDir", releaseDirSingleQueries[0])
+	assert.Contains(t, releaseDirSingleQueries[0], "set_config('synchronous_commit', 'off', true)")
+	assertPoolSyncCommitOn("ReleaseDir")
 
 	// 在默认多连接池上同样验证 SHOW synchronous_commit 为 "on"
 	var basePoolSyncCommit string
@@ -1183,9 +1613,156 @@ func BenchmarkADR0028_FullLifecycle4K(b *testing.B) {
 	reportADR0028BenchMetrics(b, "BenchmarkADR0028_FullLifecycle4K", time.Since(start))
 }
 
+func BenchmarkADR0028_ReadLifecycle4K(b *testing.B) {
+	_, _, mgr, disk, sessID := setupBenchmarkMetaTestDB(b)
+	if mgr == nil {
+		return
+	}
+	ctx := context.Background()
+	payload4K := bytes.Repeat([]byte{'R'}, 4096)
+
+	cRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("read_lifecycle_4k_target.bin"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessID,
+	})
+	require.NoError(b, err)
+
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:       cRes.Inode.Ino,
+		Fh:        cRes.Fh,
+		Offset:    0,
+		Data:      payload4K,
+		SessionID: &sessID,
+	})
+	require.NoError(b, err)
+
+	require.NoError(b, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       cRes.Inode.Ino,
+		Fh:        cRes.Fh,
+		SessionID: &sessID,
+	}))
+
+	targetIno := cRes.Inode.Ino
+
+	b.ResetTimer()
+	b.SetBytes(4096)
+	start := time.Now()
+	for i := 0; i < b.N; i++ {
+		openRes, err := mgr.Open(ctx, meta.OpenParams{
+			Ino:       targetIno,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
+		})
+		if err != nil {
+			b.Fatalf("Open failed: %v", err)
+		}
+
+		readRes, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:       targetIno,
+			Fh:        openRes.Fh,
+			Offset:    0,
+			Size:      4096,
+			SessionID: &sessID,
+		})
+		if err != nil {
+			b.Fatalf("Read failed: %v", err)
+		}
+		if len(readRes.Data) != 4096 {
+			b.Fatalf("unexpected read len: %d", len(readRes.Data))
+		}
+
+		if err := mgr.Release(ctx, meta.ReleaseParams{
+			Ino:       targetIno,
+			Fh:        openRes.Fh,
+			SessionID: &sessID,
+		}); err != nil {
+			b.Fatalf("Release failed: %v", err)
+		}
+	}
+	b.StopTimer()
+	reportADR0028BenchMetrics(b, "BenchmarkADR0028_ReadLifecycle4K", time.Since(start))
+}
+
+func BenchmarkADR0028_DirLifecycle(b *testing.B) {
+	_, _, mgr, disk, sessID := setupBenchmarkMetaTestDB(b)
+	if mgr == nil {
+		return
+	}
+	ctx := context.Background()
+
+	benchDir, err := mgr.Mkdir(ctx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("bench_dir_lifecycle"),
+		Mode:      0o755,
+		UID:       1000,
+		GID:       1000,
+	})
+	require.NoError(b, err)
+
+	childRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: benchDir.Ino,
+		Name:      []byte("dir_entry.bin"),
+		Mode:      meta.S_IFREG | 0o644,
+		UID:       1000,
+		GID:       1000,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessID,
+	})
+	require.NoError(b, err)
+	require.NoError(b, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       childRes.Inode.Ino,
+		Fh:        childRes.Fh,
+		SessionID: &sessID,
+	}))
+
+	b.ResetTimer()
+	start := time.Now()
+	for i := 0; i < b.N; i++ {
+		openDirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{
+			Ino:       benchDir.Ino,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
+		})
+		if err != nil {
+			b.Fatalf("OpenDir failed: %v", err)
+		}
+
+		entries, err := mgr.ReadDir(ctx, meta.ReadDirParams{
+			Ino:       benchDir.Ino,
+			Fh:        openDirRes.Fh,
+			Offset:    0,
+			Limit:     64,
+			SessionID: &sessID,
+		})
+		if err != nil {
+			b.Fatalf("ReadDir failed: %v", err)
+		}
+		if len(entries) != 3 {
+			b.Fatalf("expected 3 dir entries, got %d", len(entries))
+		}
+
+		if err := mgr.ReleaseDir(ctx, meta.ReleaseDirParams{
+			Ino:       benchDir.Ino,
+			Fh:        openDirRes.Fh,
+			SessionID: &sessID,
+		}); err != nil {
+			b.Fatalf("ReleaseDir failed: %v", err)
+		}
+	}
+	b.StopTimer()
+	reportADR0028BenchMetrics(b, "BenchmarkADR0028_DirLifecycle", time.Since(start))
+}
+
 func BenchmarkADR0028_SmallFileLifecycle(b *testing.B) {
 	b.Run("Create", BenchmarkADR0028_Create)
 	b.Run("Write4K", BenchmarkADR0028_Write4K)
 	b.Run("Release", BenchmarkADR0028_Release)
 	b.Run("FullLifecycle4K", BenchmarkADR0028_FullLifecycle4K)
+	b.Run("ReadLifecycle4K", BenchmarkADR0028_ReadLifecycle4K)
+	b.Run("DirLifecycle", BenchmarkADR0028_DirLifecycle)
 }

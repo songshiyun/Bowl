@@ -1,6 +1,7 @@
 package fusefs_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -1388,4 +1389,435 @@ func (f *fullSessionTestServer) OpenDir(ctx context.Context, req *connect.Reques
 		return f.openDirFn(ctx, req)
 	}
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+type adr0028LifecycleMockServer struct {
+	*handleMockStorageServer
+	lookupFn      func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
+	writeFn       func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
+	readFn        func(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error)
+	openDirFn     func(context.Context, *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error)
+	readDirFn     func(context.Context, *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error)
+	readDirPlusFn func(context.Context, *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error)
+	releaseDirFn  func(context.Context, *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error)
+}
+
+func (s *adr0028LifecycleMockServer) Lookup(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+	if s.lookupFn != nil {
+		return s.lookupFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) Write(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+	if s.writeFn != nil {
+		return s.writeFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	if s.readFn != nil {
+		return s.readFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) OpenDir(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+	if s.openDirFn != nil {
+		return s.openDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReadDir(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
+	if s.readDirFn != nil {
+		return s.readDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
+	if s.readDirPlusFn != nil {
+		return s.readDirPlusFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReleaseDir(ctx context.Context, req *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
+	if s.releaseDirFn != nil {
+		return s.releaseDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+// TestRawFS_ADR0028_WriteReadDirLifecycle_RPCCounts 验证：
+//  1. 无 POSIX 记录锁活动时：
+//     - 写全链路 Lookup(ENOENT) -> Create -> Write -> Flush -> Release：客户端 Flush 经 ToServerIno + ResolveHandle 校验后本地短路（Flush RPC 计数为 0），全链路向服务端精确发起 4 次 RPC（Lookup、Create、Write、Release）；
+//     - 读全链路 Open -> Read -> Flush -> Release：客户端 Flush 本地短路（Flush RPC 计数为 0），全链路向服务端精确发起 3 次 RPC（Open、Read、Release），且正确透传 FOPEN_KEEP_CACHE；
+//     - 目录全链路 OpenDir -> ReadDir / ReadDirPlus -> ReleaseDir：正确透传 FOPEN_CACHE_DIR，遍历目录项并关闭目录句柄；
+//  2. 一旦该 Inode 调用过 POSIX SetLk/SetLkw，后续 Flush 直通服务端发起 Flush RPC（写全链路 5 次 RPC、读全链路 4 次 RPC）。
+func TestRawFS_ADR0028_WriteReadDirLifecycle_RPCCounts(t *testing.T) {
+	var (
+		lookupCount      atomic.Int64
+		createCount      atomic.Int64
+		writeCount       atomic.Int64
+		openCount        atomic.Int64
+		readCount        atomic.Int64
+		flushCount       atomic.Int64
+		releaseCount     atomic.Int64
+		openDirCount     atomic.Int64
+		readDirCount     atomic.Int64
+		readDirPlusCount atomic.Int64
+		releaseDirCount  atomic.Int64
+		setLkCount       atomic.Int64
+	)
+
+	resetCounts := func() {
+		lookupCount.Store(0)
+		createCount.Store(0)
+		writeCount.Store(0)
+		openCount.Store(0)
+		readCount.Store(0)
+		flushCount.Store(0)
+		releaseCount.Store(0)
+		openDirCount.Store(0)
+		readDirCount.Store(0)
+		readDirPlusCount.Store(0)
+		releaseDirCount.Store(0)
+		setLkCount.Store(0)
+	}
+
+	payload4K := bytes.Repeat([]byte("ADR0028_CLIENT_4K_"), 256)[:4096]
+	now := timestamppb.Now()
+
+	baseSrv := &handleMockStorageServer{
+		createFn: func(_ context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
+			createCount.Add(1)
+			return connect.NewResponse(&storagev1.CreateResponse{
+				Inode: &storagev1.Inode{
+					Ino: 3001,
+					Attr: &storagev1.InodeAttribute{
+						Mode:  uint32(syscall.S_IFREG | 0o644),
+						Nlink: 1,
+						Atime: now,
+						Mtime: now,
+						Ctime: now,
+					},
+				},
+				Fh:                  7001,
+				OpenFlags:           fuse.FOPEN_KEEP_CACHE,
+				EntryTimeoutSeconds: 1.0,
+				AttrTimeoutSeconds:  1.0,
+			}), nil
+		},
+		openFn: func(_ context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
+			openCount.Add(1)
+			return connect.NewResponse(&storagev1.OpenResponse{
+				Fh:        7002,
+				OpenFlags: fuse.FOPEN_KEEP_CACHE,
+			}), nil
+		},
+		flushFn: func(_ context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCount.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		},
+		releaseFn: func(_ context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
+			releaseCount.Add(1)
+			return connect.NewResponse(&storagev1.ReleaseResponse{}), nil
+		},
+		setLkFn: func(_ context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
+			setLkCount.Add(1)
+			return connect.NewResponse(&storagev1.SetLkResponse{}), nil
+		},
+	}
+
+	mockSrv := &adr0028LifecycleMockServer{
+		handleMockStorageServer: baseSrv,
+		lookupFn: func(_ context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+			lookupCount.Add(1)
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("entry not found"))
+		},
+		writeFn: func(_ context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+			writeCount.Add(1)
+			return connect.NewResponse(&storagev1.WriteResponse{
+				Size: uint32(len(req.Msg.GetData())),
+			}), nil
+		},
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			readCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadResponse{
+				Data: payload4K,
+			}), nil
+		},
+		openDirFn: func(_ context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+			openDirCount.Add(1)
+			return connect.NewResponse(&storagev1.OpenDirResponse{
+				Fh:        8001,
+				OpenFlags: fuse.FOPEN_CACHE_DIR,
+			}), nil
+		},
+		readDirFn: func(_ context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
+			readDirCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadDirResponse{
+				Entries: []*storagev1.DirEntry{
+					{Ino: 1001, Name: []byte("."), Mode: uint32(syscall.S_IFDIR | 0o755), NextOffset: 1},
+					{Ino: 1001, Name: []byte(".."), Mode: uint32(syscall.S_IFDIR | 0o755), NextOffset: 2},
+					{Ino: 3001, Name: []byte("file.bin"), Mode: uint32(syscall.S_IFREG | 0o644), NextOffset: 3},
+				},
+			}), nil
+		},
+		readDirPlusFn: func(_ context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
+			readDirPlusCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadDirPlusResponse{
+				Entries: []*storagev1.DirEntryPlus{
+					{Ino: 1001, Name: []byte("."), NextOffset: 1},
+					{Ino: 1001, Name: []byte(".."), NextOffset: 2},
+					{
+						Ino:        3001,
+						Name:       []byte("file.bin"),
+						NextOffset: 3,
+						Inode: &storagev1.Inode{
+							Ino: 3001,
+							Attr: &storagev1.InodeAttribute{
+								Mode:  uint32(syscall.S_IFREG | 0o644),
+								Size:  4096,
+								Nlink: 1,
+								Atime: now,
+								Mtime: now,
+								Ctime: now,
+							},
+						},
+						EntryTimeoutSeconds: 1.0,
+						AttrTimeoutSeconds:  1.0,
+					},
+				},
+			}), nil
+		},
+		releaseDirFn: func(_ context.Context, req *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
+			releaseDirCount.Add(1)
+			return connect.NewResponse(&storagev1.ReleaseDirResponse{}), nil
+		},
+	}
+
+	mux := http.NewServeMux()
+	path, handler := storagev1connect.NewStorageServiceHandler(mockSrv)
+	mux.Handle(path, handler)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	client := storagev1connect.NewStorageServiceClient(ts.Client(), ts.URL)
+	mgr := setupTestSessionManager(t, client)
+	rawFS := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
+	t.Cleanup(rawFS.OnUnmount)
+
+	// 1.1 无 POSIX 锁活动时的写全链路：Lookup(ENOENT) -> Create -> Write -> Flush -> Release（4 次服务端 RPC，Flush 本地短路）
+	resetCounts()
+	var lookupOut fuse.EntryOut
+	stLookup := rawFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.bin", &lookupOut)
+	require.Equal(t, fuse.Status(syscall.ENOENT), stLookup)
+
+	var createOut fuse.CreateOut
+	stCreate := rawFS.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Flags:    uint32(syscall.O_CREAT | syscall.O_RDWR),
+		Mode:     0o644,
+	}, "file.bin", &createOut)
+	require.Equal(t, fuse.OK, stCreate)
+	require.Equal(t, uint64(3001), createOut.NodeId)
+	require.Equal(t, uint64(7001), createOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_KEEP_CACHE), createOut.OpenFlags)
+
+	written, stWrite := rawFS.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+		Offset:   0,
+		Size:     uint32(len(payload4K)),
+	}, payload4K)
+	require.Equal(t, fuse.OK, stWrite)
+	require.Equal(t, uint32(4096), written)
+
+	stFlushWrite := rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:        createOut.Fh,
+		LockOwner: 0xAA01,
+	})
+	require.Equal(t, fuse.OK, stFlushWrite)
+	require.Equal(t, int64(0), flushCount.Load(), "无 POSIX 锁活动时客户端 Flush 必须本地短路，不发起服务端 Flush RPC")
+
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+	})
+
+	totalWriteRPCs := lookupCount.Load() + createCount.Load() + writeCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), lookupCount.Load())
+	require.Equal(t, int64(1), createCount.Load())
+	require.Equal(t, int64(1), writeCount.Load())
+	require.Equal(t, int64(0), flushCount.Load())
+	require.Equal(t, int64(1), releaseCount.Load())
+	require.Equal(t, int64(4), totalWriteRPCs, "无 POSIX 锁活动时写全链路必须精确向服务端发起 4 次 RPC（Lookup、Create、Write、Release）")
+
+	// 1.2 无 POSIX 锁活动时的读全链路：Open -> Read -> Flush -> Release（3 次服务端 RPC，Flush 本地短路且透传 FOPEN_KEEP_CACHE）
+	resetCounts()
+	var openOut fuse.OpenOut
+	stOpen := rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDONLY),
+	}, &openOut)
+	require.Equal(t, fuse.OK, stOpen)
+	require.Equal(t, uint64(7002), openOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_KEEP_CACHE), openOut.OpenFlags, "Open 必须正确透传 FOPEN_KEEP_CACHE")
+
+	readBuf := make([]byte, 4096)
+	readRes, stRead := rawFS.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, readBuf)
+	require.Equal(t, fuse.OK, stRead)
+	resBytes, stBytes := readRes.Bytes(readBuf)
+	require.Equal(t, fuse.OK, stBytes)
+	require.Equal(t, payload4K, resBytes)
+
+	stFlushRead := rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: 3001},
+		Fh:        openOut.Fh,
+		LockOwner: 0xAA02,
+	})
+	require.Equal(t, fuse.OK, stFlushRead)
+	require.Equal(t, int64(0), flushCount.Load(), "无 POSIX 锁活动时读生命周期客户端 Flush 必须本地短路")
+
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+	})
+
+	totalReadRPCs := openCount.Load() + readCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), openCount.Load())
+	require.Equal(t, int64(1), readCount.Load())
+	require.Equal(t, int64(0), flushCount.Load())
+	require.Equal(t, int64(1), releaseCount.Load())
+	require.Equal(t, int64(3), totalReadRPCs, "无 POSIX 锁活动时读全链路必须精确向服务端发起 3 次 RPC（Open、Read、Release）")
+
+	// 1.3 目录全链路：OpenDir -> ReadDir / ReadDirPlus -> ReleaseDir（透传 FOPEN_CACHE_DIR，遍历目录项并关闭目录句柄）
+	resetCounts()
+	var openDirOut fuse.OpenOut
+	stOpenDir := rawFS.OpenDir(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+	}, &openDirOut)
+	require.Equal(t, fuse.OK, stOpenDir)
+	require.Equal(t, uint64(8001), openDirOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_CACHE_DIR), openDirOut.OpenFlags, "OpenDir 必须正确透传 FOPEN_CACHE_DIR")
+
+	dirBuf := make([]byte, 4096)
+	dirList := fuse.NewDirEntryList(dirBuf, 0)
+	stReadDir := rawFS.ReadDir(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, dirList)
+	require.Equal(t, fuse.OK, stReadDir)
+
+	dirPlusBuf := make([]byte, 4096)
+	dirPlusList := fuse.NewDirEntryList(dirPlusBuf, 0)
+	stReadDirPlus := rawFS.ReadDirPlus(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, dirPlusList)
+	require.Equal(t, fuse.OK, stReadDirPlus)
+
+	rawFS.ReleaseDir(&fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+	})
+
+	require.Equal(t, int64(1), openDirCount.Load())
+	require.Equal(t, int64(1), readDirCount.Load())
+	require.Equal(t, int64(1), readDirPlusCount.Load())
+	require.Equal(t, int64(1), releaseDirCount.Load())
+
+	// 2. 一旦该 Inode 调用过 POSIX SetLk（lkFlags == 0），后续 Flush 必须直通服务端发起 Flush RPC（写全链路 5 次 RPC、读全链路 4 次 RPC）
+	// 2.1 在 Inode 3001 上开启句柄并调用一次 POSIX SetLk
+	var lkOpenOut fuse.OpenOut
+	require.Equal(t, fuse.OK, rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDWR),
+	}, &lkOpenOut))
+	require.Equal(t, fuse.OK, rawFS.SetLk(nil, &fuse.LkIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       lkOpenOut.Fh,
+		Owner:    0xBB01,
+		Lk: fuse.FileLock{
+			Start: 0,
+			End:   127,
+			Typ:   uint32(syscall.F_WRLCK),
+			Pid:   1001,
+		},
+		LkFlags: 0, // POSIX 记录锁
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       lkOpenOut.Fh,
+	})
+
+	// 2.2 触发过 POSIX 锁后：写全链路 Lookup -> Create -> Write -> Flush -> Release 精确 5 次服务端 RPC
+	resetCounts()
+	require.Equal(t, fuse.Status(syscall.ENOENT), rawFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.bin", &lookupOut))
+	require.Equal(t, fuse.OK, rawFS.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Flags:    uint32(syscall.O_CREAT | syscall.O_RDWR),
+		Mode:     0o644,
+	}, "file.bin", &createOut))
+	_, stWriteAfterLk := rawFS.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+		Offset:   0,
+		Size:     uint32(len(payload4K)),
+	}, payload4K)
+	require.Equal(t, fuse.OK, stWriteAfterLk)
+	require.Equal(t, fuse.OK, rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:        createOut.Fh,
+		LockOwner: 0xBB01,
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+	})
+
+	totalWriteRPCsAfterLk := lookupCount.Load() + createCount.Load() + writeCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), flushCount.Load(), "发生过 POSIX 锁活动后写生命周期 Flush 必须直通服务端发起 1 次 Flush RPC")
+	require.Equal(t, int64(5), totalWriteRPCsAfterLk, "发生过 POSIX 锁活动后写全链路必须精确为 5 次服务端 RPC")
+
+	// 2.3 触发过 POSIX 锁后：读全链路 Open -> Read -> Flush -> Release 精确 4 次服务端 RPC
+	resetCounts()
+	require.Equal(t, fuse.OK, rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDONLY),
+	}, &openOut))
+	_, stReadAfterLk := rawFS.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, readBuf)
+	require.Equal(t, fuse.OK, stReadAfterLk)
+	require.Equal(t, fuse.OK, rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: 3001},
+		Fh:        openOut.Fh,
+		LockOwner: 0xBB02,
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+	})
+
+	totalReadRPCsAfterLk := openCount.Load() + readCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), flushCount.Load(), "发生过 POSIX 锁活动后读生命周期 Flush 必须直通服务端发起 1 次 Flush RPC")
+	require.Equal(t, int64(4), totalReadRPCsAfterLk, "发生过 POSIX 锁活动后读全链路必须精确为 4 次服务端 RPC")
 }
