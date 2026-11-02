@@ -61,6 +61,7 @@ type Querier interface {
 	GetFirstConflictingFileLock(ctx context.Context, arg GetFirstConflictingFileLockParams) (FileLock, error)
 	GetInode(ctx context.Context, ino int64) (Inode, error)
 	GetInodeByEntry(ctx context.Context, arg GetInodeByEntryParams) (Inode, error)
+	GetInodeChunksAndHandleForRead(ctx context.Context, arg GetInodeChunksAndHandleForReadParams) ([]GetInodeChunksAndHandleForReadRow, error)
 	GetInodeForUpdate(ctx context.Context, ino int64) (Inode, error)
 	GetInodeSizeAndChunksInRange(ctx context.Context, arg GetInodeSizeAndChunksInRangeParams) ([]GetInodeSizeAndChunksInRangeRow, error)
 	GetInodeXattr(ctx context.Context, arg GetInodeXattrParams) (InodeXattr, error)
@@ -89,6 +90,9 @@ type Querier interface {
 	LockValidSliceRefsKeyShare(ctx context.Context, sliceIds []int64) ([]int64, error)
 	LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error)
 	NextSliceID(ctx context.Context) (int64, error)
+	OpenDirFast(ctx context.Context, arg OpenDirFastParams) (OpenDirFastRow, error)
+	OpenFileFast(ctx context.Context, arg OpenFileFastParams) (OpenFileFastRow, error)
+	ReleaseDirFast(ctx context.Context, arg ReleaseDirFastParams) (ReleaseDirFastRow, error)
 	ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error)
 	TouchInodeAtime(ctx context.Context, ino int64) error
 	TouchInodeCtime(ctx context.Context, ino int64) error

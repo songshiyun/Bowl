@@ -514,15 +514,14 @@ func TestSetAttr_TruncateNonZero_ResurrectPrevention_Read(t *testing.T) {
 	// Indx=0 的 chunk.Slices 已经追加了 [origSlice, holeSlice] 两个切片
 	combinedSlicesBytes := append(append([]byte(nil), origSliceBytes...), holeSliceBytes...)
 
-	setupMockWriteTx(mockStore, mockQuerier)
-
-	mockQuerier.EXPECT().
-		GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+	mockStore.EXPECT().
+		GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 			Ino:       int64(ino),
+			Fh:        int64(fh),
 			StartIndx: 0,
 			EndIndx:   0,
 		}).
-		Return([]db.GetInodeSizeAndChunksInRangeRow{
+		Return([]db.GetInodeChunksAndHandleForReadRow{
 			{
 				Ino:         expandedRow.Ino,
 				Mode:        expandedRow.Mode,
@@ -530,27 +529,12 @@ func TestSetAttr_TruncateNonZero_ResurrectPrevention_Read(t *testing.T) {
 				Atime:       expandedRow.Atime,
 				Mtime:       expandedRow.Mtime,
 				Ctime:       expandedRow.Ctime,
+				FhFound:     true,
+				FhFlags:     int32(meta.O_RDONLY),
 				ChunkIndx:   pgtype.Int8{Int64: 0, Valid: true},
 				ChunkSlices: combinedSlicesBytes,
 			},
 		}, nil).
-		Once()
-
-	mockQuerier.EXPECT().
-		GetFileHandle(mock.Anything, db.GetFileHandleParams{
-			Fh:  int64(fh),
-			Ino: int64(ino),
-		}).
-		Return(db.FileHandle{
-			Fh:    int64(fh),
-			Ino:   int64(ino),
-			Flags: int32(meta.O_RDONLY),
-		}, nil).
-		Once()
-
-	mockQuerier.EXPECT().
-		LockValidSliceRefsKeyShare(mock.Anything, []int64{100}).
-		Return([]int64{100}, nil).
 		Once()
 
 	// 截断点之前的 2048 字节数据 (来自 ID=100) 会调用 BlockStore.GetBlock 读取

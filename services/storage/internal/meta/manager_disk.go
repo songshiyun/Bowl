@@ -73,9 +73,9 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		Valid: true,
 	}
 
-	// 4. 单次读写事务内原子创建根目录 Inode 与 Disk 记录
+	// 4. 单次读写事务内原子创建根目录 Inode 与 Disk 记录（控制面保持 synchronous_commit = on 同步提交）
 	var createdDisk db.GetDiskRow
-	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
 		rootInode, err := q.CreateRootInode(ctx, db.CreateRootInodeParams{
 			Mode:  int32(S_IFDIR | 0o755),
 			Nlink: 2,
@@ -271,7 +271,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		hasPrevRow bool
 		updatedRow db.GetDiskRow
 	)
-	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
 		if hasPrevRow {
 			m.updateDiskQuotaOnUpdate(prevRow)
 			hasPrevRow = false
@@ -349,7 +349,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		deletedInos   []int64
 	)
 
-	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
 		rootIno = 0
 		expiredCount = 0
 		reclaimedInos = nil

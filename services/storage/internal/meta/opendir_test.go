@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
@@ -92,26 +93,20 @@ func TestOpenDir_PositivePath(t *testing.T) {
 
 	t.Run("常规目录只读模式正常打开", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseDirRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{
-				Fh:        1,
-				Ino:       int64(ino),
-				Flags:     int32(meta.O_RDONLY),
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      1,
+				Nlink:   baseDirRow.Nlink,
+				Mtime:   baseDirRow.Mtime,
+				Ctime:   baseDirRow.Ctime,
+				RootIno: baseDirRow.RootIno,
 			}, nil).
 			Once()
 
@@ -128,38 +123,20 @@ func TestOpenDir_PositivePath(t *testing.T) {
 
 	t.Run("孤儿目录 (nlink == 0) 存在活跃句柄时允许打开", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		orphanDirRow := baseDirRow
-		orphanDirRow.Nlink = 0
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanDirRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(orphanDirRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			HasFileHandlesByIno(mock.Anything, int64(ino)).
-			Return(true, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{
-				Fh:        2,
-				Ino:       int64(ino),
-				Flags:     int32(meta.O_RDONLY),
-				CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      2,
+				Nlink:   0,
+				Mtime:   baseDirRow.Mtime,
+				Ctime:   baseDirRow.Ctime,
+				RootIno: baseDirRow.RootIno,
 			}, nil).
 			Once()
 
@@ -196,14 +173,14 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("目标节点不存在返回 ErrNotFound", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(db.Inode{}, pgx.ErrNoRows).
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
+				Ino:   int64(ino),
+				Flags: int32(meta.O_RDONLY),
+			}).
+			Return(db.OpenDirFastRow{Status: "not_found"}, nil).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -218,17 +195,14 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("目标节点为普通文件返回 ErrNotDir", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		fileRow := baseDirRow
-		fileRow.Mode = int32(meta.S_IFREG | 0o644)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(fileRow, nil).
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
+				Ino:   int64(ino),
+				Flags: int32(meta.O_RDONLY),
+			}).
+			Return(db.OpenDirFastRow{Status: "not_dir"}, nil).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -243,26 +217,14 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 	t.Run("死孤儿目录 (nlink == 0 且无活跃句柄) 返回 ErrNotFound", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		deadOrphanRow := baseDirRow
-		deadOrphanRow.Nlink = 0
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(deadOrphanRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(deadOrphanRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			HasFileHandlesByIno(mock.Anything, int64(ino)).
-			Return(false, nil).
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
+				Ino:   int64(ino),
+				Flags: int32(meta.O_RDONLY),
+			}).
+			Return(db.OpenDirFastRow{Status: "not_found"}, nil).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -275,80 +237,41 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 		assert.Nil(t, res)
 	})
 
-	t.Run("底层 GetInode 错误返回包装错误", func(t *testing.T) {
+	t.Run("传入过期或跨 Disk 会话返回 ErrBadFileHandle", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
+		sessID := uint64(999)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(db.Inode{}, errors.New("db error")).
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
+				Ino:       int64(ino),
+				Flags:     int32(meta.O_RDONLY),
+				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			}).
+			Return(db.OpenDirFastRow{Status: "bad_handle"}, nil).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
-			Ino:   ino,
-			Flags: meta.O_RDONLY,
+			Ino:       ino,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
 		})
 
 		require.Error(t, err)
+		assert.True(t, errors.Is(err, meta.ErrBadFileHandle))
 		assert.Nil(t, res)
-		assert.Contains(t, err.Error(), "get inode")
 	})
 
-	t.Run("底层 HasFileHandlesByIno 错误返回包装错误", func(t *testing.T) {
+	t.Run("底层 OpenDirFast 数据库错误返回包装错误", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		orphanDirRow := baseDirRow
-		orphanDirRow.Nlink = 0
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(orphanDirRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(orphanDirRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			HasFileHandlesByIno(mock.Anything, int64(ino)).
-			Return(false, errors.New("db query handles error")).
-			Once()
-
-		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
-			Ino:   ino,
-			Flags: meta.O_RDONLY,
-		})
-
-		require.Error(t, err)
-		assert.Nil(t, res)
-		assert.Contains(t, err.Error(), "check has file handles")
-	})
-
-	t.Run("底层 CreateFileHandle 错误返回包装错误", func(t *testing.T) {
-		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
-		mgr := meta.New(mockStore)
-
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseDirRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{}, errors.New("create handle error")).
+			Return(db.OpenDirFastRow{}, errors.New("db error")).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -358,27 +281,26 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, res)
-		assert.Contains(t, err.Error(), "create file handle")
+		assert.Contains(t, err.Error(), "db error")
 	})
 
 	t.Run("启用 WithOpenDirCache(true) 时返回 FOPEN_CACHE_DIR", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore, meta.WithOpenDirCache(true))
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(ino)).
-			Return(baseDirRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   int64(ino),
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{Fh: 77, Ino: int64(ino), Flags: int32(meta.O_RDONLY)}, nil).
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      77,
+				Nlink:   baseDirRow.Nlink,
+				Mtime:   baseDirRow.Mtime,
+				Ctime:   baseDirRow.Ctime,
+				RootIno: baseDirRow.RootIno,
+			}, nil).
 			Once()
 
 		res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -395,22 +317,7 @@ func TestOpenDir_NegativeAndErrorPaths(t *testing.T) {
 
 func TestOpenDir_CreateFileHandlePgErrors(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().Truncate(time.Microsecond)
 	ino := uint64(100)
-
-	baseDirRow := db.Inode{
-		Ino:        int64(ino),
-		Generation: 1,
-		Mode:       int32(meta.S_IFDIR | 0o755),
-		Size:       4096,
-		Nlink:      2,
-		Uid:        1000,
-		Gid:        1000,
-		Rdev:       0,
-		Atime:      pgtype.Timestamptz{Time: now, Valid: true},
-		Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
-		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
-	}
 
 	for _, tc := range []struct {
 		name           string
@@ -452,22 +359,14 @@ func TestOpenDir_CreateFileHandlePgErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
-			mockQuerier := dbmock.NewMockQuerier(t)
 			mgr := meta.New(mockStore)
 
-			setupMockWriteTx(mockStore, mockQuerier)
-
-			mockQuerier.EXPECT().
-				GetInode(mock.Anything, int64(ino)).
-				Return(baseDirRow, nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+			mockStore.EXPECT().
+				OpenDirFast(mock.Anything, db.OpenDirFastParams{
 					Ino:   int64(ino),
 					Flags: int32(meta.O_RDONLY),
 				}).
-				Return(db.FileHandle{}, tc.createErr).
+				Return(db.OpenDirFastRow{}, tc.createErr).
 				Once()
 
 			res, err := mgr.OpenDir(ctx, meta.OpenDirParams{
@@ -524,38 +423,26 @@ func TestOpenDir_SmartCacheRetention_Unit(t *testing.T) {
 
 	t.Run("默认配置下同一会话首次 OpenDir 返回 0，未变更时后续 OpenDir 返回 FOPEN_CACHE_DIR，版本变化后刷新并恢复", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		expectOpenDir := func(row db.Inode, fh int64, sessID *uint64) {
-			setupMockWriteTx(mockStore, mockQuerier)
-			mockQuerier.EXPECT().
-				GetInode(mock.Anything, int64(ino)).
-				Return(row, nil).
-				Once()
 			var pgSid pgtype.Int8
 			if sessID != nil {
-				mockQuerier.EXPECT().
-					HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
-						SessionID: int64(*sessID),
-						RootIno:   row.RootIno,
-					}).
-					Return(true, nil).
-					Once()
 				pgSid = pgtype.Int8{Int64: int64(*sessID), Valid: true}
 			}
-			mockQuerier.EXPECT().
-				CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+			mockStore.EXPECT().
+				OpenDirFast(mock.Anything, db.OpenDirFastParams{
 					Ino:       int64(ino),
 					Flags:     int32(meta.O_RDONLY),
 					SessionID: pgSid,
 				}).
-				Return(db.FileHandle{
-					Fh:        fh,
-					Ino:       int64(ino),
-					Flags:     int32(meta.O_RDONLY),
-					SessionID: pgSid,
-					CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				Return(db.OpenDirFastRow{
+					Status:  "ok",
+					Fh:      fh,
+					Nlink:   row.Nlink,
+					Mtime:   row.Mtime,
+					Ctime:   row.Ctime,
+					RootIno: row.RootIno,
 				}, nil).
 				Once()
 		}
@@ -623,38 +510,26 @@ func TestOpenDir_SmartCacheRetention_Unit(t *testing.T) {
 
 	t.Run("不同 SessionID 之间版本追踪互不干扰", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
 		sessA := uint64(1001)
 		sessB := uint64(1002)
 
 		expectSessionOpenDir := func(row db.Inode, fh int64, sessID uint64) {
-			setupMockWriteTx(mockStore, mockQuerier)
-			mockQuerier.EXPECT().
-				GetInode(mock.Anything, int64(ino)).
-				Return(row, nil).
-				Once()
-			mockQuerier.EXPECT().
-				HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
-					SessionID: int64(sessID),
-					RootIno:   row.RootIno,
-				}).
-				Return(true, nil).
-				Once()
 			pgSid := pgtype.Int8{Int64: int64(sessID), Valid: true}
-			mockQuerier.EXPECT().
-				CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+			mockStore.EXPECT().
+				OpenDirFast(mock.Anything, db.OpenDirFastParams{
 					Ino:       int64(ino),
 					Flags:     int32(meta.O_RDONLY),
 					SessionID: pgSid,
 				}).
-				Return(db.FileHandle{
-					Fh:        fh,
-					Ino:       int64(ino),
-					Flags:     int32(meta.O_RDONLY),
-					SessionID: pgSid,
-					CreatedAt: pgtype.Timestamptz{Time: now, Valid: true},
+				Return(db.OpenDirFastRow{
+					Status:  "ok",
+					Fh:      fh,
+					Nlink:   row.Nlink,
+					Mtime:   row.Mtime,
+					Ctime:   row.Ctime,
+					RootIno: row.RootIno,
 				}, nil).
 				Once()
 		}
@@ -984,4 +859,251 @@ func TestOpenDir_PostgresIntegration_CacheRetentionAndMutations(t *testing.T) {
 	assertClientBFirstThenClientASeesMutation("客户端 B Unlink 文件", func() {
 		require.NoError(t, mgr.Unlink(testCtx, multiDir.Ino, []byte("b.txt")))
 	}, []string{"a_renamed.txt"})
+}
+
+func TestOpenDir_PostgresIntegration_SingleStatementCTEAndOrphanConcurrency(t *testing.T) {
+	tracer := &openFastQueryTracer{}
+	pool, testCtx := setupMetaTestDBWithTracer(t, tracer)
+	if pool == nil {
+		return
+	}
+
+	store := db.NewStore(pool)
+	mgr := meta.New(store)
+
+	disk, err := mgr.CreateDisk(testCtx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("disk-opendir-fast-%d", time.Now().UnixNano()),
+		MaxBytes: 100 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = mgr.DeleteDisk(cleanupCtx, disk.DiskID)
+	})
+
+	otherDisk, err := mgr.CreateDisk(testCtx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("disk-opendir-fast-other-%d", time.Now().UnixNano()),
+		MaxBytes: 100 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = mgr.DeleteDisk(cleanupCtx, otherDisk.DiskID)
+	})
+
+	sessID := uint64((time.Now().UnixNano() & 0x3FFFFFFF) + 21)
+	_, err = mgr.RenewSessionWithDisk(testCtx, sessID, &disk.DiskID)
+	require.NoError(t, err)
+
+	otherDiskSessID := sessID + 1
+	_, err = mgr.RenewSessionWithDisk(testCtx, otherDiskSessID, &otherDisk.DiskID)
+	require.NoError(t, err)
+
+	targetDir, err := mgr.Mkdir(testCtx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("target_dir"),
+		Mode:      0o755,
+	})
+	require.NoError(t, err)
+
+	fileCreate, err := mgr.Create(testCtx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("regular.txt"),
+		Mode:      0o644,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+	fileIno := fileCreate.Inode.Ino
+	require.NoError(t, mgr.Release(testCtx, meta.ReleaseParams{
+		Ino:       fileIno,
+		Fh:        fileCreate.Fh,
+		SessionID: &sessID,
+	}))
+
+	// 1. 验证 OpenDir（含与不含 SessionID）仅执行 1 条 SQL，且不含 BEGIN / COMMIT / SET LOCAL / FOR SHARE / FOR UPDATE
+	for _, tc := range []struct {
+		name      string
+		sessionID *uint64
+	}{
+		{name: "不带 SessionID", sessionID: nil},
+		{name: "携带活跃 SessionID", sessionID: &sessID},
+	} {
+		t.Run("单语句SQL追踪验证_"+tc.name, func(t *testing.T) {
+			tracer.Reset()
+			openDirRes, oErr := mgr.OpenDir(testCtx, meta.OpenDirParams{
+				Ino:       targetDir.Ino,
+				Flags:     meta.O_RDONLY,
+				SessionID: tc.sessionID,
+			})
+			require.NoError(t, oErr)
+			require.NotNil(t, openDirRes)
+
+			queries := tracer.Snapshot()
+			require.Len(t, queries, 1, "OpenDir 必须仅执行 1 条单语句 CTE，实际执行: %v", queries)
+			sqlUpper := strings.ToUpper(queries[0])
+			assert.Contains(t, queries[0], "SELECT set_config('synchronous_commit', 'off', true)")
+			assert.Contains(t, sqlUpper, "INSERT INTO FILE_HANDLES")
+			assert.NotContains(t, sqlUpper, "FOR SHARE")
+			assert.NotContains(t, sqlUpper, "FOR UPDATE")
+			for _, q := range queries {
+				upper := strings.ToUpper(strings.TrimSpace(q))
+				assert.False(t, strings.HasPrefix(upper, "BEGIN"), "不应开启显式事务 BEGIN: %s", q)
+				assert.False(t, strings.HasPrefix(upper, "COMMIT"), "不应存在显式事务 COMMIT: %s", q)
+				assert.False(t, strings.HasPrefix(upper, "SET LOCAL"), "不应存在独立 SET LOCAL 语句: %s", q)
+			}
+
+			require.NoError(t, mgr.ReleaseDir(testCtx, meta.ReleaseDirParams{
+				Ino:       targetDir.Ino,
+				Fh:        openDirRes.Fh,
+				SessionID: tc.sessionID,
+			}))
+		})
+	}
+
+	// 2. 验证错误码映射（ENOENT, ENOTDIR, EBADF）且同样仅执行 1 条 SQL
+	unregisteredSessID := sessID + 999999
+	for _, errTC := range []struct {
+		name      string
+		params    meta.OpenDirParams
+		expectErr error
+	}{
+		{
+			name:      "目标不存在返回 ErrNotFound (ENOENT)",
+			params:    meta.OpenDirParams{Ino: 999999999, Flags: meta.O_RDONLY, SessionID: &sessID},
+			expectErr: meta.ErrNotFound,
+		},
+		{
+			name:      "目标是普通文件返回 ErrNotDir (ENOTDIR)",
+			params:    meta.OpenDirParams{Ino: fileIno, Flags: meta.O_RDONLY, SessionID: &sessID},
+			expectErr: meta.ErrNotDir,
+		},
+		{
+			name:      "未注册或过期会话返回 ErrBadFileHandle (EBADF)",
+			params:    meta.OpenDirParams{Ino: targetDir.Ino, Flags: meta.O_RDONLY, SessionID: &unregisteredSessID},
+			expectErr: meta.ErrBadFileHandle,
+		},
+		{
+			name:      "跨 Disk 会话返回 ErrBadFileHandle (EBADF)",
+			params:    meta.OpenDirParams{Ino: targetDir.Ino, Flags: meta.O_RDONLY, SessionID: &otherDiskSessID},
+			expectErr: meta.ErrBadFileHandle,
+		},
+	} {
+		t.Run("错误契约与单语句验证_"+errTC.name, func(t *testing.T) {
+			tracer.Reset()
+			res, oErr := mgr.OpenDir(testCtx, errTC.params)
+			assert.Nil(t, res)
+			require.ErrorIs(t, oErr, errTC.expectErr)
+			assert.Len(t, tracer.Snapshot(), 1, "错误路径也必须仅通过 1 条单语句 CTE 完成判定")
+		})
+	}
+
+	// 3. 验证 nlink == 0 但仍有存活句柄的 OpenDir-Rmdir 孤儿目录可正常重新 OpenDir，且最后句柄关闭后物理回收、再次 OpenDir 返回 ErrNotFound
+	orphanDir, err := mgr.Mkdir(testCtx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("orphan_reopen_dir"),
+		Mode:      0o755,
+	})
+	require.NoError(t, err)
+	firstOpenDir, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
+		Ino:       orphanDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mgr.Rmdir(testCtx, disk.RootIno, []byte("orphan_reopen_dir")))
+
+	// 孤儿目录存在存活句柄 firstOpenDir.Fh 时，单语句 OpenDir 成功
+	tracer.Reset()
+	reopenDirRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
+		Ino:       orphanDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reopenDirRes)
+	assert.Len(t, tracer.Snapshot(), 1)
+
+	// 关闭全部 2 个目录句柄后，孤儿目录物理删除，再次 OpenDir 返回 ErrNotFound
+	require.NoError(t, mgr.ReleaseDir(testCtx, meta.ReleaseDirParams{
+		Ino:       orphanDir.Ino,
+		Fh:        reopenDirRes.Fh,
+		SessionID: &sessID,
+	}))
+	require.NoError(t, mgr.ReleaseDir(testCtx, meta.ReleaseDirParams{
+		Ino:       orphanDir.Ino,
+		Fh:        firstOpenDir.Fh,
+		SessionID: &sessID,
+	}))
+
+	afterReclaimDirRes, err := mgr.OpenDir(testCtx, meta.OpenDirParams{
+		Ino:       orphanDir.Ino,
+		Flags:     meta.O_RDONLY,
+		SessionID: &sessID,
+	})
+	assert.Nil(t, afterReclaimDirRes)
+	require.ErrorIs(t, err, meta.ErrNotFound)
+
+	// 4. 验证孤儿目录在并发最后句柄 ReleaseDir 回收交错下，OpenDir 要么成功（阻止回收）要么返回 ErrNotFound（包含 23503 外键冲突兜底），绝不产生残留句柄
+	for round := 0; round < 5; round++ {
+		dirName := fmt.Sprintf("orphan_dir_race_%d", round)
+		raceDir, mErr := mgr.Mkdir(testCtx, meta.MkdirParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte(dirName),
+			Mode:      0o755,
+		})
+		require.NoError(t, mErr)
+		initDirHandle, oErr := mgr.OpenDir(testCtx, meta.OpenDirParams{
+			Ino:       raceDir.Ino,
+			Flags:     meta.O_RDONLY,
+			SessionID: &sessID,
+		})
+		require.NoError(t, oErr)
+		require.NoError(t, mgr.Rmdir(testCtx, disk.RootIno, []byte(dirName)))
+
+		startCh := make(chan struct{})
+		var wg sync.WaitGroup
+		var openDirResult *meta.OpenDirResult
+		var openDirErr error
+		var releaseDirErr error
+
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			openDirResult, openDirErr = mgr.OpenDir(testCtx, meta.OpenDirParams{
+				Ino:       raceDir.Ino,
+				Flags:     meta.O_RDONLY,
+				SessionID: &sessID,
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			<-startCh
+			releaseDirErr = mgr.ReleaseDir(testCtx, meta.ReleaseDirParams{
+				Ino:       raceDir.Ino,
+				Fh:        initDirHandle.Fh,
+				SessionID: &sessID,
+			})
+		}()
+		close(startCh)
+		wg.Wait()
+
+		require.NoError(t, releaseDirErr)
+		if openDirErr != nil {
+			require.ErrorIs(t, openDirErr, meta.ErrNotFound, "并发孤儿目录回收时 OpenDir 失败必须映射为 ErrNotFound")
+			hasHandles, hErr := store.HasFileHandlesByIno(testCtx, int64(raceDir.Ino))
+			require.NoError(t, hErr)
+			assert.False(t, hasHandles, "OpenDir 失败时严禁残留任何 file_handles 记录")
+		} else {
+			require.NotNil(t, openDirResult)
+			require.NoError(t, mgr.ReleaseDir(testCtx, meta.ReleaseDirParams{
+				Ino:       raceDir.Ino,
+				Fh:        openDirResult.Fh,
+				SessionID: &sessID,
+			}))
+		}
+	}
 }

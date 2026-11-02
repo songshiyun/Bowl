@@ -1,6 +1,7 @@
 package fusefs_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -31,7 +32,23 @@ type handleMockStorageServer struct {
 	flushFn        func(context.Context, *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error)
 	fsyncFn        func(context.Context, *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error)
 	releaseFn      func(context.Context, *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error)
+	setLkFn        func(context.Context, *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error)
+	setLkwFn       func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
+}
+
+func (m *handleMockStorageServer) SetLk(ctx context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
+	if m.setLkFn != nil {
+		return m.setLkFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.SetLkResponse{}), nil
+}
+
+func (m *handleMockStorageServer) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
+	if m.setLkwFn != nil {
+		return m.setLkwFn(ctx, req)
+	}
+	return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
 }
 
 func (m *handleMockStorageServer) Create(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
@@ -335,6 +352,15 @@ func TestRawFS_Flush(t *testing.T) {
 	mgr := setupTestSessionManager(t, client)
 	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
 
+	t.Run("anti-aliasing invalid ino returns ENOENT", func(t *testing.T) {
+		status := fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 1001},
+			Fh:        55,
+			LockOwner: 12345,
+		})
+		require.Equal(t, fuse.ENOENT, status)
+	})
+
 	t.Run("unbound handle returns EBADF", func(t *testing.T) {
 		status := fs.Flush(nil, &fuse.FlushIn{
 			InHeader:  fuse.InHeader{NodeId: 2001},
@@ -344,13 +370,138 @@ func TestRawFS_Flush(t *testing.T) {
 		require.Equal(t, fuse.Status(syscall.EBADF), status)
 	})
 
-	t.Run("successful flush passes lock_owner and session_id", func(t *testing.T) {
+	t.Run("short-circuits locally with zero RPCs when inode has no POSIX lock activity", func(t *testing.T) {
+		mgr.BindHandle(50, mgr.CurrentSessionID())
+
+		var flushCalls atomic.Int32
+		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		}
+
+		status := fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2000},
+			Fh:        50,
+			LockOwner: 777,
+		})
+		require.Equal(t, fuse.OK, status)
+		require.Zero(t, flushCalls.Load(), "未发生 POSIX 锁活动时 Flush 应本地短路，不发起 RPC")
+	})
+
+	t.Run("BSD flock does not mark POSIX lock activity and Flush still short-circuits", func(t *testing.T) {
+		mgr.BindHandle(51, mgr.CurrentSessionID())
+
+		var flushCalls atomic.Int32
+		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		}
+
+		stLk := fs.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2010},
+			Fh:       51,
+			Owner:    888,
+			LkFlags:  1, // BSD flock
+			Lk: fuse.FileLock{
+				Start: 0,
+				End:   100,
+				Typ:   uint32(syscall.F_WRLCK),
+			},
+		})
+		require.Equal(t, fuse.OK, stLk)
+
+		stLkw := fs.SetLkw(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2010},
+			Fh:       51,
+			Owner:    888,
+			LkFlags:  1, // BSD flock
+			Lk: fuse.FileLock{
+				Start: 0,
+				End:   100,
+				Typ:   uint32(syscall.F_RDLCK),
+			},
+		})
+		require.Equal(t, fuse.OK, stLkw)
+
+		status := fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2010},
+			Fh:        51,
+			LockOwner: 888,
+		})
+		require.Equal(t, fuse.OK, status)
+		require.Zero(t, flushCalls.Load(), "BSD flock 不得混入 POSIX 锁活动集合")
+	})
+
+	t.Run("invalid SetLk parameters do not mark POSIX lock activity", func(t *testing.T) {
+		mgr.BindHandle(52, mgr.CurrentSessionID())
+
+		var flushCalls atomic.Int32
+		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		}
+
+		// 非法锁类型 -> EINVAL
+		stInvalidType := fs.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2020},
+			Fh:       52,
+			Owner:    888,
+			LkFlags:  0,
+			Lk: fuse.FileLock{
+				Start: 0,
+				End:   100,
+				Typ:   999,
+			},
+		})
+		require.Equal(t, fuse.EINVAL, stInvalidType)
+
+		// 非法区间 end < start -> EINVAL
+		stInvalidRange := fs.SetLkw(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2020},
+			Fh:       52,
+			Owner:    888,
+			LkFlags:  0,
+			Lk: fuse.FileLock{
+				Start: 200,
+				End:   100,
+				Typ:   uint32(syscall.F_WRLCK),
+			},
+		})
+		require.Equal(t, fuse.EINVAL, stInvalidRange)
+
+		status := fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2020},
+			Fh:        52,
+			LockOwner: 888,
+		})
+		require.Equal(t, fuse.OK, status)
+		require.Zero(t, flushCalls.Load(), "本地参数校验未通过的锁请求不应标记 POSIX 锁活动")
+	})
+
+	t.Run("successful flush passes lock_owner and session_id across handles on same inode after POSIX lock activity", func(t *testing.T) {
 		mgr.BindHandle(55, mgr.CurrentSessionID())
+		mgr.BindHandle(56, mgr.CurrentSessionID())
+
+		// 在 fh=55 上发生 POSIX SetLk 活动
+		stLk := fs.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       55,
+			Owner:    777,
+			LkFlags:  0,
+			Lk: fuse.FileLock{
+				Start: 0,
+				End:   100,
+				Typ:   uint32(syscall.F_WRLCK),
+			},
+		})
+		require.Equal(t, fuse.OK, stLk)
 
 		var calledIno, calledFh uint64
 		var calledLockOwner, calledSID *uint64
+		var flushCalls atomic.Int32
 
 		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
 			calledIno = req.Msg.GetIno()
 			calledFh = req.Msg.GetFh()
 			calledLockOwner = req.Msg.LockOwner
@@ -358,6 +509,7 @@ func TestRawFS_Flush(t *testing.T) {
 			return connect.NewResponse(&storagev1.FlushResponse{}), nil
 		}
 
+		// 1. 直接调锁的句柄 fh=55 调用 Flush 触发 RPC
 		status := fs.Flush(nil, &fuse.FlushIn{
 			InHeader:  fuse.InHeader{NodeId: 2001},
 			Fh:        55,
@@ -365,12 +517,291 @@ func TestRawFS_Flush(t *testing.T) {
 		})
 
 		require.Equal(t, fuse.OK, status)
+		require.Equal(t, int32(1), flushCalls.Load())
 		require.Equal(t, uint64(2001), calledIno)
 		require.Equal(t, uint64(55), calledFh)
 		require.NotNil(t, calledLockOwner)
 		require.Equal(t, uint64(777), *calledLockOwner)
 		require.NotNil(t, calledSID)
 		require.Equal(t, mgr.CurrentSessionID(), *calledSID)
+
+		// 2. 同 Inode 下未直接调过 SetLk 的另一句柄 fh=56 调用 Flush 同样触发 RPC
+		status2 := fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2001},
+			Fh:        56,
+			LockOwner: 778,
+		})
+		require.Equal(t, fuse.OK, status2)
+		require.Equal(t, int32(2), flushCalls.Load())
+		require.Equal(t, uint64(56), calledFh)
+		require.NotNil(t, calledLockOwner)
+		require.Equal(t, uint64(778), *calledLockOwner)
+	})
+
+	t.Run("SetLk EAGAIN and in-flight/canceled SetLkw mark POSIX lock activity before RPC returns", func(t *testing.T) {
+		mgr.BindHandle(57, mgr.CurrentSessionID())
+		mgr.BindHandle(58, mgr.CurrentSessionID())
+
+		var flushCalls atomic.Int32
+		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		}
+
+		// 1. SetLk 返回 EAGAIN 后，Flush 仍必须发起服务端 RPC
+		mockSrv.setLkFn = func(ctx context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
+			cerr := connect.NewError(connect.CodeFailedPrecondition, errors.New("EAGAIN"))
+			detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EAGAIN", Domain: "bowl.storage"})
+			require.NoError(t, err)
+			cerr.AddDetail(detail)
+			return nil, cerr
+		}
+
+		stLk := fs.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2030},
+			Fh:       57,
+			Owner:    901,
+			LkFlags:  0,
+			Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_WRLCK)},
+		})
+		require.Equal(t, fuse.EAGAIN, stLk)
+
+		require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2030},
+			Fh:        57,
+			LockOwner: 901,
+		}))
+		require.Equal(t, int32(1), flushCalls.Load())
+
+		// 2. SetLkw 在途阻塞尚未返回期间（以及 subsequently canceled EINTR 后），同 Inode 另一句柄调用 Flush 均触发 RPC
+		setLkwEntered := make(chan struct{})
+		cancelCh := make(chan struct{})
+		mockSrv.setLkwFn = func(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
+			close(setLkwEntered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+
+		setLkwDone := make(chan fuse.Status, 1)
+		go func() {
+			setLkwDone <- fs.SetLkw(cancelCh, &fuse.LkIn{
+				InHeader: fuse.InHeader{NodeId: 2031},
+				Fh:       58,
+				Owner:    902,
+				LkFlags:  0,
+				Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_WRLCK)},
+			})
+		}()
+
+		select {
+		case <-setLkwEntered:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for SetLkw RPC to enter server handler")
+		}
+
+		// 在途阻塞期间调用 Flush -> 必须触发服务端 RPC
+		require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2031},
+			Fh:        58,
+			LockOwner: 902,
+		}))
+		require.Equal(t, int32(2), flushCalls.Load())
+
+		// 取消 SetLkw 使其返回 EINTR
+		close(cancelCh)
+		require.Equal(t, fuse.EINTR, <-setLkwDone)
+
+		// EINTR 之后再次 Flush -> 依然触发服务端 RPC
+		require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2031},
+			Fh:        58,
+			LockOwner: 902,
+		}))
+		require.Equal(t, int32(3), flushCalls.Load())
+	})
+
+	t.Run("session expiry clears old session POSIX lock activity without polluting rotated session", func(t *testing.T) {
+		var rotateFlag atomic.Bool
+		var flushCalls atomic.Int32
+		localSrv := &handleMockStorageServer{
+			renewSessionFn: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+				recreated := rotateFlag.Swap(false)
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(80 * time.Millisecond)),
+					SessionRecreated: recreated,
+				}), nil
+			},
+			flushFn: func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+				flushCalls.Add(1)
+				return connect.NewResponse(&storagev1.FlushResponse{}), nil
+			},
+		}
+		localClient := setupHandleTestRPCServer(t, localSrv)
+		localMgr, err := session.New(context.Background(), localClient, session.Config{
+			MinInterval: 15 * time.Millisecond,
+			MaxInterval: 30 * time.Millisecond,
+		})
+		require.NoError(t, err)
+		require.NoError(t, localMgr.Start(context.Background()))
+		t.Cleanup(func() { _ = localMgr.Close() })
+
+		localFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{RootIno: 1001})
+		t.Cleanup(localFS.OnUnmount)
+
+		oldSID := localMgr.CurrentSessionID()
+		const oldFH = uint64(601)
+		localMgr.BindHandle(oldFH, oldSID)
+
+		// 在旧会话 oldSID 下对 Ino=2040 发起 POSIX SetLk
+		require.Equal(t, fuse.OK, localFS.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2040},
+			Fh:       oldFH,
+			Owner:    100,
+			LkFlags:  0,
+			Lk:       fuse.FileLock{Start: 0, End: 50, Typ: uint32(syscall.F_WRLCK)},
+		}))
+
+		// 触发会话轮换
+		rotateFlag.Store(true)
+		var newSID uint64
+		require.Eventually(t, func() bool {
+			newSID = localMgr.CurrentSessionID()
+			return newSID != 0 && newSID != oldSID
+		}, 500*time.Millisecond, 10*time.Millisecond)
+
+		// 旧句柄调用 Flush 必须返回 EBADF 且不发起 RPC
+		require.Equal(t, fuse.EBADF, localFS.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2040},
+			Fh:        oldFH,
+			LockOwner: 100,
+		}))
+		require.Zero(t, flushCalls.Load())
+
+		// 新会话 newSID 下打开同一 Ino=2040 的新句柄 newFH，未调过 POSIX 锁时 Flush 应本地短路（0 次 RPC）
+		const newFH = uint64(602)
+		localMgr.BindHandle(newFH, newSID)
+		require.Equal(t, fuse.OK, localFS.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 2040},
+			Fh:        newFH,
+			LockOwner: 101,
+		}))
+		require.Zero(t, flushCalls.Load(), "旧会话的 POSIX 锁活动应在会话过期时清除，不得污染新会话")
+	})
+
+	t.Run("root inode mapping tracks POSIX lock activity by serverIno", func(t *testing.T) {
+		mgr.BindHandle(59, mgr.CurrentSessionID())
+
+		var calledIno uint64
+		var flushCalls atomic.Int32
+		mockSrv.setLkFn = func(ctx context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
+			return connect.NewResponse(&storagev1.SetLkResponse{}), nil
+		}
+		mockSrv.flushFn = func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCalls.Add(1)
+			calledIno = req.Msg.GetIno()
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		}
+
+		// 内核传入 FUSE_ROOT_ID (1)，服务端映射为 RootIno (1001)
+		require.Equal(t, fuse.OK, fs.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID},
+			Fh:       59,
+			Owner:    333,
+			LkFlags:  0,
+			Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_RDLCK)},
+		}))
+
+		require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID},
+			Fh:        59,
+			LockOwner: 333,
+		}))
+		require.Equal(t, int32(1), flushCalls.Load())
+		require.Equal(t, uint64(1001), calledIno)
+	})
+
+	t.Run("concurrent SetLk, SetLkw, Flush, and session expiry rotation are race-free", func(t *testing.T) {
+		var rotateFlag atomic.Bool
+		var flushCalls atomic.Int32
+		localSrv := &handleMockStorageServer{
+			renewSessionFn: func(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+				recreated := rotateFlag.Swap(false)
+				return connect.NewResponse(&storagev1.RenewSessionResponse{
+					ExpiresAt:        timestamppb.New(time.Now().Add(80 * time.Millisecond)),
+					SessionRecreated: recreated,
+				}), nil
+			},
+			flushFn: func(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+				flushCalls.Add(1)
+				return connect.NewResponse(&storagev1.FlushResponse{}), nil
+			},
+		}
+		localClient := setupHandleTestRPCServer(t, localSrv)
+		localMgr, err := session.New(context.Background(), localClient, session.Config{
+			MinInterval: 10 * time.Millisecond,
+			MaxInterval: 20 * time.Millisecond,
+		})
+		require.NoError(t, err)
+		require.NoError(t, localMgr.Start(context.Background()))
+		t.Cleanup(func() { _ = localMgr.Close() })
+
+		localFS := fusefs.NewRawFS(localClient, localMgr, fusefs.Config{RootIno: 1001})
+		t.Cleanup(localFS.OnUnmount)
+
+		oldSID := localMgr.CurrentSessionID()
+		for fh := uint64(701); fh <= 710; fh++ {
+			localMgr.BindHandle(fh, oldSID)
+		}
+
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				fh := uint64(701 + (idx % 10))
+				ino := uint64(3000 + (idx % 3))
+				for j := 0; j < 20; j++ {
+					_ = localFS.SetLk(nil, &fuse.LkIn{
+						InHeader: fuse.InHeader{NodeId: ino},
+						Fh:       fh,
+						Owner:    uint64(idx),
+						LkFlags:  uint32(j % 2),
+						Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_WRLCK)},
+					})
+					_ = localFS.SetLkw(nil, &fuse.LkIn{
+						InHeader: fuse.InHeader{NodeId: ino},
+						Fh:       fh,
+						Owner:    uint64(idx),
+						LkFlags:  uint32(j % 2),
+						Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_RDLCK)},
+					})
+					_ = localFS.Flush(nil, &fuse.FlushIn{
+						InHeader:  fuse.InHeader{NodeId: ino},
+						Fh:        fh,
+						LockOwner: uint64(idx),
+					})
+				}
+			}(i)
+		}
+
+		rotateFlag.Store(true)
+		wg.Wait()
+
+		var newSID uint64
+		require.Eventually(t, func() bool {
+			newSID = localMgr.CurrentSessionID()
+			return newSID != 0 && newSID != oldSID
+		}, 500*time.Millisecond, 10*time.Millisecond)
+
+		flushCalls.Store(0)
+		const freshFH = uint64(799)
+		localMgr.BindHandle(freshFH, newSID)
+		require.Equal(t, fuse.OK, localFS.Flush(nil, &fuse.FlushIn{
+			InHeader:  fuse.InHeader{NodeId: 3000},
+			Fh:        freshFH,
+			LockOwner: 999,
+		}))
+		require.Zero(t, flushCalls.Load(), "并发旧会话锁请求与轮换交错后，绝不能污染新会话")
 	})
 }
 
@@ -747,6 +1178,15 @@ func TestRawFS_Release(t *testing.T) {
 
 		require.Equal(t, int32(1), renewCalls.Load())
 
+		// 先标记 POSIX 锁活动，使后续 Flush 发起服务端 RPC
+		require.Equal(t, fuse.OK, rawFS.SetLk(nil, &fuse.LkIn{
+			InHeader: fuse.InHeader{NodeId: 2001},
+			Fh:       fh,
+			Owner:    1,
+			LkFlags:  0,
+			Lk:       fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_WRLCK)},
+		}))
+
 		// 调用 Flush 收到服务端 EBADF，必须通过 ToStatusWithSession -> TriggerRenew 立即唤醒处于 20s 睡眠中的 renewLoop
 		st := rawFS.Flush(nil, &fuse.FlushIn{
 			InHeader: fuse.InHeader{NodeId: 2001},
@@ -949,4 +1389,435 @@ func (f *fullSessionTestServer) OpenDir(ctx context.Context, req *connect.Reques
 		return f.openDirFn(ctx, req)
 	}
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+type adr0028LifecycleMockServer struct {
+	*handleMockStorageServer
+	lookupFn      func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
+	writeFn       func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
+	readFn        func(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error)
+	openDirFn     func(context.Context, *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error)
+	readDirFn     func(context.Context, *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error)
+	readDirPlusFn func(context.Context, *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error)
+	releaseDirFn  func(context.Context, *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error)
+}
+
+func (s *adr0028LifecycleMockServer) Lookup(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+	if s.lookupFn != nil {
+		return s.lookupFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) Write(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+	if s.writeFn != nil {
+		return s.writeFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	if s.readFn != nil {
+		return s.readFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) OpenDir(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+	if s.openDirFn != nil {
+		return s.openDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReadDir(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
+	if s.readDirFn != nil {
+		return s.readDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
+	if s.readDirPlusFn != nil {
+		return s.readDirPlusFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (s *adr0028LifecycleMockServer) ReleaseDir(ctx context.Context, req *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
+	if s.releaseDirFn != nil {
+		return s.releaseDirFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+// TestRawFS_ADR0028_WriteReadDirLifecycle_RPCCounts 验证：
+//  1. 无 POSIX 记录锁活动时：
+//     - 写全链路 Lookup(ENOENT) -> Create -> Write -> Flush -> Release：客户端 Flush 经 ToServerIno + ResolveHandle 校验后本地短路（Flush RPC 计数为 0），全链路向服务端精确发起 4 次 RPC（Lookup、Create、Write、Release）；
+//     - 读全链路 Open -> Read -> Flush -> Release：客户端 Flush 本地短路（Flush RPC 计数为 0），全链路向服务端精确发起 3 次 RPC（Open、Read、Release），且正确透传 FOPEN_KEEP_CACHE；
+//     - 目录全链路 OpenDir -> ReadDir / ReadDirPlus -> ReleaseDir：正确透传 FOPEN_CACHE_DIR，遍历目录项并关闭目录句柄；
+//  2. 一旦该 Inode 调用过 POSIX SetLk/SetLkw，后续 Flush 直通服务端发起 Flush RPC（写全链路 5 次 RPC、读全链路 4 次 RPC）。
+func TestRawFS_ADR0028_WriteReadDirLifecycle_RPCCounts(t *testing.T) {
+	var (
+		lookupCount      atomic.Int64
+		createCount      atomic.Int64
+		writeCount       atomic.Int64
+		openCount        atomic.Int64
+		readCount        atomic.Int64
+		flushCount       atomic.Int64
+		releaseCount     atomic.Int64
+		openDirCount     atomic.Int64
+		readDirCount     atomic.Int64
+		readDirPlusCount atomic.Int64
+		releaseDirCount  atomic.Int64
+		setLkCount       atomic.Int64
+	)
+
+	resetCounts := func() {
+		lookupCount.Store(0)
+		createCount.Store(0)
+		writeCount.Store(0)
+		openCount.Store(0)
+		readCount.Store(0)
+		flushCount.Store(0)
+		releaseCount.Store(0)
+		openDirCount.Store(0)
+		readDirCount.Store(0)
+		readDirPlusCount.Store(0)
+		releaseDirCount.Store(0)
+		setLkCount.Store(0)
+	}
+
+	payload4K := bytes.Repeat([]byte("ADR0028_CLIENT_4K_"), 256)[:4096]
+	now := timestamppb.Now()
+
+	baseSrv := &handleMockStorageServer{
+		createFn: func(_ context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
+			createCount.Add(1)
+			return connect.NewResponse(&storagev1.CreateResponse{
+				Inode: &storagev1.Inode{
+					Ino: 3001,
+					Attr: &storagev1.InodeAttribute{
+						Mode:  uint32(syscall.S_IFREG | 0o644),
+						Nlink: 1,
+						Atime: now,
+						Mtime: now,
+						Ctime: now,
+					},
+				},
+				Fh:                  7001,
+				OpenFlags:           fuse.FOPEN_KEEP_CACHE,
+				EntryTimeoutSeconds: 1.0,
+				AttrTimeoutSeconds:  1.0,
+			}), nil
+		},
+		openFn: func(_ context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
+			openCount.Add(1)
+			return connect.NewResponse(&storagev1.OpenResponse{
+				Fh:        7002,
+				OpenFlags: fuse.FOPEN_KEEP_CACHE,
+			}), nil
+		},
+		flushFn: func(_ context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
+			flushCount.Add(1)
+			return connect.NewResponse(&storagev1.FlushResponse{}), nil
+		},
+		releaseFn: func(_ context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
+			releaseCount.Add(1)
+			return connect.NewResponse(&storagev1.ReleaseResponse{}), nil
+		},
+		setLkFn: func(_ context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
+			setLkCount.Add(1)
+			return connect.NewResponse(&storagev1.SetLkResponse{}), nil
+		},
+	}
+
+	mockSrv := &adr0028LifecycleMockServer{
+		handleMockStorageServer: baseSrv,
+		lookupFn: func(_ context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+			lookupCount.Add(1)
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("entry not found"))
+		},
+		writeFn: func(_ context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+			writeCount.Add(1)
+			return connect.NewResponse(&storagev1.WriteResponse{
+				Size: uint32(len(req.Msg.GetData())),
+			}), nil
+		},
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			readCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadResponse{
+				Data: payload4K,
+			}), nil
+		},
+		openDirFn: func(_ context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
+			openDirCount.Add(1)
+			return connect.NewResponse(&storagev1.OpenDirResponse{
+				Fh:        8001,
+				OpenFlags: fuse.FOPEN_CACHE_DIR,
+			}), nil
+		},
+		readDirFn: func(_ context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
+			readDirCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadDirResponse{
+				Entries: []*storagev1.DirEntry{
+					{Ino: 1001, Name: []byte("."), Mode: uint32(syscall.S_IFDIR | 0o755), NextOffset: 1},
+					{Ino: 1001, Name: []byte(".."), Mode: uint32(syscall.S_IFDIR | 0o755), NextOffset: 2},
+					{Ino: 3001, Name: []byte("file.bin"), Mode: uint32(syscall.S_IFREG | 0o644), NextOffset: 3},
+				},
+			}), nil
+		},
+		readDirPlusFn: func(_ context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
+			readDirPlusCount.Add(1)
+			return connect.NewResponse(&storagev1.ReadDirPlusResponse{
+				Entries: []*storagev1.DirEntryPlus{
+					{Ino: 1001, Name: []byte("."), NextOffset: 1},
+					{Ino: 1001, Name: []byte(".."), NextOffset: 2},
+					{
+						Ino:        3001,
+						Name:       []byte("file.bin"),
+						NextOffset: 3,
+						Inode: &storagev1.Inode{
+							Ino: 3001,
+							Attr: &storagev1.InodeAttribute{
+								Mode:  uint32(syscall.S_IFREG | 0o644),
+								Size:  4096,
+								Nlink: 1,
+								Atime: now,
+								Mtime: now,
+								Ctime: now,
+							},
+						},
+						EntryTimeoutSeconds: 1.0,
+						AttrTimeoutSeconds:  1.0,
+					},
+				},
+			}), nil
+		},
+		releaseDirFn: func(_ context.Context, req *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
+			releaseDirCount.Add(1)
+			return connect.NewResponse(&storagev1.ReleaseDirResponse{}), nil
+		},
+	}
+
+	mux := http.NewServeMux()
+	path, handler := storagev1connect.NewStorageServiceHandler(mockSrv)
+	mux.Handle(path, handler)
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	client := storagev1connect.NewStorageServiceClient(ts.Client(), ts.URL)
+	mgr := setupTestSessionManager(t, client)
+	rawFS := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
+	t.Cleanup(rawFS.OnUnmount)
+
+	// 1.1 无 POSIX 锁活动时的写全链路：Lookup(ENOENT) -> Create -> Write -> Flush -> Release（4 次服务端 RPC，Flush 本地短路）
+	resetCounts()
+	var lookupOut fuse.EntryOut
+	stLookup := rawFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.bin", &lookupOut)
+	require.Equal(t, fuse.Status(syscall.ENOENT), stLookup)
+
+	var createOut fuse.CreateOut
+	stCreate := rawFS.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Flags:    uint32(syscall.O_CREAT | syscall.O_RDWR),
+		Mode:     0o644,
+	}, "file.bin", &createOut)
+	require.Equal(t, fuse.OK, stCreate)
+	require.Equal(t, uint64(3001), createOut.NodeId)
+	require.Equal(t, uint64(7001), createOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_KEEP_CACHE), createOut.OpenFlags)
+
+	written, stWrite := rawFS.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+		Offset:   0,
+		Size:     uint32(len(payload4K)),
+	}, payload4K)
+	require.Equal(t, fuse.OK, stWrite)
+	require.Equal(t, uint32(4096), written)
+
+	stFlushWrite := rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:        createOut.Fh,
+		LockOwner: 0xAA01,
+	})
+	require.Equal(t, fuse.OK, stFlushWrite)
+	require.Equal(t, int64(0), flushCount.Load(), "无 POSIX 锁活动时客户端 Flush 必须本地短路，不发起服务端 Flush RPC")
+
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+	})
+
+	totalWriteRPCs := lookupCount.Load() + createCount.Load() + writeCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), lookupCount.Load())
+	require.Equal(t, int64(1), createCount.Load())
+	require.Equal(t, int64(1), writeCount.Load())
+	require.Equal(t, int64(0), flushCount.Load())
+	require.Equal(t, int64(1), releaseCount.Load())
+	require.Equal(t, int64(4), totalWriteRPCs, "无 POSIX 锁活动时写全链路必须精确向服务端发起 4 次 RPC（Lookup、Create、Write、Release）")
+
+	// 1.2 无 POSIX 锁活动时的读全链路：Open -> Read -> Flush -> Release（3 次服务端 RPC，Flush 本地短路且透传 FOPEN_KEEP_CACHE）
+	resetCounts()
+	var openOut fuse.OpenOut
+	stOpen := rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDONLY),
+	}, &openOut)
+	require.Equal(t, fuse.OK, stOpen)
+	require.Equal(t, uint64(7002), openOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_KEEP_CACHE), openOut.OpenFlags, "Open 必须正确透传 FOPEN_KEEP_CACHE")
+
+	readBuf := make([]byte, 4096)
+	readRes, stRead := rawFS.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, readBuf)
+	require.Equal(t, fuse.OK, stRead)
+	resBytes, stBytes := readRes.Bytes(readBuf)
+	require.Equal(t, fuse.OK, stBytes)
+	require.Equal(t, payload4K, resBytes)
+
+	stFlushRead := rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: 3001},
+		Fh:        openOut.Fh,
+		LockOwner: 0xAA02,
+	})
+	require.Equal(t, fuse.OK, stFlushRead)
+	require.Equal(t, int64(0), flushCount.Load(), "无 POSIX 锁活动时读生命周期客户端 Flush 必须本地短路")
+
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+	})
+
+	totalReadRPCs := openCount.Load() + readCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), openCount.Load())
+	require.Equal(t, int64(1), readCount.Load())
+	require.Equal(t, int64(0), flushCount.Load())
+	require.Equal(t, int64(1), releaseCount.Load())
+	require.Equal(t, int64(3), totalReadRPCs, "无 POSIX 锁活动时读全链路必须精确向服务端发起 3 次 RPC（Open、Read、Release）")
+
+	// 1.3 目录全链路：OpenDir -> ReadDir / ReadDirPlus -> ReleaseDir（透传 FOPEN_CACHE_DIR，遍历目录项并关闭目录句柄）
+	resetCounts()
+	var openDirOut fuse.OpenOut
+	stOpenDir := rawFS.OpenDir(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+	}, &openDirOut)
+	require.Equal(t, fuse.OK, stOpenDir)
+	require.Equal(t, uint64(8001), openDirOut.Fh)
+	require.Equal(t, uint32(fuse.FOPEN_CACHE_DIR), openDirOut.OpenFlags, "OpenDir 必须正确透传 FOPEN_CACHE_DIR")
+
+	dirBuf := make([]byte, 4096)
+	dirList := fuse.NewDirEntryList(dirBuf, 0)
+	stReadDir := rawFS.ReadDir(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, dirList)
+	require.Equal(t, fuse.OK, stReadDir)
+
+	dirPlusBuf := make([]byte, 4096)
+	dirPlusList := fuse.NewDirEntryList(dirPlusBuf, 0)
+	stReadDirPlus := rawFS.ReadDirPlus(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, dirPlusList)
+	require.Equal(t, fuse.OK, stReadDirPlus)
+
+	rawFS.ReleaseDir(&fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Fh:       openDirOut.Fh,
+	})
+
+	require.Equal(t, int64(1), openDirCount.Load())
+	require.Equal(t, int64(1), readDirCount.Load())
+	require.Equal(t, int64(1), readDirPlusCount.Load())
+	require.Equal(t, int64(1), releaseDirCount.Load())
+
+	// 2. 一旦该 Inode 调用过 POSIX SetLk（lkFlags == 0），后续 Flush 必须直通服务端发起 Flush RPC（写全链路 5 次 RPC、读全链路 4 次 RPC）
+	// 2.1 在 Inode 3001 上开启句柄并调用一次 POSIX SetLk
+	var lkOpenOut fuse.OpenOut
+	require.Equal(t, fuse.OK, rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDWR),
+	}, &lkOpenOut))
+	require.Equal(t, fuse.OK, rawFS.SetLk(nil, &fuse.LkIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       lkOpenOut.Fh,
+		Owner:    0xBB01,
+		Lk: fuse.FileLock{
+			Start: 0,
+			End:   127,
+			Typ:   uint32(syscall.F_WRLCK),
+			Pid:   1001,
+		},
+		LkFlags: 0, // POSIX 记录锁
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       lkOpenOut.Fh,
+	})
+
+	// 2.2 触发过 POSIX 锁后：写全链路 Lookup -> Create -> Write -> Flush -> Release 精确 5 次服务端 RPC
+	resetCounts()
+	require.Equal(t, fuse.Status(syscall.ENOENT), rawFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.bin", &lookupOut))
+	require.Equal(t, fuse.OK, rawFS.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Flags:    uint32(syscall.O_CREAT | syscall.O_RDWR),
+		Mode:     0o644,
+	}, "file.bin", &createOut))
+	_, stWriteAfterLk := rawFS.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+		Offset:   0,
+		Size:     uint32(len(payload4K)),
+	}, payload4K)
+	require.Equal(t, fuse.OK, stWriteAfterLk)
+	require.Equal(t, fuse.OK, rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:        createOut.Fh,
+		LockOwner: 0xBB01,
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: createOut.NodeId},
+		Fh:       createOut.Fh,
+	})
+
+	totalWriteRPCsAfterLk := lookupCount.Load() + createCount.Load() + writeCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), flushCount.Load(), "发生过 POSIX 锁活动后写生命周期 Flush 必须直通服务端发起 1 次 Flush RPC")
+	require.Equal(t, int64(5), totalWriteRPCsAfterLk, "发生过 POSIX 锁活动后写全链路必须精确为 5 次服务端 RPC")
+
+	// 2.3 触发过 POSIX 锁后：读全链路 Open -> Read -> Flush -> Release 精确 4 次服务端 RPC
+	resetCounts()
+	require.Equal(t, fuse.OK, rawFS.Open(nil, &fuse.OpenIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Flags:    uint32(syscall.O_RDONLY),
+	}, &openOut))
+	_, stReadAfterLk := rawFS.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, readBuf)
+	require.Equal(t, fuse.OK, stReadAfterLk)
+	require.Equal(t, fuse.OK, rawFS.Flush(nil, &fuse.FlushIn{
+		InHeader:  fuse.InHeader{NodeId: 3001},
+		Fh:        openOut.Fh,
+		LockOwner: 0xBB02,
+	}))
+	rawFS.Release(nil, &fuse.ReleaseIn{
+		InHeader: fuse.InHeader{NodeId: 3001},
+		Fh:       openOut.Fh,
+	})
+
+	totalReadRPCsAfterLk := openCount.Load() + readCount.Load() + flushCount.Load() + releaseCount.Load()
+	require.Equal(t, int64(1), flushCount.Load(), "发生过 POSIX 锁活动后读生命周期 Flush 必须直通服务端发起 1 次 Flush RPC")
+	require.Equal(t, int64(4), totalReadRPCsAfterLk, "发生过 POSIX 锁活动后读全链路必须精确为 4 次服务端 RPC")
 }

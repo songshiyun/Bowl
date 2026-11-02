@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -580,33 +581,63 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		return nil, ErrInvalidArgument
 	}
 
+	if (params.Flags & O_TRUNC) == 0 {
+		var row db.OpenFileFastRow
+		err := tx.Retry(ctx, func(attemptCtx context.Context) error {
+			var callErr error
+			row, callErr = m.store.OpenFileFast(attemptCtx, db.OpenFileFastParams{
+				SessionID: toPgSessionID(params.SessionID),
+				Ino:       int64(params.Ino),
+				Flags:     int32(params.Flags),
+			})
+			return callErr
+		}, tx.WithDefaultRetry())
+
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+				return nil, ErrNotFound
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("open file fast: %w", err)
+		}
+
+		switch row.Status {
+		case "ok":
+		case "not_found":
+			return nil, ErrNotFound
+		case "is_dir":
+			return nil, ErrIsDir
+		case "is_symlink":
+			return nil, ErrInvalidArgument
+		case "bad_handle":
+			return nil, ErrBadFileHandle
+		default:
+			return nil, fmt.Errorf("open file fast: unexpected status %q", row.Status)
+		}
+
+		m.recordInodeRootIno(params.Ino, row.RootIno)
+		openFlags := m.resolveOpenFileCacheFlags(params.SessionID, params.Ino, row.Mtime.Time, row.Size, false)
+		m.cleanExpiredDirCursors(ctx)
+		return &OpenResult{
+			Fh:        uint64(row.Fh),
+			OpenFlags: openFlags,
+		}, nil
+	}
+
 	var (
 		result  *OpenResult
 		txInode db.Inode
 	)
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		var (
-			inode       db.Inode
-			err         error
-			lockedInode bool
-		)
-		if (params.Flags & O_TRUNC) != 0 {
-			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
 			}
-			lockedInode = true
-		} else {
-			inode, err = q.GetInode(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode %d: %w", params.Ino, err)
-			}
+			return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
 		}
 
 		fileType := uint32(inode.Mode) & S_IFMT
@@ -618,16 +649,6 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		}
 
 		if inode.Nlink == 0 {
-			if !lockedInode {
-				inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-				if err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return ErrNotFound
-					}
-					return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
-				}
-				lockedInode = true
-			}
 			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
 			if err != nil {
 				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)
@@ -641,39 +662,37 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			return err
 		}
 
-		if (params.Flags & O_TRUNC) != 0 {
-			if (params.Flags & O_ACCMODE) == O_RDONLY {
-				return ErrInvalidArgument
+		if (params.Flags & O_ACCMODE) == O_RDONLY {
+			return ErrInvalidArgument
+		}
+		if fileType == S_IFREG {
+			truncatedMode := uint32(inode.Mode) &^ (S_ISUID | S_ISGID)
+			updatedInode, err := q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
+				Ino:         inode.Ino,
+				Mode:        int32(truncatedMode),
+				Size:        0,
+				Uid:         inode.Uid,
+				Gid:         inode.Gid,
+				SetAtimeNow: false,
+				Atime:       inode.Atime,
+				SetMtimeNow: true,
+				Mtime:       pgtype.Timestamptz{},
+				Flags:       inode.Flags,
+			})
+			if err != nil {
+				return fmt.Errorf("truncate inode attr for inode %d: %w", inode.Ino, err)
 			}
-			if fileType == S_IFREG {
-				truncatedMode := uint32(inode.Mode) &^ (S_ISUID | S_ISGID)
-				updatedInode, err := q.UpdateInodeAttr(ctx, db.UpdateInodeAttrParams{
-					Ino:         inode.Ino,
-					Mode:        int32(truncatedMode),
-					Size:        0,
-					Uid:         inode.Uid,
-					Gid:         inode.Gid,
-					SetAtimeNow: false,
-					Atime:       inode.Atime,
-					SetMtimeNow: true,
-					Mtime:       pgtype.Timestamptz{},
-					Flags:       inode.Flags,
-				})
-				if err != nil {
-					return fmt.Errorf("truncate inode attr for inode %d: %w", inode.Ino, err)
+			if inode.RootIno > 0 && inode.Size > 0 {
+				if err := m.recordQuotaDelta(ctx, q, inode.RootIno, -inode.Size, 0); err != nil {
+					return fmt.Errorf("deduct disk used_bytes on open truncate for inode %d: %w", inode.Ino, err)
 				}
-				if inode.RootIno > 0 && inode.Size > 0 {
-					if err := m.recordQuotaDelta(ctx, q, inode.RootIno, -inode.Size, 0); err != nil {
-						return fmt.Errorf("deduct disk used_bytes on open truncate for inode %d: %w", inode.Ino, err)
-					}
-				}
-				if inode.Size > 0 {
-					if err := deleteAllChunksByIno(ctx, q, inode.Ino); err != nil {
-						return fmt.Errorf("delete all chunks on open truncate for inode %d: %w", inode.Ino, err)
-					}
-				}
-				inode = updatedInode
 			}
+			if inode.Size > 0 {
+				if err := deleteAllChunksByIno(ctx, q, inode.Ino); err != nil {
+					return fmt.Errorf("delete all chunks on open truncate for inode %d: %w", inode.Ino, err)
+				}
+			}
+			inode = updatedInode
 		}
 
 		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
@@ -712,25 +731,27 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 		}
 	}
 
-	inode := txInode
+	result.OpenFlags = m.resolveOpenFileCacheFlags(params.SessionID, params.Ino, txInode.Mtime.Time, txInode.Size, true)
+	return result, nil
+}
+
+func (m *manager) resolveOpenFileCacheFlags(sessionID *uint64, ino uint64, mtime time.Time, size int64, isTruncate bool) uint32 {
 	curVer := fileKnownVersion{
-		mtimeNano: inode.Mtime.Time.UnixNano(),
-		size:      inode.Size,
+		mtimeNano: mtime.UnixNano(),
+		size:      size,
 	}
 	key := sessionInoKey{
-		sessionID: sessionKeyFromPtr(params.SessionID),
-		ino:       params.Ino,
+		sessionID: sessionKeyFromPtr(sessionID),
+		ino:       ino,
 	}
 	prevVal, hadPrev := m.fileKnownVersions.Swap(key, curVer)
 	var openFlags uint32
 	if m.openKeepCache {
 		openFlags |= FOPEN_KEEP_CACHE
-	} else if (params.Flags&O_TRUNC) == 0 && hadPrev && prevVal.(fileKnownVersion) == curVer {
+	} else if !isTruncate && hadPrev && prevVal.(fileKnownVersion) == curVer {
 		openFlags |= FOPEN_KEEP_CACHE
 	}
-	result.OpenFlags = openFlags
-
-	return result, nil
+	return openFlags
 }
 
 // OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
@@ -742,86 +763,46 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 		return nil, err
 	}
 
-	var (
-		result  *OpenDirResult
-		txInode db.Inode
-	)
-	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		inode, err := q.GetInode(ctx, int64(params.Ino))
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get inode %d: %w", params.Ino, err)
-		}
-
-		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
-			return ErrNotDir
-		}
-
-		if inode.Nlink == 0 {
-			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode for update %d: %w", params.Ino, err)
-			}
-			if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
-				return ErrNotDir
-			}
-			hasHandles, err := q.HasFileHandlesByIno(ctx, inode.Ino)
-			if err != nil {
-				return fmt.Errorf("check has file handles for inode %d: %w", inode.Ino, err)
-			}
-			if !hasHandles {
-				return ErrNotFound
-			}
-		}
-
-		if err := m.verifyActiveClientSession(ctx, q, params.SessionID, inode.RootIno); err != nil {
-			return err
-		}
-
-		handle, err := q.CreateFileHandle(ctx, db.CreateFileHandleParams{
-			Ino:       inode.Ino,
-			Flags:     int32(params.Flags),
+	var row db.OpenDirFastRow
+	err := tx.Retry(ctx, func(attemptCtx context.Context) error {
+		var callErr error
+		row, callErr = m.store.OpenDirFast(attemptCtx, db.OpenDirFastParams{
 			SessionID: toPgSessionID(params.SessionID),
+			Ino:       int64(params.Ino),
+			Flags:     int32(params.Flags),
 		})
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
-				return ErrNotFound
-			}
-			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
-		}
-
-		txInode = inode
-		result = &OpenDirResult{
-			Fh: uint64(handle.Fh),
-		}
-		return nil
-	})
+		return callErr
+	}, tx.WithDefaultRetry())
 
 	if err != nil {
-		switch {
-		case errors.Is(err, ErrNotFound):
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return nil, ErrNotFound
-		case errors.Is(err, ErrNotDir):
-			return nil, ErrNotDir
-		case errors.Is(err, ErrInvalidArgument):
-			return nil, ErrInvalidArgument
-		case errors.Is(err, ErrBadFileHandle):
-			return nil, ErrBadFileHandle
-		default:
-			return nil, fmt.Errorf("opendir tx: %w", err)
 		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("opendir fast: %w", err)
 	}
 
+	switch row.Status {
+	case "ok":
+	case "not_found":
+		return nil, ErrNotFound
+	case "not_dir":
+		return nil, ErrNotDir
+	case "bad_handle":
+		return nil, ErrBadFileHandle
+	default:
+		return nil, fmt.Errorf("opendir fast: unexpected status %q", row.Status)
+	}
+
+	m.recordInodeRootIno(params.Ino, row.RootIno)
+
 	curVer := dirKnownVersion{
-		mtimeNano: txInode.Mtime.Time.UnixNano(),
-		ctimeNano: txInode.Ctime.Time.UnixNano(),
-		nlink:     txInode.Nlink,
+		mtimeNano: row.Mtime.Time.UnixNano(),
+		ctimeNano: row.Ctime.Time.UnixNano(),
+		nlink:     row.Nlink,
 		mutSeq:    m.getDirMutationSeq(params.Ino),
 	}
 	key := sessionInoKey{
@@ -834,7 +815,10 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 	if m.openDirCache || (hadPrev && prevVal.(dirKnownVersion) == curVer) {
 		openFlags |= FOPEN_CACHE_DIR
 	}
-	result.OpenFlags = openFlags
+	m.cleanExpiredDirCursors(ctx)
 
-	return result, nil
+	return &OpenDirResult{
+		Fh:        uint64(row.Fh),
+		OpenFlags: openFlags,
+	}, nil
 }

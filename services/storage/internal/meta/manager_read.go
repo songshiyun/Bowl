@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/readbuf"
 )
@@ -266,20 +264,55 @@ func ProjectChunkSlices(rawSlices []Slice, chunkReadStart, chunkReadEnd uint32) 
 	return result
 }
 
-func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRequest) (*ReadResponse, error) {
+// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
+// 遵循 ADR-0019 / ADR-0028 数据层架构与 POSIX pread(2) 语义：
+//  1. 静态边界校验：参数非空、(ino, fh, offset) 在合法正数范围内、size <= BlockSize (4 MiB)、session_id 合法；
+//  2. 权限与类型校验：校验目标 Inode 必须为常规文件 S_IFREG（目录返回 ErrIsDir，其他非常规文件返回 ErrInvalidArgument），
+//     校验 (ino, fh) 对应的 FileHandle 存在且具备读权限（O_RDONLY 或 O_RDWR；若是 O_WRONLY、句柄不存在或 ino 不匹配均返回 ErrBadFileHandle）；
+//  3. 单条合并快照查询：首次查询使用 GetInodeChunksAndHandleForRead 一次性获取同一快照时刻的 (inode, file_handle, chunks)，
+//     无需开启事务、无需二次查询句柄，杜绝跨 Chunk 循环多次 GetChunk 造成的并发写快照读撕裂；
+//  4. 会话校验与访问时间：在 SQL 内直接校验有效 session_id 租约与重建代次；遵循配置的 AtimeMode（noatime/relatime/strictatime）决定是否更新 inodes.atime；
+//  5. EOF 与截断读取：当 size == 0 或 offset >= inode.Size 时，直接返回空字节流（len(data) == 0）；
+//     当 offset + size > inode.Size 时，自动截断实际读取长度 readLen = uint32(inode.Size - offset)；
+//  6. 免数据库行锁快路径、并发 Compaction 乐观重试与多 Block 有界并发读盘：
+//     - Read 通过无行锁只读查询拉取 Chunk 视图后立即释放数据库连接，不开启读写事务或对 slice_refs 加锁；
+//     - 当单次读取涉及多个物理 Block 时，通过有界并发同时调用 BlockStore.GetBlock 填充返回缓冲区；
+//     - 若读取物理块期间遇到并发 Compaction + GC 删块返回 ErrBlockNotFound，自动调用 GetInodeSizeAndChunksInRange 重新拉取最新合并后的 Chunk 视图透明重试。
+func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+	if req == nil {
+		return nil, ErrInvalidArgument
+	}
+	if req.Ino == 0 || req.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Fh == 0 || req.Fh > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Size > BlockSize {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(req.SessionID); err != nil {
+		return nil, err
+	}
+
 	startIndx := int64(req.Offset / ChunkSize)
 	endIndx := startIndx
 	if req.Size > 0 {
 		endIndx = int64((req.Offset + uint64(req.Size) - 1) / ChunkSize)
 	}
 
-	rows, err := m.store.GetInodeSizeAndChunksInRange(ctx, db.GetInodeSizeAndChunksInRangeParams{
+	rows, err := m.store.GetInodeChunksAndHandleForRead(ctx, db.GetInodeChunksAndHandleForReadParams{
 		Ino:       int64(req.Ino),
+		Fh:        int64(req.Fh),
+		SessionID: toPgSessionID(req.SessionID),
 		StartIndx: startIndx,
 		EndIndx:   endIndx,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("read tx: get inode size and chunks (ino=%d): %w", req.Ino, err)
+		return nil, fmt.Errorf("read tx: get inode chunks and handle (ino=%d, fh=%d): %w", req.Ino, req.Fh, err)
 	}
 	if len(rows) == 0 {
 		return nil, ErrNotFound
@@ -293,20 +326,11 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 	if (mode & S_IFMT) != S_IFREG {
 		return nil, ErrInvalidArgument
 	}
-
-	handle, err := m.store.GetFileHandle(ctx, db.GetFileHandleParams{
-		Fh:        int64(req.Fh),
-		Ino:       int64(req.Ino),
-		SessionID: toPgSessionID(req.SessionID),
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrBadFileHandle
-		}
-		return nil, fmt.Errorf("read tx: get file handle (fh=%d, ino=%d): %w", req.Fh, req.Ino, err)
+	if !firstRow.FhFound {
+		return nil, ErrBadFileHandle
 	}
 
-	accMode := uint32(handle.Flags) & O_ACCMODE
+	accMode := uint32(firstRow.FhFlags) & O_ACCMODE
 	if accMode != O_RDONLY && accMode != O_RDWR {
 		return nil, ErrBadFileHandle
 	}
@@ -315,8 +339,30 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 		return &ReadResponse{Data: []byte{}}, nil
 	}
 
+	currentRows := make([]db.GetInodeSizeAndChunksInRangeRow, len(rows))
+	for i, r := range rows {
+		currentRows[i] = db.GetInodeSizeAndChunksInRangeRow{
+			Ino:           r.Ino,
+			Generation:    r.Generation,
+			Mode:          r.Mode,
+			Size:          r.Size,
+			Nlink:         r.Nlink,
+			Uid:           r.Uid,
+			Gid:           r.Gid,
+			Rdev:          r.Rdev,
+			Atime:         r.Atime,
+			Mtime:         r.Mtime,
+			Ctime:         r.Ctime,
+			SymlinkTarget: r.SymlinkTarget,
+			Flags:         r.Flags,
+			ParentIno:     r.ParentIno,
+			RootIno:       r.RootIno,
+			ChunkIndx:     r.ChunkIndx,
+			ChunkSlices:   r.ChunkSlices,
+		}
+	}
+
 	bs := m.getBlockStore()
-	currentRows := rows
 	buffer := readbuf.NewBuffer(ctx)
 
 	for attempt := 0; attempt < maxReadLockRetries; attempt++ {
@@ -382,194 +428,4 @@ func (m *manager) readWithPool(ctx context.Context, pp poolProvider, req *ReadRe
 	}
 
 	return nil, fmt.Errorf("%w: failed to read blocks after %d retries", ErrIO, maxReadLockRetries)
-}
-
-// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
-// 遵循 ADR-0019 数据层架构与 POSIX pread(2) 语义：
-//  1. 静态边界校验：参数非空、(ino, fh, offset) 在合法正数范围内、size <= BlockSize (4 MiB)、session_id 合法；
-//  2. 权限与类型校验：校验目标 Inode 必须为常规文件 S_IFREG（目录返回 ErrIsDir，其他非常规文件返回 ErrInvalidArgument），
-//     校验 (ino, fh) 对应的 FileHandle 存在且具备读权限（O_RDONLY 或 O_RDWR；若是 O_WRONLY、句柄不存在或 ino 不匹配均返回 ErrBadFileHandle）；
-//  3. 快照原子读取：使用单条语句 GetInodeSizeAndChunksInRange 一次性原子获取同一快照时刻的 (fileSize, chunks)，
-//     杜绝跨 Chunk 循环多次 GetChunk 造成的并发写快照读撕裂；
-//  4. 会话续期与访问时间：在传入有效 session_id 时续期会话租约；遵循配置的 AtimeMode（noatime/relatime/strictatime）决定是否更新 inodes.atime；
-//  5. EOF 与截断读取：当 size == 0 或 offset >= inode.Size 时，直接返回空字节流（len(data) == 0）；
-//     当 offset + size > inode.Size 时，自动截断实际读取长度 readLen = uint32(inode.Size - offset)；
-//  6. 免数据库行锁快路径、并发 Compaction 乐观重试与多 Block 有界并发读盘：
-//     - 在真实连接池路径下，Read 通过无行锁只读查询拉取 Chunk 视图后立即释放数据库连接，不开启读写事务或对 slice_refs 加锁；
-//     - 当单次读取涉及多个物理 Block 时，通过有界并发同时调用 BlockStore.GetBlock 填充返回缓冲区；
-//     - 若读取物理块期间遇到并发 Compaction + GC 删块返回 ErrBlockNotFound，自动重新拉取最新合并后的 Chunk 视图透明重试。
-func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
-	if req == nil {
-		return nil, ErrInvalidArgument
-	}
-	if req.Ino == 0 || req.Ino > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	if req.Fh == 0 || req.Fh > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	if req.Offset > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	if req.Size > BlockSize {
-		return nil, ErrInvalidArgument
-	}
-	if err := validateOptionalSessionID(req.SessionID); err != nil {
-		return nil, err
-	}
-
-	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
-		return m.readWithPool(ctx, pp, req)
-	}
-
-	var resp *ReadResponse
-	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		startIndx := int64(req.Offset / ChunkSize)
-		endIndx := startIndx
-		if req.Size > 0 {
-			endIndx = int64((req.Offset + uint64(req.Size) - 1) / ChunkSize)
-		}
-
-		rows, err := q.GetInodeSizeAndChunksInRange(ctx, db.GetInodeSizeAndChunksInRangeParams{
-			Ino:       int64(req.Ino),
-			StartIndx: startIndx,
-			EndIndx:   endIndx,
-		})
-		if err != nil {
-			return fmt.Errorf("get inode size and chunks (ino=%d): %w", req.Ino, err)
-		}
-		if len(rows) == 0 {
-			return ErrNotFound
-		}
-
-		firstRow := rows[0]
-		mode := uint32(firstRow.Mode)
-		if (mode & S_IFMT) == S_IFDIR {
-			return ErrIsDir
-		}
-		if (mode & S_IFMT) != S_IFREG {
-			return ErrInvalidArgument
-		}
-
-		handle, err := q.GetFileHandle(ctx, db.GetFileHandleParams{
-			Fh:        int64(req.Fh),
-			Ino:       int64(req.Ino),
-			SessionID: toPgSessionID(req.SessionID),
-		})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrBadFileHandle
-			}
-			return fmt.Errorf("get file handle (fh=%d, ino=%d): %w", req.Fh, req.Ino, err)
-		}
-
-		accMode := uint32(handle.Flags) & O_ACCMODE
-		if accMode != O_RDONLY && accMode != O_RDWR {
-			return ErrBadFileHandle
-		}
-
-		// 到达 EOF 或请求大小为 0 时直接返回空字节流
-		if req.Size == 0 || req.Offset >= uint64(firstRow.Size) {
-			resp = &ReadResponse{Data: []byte{}}
-			return nil
-		}
-
-		var (
-			finalBuf    []byte
-			latestInode db.GetInodeSizeAndChunksInRangeRow
-		)
-
-		bs := m.getBlockStore()
-		currentRows := rows
-		for attempt := 0; attempt < maxReadLockRetries; attempt++ {
-			if attempt > 0 {
-				currentRows, err = q.GetInodeSizeAndChunksInRange(ctx, db.GetInodeSizeAndChunksInRangeParams{
-					Ino:       int64(req.Ino),
-					StartIndx: startIndx,
-					EndIndx:   endIndx,
-				})
-				if err != nil {
-					return fmt.Errorf("re-get inode size and chunks (ino=%d): %w", req.Ino, err)
-				}
-				if len(currentRows) == 0 {
-					return ErrNotFound
-				}
-			}
-
-			latestInode = currentRows[0]
-			if req.Offset >= uint64(latestInode.Size) {
-				resp = &ReadResponse{Data: []byte{}}
-				return nil
-			}
-
-			readLen := req.Size
-			if req.Offset+uint64(req.Size) > uint64(latestInode.Size) {
-				readLen = uint32(uint64(latestInode.Size) - req.Offset)
-			}
-
-			plans, sliceIDs, err := buildReadChunkPlans(req.Ino, req.Offset, readLen, currentRows)
-			if err != nil {
-				return err
-			}
-
-			if len(sliceIDs) > 0 {
-				lockedIDs, err := q.LockValidSliceRefsKeyShare(ctx, sliceIDs)
-				if err != nil {
-					return fmt.Errorf("lock slice refs key share: %w", err)
-				}
-				if len(lockedIDs) < len(sliceIDs) {
-					if attempt == maxReadLockRetries-1 {
-						return fmt.Errorf("%w: failed to lock all slice refs after %d retries", ErrIO, maxReadLockRetries)
-					}
-					continue
-				}
-			}
-
-			finalBuf = make([]byte, readLen)
-			tasks, err := buildBlockReadTasks(plans, finalBuf)
-			if err != nil {
-				return err
-			}
-
-			m.acquireInFlightReadSlices(sliceIDs)
-			blockErr := executeBlockReadTasks(ctx, bs, tasks)
-			m.releaseInFlightReadSlices(sliceIDs)
-
-			if blockErr != nil {
-				if isBlockNotFoundErr(blockErr) && attempt < maxReadLockRetries-1 {
-					continue
-				}
-				return blockErr
-			}
-			break
-		}
-
-		if m.shouldTouchAtime(latestInode.Atime.Time, latestInode.Mtime.Time, latestInode.Ctime.Time, time.Now()) {
-			if err := q.TouchInodeAtime(ctx, int64(req.Ino)); err != nil {
-				return fmt.Errorf("touch inode atime %d: %w", req.Ino, err)
-			}
-		}
-
-		resp = &ReadResponse{Data: finalBuf}
-		return nil
-	})
-
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrInvalidArgument):
-			return nil, ErrInvalidArgument
-		case errors.Is(err, ErrNotFound):
-			return nil, ErrNotFound
-		case errors.Is(err, ErrIsDir):
-			return nil, ErrIsDir
-		case errors.Is(err, ErrBadFileHandle):
-			return nil, ErrBadFileHandle
-		case errors.Is(err, ErrIO):
-			return nil, err
-		default:
-			return nil, fmt.Errorf("read tx: %w", err)
-		}
-	}
-
-	return resp, nil
 }

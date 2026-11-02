@@ -32,7 +32,6 @@ func TestMetaModule_DefaultInjection(t *testing.T) {
 	require.NotNil(t, mgr)
 
 	ctx := context.Background()
-	mockQuerier := dbmock.NewMockQuerier(t)
 
 	t.Run("默认缓存超时: 普通文件与目录均为 1.0 秒", func(t *testing.T) {
 		mockStore.EXPECT().
@@ -74,34 +73,38 @@ func TestMetaModule_DefaultInjection(t *testing.T) {
 		regRow := db.Inode{Ino: 30, Mode: int32(meta.S_IFREG | 0o644), Nlink: 1}
 		dirRow := db.Inode{Ino: 40, Mode: int32(meta.S_IFDIR | 0o755), Nlink: 2}
 
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(30)).
-			Return(regRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenFileFast(mock.Anything, db.OpenFileFastParams{
 				Ino:   30,
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{Fh: 101, Ino: 30, Flags: int32(meta.O_RDONLY)}, nil).
+			Return(db.OpenFileFastRow{
+				Status:  "ok",
+				Fh:      101,
+				Mode:    regRow.Mode,
+				Size:    regRow.Size,
+				Mtime:   regRow.Mtime,
+				RootIno: regRow.RootIno,
+			}, nil).
 			Once()
 
 		openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: 30, Flags: meta.O_RDONLY})
 		require.NoError(t, err)
 		assert.Equal(t, uint32(0), openRes.OpenFlags)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(40)).
-			Return(dirRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   40,
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{Fh: 102, Ino: 40, Flags: int32(meta.O_RDONLY)}, nil).
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      102,
+				Nlink:   dirRow.Nlink,
+				Mtime:   dirRow.Mtime,
+				Ctime:   dirRow.Ctime,
+				RootIno: dirRow.RootIno,
+			}, nil).
 			Once()
 
 		openDirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{Ino: 40, Flags: meta.O_RDONLY})
@@ -177,34 +180,38 @@ func TestMetaModule_CustomMetaConfigRuntimeBehavior(t *testing.T) {
 		assert.Equal(t, 2.5, dirInode.AttrTimeoutSeconds)
 
 		// 2. OpenKeepCache 与 OpenDirCache
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(50)).
-			Return(regRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenFileFast(mock.Anything, db.OpenFileFastParams{
 				Ino:   50,
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{Fh: 201, Ino: 50, Flags: int32(meta.O_RDONLY)}, nil).
+			Return(db.OpenFileFastRow{
+				Status:  "ok",
+				Fh:      201,
+				Mode:    regRow.Mode,
+				Size:    regRow.Size,
+				Mtime:   regRow.Mtime,
+				RootIno: regRow.RootIno,
+			}, nil).
 			Once()
 
 		openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: 50, Flags: meta.O_RDONLY})
 		require.NoError(t, err)
 		assert.Equal(t, meta.FOPEN_KEEP_CACHE, openRes.OpenFlags)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(60)).
-			Return(dirRow, nil).
-			Once()
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:   60,
 				Flags: int32(meta.O_RDONLY),
 			}).
-			Return(db.FileHandle{Fh: 202, Ino: 60, Flags: int32(meta.O_RDONLY)}, nil).
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      202,
+				Nlink:   dirRow.Nlink,
+				Mtime:   dirRow.Mtime,
+				Ctime:   dirRow.Ctime,
+				RootIno: dirRow.RootIno,
+			}, nil).
 			Once()
 
 		openDirRes, err := mgr.OpenDir(ctx, meta.OpenDirParams{Ino: 60, Flags: meta.O_RDONLY})

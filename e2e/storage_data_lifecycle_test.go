@@ -608,4 +608,216 @@ func TestStorageDataLifecycle_ReadWriteTruncatePunchHoleOrphanAndQuota(t *testin
 		}))
 		require.NoError(t, err)
 	})
+
+	// =========================================================================
+	// 7. ADR-0028 写/读/目录全生命周期、FOPEN_KEEP_CACHE/FOPEN_CACHE_DIR 缓存协商、
+	//    Fsync/FsyncDir 同步落盘与孤儿目录 ReleaseDir 回收端到端验证
+	// =========================================================================
+	t.Run("adr0028_write_read_dir_cache_fsync_and_orphan_dir_lifecycle", func(t *testing.T) {
+		sessionID := uint64(time.Now().UnixNano() & 0x7fffffffffffffff)
+		_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: sessionID,
+			DiskId:    proto.String(diskID),
+		}))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = client.CloseSession(context.Background(), connect.NewRequest(&storagev1.CloseSessionRequest{
+				SessionId: sessionID,
+			}))
+		})
+
+		const (
+			fopenKeepCache uint32 = 1 << 1
+			fopenCacheDir  uint32 = 1 << 3
+		)
+
+		// 1) 创建子目录并验证 OpenDir 首次与未变更重开的 FOPEN_CACHE_DIR 协商
+		mkdirResp, err := client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
+			ParentIno: rootIno,
+			Name:      []byte("adr0028_dir"),
+			Mode:      0o755,
+		}))
+		require.NoError(t, err)
+		dirIno := mkdirResp.Msg.GetInode().GetIno()
+
+		openDir1, err := client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
+			Ino:       dirIno,
+			Flags:     posixFlagRO,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		assert.Zero(t, openDir1.Msg.GetOpenFlags()&fopenCacheDir, "首次 OpenDir 不应置位 FOPEN_CACHE_DIR")
+		_, err = client.ReleaseDir(ctx, connect.NewRequest(&storagev1.ReleaseDirRequest{
+			Ino:       dirIno,
+			Fh:        openDir1.Msg.GetFh(),
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		openDir2, err := client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
+			Ino:       dirIno,
+			Flags:     posixFlagRO,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		assert.NotZero(t, openDir2.Msg.GetOpenFlags()&fopenCacheDir, "目录未变更时再次 OpenDir 必须置位 FOPEN_CACHE_DIR")
+		_, err = client.ReleaseDir(ctx, connect.NewRequest(&storagev1.ReleaseDirRequest{
+			Ino:       dirIno,
+			Fh:        openDir2.Msg.GetFh(),
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		// 2) 在目录内执行 Create -> Write(4 KiB) -> Fsync -> Release 写生命周期
+		createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+			ParentIno: dirIno,
+			Name:      []byte("small_4k.bin"),
+			Mode:      0o644,
+			Flags:     posixFlagRW,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		fileIno := createResp.Msg.GetInode().GetIno()
+		writeFh := createResp.Msg.GetFh()
+
+		payload4K := bytes.Repeat([]byte{0x3C}, 4096)
+		writeResp, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+			Ino:       fileIno,
+			Fh:        writeFh,
+			Offset:    0,
+			Data:      payload4K,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(4096), writeResp.Msg.GetSize())
+
+		_, err = client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
+			Ino:       fileIno,
+			Fh:        writeFh,
+			Datasync:  false,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		_, err = client.Release(ctx, connect.NewRequest(&storagev1.ReleaseRequest{
+			Ino:       fileIno,
+			Fh:        writeFh,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		// 3) 目录新增子项后 OpenDir 必须失效 FOPEN_CACHE_DIR，遍历 ReadDir/ReadDirPlus 并验证 FsyncDir
+		openDir3, err := client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
+			Ino:       dirIno,
+			Flags:     posixFlagRO,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		assert.Zero(t, openDir3.Msg.GetOpenFlags()&fopenCacheDir, "目录新增子文件后 OpenDir 必须失效 FOPEN_CACHE_DIR")
+
+		readDirResp, err := client.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{
+			Ino:       dirIno,
+			Fh:        openDir3.Msg.GetFh(),
+			Offset:    0,
+			Limit:     100,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		require.Len(t, readDirResp.Msg.GetEntries(), 3)
+		assert.Equal(t, "small_4k.bin", string(readDirResp.Msg.GetEntries()[2].GetName()))
+
+		readDirPlusResp, err := client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
+			Ino:       dirIno,
+			Fh:        openDir3.Msg.GetFh(),
+			Offset:    0,
+			Limit:     100,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		require.Len(t, readDirPlusResp.Msg.GetEntries(), 3)
+		assert.Equal(t, fileIno, readDirPlusResp.Msg.GetEntries()[2].GetInode().GetIno())
+
+		_, err = client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{
+			Ino:       dirIno,
+			Fh:        openDir3.Msg.GetFh(),
+			Datasync:  false,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		_, err = client.ReleaseDir(ctx, connect.NewRequest(&storagev1.ReleaseDirRequest{
+			Ino:       dirIno,
+			Fh:        openDir3.Msg.GetFh(),
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		// 4) 小文件读生命周期：Open(O_RDONLY) -> Read(4096) -> Release，并验证 FOPEN_KEEP_CACHE 协商
+		openRead1, err := client.Open(ctx, connect.NewRequest(&storagev1.OpenRequest{
+			Ino:       fileIno,
+			Flags:     posixFlagRO,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		// Create 与 Write 均携带 session_id 记录了该会话对此文件的最新已知版本，Open 应命中 FOPEN_KEEP_CACHE
+		assert.NotZero(t, openRead1.Msg.GetOpenFlags()&fopenKeepCache, "同一会话已知版本未外部变更时 Open 应置位 FOPEN_KEEP_CACHE")
+
+		readResp, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+			Ino:       fileIno,
+			Fh:        openRead1.Msg.GetFh(),
+			Offset:    0,
+			Size:      4096,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, payload4K, readResp.Msg.GetData())
+
+		_, err = client.Release(ctx, connect.NewRequest(&storagev1.ReleaseRequest{
+			Ino:       fileIno,
+			Fh:        openRead1.Msg.GetFh(),
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		// 5) 孤儿目录句柄回收：清空子文件 -> OpenDir 持柄 -> Rmdir 转为孤儿 -> ReleaseDir 物理回收
+		_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
+			ParentIno: dirIno,
+			Name:      []byte("small_4k.bin"),
+		}))
+		require.NoError(t, err)
+
+		openOrphanDir, err := client.OpenDir(ctx, connect.NewRequest(&storagev1.OpenDirRequest{
+			Ino:       dirIno,
+			Flags:     posixFlagRO,
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		_, err = client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
+			ParentIno: rootIno,
+			Name:      []byte("adr0028_dir"),
+		}))
+		require.NoError(t, err)
+
+		// Rmdir 后目录成为孤儿 (nlink == 0)，但在 ReleaseDir 前仍可 GetAttr
+		orphanDirAttr, err := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+			Ino: dirIno,
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, uint32(0), orphanDirAttr.Msg.GetInode().GetAttr().GetNlink())
+
+		// ReleaseDir 触发孤儿目录慢路径回收
+		_, err = client.ReleaseDir(ctx, connect.NewRequest(&storagev1.ReleaseDirRequest{
+			Ino:       dirIno,
+			Fh:        openOrphanDir.Msg.GetFh(),
+			SessionId: proto.Uint64(sessionID),
+		}))
+		require.NoError(t, err)
+
+		// 回收后再次 GetAttr 必须返回 NotFound (ENOENT)
+		_, err = client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+			Ino: dirIno,
+		}))
+		testutil.RequireConnectError(t, err, connect.CodeNotFound, "ENOENT")
+	})
 }
