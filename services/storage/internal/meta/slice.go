@@ -11,9 +11,9 @@ var (
 	ErrInvalidSliceData  = fmt.Errorf("%w: invalid slice data", ErrInvalidArgument)
 )
 
-// Slice 表示 64 MiB Chunk 内的一个 24 字节大端序二进制切片描述符。
+// Slice 表示 4 MiB Chunk 内的一个 24 字节大端序二进制切片描述符。
 type Slice struct {
-	Pos  uint32 // 在 64 MiB Chunk 内的起始逻辑偏移 (0 <= Pos < ChunkSize)
+	Pos  uint32 // 在 4 MiB Chunk 内的起始逻辑偏移 (0 <= Pos < ChunkSize)
 	ID   uint64 // 物理切片唯一编号 (0 表示稀疏空洞 Hole)
 	Size uint32 // 该物理切片的总大小 (ID > 0 时 Size > 0)
 	Off  uint32 // 在该物理切片内的起始偏移

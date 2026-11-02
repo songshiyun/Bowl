@@ -26,9 +26,9 @@ func TestTruncateChunksToSize(t *testing.T) {
 	ctx := context.Background()
 	ino := int64(1001)
 
-	t.Run("跨多个 64 MiB Chunk 的对齐缩容 (borderPos == 0)", func(t *testing.T) {
+	t.Run("跨多个 4 MiB Chunk 的对齐缩容 (borderPos == 0)", func(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
-		// newSize = 128 MiB (2 * ChunkSize = 134217728), borderIndx = 2, borderPos = 0
+		// newSize = 8 MiB (2 * ChunkSize = 8388608), borderIndx = 2, borderPos = 0
 		newSize := uint64(2 * meta.ChunkSize)
 
 		// 模拟被删 indx=2 和 indx=3 的切片流，包含 slice_id=10 (2 次) 与 slice_id=20 (1 次)
@@ -92,7 +92,7 @@ func TestTruncateChunksToSize(t *testing.T) {
 
 	t.Run("跨块非对齐缩容 (borderPos > 0) 删除越界块并向边界块追加空洞切片", func(t *testing.T) {
 		mockQuerier := dbmock.NewMockQuerier(t)
-		// newSize = 64 MiB + 1024 (ChunkSize + 1024) -> borderIndx = 1, borderPos = 1024
+		// newSize = 4 MiB + 1024 (ChunkSize + 1024) -> borderIndx = 1, borderPos = 1024
 		newSize := uint64(meta.ChunkSize + 1024)
 		expectedHoleBytes := meta.EncodeSlice(meta.Slice{
 			Pos:  1024,
@@ -263,7 +263,7 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 		Ino:        int64(ino),
 		Generation: 1,
 		Mode:       int32(meta.S_IFREG | 0o644),
-		Size:       128 * 1024 * 1024, // 128 MiB
+		Size:       8 * 1024 * 1024, // 8 MiB (2 * ChunkSize)
 		Nlink:      1,
 		Uid:        1000,
 		Gid:        1000,
@@ -272,7 +272,7 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	t.Run("SetAttr 跨块对齐缩容 (128 MiB -> 64 MiB) 调用 DeleteChunksFromIndx 并在同事务更新属性", func(t *testing.T) {
+	t.Run("SetAttr 跨块对齐缩容 (8 MiB -> 4 MiB) 调用 DeleteChunksFromIndx 并在同事务更新属性", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -288,7 +288,7 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 			{Pos: 0, ID: 55, Size: 4096, Off: 0, Len: 4096},
 		})
 
-		// 64 MiB: borderIndx = 1, borderPos = 0
+		// 4 MiB: borderIndx = 1, borderPos = 0
 		mockQuerier.EXPECT().
 			DeleteChunksFromIndx(mock.Anything, db.DeleteChunksFromIndxParams{
 				Ino:      int64(ino),
@@ -324,7 +324,7 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 		assert.Equal(t, uint64(meta.ChunkSize), inode.Attr.Size)
 	})
 
-	t.Run("SetAttr 非对齐缩容 (128 MiB -> 64 MiB + 4 MiB) 调用 DeleteChunksAfterIndx 并追加空洞切片", func(t *testing.T) {
+	t.Run("SetAttr 非对齐缩容 (8 MiB -> 4 MiB + 1 MiB) 调用 DeleteChunksAfterIndx 并追加空洞切片", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
@@ -336,7 +336,7 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 			Return(fileRowOriginal, nil).
 			Once()
 
-		newSize := uint64(meta.ChunkSize + 4*1024*1024) // 68 MiB: borderIndx = 1, borderPos = 4 MiB
+		newSize := uint64(meta.ChunkSize + 1024*1024) // 5 MiB: borderIndx = 1, borderPos = 1 MiB
 
 		deletedSlices := meta.EncodeSlices([]meta.Slice{
 			{Pos: 0, ID: 66, Size: 4096, Off: 0, Len: 4096},
@@ -359,11 +359,11 @@ func TestSetAttr_TruncateNonZero(t *testing.T) {
 			Once()
 
 		expectedHole := meta.EncodeSlice(meta.Slice{
-			Pos:  4 * 1024 * 1024,
+			Pos:  1024 * 1024,
 			ID:   0,
 			Size: 0,
 			Off:  0,
-			Len:  uint32(meta.ChunkSize) - 4*1024*1024,
+			Len:  uint32(meta.ChunkSize) - 1024*1024,
 		})
 
 		mockQuerier.EXPECT().
@@ -581,7 +581,7 @@ func TestSetAttr_TruncateNonZero_ResurrectPrevention_Read(t *testing.T) {
 	mockBS.AssertNumberOfCalls(t, "GetBlock", 1)
 }
 
-// TestTruncate_CrossChunkSharedSliceRefCountAndGCProtection_PostgresIntegration 验证跨 64 MiB Chunk 边界写入拆分为多 Chunk 共享同一 SliceID 时，
+// TestTruncate_CrossChunkSharedSliceRefCountAndGCProtection_PostgresIntegration 验证跨 4 MiB Chunk 边界写入拆分为多 Chunk 共享同一 SliceID 时，
 // 单侧截断仅扣减 refs 并保留物理块供剩余 Chunk 读取，全量归零截断后 refs 归零且 GC 彻底清理物理块与元数据记录。
 func TestTruncate_CrossChunkSharedSliceRefCountAndGCProtection_PostgresIntegration(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
@@ -639,7 +639,7 @@ func TestTruncate_CrossChunkSharedSliceRefCountAndGCProtection_PostgresIntegrati
 		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
 	})
 
-	// 在跨 64 MiB 边界 offset = meta.ChunkSize - 2048 处单次写入 4096 字节可识别数据（跨 Chunk 0 末尾 2048B 与 Chunk 1 开头 2048B）
+	// 在跨 4 MiB 边界 offset = meta.ChunkSize - 2048 处单次写入 4096 字节可识别数据（跨 Chunk 0 末尾 2048B 与 Chunk 1 开头 2048B）
 	crossOffset := uint64(meta.ChunkSize - 2048)
 	payload := make([]byte, 4096)
 	for i := range payload {

@@ -7,8 +7,8 @@ import (
 )
 
 func TestDataLayerConstants(t *testing.T) {
-	if ChunkSize != 64*1024*1024 {
-		t.Fatalf("ChunkSize expected 67108864 (64 MiB), got %d", ChunkSize)
+	if ChunkSize != 4*1024*1024 {
+		t.Fatalf("ChunkSize expected 4194304 (4 MiB), got %d", ChunkSize)
 	}
 	if BlockSize != 4*1024*1024 {
 		t.Fatalf("BlockSize expected 4194304 (4 MiB), got %d", BlockSize)
@@ -191,7 +191,7 @@ func TestSlice_DecodeValidationErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("Pos+Len超过ChunkSize (64 MiB)", func(t *testing.T) {
+	t.Run("Pos+Len超过ChunkSize (4 MiB)", func(t *testing.T) {
 		s := Slice{Pos: ChunkSize - 10, ID: 1, Size: 100, Off: 0, Len: 11}
 		raw := make([]byte, SliceBytes)
 		binary.BigEndian.PutUint32(raw[0:4], s.Pos)

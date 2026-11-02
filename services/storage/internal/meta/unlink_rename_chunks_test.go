@@ -903,4 +903,114 @@ func TestUnlink_Rename_Chunks_Integration(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, bytes.Equal(srcData, readResSrc.Data))
 	})
+
+	t.Run("跨 4 MiB Chunk 边界共享物理块 (refs == 2) 在 Rename 覆盖、Unlink/Release、Open(O_TRUNC) 下按出现次数精确归零并由 GC 回收", func(t *testing.T) {
+		// 1. 验证 Rename 覆盖含跨 4 MiB 边界共享 Slice (refs = 2) 的目标文件时，refs 一次性从 2 扣减至 0
+		srcName := []byte("src_over_cross.bin")
+		dstName := []byte("dst_cross_4mib.bin")
+
+		srcCreated, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: rootIno,
+			Name:      srcName,
+			Mode:      0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR,
+		})
+		require.NoError(t, err)
+		srcIno := srcCreated.Inode.Ino
+		srcFh := srcCreated.Fh
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    srcIno,
+			Fh:     srcFh,
+			Offset: 0,
+			Data:   []byte("src-payload"),
+		})
+		require.NoError(t, err)
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: srcIno, Fh: srcFh}))
+
+		dstCreated, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: rootIno,
+			Name:      dstName,
+			Mode:      0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR,
+		})
+		require.NoError(t, err)
+		dstIno := dstCreated.Inode.Ino
+		dstFh := dstCreated.Fh
+
+		// 在 4 MiB 边界处写入 4096 字节，使 dstIno 在 Chunk 0 和 Chunk 1 共享同一 Slice (refs = 2)
+		crossPayload := bytes.Repeat([]byte{0x5A}, 4096)
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    dstIno,
+			Fh:     dstFh,
+			Offset: uint64(meta.ChunkSize - 2048),
+			Data:   crossPayload,
+		})
+		require.NoError(t, err)
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: dstIno, Fh: dstFh}))
+
+		dstC0, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(dstIno), Indx: 0})
+		require.NoError(t, err)
+		dstSlices0, err := meta.DecodeSlices(dstC0.Slices)
+		require.NoError(t, err)
+		sharedDstSliceID := dstSlices0[0].ID
+
+		refBeforeRename, err := store.GetSliceRef(ctx, int64(sharedDstSliceID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), refBeforeRename.Refs, "跨 4 MiB 边界写入后目标文件 slice_refs.refs 必须为 2")
+
+		// 执行 Rename 覆盖 dstName
+		require.NoError(t, mgr.Rename(ctx, meta.RenameParams{
+			OldParentIno: rootIno,
+			OldName:      srcName,
+			NewParentIno: rootIno,
+			NewName:      dstName,
+		}))
+
+		refAfterRename, err := store.GetSliceRef(ctx, int64(sharedDstSliceID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), refAfterRename.Refs, "Rename 覆盖跨 4 MiB 边界文件后，共享 Slice 的 refs 必须按出现次数 2 扣减至 0")
+
+		// 2. 验证 Open(O_TRUNC) 截断含跨 4 MiB 边界共享 Slice (refs = 2) 的文件时，refs 按出现次数从 2 扣减至 0
+		openTruncTarget, err := mgr.Open(ctx, meta.OpenParams{Ino: srcIno, Flags: meta.O_RDWR})
+		require.NoError(t, err)
+		_, err = mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    srcIno,
+			Fh:     openTruncTarget.Fh,
+			Offset: uint64(meta.ChunkSize - 1024),
+			Data:   crossPayload,
+		})
+		require.NoError(t, err)
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: srcIno, Fh: openTruncTarget.Fh}))
+
+		srcC1, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(srcIno), Indx: 1})
+		require.NoError(t, err)
+		srcSlices1, err := meta.DecodeSlices(srcC1.Slices)
+		require.NoError(t, err)
+		sharedTruncSliceID := srcSlices1[0].ID
+
+		refBeforeOTrunc, err := store.GetSliceRef(ctx, int64(sharedTruncSliceID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), refBeforeOTrunc.Refs)
+
+		truncRes, err := mgr.Open(ctx, meta.OpenParams{Ino: srcIno, Flags: meta.O_RDWR | meta.O_TRUNC})
+		require.NoError(t, err)
+		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: srcIno, Fh: truncRes.Fh}))
+
+		refAfterOTrunc, err := store.GetSliceRef(ctx, int64(sharedTruncSliceID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(0), refAfterOTrunc.Refs, "Open(O_TRUNC) 必须将跨 4 MiB 边界共享 Slice 的 refs 从 2 归零")
+
+		// 3. CollectGarbage 彻底回收上述 refs == 0 的跨界共享物理块
+		reclaimed, err := mgr.CollectGarbage(ctx, 500)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, reclaimed, 2)
+		_, err = store.GetSliceRef(ctx, int64(sharedDstSliceID))
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
+		_, err = store.GetSliceRef(ctx, int64(sharedTruncSliceID))
+		assert.ErrorIs(t, err, pgx.ErrNoRows)
+	})
 }
