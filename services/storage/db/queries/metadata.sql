@@ -993,4 +993,143 @@ LEFT JOIN locked_parent lp ON true
 LEFT JOIN inserted_inode ii ON true
 LEFT JOIN inserted_handle ih ON true;
 
+-- name: OpenFileFast :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+target_inode AS (
+    SELECT ino, mode, size, nlink, mtime, root_ino
+    FROM inodes
+    WHERE inodes.ino = @ino::bigint
+),
+inode_alive AS (
+    SELECT ti.ino, ti.mode, ti.size, ti.nlink, ti.mtime, ti.root_ino
+    FROM target_inode ti
+    WHERE (ti.mode & 61440) <> 16384
+      AND (ti.mode & 61440) <> 40960
+      AND (
+          ti.nlink > 0
+          OR EXISTS (
+              SELECT 1
+              FROM file_handles fh
+              LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+              WHERE fh.ino = ti.ino
+                AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+          )
+      )
+),
+valid_session AS (
+    SELECT s.session_id
+    FROM client_sessions s
+    CROSS JOIN inode_alive ia
+    WHERE sqlc.narg('session_id')::bigint IS NOT NULL
+      AND s.session_id = sqlc.narg('session_id')::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR ia.root_ino <= 0
+          OR EXISTS (
+              SELECT 1
+              FROM disks d
+              WHERE d.root_ino = ia.root_ino
+                AND d.disk_id = s.disk_id
+          )
+      )
+),
+inserted_handle AS (
+    INSERT INTO file_handles (ino, flags, session_id)
+    SELECT ia.ino, @flags::int4, sqlc.narg('session_id')::bigint
+    FROM inode_alive ia
+    WHERE sqlc.narg('session_id')::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM valid_session)
+    RETURNING fh
+)
+SELECT
+    CASE
+        WHEN ti.ino IS NULL THEN 'not_found'
+        WHEN (ti.mode & 61440) = 16384 THEN 'is_dir'
+        WHEN (ti.mode & 61440) = 40960 THEN 'is_symlink'
+        WHEN ia.ino IS NULL THEN 'not_found'
+        WHEN sqlc.narg('session_id')::bigint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM valid_session) THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ih.fh, 0)::bigint AS fh,
+    COALESCE(ti.mode, 0)::int4 AS mode,
+    COALESCE(ti.size, 0)::bigint AS size,
+    ti.mtime AS mtime,
+    COALESCE(ti.root_ino, 0)::bigint AS root_ino
+FROM async_wal
+LEFT JOIN target_inode ti ON true
+LEFT JOIN inode_alive ia ON true
+LEFT JOIN inserted_handle ih ON true;
+
+-- name: OpenDirFast :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+target_inode AS (
+    SELECT ino, mode, nlink, mtime, ctime, root_ino
+    FROM inodes
+    WHERE inodes.ino = @ino::bigint
+),
+inode_alive AS (
+    SELECT ti.ino, ti.mode, ti.nlink, ti.mtime, ti.ctime, ti.root_ino
+    FROM target_inode ti
+    WHERE (ti.mode & 61440) = 16384
+      AND (
+          ti.nlink > 0
+          OR EXISTS (
+              SELECT 1
+              FROM file_handles fh
+              LEFT JOIN client_sessions s ON fh.session_id = s.session_id
+              WHERE fh.ino = ti.ino
+                AND (fh.session_id IS NULL OR s.expires_at > clock_timestamp())
+          )
+      )
+),
+valid_session AS (
+    SELECT s.session_id
+    FROM client_sessions s
+    CROSS JOIN inode_alive ia
+    WHERE sqlc.narg('session_id')::bigint IS NOT NULL
+      AND s.session_id = sqlc.narg('session_id')::bigint
+      AND s.expires_at > clock_timestamp()
+      AND (
+          s.disk_id IS NULL
+          OR ia.root_ino <= 0
+          OR EXISTS (
+              SELECT 1
+              FROM disks d
+              WHERE d.root_ino = ia.root_ino
+                AND d.disk_id = s.disk_id
+          )
+      )
+),
+inserted_handle AS (
+    INSERT INTO file_handles (ino, flags, session_id)
+    SELECT ia.ino, @flags::int4, sqlc.narg('session_id')::bigint
+    FROM inode_alive ia
+    WHERE sqlc.narg('session_id')::bigint IS NULL
+       OR EXISTS (SELECT 1 FROM valid_session)
+    RETURNING fh
+)
+SELECT
+    CASE
+        WHEN ti.ino IS NULL THEN 'not_found'
+        WHEN (ti.mode & 61440) <> 16384 THEN 'not_dir'
+        WHEN ia.ino IS NULL THEN 'not_found'
+        WHEN sqlc.narg('session_id')::bigint IS NOT NULL AND NOT EXISTS (SELECT 1 FROM valid_session) THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ih.fh, 0)::bigint AS fh,
+    COALESCE(ti.nlink, 0)::int4 AS nlink,
+    ti.mtime AS mtime,
+    ti.ctime AS ctime,
+    COALESCE(ti.root_ino, 0)::bigint AS root_ino
+FROM async_wal
+LEFT JOIN target_inode ti ON true
+LEFT JOIN inode_alive ia ON true
+LEFT JOIN inserted_handle ih ON true;
+
+
 

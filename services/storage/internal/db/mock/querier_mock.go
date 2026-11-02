@@ -4985,6 +4985,138 @@ func (_c *MockQuerier_NextSliceID_Call) RunAndReturn(run func(ctx context.Contex
 	return _c
 }
 
+// OpenDirFast provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) OpenDirFast(ctx context.Context, arg db.OpenDirFastParams) (db.OpenDirFastRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OpenDirFast")
+	}
+
+	var r0 db.OpenDirFastRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.OpenDirFastParams) (db.OpenDirFastRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.OpenDirFastParams) db.OpenDirFastRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.OpenDirFastRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.OpenDirFastParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_OpenDirFast_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OpenDirFast'
+type MockQuerier_OpenDirFast_Call struct {
+	*mock.Call
+}
+
+// OpenDirFast is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.OpenDirFastParams
+func (_e *MockQuerier_Expecter) OpenDirFast(ctx any, arg any) *MockQuerier_OpenDirFast_Call {
+	return &MockQuerier_OpenDirFast_Call{Call: _e.mock.On("OpenDirFast", ctx, arg)}
+}
+
+func (_c *MockQuerier_OpenDirFast_Call) Run(run func(ctx context.Context, arg db.OpenDirFastParams)) *MockQuerier_OpenDirFast_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.OpenDirFastParams
+		if args[1] != nil {
+			arg1 = args[1].(db.OpenDirFastParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_OpenDirFast_Call) Return(openDirFastRow db.OpenDirFastRow, err error) *MockQuerier_OpenDirFast_Call {
+	_c.Call.Return(openDirFastRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_OpenDirFast_Call) RunAndReturn(run func(ctx context.Context, arg db.OpenDirFastParams) (db.OpenDirFastRow, error)) *MockQuerier_OpenDirFast_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// OpenFileFast provides a mock function for the type MockQuerier
+func (_mock *MockQuerier) OpenFileFast(ctx context.Context, arg db.OpenFileFastParams) (db.OpenFileFastRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OpenFileFast")
+	}
+
+	var r0 db.OpenFileFastRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.OpenFileFastParams) (db.OpenFileFastRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.OpenFileFastParams) db.OpenFileFastRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.OpenFileFastRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.OpenFileFastParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockQuerier_OpenFileFast_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OpenFileFast'
+type MockQuerier_OpenFileFast_Call struct {
+	*mock.Call
+}
+
+// OpenFileFast is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.OpenFileFastParams
+func (_e *MockQuerier_Expecter) OpenFileFast(ctx any, arg any) *MockQuerier_OpenFileFast_Call {
+	return &MockQuerier_OpenFileFast_Call{Call: _e.mock.On("OpenFileFast", ctx, arg)}
+}
+
+func (_c *MockQuerier_OpenFileFast_Call) Run(run func(ctx context.Context, arg db.OpenFileFastParams)) *MockQuerier_OpenFileFast_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.OpenFileFastParams
+		if args[1] != nil {
+			arg1 = args[1].(db.OpenFileFastParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockQuerier_OpenFileFast_Call) Return(openFileFastRow db.OpenFileFastRow, err error) *MockQuerier_OpenFileFast_Call {
+	_c.Call.Return(openFileFastRow, err)
+	return _c
+}
+
+func (_c *MockQuerier_OpenFileFast_Call) RunAndReturn(run func(ctx context.Context, arg db.OpenFileFastParams) (db.OpenFileFastRow, error)) *MockQuerier_OpenFileFast_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ReleaseFileFast provides a mock function for the type MockQuerier
 func (_mock *MockQuerier) ReleaseFileFast(ctx context.Context, arg db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error) {
 	ret := _mock.Called(ctx, arg)
