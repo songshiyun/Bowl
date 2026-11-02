@@ -692,6 +692,9 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")
     lines.append("")
 
+    lines.append('本轮包含 ADR-0028：Create、Write、常规 Release 使用单语句原子 CTE 与内联异步 WAL 提交；重开文件时按版本保留内核页缓存。因此重复读取包含缓存命中收益，本轮数据不能单独归因于数据库往返减少。')
+    lines.append("")
+
     # Section 7: Cloud Resource Audit
     lines.append("---")
     lines.append("")

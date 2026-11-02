@@ -667,6 +667,9 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。")
     lines.append("")
 
+    lines.append('本轮包含 ADR-0028：Create、Write、常规 Release 使用单语句原子 CTE 与内联异步 WAL 提交；重开文件时按版本保留内核页缓存。因此重复读取包含缓存命中收益，本轮数据不能单独归因于数据库往返减少。')
+    lines.append("")
+
     # Section 7: Cloud Resource Audit
     lines.append("---")
     lines.append("")

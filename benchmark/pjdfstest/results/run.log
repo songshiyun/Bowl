@@ -1,19 +1,19 @@
-[2026-11-02T06:02:12Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
-[2026-11-02T06:02:17Z] Compiled binaries ready in /tmp/bowl-pjdfstest-20261102-060212-8vn57F
-[2026-11-02T06:02:17Z] Step 2/6: Creating temporary SSH KeyPair bowl-pjdfstest-kp-20261102-060212 in us-west-1...
-[2026-11-02T06:02:19Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd) in us-west-1a...
-[2026-11-02T06:02:21Z] Created Server Instance: i-rj919rrwofx0l0a35rv7, Client Instance: i-rj919rrwofx0l0a35rv8
-[2026-11-02T06:02:21Z] Waiting for both instances to reach Running state...
-[2026-11-02T06:02:27Z] Server (i-rj919rrwofx0l0a35rv7): Public=43.110.149.21, Private=172.16.1.209
-[2026-11-02T06:02:27Z] Client (i-rj919rrwofx0l0a35rv8): Public=43.110.148.194, Private=172.16.1.208
-[2026-11-02T06:02:27Z] Waiting for SSH readiness on Server (43.110.149.21) and Client (43.110.148.194)...
-[2026-11-02T06:02:41Z] Direct SSH ready on bowl-bench-server (43.110.149.21)
-[2026-11-02T06:02:43Z] Direct SSH ready on bowl-bench-client (43.110.148.194)
-[2026-11-02T06:02:43Z] Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (172.16.1.209)...
-Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
+[2026-11-02T10:39:52Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
+[2026-11-02T10:39:56Z] Compiled binaries ready in /tmp/bowl-pjdfstest-20261102-103952-3z3UbO
+[2026-11-02T10:39:56Z] Step 2/6: Creating temporary SSH KeyPair bowl-pjdfstest-kp-20261102-103952 in us-west-1...
+[2026-11-02T10:39:58Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd) in us-west-1a...
+[2026-11-02T10:40:00Z] Created Server Instance: i-rj950b58fumtpmt9tzz2, Client Instance: i-rj950b58fumtpmt9tzz3
+[2026-11-02T10:40:00Z] Waiting for both instances to reach Running state...
+[2026-11-02T10:40:06Z] Server (i-rj950b58fumtpmt9tzz2): Public=43.110.148.194, Private=172.16.1.214
+[2026-11-02T10:40:06Z] Client (i-rj950b58fumtpmt9tzz3): Public=43.110.149.21, Private=172.16.1.215
+[2026-11-02T10:40:06Z] Waiting for SSH readiness on Server (43.110.148.194) and Client (43.110.149.21)...
+[2026-11-02T10:40:19Z] Direct SSH ready on bowl-bench-server (43.110.148.194)
+[2026-11-02T10:40:21Z] Direct SSH ready on bowl-bench-client (43.110.149.21)
+[2026-11-02T10:40:21Z] Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (172.16.1.214)...
+Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
@@ -124,26 +124,26 @@ Executing: /usr/lib/systemd/systemd-sysv-install enable postgresql
 ALTER ROLE
 CREATE DATABASE
 ALTER SYSTEM
-2026/11/02 14:04:15 OK   20261015165500_create_metadata_tables.sql (4.08ms)
-2026/11/02 14:04:15 OK   20261016180000_add_symlink_target_to_inodes.sql (1.98ms)
-2026/11/02 14:04:15 OK   20261017000000_create_file_handles_table.sql (2.24ms)
-2026/11/02 14:04:15 OK   20261017010000_convert_symlink_target_to_bytea.sql (4.74ms)
-2026/11/02 14:04:15 OK   20261017020000_convert_entries_name_to_bytea.sql (4.4ms)
-2026/11/02 14:04:15 OK   20261017030000_create_inode_xattrs_table.sql (2.29ms)
-2026/11/02 14:04:15 OK   20261018000000_create_file_locks_tables.sql (6.44ms)
-2026/11/02 14:04:15 OK   20261018010000_add_session_id_to_file_handles.sql (1.71ms)
-2026/11/02 14:04:15 OK   20261019000000_align_juicefs_meta_foundation.sql (3.76ms)
-2026/11/02 14:04:15 OK   20261023000000_add_disks_and_inode_root_ino.sql (5.94ms)
-2026/11/02 14:04:15 OK   20261028000000_add_chunks_and_slice_refs.sql (3.22ms)
-2026/11/02 14:04:15 OK   20261029000000_alter_chunks_indx_to_bigint.sql (2.46ms)
-2026/11/02 14:04:15 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.2ms)
-2026/11/02 14:04:15 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (1.35ms)
-2026/11/02 14:04:15 goose: successfully migrated database to version: 20261101000000
+2026/11/02 18:43:12 OK   20261015165500_create_metadata_tables.sql (4.18ms)
+2026/11/02 18:43:12 OK   20261016180000_add_symlink_target_to_inodes.sql (1.83ms)
+2026/11/02 18:43:12 OK   20261017000000_create_file_handles_table.sql (2.31ms)
+2026/11/02 18:43:12 OK   20261017010000_convert_symlink_target_to_bytea.sql (4.52ms)
+2026/11/02 18:43:12 OK   20261017020000_convert_entries_name_to_bytea.sql (4.29ms)
+2026/11/02 18:43:12 OK   20261017030000_create_inode_xattrs_table.sql (2.05ms)
+2026/11/02 18:43:12 OK   20261018000000_create_file_locks_tables.sql (6.61ms)
+2026/11/02 18:43:12 OK   20261018010000_add_session_id_to_file_handles.sql (1.87ms)
+2026/11/02 18:43:12 OK   20261019000000_align_juicefs_meta_foundation.sql (3.22ms)
+2026/11/02 18:43:12 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.11ms)
+2026/11/02 18:43:12 OK   20261028000000_add_chunks_and_slice_refs.sql (3.28ms)
+2026/11/02 18:43:12 OK   20261029000000_alter_chunks_indx_to_bigint.sql (2.4ms)
+2026/11/02 18:43:12 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.19ms)
+2026/11/02 18:43:12 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (1.32ms)
+2026/11/02 18:43:12 goose: successfully migrated database to version: 20261101000000
 Created symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
-[2026-11-02T06:04:16Z] Server node (172.16.1.209:9000) is up and healthy.
-[2026-11-02T06:04:16Z] Step 4/6: Preparing Client (172.16.1.208), building pjdfstest, and mounting Bowl over VPC internal network...
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
+[2026-11-02T10:43:13Z] Server node (172.16.1.214:9000) is up and healthy.
+[2026-11-02T10:43:13Z] Step 4/6: Preparing Client (172.16.1.215), building pjdfstest, and mounting Bowl over VPC internal network...
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
@@ -338,52 +338,52 @@ cc -DHAVE_CONFIG_H -I.    -Wall -Werror -g -O2 -MT pjdfstest.o -MD -MP -MF .deps
 mv -f .deps/pjdfstest.Tpo .deps/pjdfstest.Po
 cc -Wall -Werror -g -O2   -o pjdfstest pjdfstest.o  
 make[1]: Leaving directory '/opt/pjdfstest'
-[2026-11-02T06:04:51Z] Measuring internal VPC RTT and throughput (172.16.1.208 -> 172.16.1.209)...
+[2026-11-02T10:43:53Z] Measuring internal VPC RTT and throughput (172.16.1.215 -> 172.16.1.214)...
+Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
 Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
-[2026-11-02T06:05:01Z] Client mounted /mnt/bowl over VPC internal network: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0"},"network":{"ping_rtt_ms":"0.041/0.077/0.315/0.061","iperf3_gbps":"15.71"},"bowl":{"disk_id":"01a19adc-734e-79c6-9a6d-595d2288a406","root_ino":2,"pjdfstest_git_commit":"85a8aea"}}
-[2026-11-02T06:05:01Z] Step 5/6: Running full pjdfstest suite on /mnt/bowl/work...
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
+[2026-11-02T10:44:06Z] Client mounted /mnt/bowl over VPC internal network: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0"},"network":{"ping_rtt_ms":"0.045/0.080/0.337/0.064","iperf3_gbps":"15.71"},"bowl":{"disk_id":"01a19bdb-f5fd-7613-bf78-1b1c6380209e","root_ino":2,"pjdfstest_git_commit":"85a8aea"}}
+[2026-11-02T10:44:06Z] Step 5/6: Running full pjdfstest suite on /mnt/bowl/work...
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
 [pjdfstest-runner] Discovered 17 syscall directories: chflags, chmod, chown, ftruncate, granular, link, mkdir, mkfifo, mknod, open, posix_fallocate, rename, rmdir, symlink, truncate, unlink, utimensat
 [01/17] Running prove --timer -rv /opt/pjdfstest/tests/chflags ...
     -> Done chflags in 0.22s (rc=0): Files=14, Tests=14,  0 wallclock secs ( 0.02 usr  0.01 sys +  0.04 cusr  0.04 csys =  0.11 CPU) Result: PASS
 [02/17] Running prove --timer -rv /opt/pjdfstest/tests/chmod ...
-    -> Done chmod in 14.88s (rc=0): Files=13, Tests=327, 15 wallclock secs ( 0.06 usr  0.01 sys +  0.97 cusr  0.76 csys =  1.80 CPU) Result: PASS
+    -> Done chmod in 14.84s (rc=0): Files=13, Tests=327, 15 wallclock secs ( 0.06 usr  0.01 sys +  1.01 cusr  0.74 csys =  1.82 CPU) Result: PASS
 [03/17] Running prove --timer -rv /opt/pjdfstest/tests/chown ...
-    -> Done chown in 83.74s (rc=0): Files=11, Tests=1497, 84 wallclock secs ( 0.18 usr  0.02 sys +  2.58 cusr  1.92 csys =  4.70 CPU) Result: PASS
+    -> Done chown in 83.56s (rc=0): Files=11, Tests=1497, 83 wallclock secs ( 0.18 usr  0.02 sys +  2.62 cusr  1.90 csys =  4.72 CPU) Result: PASS
 [04/17] Running prove --timer -rv /opt/pjdfstest/tests/ftruncate ...
-    -> Done ftruncate in 3.78s (rc=0): Files=15, Tests=89,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.65 cusr  0.50 csys =  1.20 CPU) Result: PASS
+    -> Done ftruncate in 3.79s (rc=0): Files=15, Tests=89,  4 wallclock secs ( 0.04 usr  0.00 sys +  0.64 cusr  0.52 csys =  1.20 CPU) Result: PASS
 [05/17] Running prove --timer -rv /opt/pjdfstest/tests/granular ...
-    -> Done granular in 0.12s (rc=0): Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.05 CPU) Result: PASS
+    -> Done granular in 0.12s (rc=0): Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.06 CPU) Result: PASS
 [06/17] Running prove --timer -rv /opt/pjdfstest/tests/link ...
-    -> Done link in 12.91s (rc=0): Files=18, Tests=359, 12 wallclock secs ( 0.06 usr  0.01 sys +  1.03 cusr  0.81 csys =  1.91 CPU) Result: PASS
+    -> Done link in 12.97s (rc=0): Files=18, Tests=359, 13 wallclock secs ( 0.07 usr  0.01 sys +  1.06 cusr  0.81 csys =  1.95 CPU) Result: PASS
 [07/17] Running prove --timer -rv /opt/pjdfstest/tests/mkdir ...
-    -> Done mkdir in 2.74s (rc=0): Files=13, Tests=118,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.70 cusr  0.49 csys =  1.23 CPU) Result: PASS
+    -> Done mkdir in 2.75s (rc=0): Files=13, Tests=118,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.67 cusr  0.53 csys =  1.25 CPU) Result: PASS
 [08/17] Running prove --timer -rv /opt/pjdfstest/tests/mkfifo ...
-    -> Done mkfifo in 2.76s (rc=0): Files=13, Tests=120,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.69 cusr  0.50 csys =  1.23 CPU) Result: PASS
+    -> Done mkfifo in 2.81s (rc=0): Files=13, Tests=120,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.66 cusr  0.54 csys =  1.25 CPU) Result: PASS
 [09/17] Running prove --timer -rv /opt/pjdfstest/tests/mknod ...
-    -> Done mknod in 5.10s (rc=0): Files=12, Tests=186,  5 wallclock secs ( 0.04 usr  0.01 sys +  0.75 cusr  0.59 csys =  1.39 CPU) Result: PASS
+    -> Done mknod in 5.15s (rc=0): Files=12, Tests=186,  5 wallclock secs ( 0.04 usr  0.01 sys +  0.77 cusr  0.58 csys =  1.40 CPU) Result: PASS
 [10/17] Running prove --timer -rv /opt/pjdfstest/tests/open ...
-    -> Done open in 5.68s (rc=0): Files=27, Tests=337,  6 wallclock secs ( 0.07 usr  0.02 sys +  1.02 cusr  0.81 csys =  1.92 CPU) Result: PASS
+    -> Done open in 5.68s (rc=0): Files=27, Tests=337,  6 wallclock secs ( 0.06 usr  0.02 sys +  1.01 cusr  0.84 csys =  1.93 CPU) Result: PASS
 [11/17] Running prove --timer -rv /opt/pjdfstest/tests/posix_fallocate ...
     -> Done posix_fallocate in 0.06s (rc=0): Files=1, Tests=1,  0 wallclock secs ( 0.01 usr +  0.00 sys =  0.01 CPU) Result: PASS
 [12/17] Running prove --timer -rv /opt/pjdfstest/tests/rename ...
-    -> Done rename in 36.02s (rc=0): Files=25, Tests=4857, 36 wallclock secs ( 0.47 usr  0.05 sys +  7.45 cusr  5.27 csys = 13.24 CPU) Result: PASS
+    -> Done rename in 36.15s (rc=0): Files=25, Tests=4857, 36 wallclock secs ( 0.47 usr  0.05 sys +  7.46 cusr  5.42 csys = 13.40 CPU) Result: PASS
 [13/17] Running prove --timer -rv /opt/pjdfstest/tests/rmdir ...
-    -> Done rmdir in 2.99s (rc=0): Files=16, Tests=145,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.75 cusr  0.55 csys =  1.35 CPU) Result: PASS
+    -> Done rmdir in 2.99s (rc=0): Files=16, Tests=145,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.73 cusr  0.58 csys =  1.36 CPU) Result: PASS
 [14/17] Running prove --timer -rv /opt/pjdfstest/tests/symlink ...
-    -> Done symlink in 2.65s (rc=0): Files=13, Tests=95,  2 wallclock secs ( 0.04 usr  0.00 sys +  0.64 cusr  0.51 csys =  1.19 CPU) Result: PASS
+    -> Done symlink in 2.69s (rc=0): Files=13, Tests=95,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.66 cusr  0.51 csys =  1.21 CPU) Result: PASS
 [15/17] Running prove --timer -rv /opt/pjdfstest/tests/truncate ...
-    -> Done truncate in 3.74s (rc=0): Files=15, Tests=84,  4 wallclock secs ( 0.03 usr  0.01 sys +  0.66 cusr  0.47 csys =  1.17 CPU) Result: PASS
+    -> Done truncate in 3.74s (rc=0): Files=15, Tests=84,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.65 cusr  0.50 csys =  1.19 CPU) Result: PASS
 [16/17] Running prove --timer -rv /opt/pjdfstest/tests/unlink ...
-    -> Done unlink in 20.14s (rc=0): Files=15, Tests=440, 20 wallclock secs ( 0.07 usr  0.01 sys +  1.14 cusr  0.84 csys =  2.06 CPU) Result: PASS
+    -> Done unlink in 20.18s (rc=0): Files=15, Tests=440, 21 wallclock secs ( 0.07 usr  0.01 sys +  1.12 cusr  0.88 csys =  2.08 CPU) Result: PASS
 [17/17] Running prove --timer -rv /opt/pjdfstest/tests/utimensat ...
-    -> Done utimensat in 1.71s (rc=0): Files=10, Tests=122,  2 wallclock secs ( 0.04 usr  0.00 sys +  0.24 cusr  0.18 csys =  0.46 CPU) Result: PASS
-[2026-11-02T06:08:22Z] pjdfstest execution finished at 2026-11-02T06:08:22Z.
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.148.194' (ED25519) to the list of known hosts.
-[2026-11-02T06:08:31Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-02T06:08:33Z] Verified both ECS instances (i-rj919rrwofx0l0a35rv7, i-rj919rrwofx0l0a35rv8) are deleted (Remaining: 0).
-[parse_results] Parsed 238 files, 8798/8798 tests passed (100.00%) in 199.24s
-[2026-11-02T06:08:34Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-bc64975/pjdfstest/REPORT.md
+    -> Done utimensat in 1.72s (rc=0): Files=10, Tests=122,  1 wallclock secs ( 0.03 usr  0.00 sys +  0.24 cusr  0.19 csys =  0.46 CPU) Result: PASS
+[2026-11-02T10:47:27Z] pjdfstest execution finished at 2026-11-02T10:47:27Z.
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.21' (ED25519) to the list of known hosts.
+[2026-11-02T10:47:37Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
+[2026-11-02T10:47:39Z] Verified both ECS instances (i-rj950b58fumtpmt9tzz2, i-rj950b58fumtpmt9tzz3) are deleted (Remaining: 0).
+[parse_results] Parsed 238 files, 8798/8798 tests passed (100.00%) in 199.43s
+[2026-11-02T10:47:40Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-ee8d113/pjdfstest/REPORT.md

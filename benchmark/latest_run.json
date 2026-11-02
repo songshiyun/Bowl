@@ -1,5 +1,5 @@
 {
-  "bowl_commit": "bc64975dc1aa6100dd6635c1c5bb4d6b1ec78226",
+  "bowl_commit": "ee8d11385a12642a8ef4ea307ecdb25745b82562",
   "date_local": "2026-11-02",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
@@ -38,7 +38,7 @@
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-02T06:30:41.780661+00:00",
+    "verified_at_utc": "2026-11-02T11:08:48.614991+00:00",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
     "created_instances_total": 6
@@ -52,7 +52,7 @@
   ],
   "limitations": [
     "单轮运行不能证明长期稳定性或消除全部超时场景",
-    "ADR-0027 同时调整分块、合并、后台并发、块写入路径及 RPC 超时，不能据此隔离单项优化收益",
+    "ADR-0028 同时调整数据库交互、WAL 提交与内核缓存保留；本轮未隔离单项优化收益",
     "ADR-0026 使用服务端页缓存，未测试整机断电恢复",
     "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读",
     "原始日志保留原始尾随空格"

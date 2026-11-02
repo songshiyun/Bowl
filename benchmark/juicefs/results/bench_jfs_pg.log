@@ -1,19 +1,19 @@
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 25.7 s, CPU: 66.7%, Memory: 717.0 MiB
-+------------------+------------------+--------------+
-|       ITEM       |       VALUE      |     COST     |
-+------------------+------------------+--------------+
-|   Write big file |     305.83 MiB/s | 13.39 s/file |
-|    Read big file |     455.43 MiB/s |  8.99 s/file |
-| Write small file |    435.9 files/s | 9.18 ms/file |
-|  Read small file |   2229.9 files/s | 1.79 ms/file |
-|        Stat file |   8071.1 files/s | 0.50 ms/file |
-|   FUSE operation | 71273 operations |   1.56 ms/op |
-|      Update meta |  6520 operations |   1.91 ms/op |
-|       Put object |  1424 operations | 183.52 ms/op |
-|       Get object |  1024 operations | 178.80 ms/op |
-|    Delete object |  1424 operations |   0.90 ms/op |
-| Write into cache |  1145 operations |   3.89 ms/op |
-|  Read from cache |   400 operations |   0.36 ms/op |
-+------------------+------------------+--------------+
+Time used: 25.9 s, CPU: 64.2%, Memory: 643.9 MiB
++------------------+------------------+---------------+
+|       ITEM       |       VALUE      |      COST     |
++------------------+------------------+---------------+
+|   Write big file |     307.73 MiB/s |  13.31 s/file |
+|    Read big file |     451.21 MiB/s |   9.08 s/file |
+| Write small file |    397.4 files/s | 10.07 ms/file |
+|  Read small file |   3143.5 files/s |  1.27 ms/file |
+|        Stat file |  12817.7 files/s |  0.31 ms/file |
+|   FUSE operation | 71353 operations |    1.57 ms/op |
+|      Update meta |  6578 operations |    1.59 ms/op |
+|       Put object |  1424 operations |  183.11 ms/op |
+|       Get object |  1024 operations |  185.60 ms/op |
+|    Delete object |  1424 operations |    0.72 ms/op |
+| Write into cache |  1172 operations |    6.77 ms/op |
+|  Read from cache |   400 operations |    0.07 ms/op |
++------------------+------------------+---------------+

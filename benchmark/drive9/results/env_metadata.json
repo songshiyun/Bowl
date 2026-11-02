@@ -12,9 +12,9 @@
     "system_disk_size_gib": 120
   },
   "server_node": {
-    "instance_id": "i-rj912d5rbcy2stqm8dwi",
-    "public_ip": "43.110.144.216",
-    "private_ip": "172.16.1.212",
+    "instance_id": "i-rj96chrxq3htln3b3rul",
+    "public_ip": "47.251.118.226",
+    "private_ip": "172.16.1.218",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -23,12 +23,12 @@
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "tidb_version": "v8.5.5",
     "disk_seq_write_mib_s": 192.61,
-    "disk_seq_read_mib_s": 184.01
+    "disk_seq_read_mib_s": 184.19
   },
   "client_node": {
-    "instance_id": "i-rj912d5rbcy2stqm8dwj",
-    "public_ip": "43.110.149.93",
-    "private_ip": "172.16.1.213",
+    "instance_id": "i-rj96chrxq3htln3b3rum",
+    "public_ip": "43.110.151.153",
+    "private_ip": "172.16.1.219",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -40,17 +40,18 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.043/0.071/0.170/0.033 ms",
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.066/0.099/0.217/0.038 ms",
     "iperf3_gbps": 15.71
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 192.61,
-    "local_seq_read_mib_s": 184.01
+    "local_seq_read_mib_s": 184.19
   },
   "bowl_config": {
-    "git_commit": "bc64975",
+    "git_commit": "ee8d113",
     "atime_mode": "noatime",
-    "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)"
+    "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)",
+    "optimization_adr": "ADR-0028"
   },
   "drive9_config": {
     "git_commit": "b529a36f",
@@ -58,15 +59,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9-bench-kp-20261102140214",
-    "server_instance_ids": "i-rj912d5rbcy2stqm8dwi",
-    "client_instance_ids": "i-rj912d5rbcy2stqm8dwj",
-    "instances_created_at": "2026-11-02T06:02:29Z",
-    "instances_deleted_at": "2026-11-02T06:26:17Z",
+    "key_pair_name": "bowl-d9-bench-kp-20261102184005",
+    "server_instance_ids": "i-rj96chrxq3htln3b3rul",
+    "client_instance_ids": "i-rj96chrxq3htln3b3rum",
+    "instances_created_at": "2026-11-02T10:40:19Z",
+    "instances_deleted_at": "2026-11-02T11:07:25Z",
     "remaining_benchmark_instances": 0
-  },
-  "execution_notes": [
-    "本轮于 2026-11-02 测试 Bowl bc64975，Drive9 固定为 b529a36f；冷热各 45 项、每项 3 次采样，三组文件与 SQLite 完整性指纹一致。",
-    "Bowl 采用 ADR-0027：4 MiB Chunk、满 64 条 Slice 整体合并、后台串行整理与回收、PutBlock 直写目标路径、默认 RPC 超时 30 秒。本轮同时包含这些变化，不能将结果变化归因于单项优化。"
-  ]
+  }
 }

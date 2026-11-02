@@ -1,5 +1,7 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
+> 最新复跑：2026-11-02，Bowl `ee8d113`。完整结果见 [REPORT.md](REPORT.md)。
+
 本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
 
 ## 目录结构

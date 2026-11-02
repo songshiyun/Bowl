@@ -1,66 +1,66 @@
-# === DIRECTORY: chflags (rc=0, duration_sec=0.22) ===
-[14:05:03] /opt/pjdfstest/tests/chflags/00.t .. 
+# === DIRECTORY: chflags (rc=0, duration_sec=0.219) ===
+[18:44:08] /opt/pjdfstest/tests/chflags/00.t .. 
 1..1
 ok 1
 ok       12 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/01.t .. 
+[18:44:08] /opt/pjdfstest/tests/chflags/01.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/02.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/02.t .. 
 1..1
 ok 1
-ok       10 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/03.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/04.t .. 
-1..1
-ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/05.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/06.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/07.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/08.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/09.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/10.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/11.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/12.t .. 
+ok        9 ms ( 0.01 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.02 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/03.t .. 
 1..1
 ok 1
 ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:05:03] /opt/pjdfstest/tests/chflags/13.t .. 
+[18:44:08] /opt/pjdfstest/tests/chflags/04.t .. 
+1..1
+ok 1
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/05.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/06.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/07.t .. 
+1..1
+ok 1
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/08.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/09.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/10.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/11.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/12.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:44:08] /opt/pjdfstest/tests/chflags/13.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:03]
+[18:44:08]
 All tests successful.
 Files=14, Tests=14,  0 wallclock secs ( 0.02 usr  0.01 sys +  0.04 cusr  0.04 csys =  0.11 CPU)
 Result: PASS
-# === DIRECTORY: chmod (rc=0, duration_sec=14.88) ===
-[14:05:16] /opt/pjdfstest/tests/chmod/00.t .. 
+# === DIRECTORY: chmod (rc=0, duration_sec=14.837) ===
+[18:44:21] /opt/pjdfstest/tests/chmod/00.t .. 
 1..119
 ok 1
 ok 2
@@ -181,8 +181,8 @@ ok 116
 ok 117
 ok 118
 ok 119
-ok    12499 ms ( 0.01 usr  0.00 sys +  0.17 cusr  0.13 csys =  0.31 CPU)
-[14:05:16] /opt/pjdfstest/tests/chmod/01.t .. 
+ok    12505 ms ( 0.02 usr  0.00 sys +  0.17 cusr  0.13 csys =  0.32 CPU)
+[18:44:21] /opt/pjdfstest/tests/chmod/01.t .. 
 1..17
 ok 1
 ok 2
@@ -201,24 +201,24 @@ ok 14
 ok 15
 ok 16
 ok 17
-ok       93 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:05:16] /opt/pjdfstest/tests/chmod/02.t .. 
+ok       96 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:44:21] /opt/pjdfstest/tests/chmod/02.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       56 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/03.t .. 
+ok       56 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/03.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok     1090 ms ( 0.00 usr  0.00 sys +  0.42 cusr  0.33 csys =  0.75 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/04.t .. 
+ok     1088 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.33 csys =  0.76 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/04.t .. 
 1..7
 ok 1
 ok 2
@@ -227,8 +227,8 @@ ok 4
 ok 5
 ok 6
 ok 7
-ok       43 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/05.t .. 
+ok       43 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.05 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/05.t .. 
 1..14
 ok 1
 ok 2
@@ -244,8 +244,8 @@ ok 11
 ok 12
 ok 13
 ok 14
-ok       74 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/06.t .. 
+ok       74 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/06.t .. 
 1..8
 ok 1
 ok 2
@@ -255,8 +255,8 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok      277 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/07.t .. 
+ok      258 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/07.t .. 
 1..25
 ok 1
 ok 2
@@ -283,21 +283,21 @@ ok 22
 ok 23
 ok 24
 ok 25
-ok      135 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.09 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/08.t .. 
+ok      127 ms ( 0.00 usr  0.01 sys +  0.05 cusr  0.03 csys =  0.09 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/08.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/09.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/09.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:05:17] /opt/pjdfstest/tests/chmod/10.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:44:22] /opt/pjdfstest/tests/chmod/10.t .. 
 1..2
 ok 1
 ok 2
-ok       12 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:05:18] /opt/pjdfstest/tests/chmod/11.t .. 
+ok       11 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:44:23] /opt/pjdfstest/tests/chmod/11.t .. 
 1..109
 ok 1
 ok 2
@@ -408,8 +408,8 @@ ok 106
 ok 107
 ok 108
 ok 109
-ok      413 ms ( 0.01 usr  0.00 sys +  0.16 cusr  0.12 csys =  0.29 CPU)
-[14:05:18] /opt/pjdfstest/tests/chmod/12.t .. 
+ok      393 ms ( 0.01 usr  0.00 sys +  0.16 cusr  0.12 csys =  0.29 CPU)
+[18:44:23] /opt/pjdfstest/tests/chmod/12.t .. 
 1..14
 ok 1
 ok 2
@@ -425,13 +425,13 @@ ok 11
 ok 12
 ok 13
 ok 14
-ok       89 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:05:18]
+ok       87 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:44:23]
 All tests successful.
-Files=13, Tests=327, 15 wallclock secs ( 0.06 usr  0.01 sys +  0.97 cusr  0.76 csys =  1.80 CPU)
+Files=13, Tests=327, 15 wallclock secs ( 0.06 usr  0.01 sys +  1.01 cusr  0.74 csys =  1.82 CPU)
 Result: PASS
-# === DIRECTORY: chown (rc=0, duration_sec=83.742) ===
-[14:06:39] /opt/pjdfstest/tests/chown/00.t .. 
+# === DIRECTORY: chown (rc=0, duration_sec=83.561) ===
+[18:45:44] /opt/pjdfstest/tests/chown/00.t .. 
 1..1280
 ok 1
 ok 2
@@ -1713,8 +1713,8 @@ ok 1277
 ok 1278
 ok 1279
 ok 1280
-ok    81052 ms ( 0.13 usr  0.01 sys +  1.77 cusr  1.31 csys =  3.22 CPU)
-[14:06:39] /opt/pjdfstest/tests/chown/01.t .. 
+ok    80946 ms ( 0.14 usr  0.01 sys +  1.80 cusr  1.28 csys =  3.23 CPU)
+[18:45:44] /opt/pjdfstest/tests/chown/01.t .. 
 1..22
 ok 1
 ok 2
@@ -1738,8 +1738,8 @@ ok 19
 ok 20
 ok 21
 ok 22
-ok      105 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:06:39] /opt/pjdfstest/tests/chown/02.t .. 
+ok      104 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.04 csys =  0.08 CPU)
+[18:45:44] /opt/pjdfstest/tests/chown/02.t .. 
 1..10
 ok 1
 ok 2
@@ -1751,8 +1751,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       74 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
-[14:06:40] /opt/pjdfstest/tests/chown/03.t .. 
+ok       74 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:45:45] /opt/pjdfstest/tests/chown/03.t .. 
 1..10
 ok 1
 ok 2
@@ -1764,8 +1764,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok     1217 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.33 csys =  0.76 CPU)
-[14:06:40] /opt/pjdfstest/tests/chown/04.t .. 
+ok     1182 ms ( 0.00 usr  0.00 sys +  0.45 cusr  0.33 csys =  0.78 CPU)
+[18:45:45] /opt/pjdfstest/tests/chown/04.t .. 
 1..9
 ok 1
 ok 2
@@ -1776,8 +1776,8 @@ ok 6
 ok 7
 ok 8
 ok 9
-ok       51 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.05 CPU)
-[14:06:41] /opt/pjdfstest/tests/chown/05.t .. 
+ok       54 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:45:45] /opt/pjdfstest/tests/chown/05.t .. 
 1..18
 ok 1
 ok 2
@@ -1797,8 +1797,8 @@ ok 15
 ok 16
 ok 17
 ok 18
-ok       90 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:06:41] /opt/pjdfstest/tests/chown/06.t .. 
+ok       89 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:45:46] /opt/pjdfstest/tests/chown/06.t .. 
 1..10
 ok 1
 ok 2
@@ -1810,8 +1810,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok      401 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:06:42] /opt/pjdfstest/tests/chown/07.t .. 
+ok      388 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:45:46] /opt/pjdfstest/tests/chown/07.t .. 
 1..132
 ok 1
 ok 2
@@ -1945,23 +1945,23 @@ ok 129
 ok 130
 ok 131
 ok 132
-ok      644 ms ( 0.02 usr  0.00 sys +  0.19 cusr  0.15 csys =  0.36 CPU)
-[14:06:42] /opt/pjdfstest/tests/chown/08.t .. 
+ok      614 ms ( 0.01 usr  0.00 sys +  0.20 cusr  0.14 csys =  0.35 CPU)
+[18:45:46] /opt/pjdfstest/tests/chown/08.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:46] /opt/pjdfstest/tests/chown/09.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:42] /opt/pjdfstest/tests/chown/09.t .. 
-1..1
-ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:06:42] /opt/pjdfstest/tests/chown/10.t .. 
+[18:45:46] /opt/pjdfstest/tests/chown/10.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       15 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:06:42]
+ok       15 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:45:46]
 All tests successful.
 
 Test Summary Report
@@ -1970,10 +1970,10 @@ Test Summary Report
   TODO passed:   1054, 1058, 1064, 1069, 1073, 1079, 1084
                 1088, 1094, 1099, 1103, 1109, 1114, 1118
                 1124, 1129, 1133, 1139, 1144
-Files=11, Tests=1497, 84 wallclock secs ( 0.18 usr  0.02 sys +  2.58 cusr  1.92 csys =  4.70 CPU)
+Files=11, Tests=1497, 83 wallclock secs ( 0.18 usr  0.02 sys +  2.62 cusr  1.90 csys =  4.72 CPU)
 Result: PASS
-# === DIRECTORY: ftruncate (rc=0, duration_sec=3.781) ===
-[14:06:44] /opt/pjdfstest/tests/ftruncate/00.t .. 
+# === DIRECTORY: ftruncate (rc=0, duration_sec=3.794) ===
+[18:45:49] /opt/pjdfstest/tests/ftruncate/00.t .. 
 1..26
 ok 1
 ok 2
@@ -2001,39 +2001,39 @@ ok 23
 ok 24
 ok 25
 ok 26
-ok     2140 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
-[14:06:44] /opt/pjdfstest/tests/ftruncate/01.t .. 
+ok     2141 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
+[18:45:49] /opt/pjdfstest/tests/ftruncate/01.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       37 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:06:44] /opt/pjdfstest/tests/ftruncate/02.t .. 
+ok       34 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:45:49] /opt/pjdfstest/tests/ftruncate/02.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       53 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/03.t .. 
+ok       54 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/03.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok     1063 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.32 csys =  0.75 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/04.t .. 
+ok     1055 ms ( 0.00 usr  0.00 sys +  0.42 cusr  0.34 csys =  0.76 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/04.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       28 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/05.t .. 
+ok       27 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.03 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/05.t .. 
 1..15
 ok 1
 ok 2
@@ -2050,8 +2050,8 @@ ok 12
 ok 13
 ok 14
 ok 15
-ok       73 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/06.t .. 
+ok       79 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/06.t .. 
 1..8
 ok 1
 ok 2
@@ -2061,8 +2061,8 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok       46 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/07.t .. 
+ok       48 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.04 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/07.t .. 
 1..6
 ok 1
 ok 2
@@ -2070,82 +2070,82 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      142 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/08.t .. 
+ok      162 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/08.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/09.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/09.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       20 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/10.t .. 
+ok       20 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/10.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/11.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/11.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/12.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/12.t .. 
 1..3
 ok 1
 ok 2
 ok 3
 ok       25 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/13.t .. 
+[18:45:50] /opt/pjdfstest/tests/ftruncate/13.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       29 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45] /opt/pjdfstest/tests/ftruncate/14.t .. 
+ok       28 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:45:50] /opt/pjdfstest/tests/ftruncate/14.t .. 
 1..2
 ok 1
 ok 2
-ok       13 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45]
+ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:50]
 All tests successful.
-Files=15, Tests=89,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.65 cusr  0.50 csys =  1.20 CPU)
+Files=15, Tests=89,  4 wallclock secs ( 0.04 usr  0.00 sys +  0.64 cusr  0.52 csys =  1.20 CPU)
 Result: PASS
-# === DIRECTORY: granular (rc=0, duration_sec=0.122) ===
-[14:06:45] /opt/pjdfstest/tests/granular/00.t .. 
+# === DIRECTORY: granular (rc=0, duration_sec=0.12) ===
+[18:45:50] /opt/pjdfstest/tests/granular/00.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/01.t .. 
+[18:45:50] /opt/pjdfstest/tests/granular/01.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/02.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:45:50] /opt/pjdfstest/tests/granular/02.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/granular/03.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:45:50] /opt/pjdfstest/tests/granular/04.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:50] /opt/pjdfstest/tests/granular/05.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/03.t .. 
+[18:45:50] /opt/pjdfstest/tests/granular/06.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/04.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/05.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45] /opt/pjdfstest/tests/granular/06.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:45]
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:45:50]
 All tests successful.
-Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.05 CPU)
+Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.06 CPU)
 Result: PASS
-# === DIRECTORY: link (rc=0, duration_sec=12.914) ===
-[14:06:56] /opt/pjdfstest/tests/link/00.t .. 
+# === DIRECTORY: link (rc=0, duration_sec=12.974) ===
+[18:46:01] /opt/pjdfstest/tests/link/00.t .. 
 1..202
 ok 1
 ok 2
@@ -2349,8 +2349,8 @@ ok 199
 ok 200
 ok 201
 ok 202
-ok    10686 ms ( 0.02 usr  0.00 sys +  0.26 cusr  0.20 csys =  0.48 CPU)
-[14:06:56] /opt/pjdfstest/tests/link/01.t .. 
+ok    10704 ms ( 0.02 usr  0.00 sys +  0.27 cusr  0.19 csys =  0.48 CPU)
+[18:46:01] /opt/pjdfstest/tests/link/01.t .. 
 1..32
 ok 1
 ok 2
@@ -2384,8 +2384,8 @@ ok 29
 ok 30
 ok 31
 ok 32
-ok      157 ms ( 0.00 usr  0.00 sys +  0.07 cusr  0.03 csys =  0.10 CPU)
-[14:06:56] /opt/pjdfstest/tests/link/02.t .. 
+ok      157 ms ( 0.01 usr  0.00 sys +  0.06 cusr  0.05 csys =  0.12 CPU)
+[18:46:01] /opt/pjdfstest/tests/link/02.t .. 
 1..10
 ok 1
 ok 2
@@ -2397,8 +2397,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       79 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.04 csys =  0.08 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/03.t .. 
+ok       80 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.04 csys =  0.07 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/03.t .. 
 1..13
 ok 1
 ok 2
@@ -2413,8 +2413,8 @@ ok 10
 ok 11
 ok 12
 ok 13
-ok     1128 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.34 csys =  0.77 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/04.t .. 
+ok     1163 ms ( 0.00 usr  0.00 sys +  0.45 cusr  0.34 csys =  0.79 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/04.t .. 
 1..6
 ok 1
 ok 2
@@ -2422,12 +2422,12 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       40 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.05 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/05.t .. 
+ok       39 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/05.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/06.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/06.t .. 
 1..18
 ok 1
 ok 2
@@ -2447,8 +2447,8 @@ ok 15
 ok 16
 ok 17
 ok 18
-ok       93 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/07.t .. 
+ok       93 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/07.t .. 
 1..17
 ok 1
 ok 2
@@ -2467,8 +2467,8 @@ ok 14
 ok 15
 ok 16
 ok 17
-ok       95 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.04 csys =  0.07 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/08.t .. 
+ok       96 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/08.t .. 
 1..10
 ok 1
 ok 2
@@ -2480,16 +2480,16 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok      287 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/09.t .. 
+ok      288 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/09.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       34 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/10.t .. 
+ok       32 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/10.t .. 
 1..23
 ok 1
 ok 2
@@ -2514,8 +2514,8 @@ ok 20
 ok 21
 ok 22
 ok 23
-ok       94 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.02 csys =  0.08 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/11.t .. 
+ok       94 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/11.t .. 
 1..9
 ok 1
 ok 2
@@ -2526,28 +2526,28 @@ ok 6
 ok 7
 ok 8
 ok 9
-ok       52 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/12.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/13.t .. 
+ok       53 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/12.t .. 
 1..1
 ok 1
 ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/14.t .. 
+[18:46:03] /opt/pjdfstest/tests/link/13.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/15.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/14.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/16.t .. 
+ok        8 ms ( 0.01 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.02 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/15.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:06:58] /opt/pjdfstest/tests/link/17.t .. 
+[18:46:03] /opt/pjdfstest/tests/link/16.t .. 
+1..1
+ok 1
+ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:03] /opt/pjdfstest/tests/link/17.t .. 
 1..8
 ok 1
 ok 2
@@ -2557,13 +2557,339 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok       30 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:06:58]
+ok       31 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:03]
 All tests successful.
-Files=18, Tests=359, 12 wallclock secs ( 0.06 usr  0.01 sys +  1.03 cusr  0.81 csys =  1.91 CPU)
+Files=18, Tests=359, 13 wallclock secs ( 0.07 usr  0.01 sys +  1.06 cusr  0.81 csys =  1.95 CPU)
 Result: PASS
-# === DIRECTORY: mkdir (rc=0, duration_sec=2.738) ===
-[14:07:00] /opt/pjdfstest/tests/mkdir/00.t .. 
+# === DIRECTORY: mkdir (rc=0, duration_sec=2.753) ===
+[18:46:05] /opt/pjdfstest/tests/mkdir/00.t .. 
+1..36
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok 18
+ok 19
+ok 20
+ok 21
+ok 22
+ok 23
+ok 24
+ok 25
+ok 26
+ok 27
+ok 28
+ok 29
+ok 30
+ok 31
+ok 32
+ok 33
+ok 34
+ok 35
+ok 36
+ok     1141 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
+[18:46:05] /opt/pjdfstest/tests/mkdir/01.t .. 
+1..17
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok       84 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:46:05] /opt/pjdfstest/tests/mkdir/02.t .. 
+1..3
+ok 1
+ok 2
+ok 3
+ok       48 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/03.t .. 
+1..3
+ok 1
+ok 2
+ok 3
+ok      983 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.33 csys =  0.76 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/04.t .. 
+1..3
+ok 1
+ok 2
+ok 3
+ok       24 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/05.t .. 
+1..12
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok       64 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/06.t .. 
+1..12
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok       66 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/07.t .. 
+1..6
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok      145 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/08.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/09.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/10.t .. 
+1..21
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok 18
+ok 19
+ok 20
+ok 21
+ok       76 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/11.t .. 
+1..1
+ok 1
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:06] /opt/pjdfstest/tests/mkdir/12.t .. 
+1..2
+ok 1
+ok 2
+ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:06]
+All tests successful.
+Files=13, Tests=118,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.67 cusr  0.53 csys =  1.25 CPU)
+Result: PASS
+# === DIRECTORY: mkfifo (rc=0, duration_sec=2.808) ===
+[18:46:07] /opt/pjdfstest/tests/mkfifo/00.t .. 
+1..36
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok 18
+ok 19
+ok 20
+ok 21
+ok 22
+ok 23
+ok 24
+ok 25
+ok 26
+ok 27
+ok 28
+ok 29
+ok 30
+ok 31
+ok 32
+ok 33
+ok 34
+ok 35
+ok 36
+ok     1142 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
+[18:46:07] /opt/pjdfstest/tests/mkfifo/01.t .. 
+1..17
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok       81 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:46:07] /opt/pjdfstest/tests/mkfifo/02.t .. 
+1..4
+ok 1
+ok 2
+ok 3
+ok 4
+ok       50 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:46:08] /opt/pjdfstest/tests/mkfifo/03.t .. 
+1..4
+ok 1
+ok 2
+ok 3
+ok 4
+ok     1019 ms ( 0.00 usr  0.00 sys +  0.41 cusr  0.35 csys =  0.76 CPU)
+[18:46:08] /opt/pjdfstest/tests/mkfifo/04.t .. 
+1..3
+ok 1
+ok 2
+ok 3
+ok       26 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/05.t .. 
+1..12
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok       68 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.05 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/06.t .. 
+1..12
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok       68 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/07.t .. 
+1..6
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok      162 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/08.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/09.t .. 
+1..21
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok 11
+ok 12
+ok 13
+ok 14
+ok 15
+ok 16
+ok 17
+ok 18
+ok 19
+ok 20
+ok 21
+ok       76 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/10.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/11.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:09] /opt/pjdfstest/tests/mkfifo/12.t .. 
+1..2
+ok 1
+ok 2
+ok       11 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:09]
+All tests successful.
+Files=13, Tests=120,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.66 cusr  0.54 csys =  1.25 CPU)
+Result: PASS
+# === DIRECTORY: mknod (rc=0, duration_sec=5.151) ===
+[18:46:10] /opt/pjdfstest/tests/mknod/00.t .. 
 1..36
 ok 1
 ok 2
@@ -2602,333 +2928,7 @@ ok 34
 ok 35
 ok 36
 ok     1137 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
-[14:07:00] /opt/pjdfstest/tests/mkdir/01.t .. 
-1..17
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok       83 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.04 CPU)
-[14:07:00] /opt/pjdfstest/tests/mkdir/02.t .. 
-1..3
-ok 1
-ok 2
-ok 3
-ok       47 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/03.t .. 
-1..3
-ok 1
-ok 2
-ok 3
-ok      966 ms ( 0.00 usr  0.00 sys +  0.44 cusr  0.31 csys =  0.75 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/04.t .. 
-1..3
-ok 1
-ok 2
-ok 3
-ok       25 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/05.t .. 
-1..12
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok       64 ms ( 0.00 usr  0.01 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/06.t .. 
-1..12
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok       65 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/07.t .. 
-1..6
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok      157 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/08.t .. 
-1..1
-ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/09.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/10.t .. 
-1..21
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok 18
-ok 19
-ok 20
-ok 21
-ok       78 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/11.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:01] /opt/pjdfstest/tests/mkdir/12.t .. 
-1..2
-ok 1
-ok 2
-ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:01]
-All tests successful.
-Files=13, Tests=118,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.70 cusr  0.49 csys =  1.23 CPU)
-Result: PASS
-# === DIRECTORY: mkfifo (rc=0, duration_sec=2.757) ===
-[14:07:02] /opt/pjdfstest/tests/mkfifo/00.t .. 
-1..36
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok 18
-ok 19
-ok 20
-ok 21
-ok 22
-ok 23
-ok 24
-ok 25
-ok 26
-ok 27
-ok 28
-ok 29
-ok 30
-ok 31
-ok 32
-ok 33
-ok 34
-ok 35
-ok 36
-ok     1137 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.09 CPU)
-[14:07:02] /opt/pjdfstest/tests/mkfifo/01.t .. 
-1..17
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok       80 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:07:02] /opt/pjdfstest/tests/mkfifo/02.t .. 
-1..4
-ok 1
-ok 2
-ok 3
-ok 4
-ok       50 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
-[14:07:03] /opt/pjdfstest/tests/mkfifo/03.t .. 
-1..4
-ok 1
-ok 2
-ok 3
-ok 4
-ok     1000 ms ( 0.00 usr  0.00 sys +  0.42 cusr  0.33 csys =  0.75 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/04.t .. 
-1..3
-ok 1
-ok 2
-ok 3
-ok       24 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/05.t .. 
-1..12
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok       64 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/06.t .. 
-1..12
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok       63 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/07.t .. 
-1..6
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok      149 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/08.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/09.t .. 
-1..21
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok 18
-ok 19
-ok 20
-ok 21
-ok       72 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/10.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/11.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:04] /opt/pjdfstest/tests/mkfifo/12.t .. 
-1..2
-ok 1
-ok 2
-ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:04]
-All tests successful.
-Files=13, Tests=120,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.69 cusr  0.50 csys =  1.23 CPU)
-Result: PASS
-# === DIRECTORY: mknod (rc=0, duration_sec=5.103) ===
-[14:07:05] /opt/pjdfstest/tests/mknod/00.t .. 
-1..36
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok 11
-ok 12
-ok 13
-ok 14
-ok 15
-ok 16
-ok 17
-ok 18
-ok 19
-ok 20
-ok 21
-ok 22
-ok 23
-ok 24
-ok 25
-ok 26
-ok 27
-ok 28
-ok 29
-ok 30
-ok 31
-ok 32
-ok 33
-ok 34
-ok 35
-ok 36
-ok     1139 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
-[14:07:05] /opt/pjdfstest/tests/mknod/01.t .. 
+[18:46:10] /opt/pjdfstest/tests/mknod/01.t .. 
 1..27
 ok 1
 ok 2
@@ -2957,8 +2957,8 @@ ok 24
 ok 25
 ok 26
 ok 27
-ok      111 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
-[14:07:05] /opt/pjdfstest/tests/mknod/02.t .. 
+ok      113 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:46:10] /opt/pjdfstest/tests/mknod/02.t .. 
 1..12
 ok 1
 ok 2
@@ -2972,8 +2972,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       73 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:07:06] /opt/pjdfstest/tests/mknod/03.t .. 
+ok       73 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
+[18:46:11] /opt/pjdfstest/tests/mknod/03.t .. 
 1..12
 ok 1
 ok 2
@@ -2987,14 +2987,14 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok     1194 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.34 csys =  0.77 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/04.t .. 
+ok     1207 ms ( 0.01 usr  0.00 sys +  0.46 cusr  0.33 csys =  0.80 CPU)
+[18:46:11] /opt/pjdfstest/tests/mknod/04.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       24 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/05.t .. 
+ok       25 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/05.t .. 
 1..12
 ok 1
 ok 2
@@ -3008,8 +3008,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       62 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/06.t .. 
+ok       64 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/06.t .. 
 1..12
 ok 1
 ok 2
@@ -3023,8 +3023,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       64 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/07.t .. 
+ok       65 ms ( 0.00 usr  0.01 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/07.t .. 
 1..6
 ok 1
 ok 2
@@ -3032,8 +3032,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      135 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/08.t .. 
+ok      146 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/08.t .. 
 1..35
 ok 1
 ok 2
@@ -3070,17 +3070,17 @@ ok 32
 ok 33
 ok 34
 ok 35
-ok      106 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.09 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/09.t .. 
+ok      110 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/09.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:07] /opt/pjdfstest/tests/mknod/10.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:46:12] /opt/pjdfstest/tests/mknod/10.t .. 
 1..2
 ok 1
 ok 2
-ok       11 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:09] /opt/pjdfstest/tests/mknod/11.t .. 
+ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:14] /opt/pjdfstest/tests/mknod/11.t .. 
 1..28
 ok 1
 ok 2
@@ -3110,13 +3110,13 @@ ok 25
 ok 26
 ok 27
 ok 28
-ok     2098 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.04 csys =  0.07 CPU)
-[14:07:09]
+ok     2107 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:14]
 All tests successful.
-Files=12, Tests=186,  5 wallclock secs ( 0.04 usr  0.01 sys +  0.75 cusr  0.59 csys =  1.39 CPU)
+Files=12, Tests=186,  5 wallclock secs ( 0.04 usr  0.01 sys +  0.77 cusr  0.58 csys =  1.40 CPU)
 Result: PASS
-# === DIRECTORY: open (rc=0, duration_sec=5.679) ===
-[14:07:12] /opt/pjdfstest/tests/open/00.t .. 
+# === DIRECTORY: open (rc=0, duration_sec=5.682) ===
+[18:46:17] /opt/pjdfstest/tests/open/00.t .. 
 1..47
 ok 1
 ok 2
@@ -3165,8 +3165,8 @@ ok 44
 ok 45
 ok 46
 ok 47
-ok     3204 ms ( 0.00 usr  0.00 sys +  0.06 cusr  0.05 csys =  0.11 CPU)
-[14:07:12] /opt/pjdfstest/tests/open/01.t .. 
+ok     3205 ms ( 0.00 usr  0.00 sys +  0.06 cusr  0.05 csys =  0.11 CPU)
+[18:46:17] /opt/pjdfstest/tests/open/01.t .. 
 1..22
 ok 1
 ok 2
@@ -3190,29 +3190,29 @@ ok 19
 ok 20
 ok 21
 ok 22
-ok       96 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
-[14:07:12] /opt/pjdfstest/tests/open/02.t .. 
+ok       98 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.02 csys =  0.07 CPU)
+[18:46:17] /opt/pjdfstest/tests/open/02.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       48 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:13] /opt/pjdfstest/tests/open/03.t .. 
+ok       51 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
+[18:46:18] /opt/pjdfstest/tests/open/03.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok     1020 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.33 csys =  0.76 CPU)
-[14:07:13] /opt/pjdfstest/tests/open/04.t .. 
+ok     1023 ms ( 0.00 usr  0.00 sys +  0.41 cusr  0.34 csys =  0.75 CPU)
+[18:46:18] /opt/pjdfstest/tests/open/04.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       27 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/05.t .. 
+ok       28 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/05.t .. 
 1..12
 ok 1
 ok 2
@@ -3226,8 +3226,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       65 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/06.t .. 
+ok       67 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/06.t .. 
 1..144
 ok 1
 ok 2
@@ -3373,8 +3373,8 @@ ok 141
 ok 142
 ok 143
 ok 144
-ok      454 ms ( 0.01 usr  0.00 sys +  0.21 cusr  0.14 csys =  0.36 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/07.t .. 
+ok      467 ms ( 0.02 usr  0.00 sys +  0.20 cusr  0.17 csys =  0.39 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/07.t .. 
 1..25
 ok 1
 ok 2
@@ -3401,26 +3401,26 @@ ok 22
 ok 23
 ok 24
 ok 25
-ok       99 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/08.t .. 
+ok       98 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/08.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       28 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/09.t .. 
+ok       29 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/09.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/10.t .. 
+[18:46:19] /opt/pjdfstest/tests/open/10.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/11.t .. 
+[18:46:19] /opt/pjdfstest/tests/open/11.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/12.t .. 
+[18:46:19] /opt/pjdfstest/tests/open/12.t .. 
 1..6
 ok 1
 ok 2
@@ -3428,20 +3428,20 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      163 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/13.t .. 
+ok      142 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/13.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/14.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/14.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/15.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/15.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/16.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/16.t .. 
 1..6
 ok 1
 ok 2
@@ -3449,31 +3449,31 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       29 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/17.t .. 
+ok       32 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/17.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       22 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.00 csys =  0.02 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/18.t .. 
+ok       20 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/18.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/19.t .. 
+1..1
+ok 1
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:19] /opt/pjdfstest/tests/open/20.t .. 
 1..1
 ok 1
 ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/19.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/20.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:14] /opt/pjdfstest/tests/open/21.t .. 
+[18:46:19] /opt/pjdfstest/tests/open/21.t .. 
 1..2
 ok 1
 ok 2
 ok       11 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:15] /opt/pjdfstest/tests/open/22.t .. 
+[18:46:20] /opt/pjdfstest/tests/open/22.t .. 
 1..21
 ok 1
 ok 2
@@ -3496,24 +3496,24 @@ ok 18
 ok 19
 ok 20
 ok 21
-ok       80 ms ( 0.00 usr  0.01 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
-[14:07:15] /opt/pjdfstest/tests/open/23.t .. 
+ok       80 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
+[18:46:20] /opt/pjdfstest/tests/open/23.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       31 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:15] /opt/pjdfstest/tests/open/24.t .. 
+ok       32 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:20] /opt/pjdfstest/tests/open/24.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       28 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.03 CPU)
-[14:07:15] /opt/pjdfstest/tests/open/25.t .. 
+ok       27 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:20] /opt/pjdfstest/tests/open/25.t .. 
 1..6
 ok 1
 ok 2
@@ -3521,8 +3521,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       46 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:15] /opt/pjdfstest/tests/open/26.t .. 
+ok       44 ms ( 0.00 usr  0.01 sys +  0.01 cusr  0.02 csys =  0.04 CPU)
+[18:46:20] /opt/pjdfstest/tests/open/26.t .. 
 1..9
 ok 1
 ok 2
@@ -3533,22 +3533,22 @@ ok 6
 ok 7
 ok 8
 ok 9
-ok       41 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:15]
+ok       42 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:20]
 All tests successful.
-Files=27, Tests=337,  6 wallclock secs ( 0.07 usr  0.02 sys +  1.02 cusr  0.81 csys =  1.92 CPU)
+Files=27, Tests=337,  6 wallclock secs ( 0.06 usr  0.02 sys +  1.01 cusr  0.84 csys =  1.93 CPU)
 Result: PASS
-# === DIRECTORY: posix_fallocate (rc=0, duration_sec=0.059) ===
-[14:07:15] /opt/pjdfstest/tests/posix_fallocate/00.t .. 
+# === DIRECTORY: posix_fallocate (rc=0, duration_sec=0.06) ===
+[18:46:20] /opt/pjdfstest/tests/posix_fallocate/00.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:15]
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:20]
 All tests successful.
 Files=1, Tests=1,  0 wallclock secs ( 0.01 usr +  0.00 sys =  0.01 CPU)
 Result: PASS
-# === DIRECTORY: rename (rc=0, duration_sec=36.016) ===
-[14:07:22] /opt/pjdfstest/tests/rename/00.t .. 
+# === DIRECTORY: rename (rc=0, duration_sec=36.146) ===
+[18:46:27] /opt/pjdfstest/tests/rename/00.t .. 
 1..122
 ok 1
 ok 2
@@ -3672,8 +3672,8 @@ ok 119
 ok 120
 ok 121
 ok 122
-ok     7478 ms ( 0.01 usr  0.00 sys +  0.18 cusr  0.12 csys =  0.31 CPU)
-[14:07:22] /opt/pjdfstest/tests/rename/01.t .. 
+ok     7478 ms ( 0.02 usr  0.00 sys +  0.18 cusr  0.13 csys =  0.33 CPU)
+[18:46:27] /opt/pjdfstest/tests/rename/01.t .. 
 1..8
 ok 1
 ok 2
@@ -3683,8 +3683,8 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok       76 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.04 csys =  0.08 CPU)
-[14:07:23] /opt/pjdfstest/tests/rename/02.t .. 
+ok       75 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:46:28] /opt/pjdfstest/tests/rename/02.t .. 
 1..6
 ok 1
 ok 2
@@ -3692,8 +3692,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok     1008 ms ( 0.00 usr  0.00 sys +  0.45 cusr  0.31 csys =  0.76 CPU)
-[14:07:23] /opt/pjdfstest/tests/rename/03.t .. 
+ok     1000 ms ( 0.00 usr  0.00 sys +  0.44 cusr  0.33 csys =  0.77 CPU)
+[18:46:28] /opt/pjdfstest/tests/rename/03.t .. 
 1..6
 ok 1
 ok 2
@@ -3701,8 +3701,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       41 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:24] /opt/pjdfstest/tests/rename/04.t .. 
+ok       39 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:29] /opt/pjdfstest/tests/rename/04.t .. 
 1..18
 ok 1
 ok 2
@@ -3722,8 +3722,8 @@ ok 15
 ok 16
 ok 17
 ok 18
-ok       93 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
-[14:07:24] /opt/pjdfstest/tests/rename/05.t .. 
+ok       95 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.08 CPU)
+[18:46:29] /opt/pjdfstest/tests/rename/05.t .. 
 1..17
 ok 1
 ok 2
@@ -3742,20 +3742,20 @@ ok 14
 ok 15
 ok 16
 ok 17
-ok      101 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:07:24] /opt/pjdfstest/tests/rename/06.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:24] /opt/pjdfstest/tests/rename/07.t .. 
+ok      100 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
+[18:46:29] /opt/pjdfstest/tests/rename/06.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:24] /opt/pjdfstest/tests/rename/08.t .. 
+[18:46:29] /opt/pjdfstest/tests/rename/07.t .. 
 1..1
 ok 1
-ok        6 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:35] /opt/pjdfstest/tests/rename/09.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:29] /opt/pjdfstest/tests/rename/08.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:40] /opt/pjdfstest/tests/rename/09.t .. 
 1..2353
 ok 1
 ok 2
@@ -6110,8 +6110,8 @@ ok 2350
 ok 2351
 ok 2352
 ok 2353
-ok    10932 ms ( 0.21 usr  0.02 sys +  3.31 cusr  2.30 csys =  5.84 CPU)
-[14:07:44] /opt/pjdfstest/tests/rename/10.t .. 
+ok    11032 ms ( 0.21 usr  0.01 sys +  3.30 cusr  2.37 csys =  5.89 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/10.t .. 
 1..2099
 ok 1
 ok 2
@@ -8212,8 +8212,8 @@ ok 2096
 ok 2097
 ok 2098
 ok 2099
-ok     9823 ms ( 0.18 usr  0.01 sys +  2.93 cusr  2.09 csys =  5.21 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/11.t .. 
+ok     9856 ms ( 0.19 usr  0.02 sys +  2.97 cusr  2.11 csys =  5.29 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/11.t .. 
 1..10
 ok 1
 ok 2
@@ -8225,8 +8225,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok      293 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/12.t .. 
+ok      284 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/12.t .. 
 1..32
 ok 1
 ok 2
@@ -8260,8 +8260,8 @@ ok 29
 ok 30
 ok 31
 ok 32
-ok      149 ms ( 0.00 usr  0.01 sys +  0.05 cusr  0.05 csys =  0.11 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/13.t .. 
+ok      156 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.05 csys =  0.10 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/13.t .. 
 1..32
 ok 1
 ok 2
@@ -8295,8 +8295,8 @@ ok 29
 ok 30
 ok 31
 ok 32
-ok      121 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.09 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/14.t .. 
+ok      123 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.10 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/14.t .. 
 1..32
 ok 1
 ok 2
@@ -8330,16 +8330,16 @@ ok 29
 ok 30
 ok 31
 ok 32
-ok      125 ms ( 0.00 usr  0.00 sys +  0.06 cusr  0.03 csys =  0.09 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/15.t .. 
+ok      126 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.04 csys =  0.09 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/15.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/16.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/16.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/17.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/17.t .. 
 1..8
 ok 1
 ok 2
@@ -8349,8 +8349,8 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok       28 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/18.t .. 
+ok       28 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.04 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/18.t .. 
 1..6
 ok 1
 ok 2
@@ -8358,8 +8358,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       42 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/19.t .. 
+ok       45 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:50] /opt/pjdfstest/tests/rename/19.t .. 
 1..6
 ok 1
 ok 2
@@ -8367,8 +8367,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       42 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/20.t .. 
+ok       42 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:46:51] /opt/pjdfstest/tests/rename/20.t .. 
 1..25
 ok 1
 ok 2
@@ -8395,8 +8395,8 @@ ok 22
 ok 23
 ok 24
 ok 25
-ok      129 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.09 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/21.t .. 
+ok      128 ms ( 0.00 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.08 CPU)
+[18:46:51] /opt/pjdfstest/tests/rename/21.t .. 
 1..16
 ok 1
 ok 2
@@ -8414,12 +8414,12 @@ ok 13
 ok 14
 ok 15
 ok 16
-ok       94 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
-[14:07:45] /opt/pjdfstest/tests/rename/22.t .. 
+ok       93 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:51] /opt/pjdfstest/tests/rename/22.t .. 
 1..1
 ok 1
-ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:51] /opt/pjdfstest/tests/rename/23.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:46:56] /opt/pjdfstest/tests/rename/23.t .. 
 1..42
 ok 1
 ok 2
@@ -8463,8 +8463,8 @@ ok 39
 ok 40
 ok 41
 ok 42
-ok     5205 ms ( 0.01 usr  0.00 sys +  0.07 cusr  0.06 csys =  0.14 CPU)
-[14:07:51] /opt/pjdfstest/tests/rename/24.t .. 
+ok     5205 ms ( 0.00 usr  0.00 sys +  0.07 cusr  0.06 csys =  0.13 CPU)
+[18:46:56] /opt/pjdfstest/tests/rename/24.t .. 
 1..13
 ok 1
 ok 2
@@ -8479,13 +8479,13 @@ ok 10
 ok 11
 ok 12
 ok 13
-ok       75 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:51]
+ok       77 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.03 csys =  0.05 CPU)
+[18:46:56]
 All tests successful.
-Files=25, Tests=4857, 36 wallclock secs ( 0.47 usr  0.05 sys +  7.45 cusr  5.27 csys = 13.24 CPU)
+Files=25, Tests=4857, 36 wallclock secs ( 0.47 usr  0.05 sys +  7.46 cusr  5.42 csys = 13.40 CPU)
 Result: PASS
-# === DIRECTORY: rmdir (rc=0, duration_sec=2.993) ===
-[14:07:52] /opt/pjdfstest/tests/rmdir/00.t .. 
+# === DIRECTORY: rmdir (rc=0, duration_sec=2.987) ===
+[18:46:57] /opt/pjdfstest/tests/rmdir/00.t .. 
 1..10
 ok 1
 ok 2
@@ -8497,8 +8497,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok     1053 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:52] /opt/pjdfstest/tests/rmdir/01.t .. 
+ok     1054 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.04 CPU)
+[18:46:57] /opt/pjdfstest/tests/rmdir/01.t .. 
 1..14
 ok 1
 ok 2
@@ -8514,30 +8514,30 @@ ok 11
 ok 12
 ok 13
 ok 14
-ok       67 ms ( 0.00 usr  0.01 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:07:52] /opt/pjdfstest/tests/rmdir/02.t .. 
+ok       64 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:46:57] /opt/pjdfstest/tests/rmdir/02.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       52 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/03.t .. 
+ok       49 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:46:58] /opt/pjdfstest/tests/rmdir/03.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok     1052 ms ( 0.01 usr  0.00 sys +  0.43 cusr  0.32 csys =  0.76 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/04.t .. 
+ok     1062 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.33 csys =  0.76 CPU)
+[18:46:58] /opt/pjdfstest/tests/rmdir/04.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       26 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/05.t .. 
+ok       25 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:58] /opt/pjdfstest/tests/rmdir/05.t .. 
 1..6
 ok 1
 ok 2
@@ -8545,8 +8545,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      157 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/06.t .. 
+ok      149 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.04 CPU)
+[18:46:58] /opt/pjdfstest/tests/rmdir/06.t .. 
 1..23
 ok 1
 ok 2
@@ -8571,8 +8571,8 @@ ok 20
 ok 21
 ok 22
 ok 23
-ok      113 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/07.t .. 
+ok      106 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/07.t .. 
 1..10
 ok 1
 ok 2
@@ -8584,8 +8584,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       54 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/08.t .. 
+ok       56 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/08.t .. 
 1..10
 ok 1
 ok 2
@@ -8597,16 +8597,16 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       55 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/09.t .. 
-1..1
-ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:53] /opt/pjdfstest/tests/rmdir/10.t .. 
+ok       57 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/09.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:54] /opt/pjdfstest/tests/rmdir/11.t .. 
+[18:46:59] /opt/pjdfstest/tests/rmdir/10.t .. 
+1..1
+ok 1
+ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/11.t .. 
 1..47
 ok 1
 ok 2
@@ -8655,8 +8655,8 @@ ok 44
 ok 45
 ok 46
 ok 47
-ok      197 ms ( 0.01 usr  0.00 sys +  0.08 cusr  0.04 csys =  0.13 CPU)
-[14:07:54] /opt/pjdfstest/tests/rmdir/12.t .. 
+ok      194 ms ( 0.01 usr  0.00 sys +  0.07 cusr  0.06 csys =  0.14 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/12.t .. 
 1..6
 ok 1
 ok 2
@@ -8664,26 +8664,26 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok       38 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:07:54] /opt/pjdfstest/tests/rmdir/13.t .. 
+ok       38 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/13.t .. 
 1..1
 ok 1
 ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:54] /opt/pjdfstest/tests/rmdir/14.t .. 
+[18:46:59] /opt/pjdfstest/tests/rmdir/14.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:54] /opt/pjdfstest/tests/rmdir/15.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:46:59] /opt/pjdfstest/tests/rmdir/15.t .. 
 1..2
 ok 1
 ok 2
-ok       12 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:54]
+ok       12 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
+[18:46:59]
 All tests successful.
-Files=16, Tests=145,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.75 cusr  0.55 csys =  1.35 CPU)
+Files=16, Tests=145,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.73 cusr  0.58 csys =  1.36 CPU)
 Result: PASS
-# === DIRECTORY: symlink (rc=0, duration_sec=2.649) ===
-[14:07:55] /opt/pjdfstest/tests/symlink/00.t .. 
+# === DIRECTORY: symlink (rc=0, duration_sec=2.695) ===
+[18:47:00] /opt/pjdfstest/tests/symlink/00.t .. 
 1..14
 ok 1
 ok 2
@@ -8699,16 +8699,16 @@ ok 11
 ok 12
 ok 13
 ok 14
-ok     1069 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.04 CPU)
-[14:07:55] /opt/pjdfstest/tests/symlink/01.t .. 
+ok     1069 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:47:00] /opt/pjdfstest/tests/symlink/01.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       36 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:07:55] /opt/pjdfstest/tests/symlink/02.t .. 
+ok       36 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.03 CPU)
+[18:47:00] /opt/pjdfstest/tests/symlink/02.t .. 
 1..7
 ok 1
 ok 2
@@ -8717,8 +8717,8 @@ ok 4
 ok 5
 ok 6
 ok 7
-ok       64 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.04 csys =  0.08 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/03.t .. 
+ok       64 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:47:01] /opt/pjdfstest/tests/symlink/03.t .. 
 1..6
 ok 1
 ok 2
@@ -8726,14 +8726,14 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      984 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.32 csys =  0.75 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/04.t .. 
+ok     1017 ms ( 0.00 usr  0.00 sys +  0.44 cusr  0.33 csys =  0.77 CPU)
+[18:47:01] /opt/pjdfstest/tests/symlink/04.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       25 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.03 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/05.t .. 
+ok       25 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:47:01] /opt/pjdfstest/tests/symlink/05.t .. 
 1..12
 ok 1
 ok 2
@@ -8747,8 +8747,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       65 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/06.t .. 
+ok       63 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:47:01] /opt/pjdfstest/tests/symlink/06.t .. 
 1..12
 ok 1
 ok 2
@@ -8762,8 +8762,8 @@ ok 9
 ok 10
 ok 11
 ok 12
-ok       64 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/07.t .. 
+ok       68 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:47:01] /opt/pjdfstest/tests/symlink/07.t .. 
 1..6
 ok 1
 ok 2
@@ -8771,8 +8771,8 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      138 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/08.t .. 
+ok      143 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.04 CPU)
+[18:47:02] /opt/pjdfstest/tests/symlink/08.t .. 
 1..21
 ok 1
 ok 2
@@ -8795,20 +8795,20 @@ ok 18
 ok 19
 ok 20
 ok 21
-ok       75 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/09.t .. 
-1..1
-ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/10.t .. 
+ok       81 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:47:02] /opt/pjdfstest/tests/symlink/09.t .. 
 1..1
 ok 1
 ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/11.t .. 
+[18:47:02] /opt/pjdfstest/tests/symlink/10.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:07:56] /opt/pjdfstest/tests/symlink/12.t .. 
+[18:47:02] /opt/pjdfstest/tests/symlink/11.t .. 
+1..1
+ok 1
+ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:47:02] /opt/pjdfstest/tests/symlink/12.t .. 
 1..6
 ok 1
 ok 2
@@ -8817,12 +8817,12 @@ ok 4
 ok 5
 ok 6
 ok       21 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:07:56]
+[18:47:02]
 All tests successful.
-Files=13, Tests=95,  2 wallclock secs ( 0.04 usr  0.00 sys +  0.64 cusr  0.51 csys =  1.19 CPU)
+Files=13, Tests=95,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.66 cusr  0.51 csys =  1.21 CPU)
 Result: PASS
-# === DIRECTORY: truncate (rc=0, duration_sec=3.739) ===
-[14:07:59] /opt/pjdfstest/tests/truncate/00.t .. 
+# === DIRECTORY: truncate (rc=0, duration_sec=3.744) ===
+[18:47:04] /opt/pjdfstest/tests/truncate/00.t .. 
 1..21
 ok 1
 ok 2
@@ -8845,39 +8845,39 @@ ok 18
 ok 19
 ok 20
 ok 21
-ok     2107 ms ( 0.01 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.07 CPU)
-[14:07:59] /opt/pjdfstest/tests/truncate/01.t .. 
+ok     2108 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.07 CPU)
+[18:47:04] /opt/pjdfstest/tests/truncate/01.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       35 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:07:59] /opt/pjdfstest/tests/truncate/02.t .. 
+ok       33 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:04] /opt/pjdfstest/tests/truncate/02.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       54 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/03.t .. 
+ok       58 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.03 csys =  0.07 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/03.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok     1052 ms ( 0.00 usr  0.00 sys +  0.44 cusr  0.31 csys =  0.75 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/04.t .. 
+ok     1052 ms ( 0.00 usr  0.00 sys +  0.44 cusr  0.32 csys =  0.76 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/04.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       27 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/05.t .. 
+ok       27 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/05.t .. 
 1..15
 ok 1
 ok 2
@@ -8894,8 +8894,8 @@ ok 12
 ok 13
 ok 14
 ok 15
-ok       80 ms ( 0.01 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.06 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/06.t .. 
+ok       78 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/06.t .. 
 1..8
 ok 1
 ok 2
@@ -8905,8 +8905,8 @@ ok 5
 ok 6
 ok 7
 ok 8
-ok       45 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/07.t .. 
+ok       42 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/07.t .. 
 1..6
 ok 1
 ok 2
@@ -8914,49 +8914,49 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      155 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/08.t .. 
+ok      155 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/08.t .. 
 1..1
 ok 1
-ok        9 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/09.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/09.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       19 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/10.t .. 
+ok       21 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.02 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/10.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/11.t .. 
+ok        9 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/11.t .. 
 1..1
 ok 1
 ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/12.t .. 
+[18:47:05] /opt/pjdfstest/tests/truncate/12.t .. 
 1..3
 ok 1
 ok 2
 ok 3
-ok       25 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/13.t .. 
+ok       26 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/13.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       23 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:08:00] /opt/pjdfstest/tests/truncate/14.t .. 
+ok       24 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:05] /opt/pjdfstest/tests/truncate/14.t .. 
 1..2
 ok 1
 ok 2
-ok       11 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:08:00]
+ok       13 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:47:05]
 All tests successful.
-Files=15, Tests=84,  4 wallclock secs ( 0.03 usr  0.01 sys +  0.66 cusr  0.47 csys =  1.17 CPU)
+Files=15, Tests=84,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.65 cusr  0.50 csys =  1.19 CPU)
 Result: PASS
-# === DIRECTORY: unlink (rc=0, duration_sec=20.138) ===
-[14:08:18] /opt/pjdfstest/tests/unlink/00.t .. 
+# === DIRECTORY: unlink (rc=0, duration_sec=20.178) ===
+[18:47:23] /opt/pjdfstest/tests/unlink/00.t .. 
 1..112
 ok 1
 ok 2
@@ -9070,37 +9070,50 @@ ok 109
 ok 110
 ok 111
 ok 112
-ok    17464 ms ( 0.02 usr  0.00 sys +  0.16 cusr  0.10 csys =  0.28 CPU)
-[14:08:18] /opt/pjdfstest/tests/unlink/01.t .. 
+ok    17484 ms ( 0.02 usr  0.00 sys +  0.15 cusr  0.12 csys =  0.29 CPU)
+[18:47:23] /opt/pjdfstest/tests/unlink/01.t .. 
 1..5
 ok 1
 ok 2
 ok 3
 ok 4
 ok 5
-ok       32 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:08:18] /opt/pjdfstest/tests/unlink/02.t .. 
+ok       36 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:47:23] /opt/pjdfstest/tests/unlink/02.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok       51 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/03.t .. 
+ok       50 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/03.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
-ok     1017 ms ( 0.00 usr  0.00 sys +  0.43 cusr  0.31 csys =  0.74 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/04.t .. 
+ok     1021 ms ( 0.00 usr  0.00 sys +  0.42 cusr  0.34 csys =  0.76 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/04.t .. 
 1..4
 ok 1
 ok 2
 ok 3
 ok 4
 ok       29 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/05.t .. 
+[18:47:24] /opt/pjdfstest/tests/unlink/05.t .. 
+1..10
+ok 1
+ok 2
+ok 3
+ok 4
+ok 5
+ok 6
+ok 7
+ok 8
+ok 9
+ok 10
+ok       55 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.04 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/06.t .. 
 1..10
 ok 1
 ok 2
@@ -9113,20 +9126,7 @@ ok 8
 ok 9
 ok 10
 ok       56 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/06.t .. 
-1..10
-ok 1
-ok 2
-ok 3
-ok 4
-ok 5
-ok 6
-ok 7
-ok 8
-ok 9
-ok 10
-ok       60 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.05 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/07.t .. 
+[18:47:24] /opt/pjdfstest/tests/unlink/07.t .. 
 1..6
 ok 1
 ok 2
@@ -9134,22 +9134,22 @@ ok 3
 ok 4
 ok 5
 ok 6
-ok      144 ms ( 0.00 usr  0.01 sys +  0.03 cusr  0.01 csys =  0.05 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/08.t .. 
+ok      152 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/08.t .. 
 1..3
 ok 1
 not ok 2 # TODO According to POSIX: EPERM - The file named by path is a directory, and either the calling process does not have appropriate privileges, or the implementation prohibits using unlink() on directories.
 ok 3
-ok       22 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/09.t .. 
+ok       22 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/09.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
-[14:08:19] /opt/pjdfstest/tests/unlink/10.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:47:24] /opt/pjdfstest/tests/unlink/10.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:08:20] /opt/pjdfstest/tests/unlink/11.t .. 
+ok        7 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:47:25] /opt/pjdfstest/tests/unlink/11.t .. 
 1..270
 ok 1
 ok 2
@@ -9421,17 +9421,17 @@ ok 267
 ok 268
 ok 269
 ok 270
-ok     1088 ms ( 0.03 usr  0.00 sys +  0.37 cusr  0.28 csys =  0.68 CPU)
-[14:08:20] /opt/pjdfstest/tests/unlink/12.t .. 
+ok     1092 ms ( 0.03 usr  0.00 sys +  0.36 cusr  0.29 csys =  0.68 CPU)
+[18:47:25] /opt/pjdfstest/tests/unlink/12.t .. 
 1..1
 ok 1
-ok        7 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.00 csys =  0.00 CPU)
-[14:08:20] /opt/pjdfstest/tests/unlink/13.t .. 
+ok       10 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.00 csys =  0.01 CPU)
+[18:47:25] /opt/pjdfstest/tests/unlink/13.t .. 
 1..2
 ok 1
 ok 2
-ok       12 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
-[14:08:20] /opt/pjdfstest/tests/unlink/14.t .. 
+ok       12 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
+[18:47:26] /opt/pjdfstest/tests/unlink/14.t .. 
 1..7
 ok 1
 ok 2
@@ -9440,13 +9440,13 @@ ok 4
 ok 5
 ok 6
 ok 7
-ok       54 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:08:20]
+ok       56 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:47:26]
 All tests successful.
-Files=15, Tests=440, 20 wallclock secs ( 0.07 usr  0.01 sys +  1.14 cusr  0.84 csys =  2.06 CPU)
+Files=15, Tests=440, 21 wallclock secs ( 0.07 usr  0.01 sys +  1.12 cusr  0.88 csys =  2.08 CPU)
 Result: PASS
-# === DIRECTORY: utimensat (rc=0, duration_sec=1.714) ===
-[14:08:20] /opt/pjdfstest/tests/utimensat/00.t .. 
+# === DIRECTORY: utimensat (rc=0, duration_sec=1.719) ===
+[18:47:26] /opt/pjdfstest/tests/utimensat/00.t .. 
 1..32
 ok 1
 ok 2
@@ -9480,8 +9480,8 @@ ok 29
 ok 30
 ok 31
 ok 32
-ok      130 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.09 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/01.t .. 
+ok      140 ms ( 0.01 usr  0.00 sys +  0.05 cusr  0.03 csys =  0.09 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/01.t .. 
 1..7
 ok 1
 ok 2
@@ -9490,8 +9490,8 @@ ok 4
 ok 5
 ok 6
 ok 7
-ok     1048 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/02.t .. 
+ok     1046 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.03 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/02.t .. 
 1..10
 ok 1
 ok 2
@@ -9503,12 +9503,12 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       60 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.04 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/03.t .. 
+ok       56 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/03.t .. 
 1..1
 ok 1
-ok        8 ms ( 0.00 usr  0.00 sys +  0.00 cusr  0.01 csys =  0.01 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/04.t .. 
+ok        8 ms ( 0.00 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.02 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/04.t .. 
 1..10
 ok 1
 ok 2
@@ -9520,8 +9520,8 @@ ok 7
 ok 8
 ok 9
 ok 10
-ok       54 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.04 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/05.t .. 
+ok       52 ms ( 0.01 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.04 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/05.t .. 
 1..16
 ok 1
 ok 2
@@ -9539,8 +9539,8 @@ ok 13
 ok 14
 ok 15
 ok 16
-ok       79 ms ( 0.00 usr  0.00 sys +  0.04 cusr  0.02 csys =  0.06 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/06.t .. 
+ok       77 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/06.t .. 
 1..13
 ok 1
 ok 2
@@ -9555,8 +9555,8 @@ ok 10
 ok 11
 ok 12
 ok 13
-ok       75 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.01 csys =  0.04 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/07.t .. 
+ok       74 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.02 csys =  0.05 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/07.t .. 
 1..17
 ok 1
 ok 2
@@ -9575,8 +9575,8 @@ ok 14
 ok 15
 ok 16
 ok 17
-ok       86 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.04 csys =  0.07 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/08.t .. 
+ok       88 ms ( 0.00 usr  0.00 sys +  0.03 cusr  0.03 csys =  0.06 CPU)
+[18:47:27] /opt/pjdfstest/tests/utimensat/08.t .. 
 1..9
 ok 1
 ok 2
@@ -9588,7 +9588,7 @@ ok 7
 ok 8
 ok 9
 ok       46 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
-[14:08:22] /opt/pjdfstest/tests/utimensat/09.t .. 
+[18:47:27] /opt/pjdfstest/tests/utimensat/09.t .. 
 1..7
 ok 1
 ok 2
@@ -9597,8 +9597,8 @@ ok 4
 ok 5
 ok 6
 ok 7
-ok       56 ms ( 0.01 usr  0.00 sys +  0.01 cusr  0.01 csys =  0.03 CPU)
-[14:08:22]
+ok       56 ms ( 0.00 usr  0.00 sys +  0.02 cusr  0.01 csys =  0.03 CPU)
+[18:47:27]
 All tests successful.
-Files=10, Tests=122,  2 wallclock secs ( 0.04 usr  0.00 sys +  0.24 cusr  0.18 csys =  0.46 CPU)
+Files=10, Tests=122,  1 wallclock secs ( 0.03 usr  0.00 sys +  0.24 cusr  0.19 csys =  0.46 CPU)
 Result: PASS

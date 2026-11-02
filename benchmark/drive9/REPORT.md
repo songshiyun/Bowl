@@ -1,9 +1,5 @@
 # Bowl vs Drive9 (mem9-ai/drive9) — 阿里云硅谷双机内网性能基准测试报告
 
-> 本轮于 2026-11-02 测试 Bowl bc64975，Drive9 固定为 b529a36f；冷热各 45 项、每项 3 次采样，三组文件与 SQLite 完整性指纹一致。
-
-> Bowl 采用 ADR-0027：4 MiB Chunk、满 64 条 Slice 整体合并、后台串行整理与回收、PutBlock 直写目标路径、默认 RPC 超时 30 秒。本轮同时包含这些变化，不能将结果变化归因于单项优化。
-
 ## 1. 执行摘要（Executive Summary）
 
 本报告记录了 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）真实开启 2 台按量计费云服务器（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下依次运行 **`juicefs bench` 基础测试套件**、**Drive9 内置 [`drive9_fuse_bench.py`](drive9_fuse_bench.py) 微观与宏观基准套件（冷缓存 + 热缓存）** 以及 **Drive9 内置 [`fuse_perf_baseline.py`](fuse_perf_baseline.py)（SHA-256 完整性校验读写 + SQLite `DELETE`/`WAL` 事务基准）** 的实测对比结果。
@@ -18,19 +14,19 @@
 
 | 测试套件 | 指标项 | Bowl (PG 16) | Drive9 Default (`interactive`) | Drive9 Sync (`close-sync`) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `288.07 MiB/s` | `202.99 MiB/s` | `62.84 MiB/s` | **1.42x** | **4.58x** |
-| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `487.42 MiB/s` | `234.30 MiB/s` | `448.73 MiB/s` | **2.08x** | **1.09x** |
-| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `157.80 files/s` | `1,913.70 files/s` | `103.00 files/s` | **0.08x** | **1.53x** |
-| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `1,334.10 files/s` | `6,749.90 files/s` | `309.30 files/s` | **0.20x** | **4.31x** |
-| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `6,544.00 files/s` | `12,130.20 files/s` | `499.00 files/s` | **0.54x** | **13.11x** |
-| `drive9_fuse_bench` (Cold) | **顺序写 (256 MiB + fsync)** | `374.27 MiB/s` | `324.50 MiB/s` | `189.90 MiB/s` | **1.15x** | **1.97x** |
-| `drive9_fuse_bench` (Cold) | **顺序读 (256 MiB)** | `531.05 MiB/s` | `184.12 MiB/s` | `56.21 MiB/s` | **2.88x** | **9.45x** |
-| `drive9_fuse_bench` (Cold) | **4K 小文件写 + fsync (200 个)** | `211.65 ops/s` | `1,010.42 ops/s` | `149.41 ops/s` | **0.21x** | **1.42x** |
-| `drive9_fuse_bench` (Cold) | **目录创建 mkdir (500 个)** | `585.14 ops/s` | `260.19 ops/s` | `256.57 ops/s` | **2.25x** | **2.28x** |
-| `drive9_fuse_bench` (Cold) | **目录重命名 rename (500 个)** | `466.64 ops/s` | `99.93 ops/s` | `63.17 ops/s` | **4.67x** | **7.39x** |
-| `drive9_fuse_bench` (Cold) | **文件删除 unlink (500 个)** | `559.88 ops/s` | `101.08 ops/s` | `57.21 ops/s` | **5.54x** | **9.79x** |
-| `drive9_fuse_bench` (Cold) | **Git Clone (200 文件 · 20 MiB, 耗时越低越好)** | `3.23 s` | `1.86 s` | `5.87 s` | **0.58x** | **1.82x** |
-| SQLite Baseline (`WAL`) | **SQLite WAL 事务插入 (256 rows)** | `1,581.65 rows/s` | `7,726.82 rows/s` | `7,080.74 rows/s` | **0.20x** | **0.22x** |
+| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `282.50 MiB/s` | `200.20 MiB/s` | `64.54 MiB/s` | **1.41x** | **4.38x** |
+| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `951.07 MiB/s` | `180.51 MiB/s` | `346.40 MiB/s` | **5.27x** | **2.75x** |
+| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `268.30 files/s` | `2,478.90 files/s` | `99.10 files/s` | **0.11x** | **2.71x** |
+| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `661.00 files/s` | `7,723.00 files/s` | `12.80 files/s` | **0.09x** | **51.64x** |
+| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `6,574.90 files/s` | `105,162.90 files/s` | `22.20 files/s` | **0.06x** | **296.17x** |
+| `drive9_fuse_bench` (Cold) | **顺序写 (256 MiB + fsync)** | `346.78 MiB/s` | `260.35 MiB/s` | `189.59 MiB/s` | **1.33x** | **1.83x** |
+| `drive9_fuse_bench` (Cold) | **顺序读 (256 MiB)** | `189.35 MiB/s` | `183.50 MiB/s` | `60.65 MiB/s` | **1.03x** | **3.12x** |
+| `drive9_fuse_bench` (Cold) | **4K 小文件写 + fsync (200 个)** | `214.00 ops/s` | `1,011.60 ops/s` | `147.70 ops/s` | **0.21x** | **1.45x** |
+| `drive9_fuse_bench` (Cold) | **目录创建 mkdir (500 个)** | `559.80 ops/s` | `251.27 ops/s` | `243.80 ops/s` | **2.23x** | **2.30x** |
+| `drive9_fuse_bench` (Cold) | **目录重命名 rename (500 个)** | `444.59 ops/s` | `94.40 ops/s` | `57.46 ops/s` | **4.71x** | **7.74x** |
+| `drive9_fuse_bench` (Cold) | **文件删除 unlink (500 个)** | `555.67 ops/s` | `98.65 ops/s` | `52.88 ops/s` | **5.63x** | **10.51x** |
+| `drive9_fuse_bench` (Cold) | **Git Clone (200 文件 · 20 MiB, 耗时越低越好)** | `3.96 s` | `1.88 s` | `6.16 s` | **0.48x** | **1.56x** |
+| SQLite Baseline (`WAL`) | **SQLite WAL 事务插入 (256 rows)** | `1,678.38 rows/s` | `7,715.88 rows/s` | `8,137.68 rows/s` | **0.22x** | **0.21x** |
 
 ---
 
@@ -40,24 +36,24 @@
 
 | 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 系统盘 | 操作系统与内核 | VPC 私网 IP |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Server 服务端** (`bowl-d9-server`) | `i-rj912d5rbcy2stqm8dwi` | `ecs.c9i.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 7.4Gi | `cloud_essd` (120 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.212` |
-| **Client 客户端** (`bowl-d9-client`) | `i-rj912d5rbcy2stqm8dwj` | `ecs.c9i.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 7.4Gi | `cloud_essd` (120 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.213` |
+| **Server 服务端** (`bowl-d9-server`) | `i-rj96chrxq3htln3b3rul` | `ecs.c9i.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 7.4Gi | `cloud_essd` (120 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.218` |
+| **Client 客户端** (`bowl-d9-client`) | `i-rj96chrxq3htln3b3rum` | `ecs.c9i.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 7.4Gi | `cloud_essd` (120 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.219` |
 
 ### 2.2 同可用区 VPC 内网与 Server 节点云盘物理基线
 
 | 基线指标 | 实测数值 | 采集方式与说明 |
 | :--- | :--- | :--- |
 | **VPC ID / 交换机 ID** | `vpc-rj9gjwyzzh4v0cn576fhu` / `vsw-rj9rsvsgpihtsgxej6me5` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
-| **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `rtt min/avg/max/mdev = 0.043/0.071/0.170/0.033 ms` | `ping -c 20 -i 0.05 172.16.1.212` |
-| **内网单流 TCP 吞吐带宽** | `15.71` Gbps | `iperf3 -c 172.16.1.212 -t 5` |
+| **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `rtt min/avg/max/mdev = 0.066/0.099/0.217/0.038 ms` | `ping -c 20 -i 0.05 172.16.1.218` |
+| **内网单流 TCP 吞吐带宽** | `15.71` Gbps | `iperf3 -c 172.16.1.218 -t 5` |
 | **Server 节点 `cloud_essd` (120 GiB) 本地顺序写基线** | `192.61` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |
-| **Server 节点 `cloud_essd` (120 GiB) 本地顺序读基线** | `184.01` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |
+| **Server 节点 `cloud_essd` (120 GiB) 本地顺序读基线** | `184.19` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |
 
 ### 2.3 三组被测文件系统架构与参数对照矩阵
 
 | 维度 | Bowl (`bowl`) | Drive9 Default (`drive9_default`) | Drive9 Sync (`drive9_sync`) |
 | :--- | :--- | :--- | :--- |
-| **代码版本 (Git SHA)** | Bowl `bc64975` | Drive9 `b529a36f` | Drive9 `b529a36f` |
+| **代码版本 (Git SHA)** | Bowl `ee8d113` | Drive9 `b529a36f` | Drive9 `b529a36f` |
 | **服务端元数据引擎** | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) (`127.0.0.1:5432`) | TiDB `v8.5.5` Unistore (`127.0.0.1:4000`) | TiDB `v8.5.5` Unistore (`127.0.0.1:4000`) |
 | **服务端数据块引擎** | `storage-service` 本地 BlockStore (`/var/lib/bowl/data`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) |
 | **客户端挂载参数** | `bowl mount` (生产默认 `noatime`) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |
@@ -73,11 +69,11 @@
 
 | 测试项目 (`ITEM`) | Bowl (PG 16) | Drive9 Default (`interactive`) | Drive9 Sync (`close-sync`) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Write big file** | `288.07 MiB/s (14.22 s/file)` | `202.99 MiB/s (20.18 s/file)` | `62.84 MiB/s (65.18 s/file)` | **1.42x** | **4.58x** |
-| **Read big file** | `487.42 MiB/s (8.40 s/file)` | `234.30 MiB/s (17.48 s/file)` | `448.73 MiB/s (9.13 s/file)` | **2.08x** | **1.09x** |
-| **Write small file** | `157.80 files/s (25.34 ms/file)` | `1913.70 files/s (2.09 ms/file)` | `103.00 files/s (38.85 ms/file)` | **0.08x** | **1.53x** |
-| **Read small file** | `1334.10 files/s (3.00 ms/file)` | `6749.90 files/s (0.59 ms/file)` | `309.30 files/s (12.93 ms/file)` | **0.20x** | **4.31x** |
-| **Stat file** | `6544.00 files/s (0.61 ms/file)` | `12130.20 files/s (0.33 ms/file)` | `499.00 files/s (8.02 ms/file)` | **0.54x** | **13.11x** |
+| **Write big file** | `282.50 MiB/s (14.50 s/file)` | `200.20 MiB/s (20.46 s/file)` | `64.54 MiB/s (63.46 s/file)` | **1.41x** | **4.38x** |
+| **Read big file** | `951.07 MiB/s (4.31 s/file)` | `180.51 MiB/s (22.69 s/file)` | `346.40 MiB/s (11.82 s/file)` | **5.27x** | **2.75x** |
+| **Write small file** | `268.30 files/s (14.91 ms/file)` | `2478.90 files/s (1.61 ms/file)` | `99.10 files/s (40.37 ms/file)` | **0.11x** | **2.71x** |
+| **Read small file** | `661.00 files/s (6.05 ms/file)` | `7723.00 files/s (0.52 ms/file)` | `12.80 files/s (311.34 ms/file)` | **0.09x** | **51.64x** |
+| **Stat file** | `6574.90 files/s (0.61 ms/file)` | `105162.90 files/s (0.04 ms/file)` | `22.20 files/s (180.37 ms/file)` | **0.06x** | **296.17x** |
 
 ---
 
@@ -89,26 +85,26 @@
 
 | 工作负载 (`Workload`) | 指标说明 | Bowl Median (P95) | Drive9 Default Median (P95) | Drive9 Sync Median (P95) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `sequential_write` | **顺序写 (256 MiB + fsync)** | `374.27 (381.96) MiB/s` | `324.50 (443.48) MiB/s` | `189.90 (256.66) MiB/s` | **1.15x** | **1.97x** |
-| `sequential_read` | **顺序读 (256 MiB)** | `531.05 (533.13) MiB/s` | `184.12 (184.91) MiB/s` | `56.21 (56.60) MiB/s` | **2.88x** | **9.45x** |
-| `random_read_4k` | **随机 4K 读 (1,000 次)** | `6.92 (7.40) MiB/s` | `2.78 (2.79) MiB/s` | `5.12 (5.16) MiB/s` | **2.49x** | **1.35x** |
-| `small_write_4k_fsync` | **4K 小文件写 + fsync (200 个)** | `211.65 (224.11) ops/s` | `1,010.42 (1,025.96) ops/s` | `149.41 (150.29) ops/s` | **0.21x** | **1.42x** |
-| `mkdir` | **目录创建 mkdir (500 个)** | `585.14 (590.83) ops/s` | `260.19 (261.13) ops/s` | `256.57 (258.00) ops/s` | **2.25x** | **2.28x** |
-| `rename` | **目录重命名 rename (500 个)** | `466.64 (467.92) ops/s` | `99.93 (100.52) ops/s` | `63.17 (64.06) ops/s` | **4.67x** | **7.39x** |
-| `unlink` | **文件删除 unlink (500 个)** | `559.88 (584.79) ops/s` | `101.08 (101.11) ops/s` | `57.21 (57.58) ops/s` | **5.54x** | **9.79x** |
-| `readdir_small` | **小目录列举 readdir (20 项)** | `6,701.54 (7,210.70) ops/s` | `6,552.93 (6,971.80) ops/s` | `15,299.19 (16,922.66) ops/s` | **1.02x** | **0.44x** |
-| `readdir_large` | **大目录列举 readdir (500 项)** | `13,694.96 (14,858.16) ops/s` | `42,682.95 (43,429.06) ops/s` | `106,676.27 (127,407.78) ops/s` | **0.32x** | **0.13x** |
-| `stat` | **文件属性查询 stat (500 个)** | `3,140.30 (3,144.09) ops/s` | `20,482.84 (21,826.50) ops/s` | `39,206.71 (44,409.20) ops/s` | **0.15x** | **0.08x** |
+| `sequential_write` | **顺序写 (256 MiB + fsync)** | `346.78 (359.70) MiB/s` | `260.35 (435.01) MiB/s` | `189.59 (260.49) MiB/s` | **1.33x** | **1.83x** |
+| `sequential_read` | **顺序读 (256 MiB)** | `189.35 (318.66) MiB/s` | `183.50 (183.77) MiB/s` | `60.65 (60.92) MiB/s` | **1.03x** | **3.12x** |
+| `random_read_4k` | **随机 4K 读 (1,000 次)** | `6.82 (6.94) MiB/s` | `2.78 (2.78) MiB/s` | `5.08 (5.10) MiB/s` | **2.45x** | **1.34x** |
+| `small_write_4k_fsync` | **4K 小文件写 + fsync (200 个)** | `214.00 (218.73) ops/s` | `1,011.60 (1,033.55) ops/s` | `147.70 (148.10) ops/s` | **0.21x** | **1.45x** |
+| `mkdir` | **目录创建 mkdir (500 个)** | `559.80 (575.41) ops/s` | `251.27 (253.65) ops/s` | `243.80 (248.82) ops/s` | **2.23x** | **2.30x** |
+| `rename` | **目录重命名 rename (500 个)** | `444.59 (462.28) ops/s` | `94.40 (95.80) ops/s` | `57.46 (61.38) ops/s` | **4.71x** | **7.74x** |
+| `unlink` | **文件删除 unlink (500 个)** | `555.67 (572.94) ops/s` | `98.65 (100.05) ops/s` | `52.88 (52.95) ops/s` | **5.63x** | **10.51x** |
+| `readdir_small` | **小目录列举 readdir (20 项)** | `3,491.68 (4,631.20) ops/s` | `7,024.47 (7,149.62) ops/s` | `13,529.25 (16,635.62) ops/s` | **0.50x** | **0.26x** |
+| `readdir_large` | **大目录列举 readdir (500 项)** | `12,402.29 (12,499.54) ops/s` | `42,420.99 (49,278.85) ops/s` | `116,730.38 (125,871.02) ops/s` | **0.29x** | **0.11x** |
+| `stat` | **文件属性查询 stat (500 个)** | `2,928.71 (2,972.73) ops/s` | `21,812.66 (22,785.68) ops/s` | `43,792.01 (49,563.91) ops/s` | **0.13x** | **0.07x** |
 
 #### (B) 宏观研发工作流负载（Macro Workloads · 耗时越短越好，比值为加速比 `Drive9耗时 / Bowl耗时`）
 
 | 工作负载 (`Workload`) | 指标说明 | Bowl Median (P95) | Drive9 Default Median (P95) | Drive9 Sync Median (P95) | Bowl 加速比 vs Default | Bowl 加速比 vs Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `macro_git_clone` | **Git Clone (--no-local · 200 文件 · 20 MiB)** | `3.234s (3.238s)` | `1.864s (1.864s)` | `5.871s (5.945s)` | **0.58x** | **1.82x** |
-| `macro_git_status_dirty` | **Git Status (--porcelain · dirty 工作区)** | `0.305s (0.313s)` | `2.016s (2.121s)` | `0.267s (0.307s)` | **6.61x** | **0.87x** |
-| `macro_git_diff_dirty` | **Git Diff (--name-only · dirty 工作区)** | `0.122s (0.207s)` | `0.760s (0.764s)` | `0.034s (0.037s)` | **6.21x** | **0.28x** |
-| `macro_find_files` | **目录树遍历 (find . -type f | wc -l)** | `0.081s (0.091s)` | `0.016s (0.027s)` | `0.041s (0.042s)` | **0.19x** | **0.50x** |
-| `macro_go_build` | **Go 编译构建 (go build ./...)** | `0.629s (2.021s)` | `0.375s (0.377s)` | `0.332s (0.336s)` | **0.60x** | **0.53x** |
+| `macro_git_clone` | **Git Clone (--no-local · 200 文件 · 20 MiB)** | `3.958s (4.132s)` | `1.881s (1.932s)` | `6.158s (6.204s)` | **0.48x** | **1.56x** |
+| `macro_git_status_dirty` | **Git Status (--porcelain · dirty 工作区)** | `0.321s (0.322s)` | `2.027s (2.034s)` | `0.239s (0.296s)` | **6.32x** | **0.75x** |
+| `macro_git_diff_dirty` | **Git Diff (--name-only · dirty 工作区)** | `0.129s (0.145s)` | `0.777s (0.785s)` | `0.066s (0.502s)` | **6.03x** | **0.51x** |
+| `macro_find_files` | **目录树遍历 (find . -type f | wc -l)** | `0.098s (0.107s)` | `0.014s (0.015s)` | `0.050s (0.054s)` | **0.14x** | **0.51x** |
+| `macro_go_build` | **Go 编译构建 (go build ./...)** | `0.515s (1.956s)` | `0.354s (0.357s)` | `0.323s (0.356s)` | **0.69x** | **0.63x** |
 
 ### 4.2 热缓存（Hot Cache，预热后直接测量）对比
 
@@ -116,26 +112,26 @@
 
 | 工作负载 (`Workload`) | 指标说明 | Bowl Median (P95) | Drive9 Default Median (P95) | Drive9 Sync Median (P95) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `sequential_write` | **顺序写 (256 MiB + fsync)** | `381.03 (392.97) MiB/s` | `270.39 (439.10) MiB/s` | `186.61 (262.61) MiB/s` | **1.41x** | **2.04x** |
-| `sequential_read` | **顺序读 (256 MiB)** | `397.11 (649.37) MiB/s` | `2,159.66 (2,237.60) MiB/s` | `655.84 (718.08) MiB/s` | **0.18x** | **0.61x** |
-| `random_read_4k` | **随机 4K 读 (1,000 次)** | `7.19 (7.41) MiB/s` | `166.97 (178.39) MiB/s` | `4.91 (4.94) MiB/s` | **0.04x** | **1.46x** |
-| `small_write_4k_fsync` | **4K 小文件写 + fsync (200 个)** | `196.20 (196.63) ops/s` | `1,077.22 (1,099.15) ops/s` | `149.30 (149.69) ops/s` | **0.18x** | **1.31x** |
-| `mkdir` | **目录创建 mkdir (500 个)** | `551.58 (571.17) ops/s` | `264.86 (265.06) ops/s` | `257.39 (260.76) ops/s` | **2.08x** | **2.14x** |
-| `rename` | **目录重命名 rename (500 个)** | `573.89 (615.30) ops/s` | `100.14 (101.92) ops/s` | `56.17 (56.94) ops/s` | **5.73x** | **10.22x** |
-| `unlink` | **文件删除 unlink (500 个)** | `585.69 (604.72) ops/s` | `105.22 (105.53) ops/s` | `58.80 (58.85) ops/s` | **5.57x** | **9.96x** |
-| `readdir_small` | **小目录列举 readdir (20 项)** | `6,852.82 (8,694.99) ops/s` | `144,620.48 (158,027.90) ops/s` | `227,614.15 (248,983.01) ops/s` | **0.05x** | **0.03x** |
-| `readdir_large` | **大目录列举 readdir (500 项)** | `15,137.14 (15,182.99) ops/s` | `85,787.90 (88,181.26) ops/s` | `255,947.06 (256,031.87) ops/s` | **0.18x** | **0.06x** |
-| `stat` | **文件属性查询 stat (500 个)** | `46,697.24 (50,692.48) ops/s` | `626,913.65 (652,416.78) ops/s` | `434,725.15 (436,059.43) ops/s` | **0.07x** | **0.11x** |
+| `sequential_write` | **顺序写 (256 MiB + fsync)** | `300.70 (300.90) MiB/s` | `273.71 (437.25) MiB/s` | `188.93 (260.75) MiB/s` | **1.10x** | **1.59x** |
+| `sequential_read` | **顺序读 (256 MiB)** | `7,225.67 (7,718.02) MiB/s` | `2,205.55 (2,235.35) MiB/s` | `708.39 (716.67) MiB/s` | **3.28x** | **10.20x** |
+| `random_read_4k` | **随机 4K 读 (1,000 次)** | `321.86 (379.94) MiB/s` | `185.80 (190.12) MiB/s` | `4.52 (4.55) MiB/s` | **1.73x** | **71.15x** |
+| `small_write_4k_fsync` | **4K 小文件写 + fsync (200 个)** | `176.25 (184.13) ops/s` | `1,056.96 (1,116.14) ops/s` | `145.44 (147.41) ops/s` | **0.17x** | **1.21x** |
+| `mkdir` | **目录创建 mkdir (500 个)** | `496.44 (514.79) ops/s` | `249.24 (251.65) ops/s` | `248.20 (248.51) ops/s` | **1.99x** | **2.00x** |
+| `rename` | **目录重命名 rename (500 个)** | `400.88 (414.98) ops/s` | `93.69 (93.99) ops/s` | `54.99 (57.94) ops/s` | **4.28x** | **7.29x** |
+| `unlink` | **文件删除 unlink (500 个)** | `540.06 (576.89) ops/s` | `100.97 (101.40) ops/s` | `52.97 (53.08) ops/s` | **5.35x** | **10.19x** |
+| `readdir_small` | **小目录列举 readdir (20 项)** | `6,981.68 (8,044.23) ops/s` | `127,292.05 (149,657.15) ops/s` | `211,153.11 (232,211.96) ops/s` | **0.05x** | **0.03x** |
+| `readdir_large` | **大目录列举 readdir (500 项)** | `13,832.56 (14,196.39) ops/s` | `90,058.04 (97,328.02) ops/s` | `274,306.28 (293,574.47) ops/s` | **0.15x** | **0.05x** |
+| `stat` | **文件属性查询 stat (500 个)** | `51,136.18 (62,392.71) ops/s` | `673,677.40 (691,973.89) ops/s` | `13,189.61 (31,655.76) ops/s` | **0.08x** | **3.88x** |
 
 #### (B) 宏观研发工作流负载（Macro Workloads · 耗时越短越好，比值为加速比 `Drive9耗时 / Bowl耗时`）
 
 | 工作负载 (`Workload`) | 指标说明 | Bowl Median (P95) | Drive9 Default Median (P95) | Drive9 Sync Median (P95) | Bowl 加速比 vs Default | Bowl 加速比 vs Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `macro_git_clone` | **Git Clone (--no-local · 200 文件 · 20 MiB)** | `3.159s (3.243s)` | `1.824s (1.851s)` | `5.790s (5.794s)` | **0.58x** | **1.83x** |
-| `macro_git_status_dirty` | **Git Status (--porcelain · dirty 工作区)** | `0.171s (0.208s)` | `0.217s (0.231s)` | `0.048s (0.068s)` | **1.27x** | **0.28x** |
-| `macro_git_diff_dirty` | **Git Diff (--name-only · dirty 工作区)** | `0.062s (0.085s)` | `0.013s (0.014s)` | `0.011s (0.012s)` | **0.21x** | **0.17x** |
-| `macro_find_files` | **目录树遍历 (find . -type f | wc -l)** | `0.071s (0.076s)` | `0.004s (0.004s)` | `0.004s (0.004s)` | **0.06x** | **0.05x** |
-| `macro_go_build` | **Go 编译构建 (go build ./...)** | `0.249s (0.301s)` | `0.116s (0.117s)` | `0.157s (0.169s)` | **0.47x** | **0.63x** |
+| `macro_git_clone` | **Git Clone (--no-local · 200 文件 · 20 MiB)** | `3.738s (3.779s)` | `2.027s (2.061s)` | `6.293s (6.346s)` | **0.54x** | **1.68x** |
+| `macro_git_status_dirty` | **Git Status (--porcelain · dirty 工作区)** | `0.154s (0.157s)` | `0.237s (0.240s)` | `0.038s (0.066s)` | **1.54x** | **0.25x** |
+| `macro_git_diff_dirty` | **Git Diff (--name-only · dirty 工作区)** | `0.061s (0.092s)` | `0.015s (0.015s)` | `0.012s (0.024s)` | **0.24x** | **0.19x** |
+| `macro_find_files` | **目录树遍历 (find . -type f | wc -l)** | `0.078s (0.081s)` | `0.004s (0.004s)` | `0.006s (0.015s)` | **0.05x** | **0.08x** |
+| `macro_go_build` | **Go 编译构建 (go build ./...)** | `0.224s (0.251s)` | `0.117s (0.129s)` | `0.157s (0.175s)` | **0.52x** | **0.70x** |
 
 ---
 
@@ -145,28 +141,28 @@
 
 | 测试工作负载 (`Workload`) | 指标单位 | Bowl (PG 16) | Drive9 Default (`interactive`) | Drive9 Sync (`close-sync`) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| **64×1KiB 小文件写 (`fsync` + dir `fsync`)** | `files/s` | `216.76 files/s` | `924.39 files/s` | `168.26 files/s` | **0.23x** | **1.29x** |
-| **64×1KiB 小文件 SHA-256 校验读** | `files/s` | `337.76 files/s` | `100.91 files/s` | `371.57 files/s` | **3.35x** | **0.91x** |
-| **16 MiB 大文件写 (`fsync` + dir `fsync`)** | `MiB/s` | `52.05 MiB/s` | `58.63 MiB/s` | `50.74 MiB/s` | **0.89x** | **1.03x** |
-| **16 MiB 大文件 SHA-256 校验读 (Pass 1)** | `MiB/s` | `86.09 MiB/s` | `617.02 MiB/s` | `83.19 MiB/s` | **0.14x** | **1.03x** |
-| **16 MiB 大文件 SHA-256 校验读 (Pass 2)** | `MiB/s` | `138.21 MiB/s` | `890.27 MiB/s` | `54.25 MiB/s` | **0.16x** | **2.55x** |
-| **SQLite `DELETE` 模式：事务插入 (256 rows)** | `rows/s` | `3,094.95 rows/s` | `7,349.83 rows/s` | `4,450.11 rows/s` | **0.42x** | **0.70x** |
-| **SQLite `DELETE` 模式：事务更新 (86 rows)** | `rows/s` | `333.00 rows/s` | `1,143.55 rows/s` | `996.22 rows/s` | **0.29x** | **0.33x** |
-| **SQLite `DELETE` 模式：全表聚合校验读 (256 rows)** | `rows/s` | `42,295.77 rows/s` | `566,548.41 rows/s` | `72,251.81 rows/s` | **0.07x** | **0.59x** |
-| **SQLite `WAL` 模式：事务插入 (256 rows)** | `rows/s` | `1,581.65 rows/s` | `7,726.82 rows/s` | `7,080.74 rows/s` | **0.20x** | **0.22x** |
-| **SQLite `WAL` 模式：事务更新 (86 rows)** | `rows/s` | `629.93 rows/s` | `3,260.54 rows/s` | `3,100.91 rows/s` | **0.19x** | **0.20x** |
-| **SQLite `WAL` 模式：全表聚合校验读 (256 rows)** | `rows/s` | `92,427.55 rows/s` | `848,927.40 rows/s` | `969,282.09 rows/s` | **0.11x** | **0.10x** |
-| **SQLite `WAL` 模式：`wal_checkpoint(TRUNCATE)` 耗时** | `s` | `0.0727 s` | `0.0086 s` | `0.0294 s` | **0.12x** | **0.40x** |
+| **64×1KiB 小文件写 (`fsync` + dir `fsync`)** | `files/s` | `178.03 files/s` | `872.52 files/s` | `159.48 files/s` | **0.20x** | **1.12x** |
+| **64×1KiB 小文件 SHA-256 校验读** | `files/s` | `337.02 files/s` | `93.24 files/s` | `353.53 files/s` | **3.61x** | **0.95x** |
+| **16 MiB 大文件写 (`fsync` + dir `fsync`)** | `MiB/s` | `52.59 MiB/s` | `60.25 MiB/s` | `50.23 MiB/s` | **0.87x** | **1.05x** |
+| **16 MiB 大文件 SHA-256 校验读 (Pass 1)** | `MiB/s` | `185.99 MiB/s` | `694.17 MiB/s` | `81.72 MiB/s` | **0.27x** | **2.28x** |
+| **16 MiB 大文件 SHA-256 校验读 (Pass 2)** | `MiB/s` | `1,180.74 MiB/s` | `737.46 MiB/s` | `51.82 MiB/s` | **1.60x** | **22.78x** |
+| **SQLite `DELETE` 模式：事务插入 (256 rows)** | `rows/s` | `2,992.31 rows/s` | `6,573.81 rows/s` | `4,234.17 rows/s` | **0.46x** | **0.71x** |
+| **SQLite `DELETE` 模式：事务更新 (86 rows)** | `rows/s` | `317.91 rows/s` | `1,117.53 rows/s` | `896.66 rows/s` | **0.28x** | **0.35x** |
+| **SQLite `DELETE` 模式：全表聚合校验读 (256 rows)** | `rows/s` | `41,419.50 rows/s` | `717,319.91 rows/s` | `69,839.66 rows/s` | **0.06x** | **0.59x** |
+| **SQLite `WAL` 模式：事务插入 (256 rows)** | `rows/s` | `1,678.38 rows/s` | `7,715.88 rows/s` | `8,137.68 rows/s` | **0.22x** | **0.21x** |
+| **SQLite `WAL` 模式：事务更新 (86 rows)** | `rows/s` | `545.50 rows/s` | `2,860.58 rows/s` | `2,739.99 rows/s` | **0.19x** | **0.20x** |
+| **SQLite `WAL` 模式：全表聚合校验读 (256 rows)** | `rows/s` | `89,849.06 rows/s` | `1,231,550.79 rows/s` | `1,165,533.00 rows/s` | **0.07x** | **0.08x** |
+| **SQLite `WAL` 模式：`wal_checkpoint(TRUNCATE)` 耗时** | `s` | `0.0803 s` | `0.0087 s` | `0.0321 s` | **0.11x** | **0.40x** |
 
 ---
 
 ## 6. 本轮观测与比较边界
 
-- `Write big file`：Bowl `288.07 MiB/s`，Drive9 Sync `62.84 MiB/s`，吞吐比 `4.58x`。
-- `Read big file`：Bowl `487.42 MiB/s`，Drive9 Sync `448.73 MiB/s`，吞吐比 `1.09x`。
-- `Write small file`：Bowl `157.80 files/s`，Drive9 Sync `103.00 files/s`，吞吐比 `1.53x`。
-- `Read small file`：Bowl `1334.10 files/s`，Drive9 Sync `309.30 files/s`，吞吐比 `4.31x`。
-- `Stat file`：Bowl `6544.00 files/s`，Drive9 Sync `499.00 files/s`，吞吐比 `13.11x`。
+- `Write big file`：Bowl `282.50 MiB/s`，Drive9 Sync `64.54 MiB/s`，吞吐比 `4.38x`。
+- `Read big file`：Bowl `951.07 MiB/s`，Drive9 Sync `346.40 MiB/s`，吞吐比 `2.75x`。
+- `Write small file`：Bowl `268.30 files/s`，Drive9 Sync `99.10 files/s`，吞吐比 `2.71x`。
+- `Read small file`：Bowl `661.00 files/s`，Drive9 Sync `12.80 files/s`，吞吐比 `51.64x`。
+- `Stat file`：Bowl `6574.90 files/s`，Drive9 Sync `22.20 files/s`，吞吐比 `296.17x`。
 
 Drive9 Default 使用 `interactive`，Drive9 Sync 使用 `close-sync`，两者的写入确认条件不同。表内数值保留各自配置，吞吐比较不等于持久化契约相同。
 
@@ -174,15 +170,17 @@ Drive9 Default 使用 `interactive`，Drive9 Sync 使用 `close-sync`，两者�
 
 微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。
 
+本轮包含 ADR-0028：Create、Write、常规 Release 使用单语句原子 CTE 与内联异步 WAL 提交；重开文件时按版本保留内核页缓存。因此重复读取包含缓存命中收益，本轮数据不能单独归因于数据库往返减少。
+
 ---
 
 ## 7. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）
 
 | 审计项 | 记录值 |
 | :--- | :--- |
-| **临时 SSH 密钥对** | `bowl-d9-bench-kp-20261102140214`（已调用 `DeleteKeyPairs` 销毁） |
-| **Server 节点实例 ID** | `i-rj912d5rbcy2stqm8dwi`（已调用 `DeleteInstances --Force true` 销毁） |
-| **Client 节点实例 ID** | `i-rj912d5rbcy2stqm8dwj`（已调用 `DeleteInstances --Force true` 销毁） |
-| **实例创建时间 (UTC)** | `2026-11-02T06:02:29Z` |
-| **实例销毁时间 (UTC)** | `2026-11-02T06:26:17Z` |
+| **临时 SSH 密钥对** | `bowl-d9-bench-kp-20261102184005`（已调用 `DeleteKeyPairs` 销毁） |
+| **Server 节点实例 ID** | `i-rj96chrxq3htln3b3rul`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Client 节点实例 ID** | `i-rj96chrxq3htln3b3rum`（已调用 `DeleteInstances --Force true` 销毁） |
+| **实例创建时间 (UTC)** | `2026-11-02T10:40:19Z` |
+| **实例销毁时间 (UTC)** | `2026-11-02T11:07:25Z` |
 | **销毁后存量实例核验** | `DescribeInstances` 核验目标实例残留数为 `0`（存量 VPC/VSwitch/安全组完整保留） |
