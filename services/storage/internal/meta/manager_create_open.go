@@ -684,6 +684,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
 		}
 
+		m.recordInodeRootIno(uint64(inode.Ino), inode.RootIno)
 		var openFlags uint32
 		if m.openKeepCache {
 			openFlags = FOPEN_KEEP_CACHE

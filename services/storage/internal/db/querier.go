@@ -104,6 +104,7 @@ type Querier interface {
 	UpsertClientSession(ctx context.Context, arg UpsertClientSessionParams) (ClientSession, error)
 	UpsertFileLockWaiter(ctx context.Context, arg UpsertFileLockWaiterParams) (FileLockWaiter, error)
 	UpsertInodeXattr(ctx context.Context, arg UpsertInodeXattrParams) error
+	WriteFileAtomic(ctx context.Context, arg WriteFileAtomicParams) (WriteFileAtomicRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

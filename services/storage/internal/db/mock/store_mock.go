@@ -6027,3 +6027,69 @@ func (_c *MockStore_UpsertInodeXattr_Call) RunAndReturn(run func(ctx context.Con
 	_c.Call.Return(run)
 	return _c
 }
+
+// WriteFileAtomic provides a mock function for the type MockStore
+func (_mock *MockStore) WriteFileAtomic(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for WriteFileAtomic")
+	}
+
+	var r0 db.WriteFileAtomicRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.WriteFileAtomicParams) db.WriteFileAtomicRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.WriteFileAtomicRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.WriteFileAtomicParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_WriteFileAtomic_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WriteFileAtomic'
+type MockStore_WriteFileAtomic_Call struct {
+	*mock.Call
+}
+
+// WriteFileAtomic is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.WriteFileAtomicParams
+func (_e *MockStore_Expecter) WriteFileAtomic(ctx any, arg any) *MockStore_WriteFileAtomic_Call {
+	return &MockStore_WriteFileAtomic_Call{Call: _e.mock.On("WriteFileAtomic", ctx, arg)}
+}
+
+func (_c *MockStore_WriteFileAtomic_Call) Run(run func(ctx context.Context, arg db.WriteFileAtomicParams)) *MockStore_WriteFileAtomic_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.WriteFileAtomicParams
+		if args[1] != nil {
+			arg1 = args[1].(db.WriteFileAtomicParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_WriteFileAtomic_Call) Return(writeFileAtomicRow db.WriteFileAtomicRow, err error) *MockStore_WriteFileAtomic_Call {
+	_c.Call.Return(writeFileAtomicRow, err)
+	return _c
+}
+
+func (_c *MockStore_WriteFileAtomic_Call) RunAndReturn(run func(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error)) *MockStore_WriteFileAtomic_Call {
+	_c.Call.Return(run)
+	return _c
+}

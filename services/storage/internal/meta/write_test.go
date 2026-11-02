@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -377,7 +376,6 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 
 	t.Run("两阶段正常写入成功：文件扩容、特权位剥离、mtime/ctime刷新", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -392,69 +390,37 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 			Return(nil).
 			Once()
 
-		// 阶段 2：事务提交
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(baseFileRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_WRONLY),
-			}, nil).
-			Once()
-
-		expectedSliceBytes := meta.EncodeSlice(meta.Slice{
-			Pos:  50,
-			ID:   uint64(sliceID),
-			Size: uint32(len(payload)),
-			Off:  0,
-			Len:  uint32(len(payload)),
-		})
-
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-				Ino:    int64(ino),
-				Indx:   0,
-				Slices: expectedSliceBytes,
-			}).
-			Return(int64(24), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			InsertSliceRef(mock.Anything, db.InsertSliceRefParams{
-				SliceID: sliceID,
-				Size:    int32(len(payload)),
-				Refs:    1,
-			}).
-			Return(nil).
-			Once()
-
-		// offset=50, len=16 -> newEnd=66 > 50 -> 扩容至 66
+		// 阶段 2：单语句 CTE WriteFileAtomic 提交
 		expectedNewSize := int64(50 + len(payload))
 		expectedNewMode := int32(meta.S_IFREG | 0o755) // S_ISUID 与 S_ISGID 被剥离
 
-		updatedFileRow := baseFileRow
-		updatedFileRow.Size = expectedNewSize
-		updatedFileRow.Mode = expectedNewMode
-		updatedFileRow.Mtime = pgtype.Timestamptz{Time: now, Valid: true}
-		updatedFileRow.Ctime = pgtype.Timestamptz{Time: now, Valid: true}
-
-		mockQuerier.EXPECT().
-			UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-				Ino:  int64(ino),
-				Size: expectedNewSize,
-				Mode: expectedNewMode,
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+				Ino:             int64(ino),
+				Fh:              int64(fh),
+				SessionID:       pgtype.Int8{},
+				ReqOffset:       50,
+				DataLen:         int64(len(payload)),
+				QuotaAvailBytes: math.MaxInt64,
+				SliceID:         sliceID,
 			}).
-			Return(updatedFileRow, nil).
+			Return(db.WriteFileAtomicRow{
+				Status:     "ok",
+				OldSize:    50,
+				NewSize:    expectedNewSize,
+				StartIndx:  0,
+				EndIndx:    0,
+				OctetLen1:  24,
+				Ino:        int64(ino),
+				Generation: 1,
+				Mode:       expectedNewMode,
+				Nlink:      1,
+				Uid:        1000,
+				Gid:        1000,
+				Atime:      baseFileRow.Atime,
+				Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
 			Once()
 
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -474,12 +440,8 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 
 	t.Run("内部覆写：offset+len <= oldSize 时文件尺寸保持不变，但特权位剥离且更新时间戳", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
-
-		largeFileRow := baseFileRow
-		largeFileRow.Size = 1000 // 当前大小 1000
 
 		// 阶段 1
 		mockStore.EXPECT().
@@ -493,46 +455,35 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 			Once()
 
 		// 阶段 2
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(largeFileRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, mock.Anything).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDWR),
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, mock.Anything).
-			Return(int64(24), nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			InsertSliceRef(mock.Anything, mock.Anything).
-			Return(nil).
-			Once()
-
 		// offset=100, len=16 -> newEnd=116 <= 1000，size 保持 1000
 		expectedNewMode := int32(meta.S_IFREG | 0o755)
-		updatedFileRow := largeFileRow
-		updatedFileRow.Mode = expectedNewMode
-		updatedFileRow.Mtime = pgtype.Timestamptz{Time: now, Valid: true}
-		updatedFileRow.Ctime = pgtype.Timestamptz{Time: now, Valid: true}
-
-		mockQuerier.EXPECT().
-			UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-				Ino:  int64(ino),
-				Size: 1000,
-				Mode: expectedNewMode,
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+				Ino:             int64(ino),
+				Fh:              int64(fh),
+				SessionID:       pgtype.Int8{},
+				ReqOffset:       100,
+				DataLen:         int64(len(payload)),
+				QuotaAvailBytes: math.MaxInt64,
+				SliceID:         sliceID,
 			}).
-			Return(updatedFileRow, nil).
+			Return(db.WriteFileAtomicRow{
+				Status:     "ok",
+				OldSize:    1000,
+				NewSize:    1000,
+				StartIndx:  0,
+				EndIndx:    0,
+				OctetLen1:  24,
+				Ino:        int64(ino),
+				Generation: 1,
+				Mode:       expectedNewMode,
+				Nlink:      1,
+				Uid:        1000,
+				Gid:        1000,
+				Atime:      baseFileRow.Atime,
+				Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
 			Once()
 
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -576,7 +527,6 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 
 	t.Run("阶段 2 事务回滚失败：在事务外自动调用 DeleteBlock 清理物理块确保零残留", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -591,12 +541,10 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 			Return(nil).
 			Once()
 
-		// 阶段 2 事务中 Inode 查询报错导致回滚
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(db.Inode{}, pgx.ErrNoRows).
+		// 阶段 2 单语句 CTE 返回 not_found
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			Return(db.WriteFileAtomicRow{Status: "not_found"}, nil).
 			Once()
 
 		// 关键断言：事务外必须调用 DeleteBlock 回滚清理阶段 1 物理块！
@@ -618,7 +566,6 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 
 	t.Run("阶段 2 句柄只读返回 ErrBadFileHandle 并清理物理块", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -632,20 +579,9 @@ func TestWrite_TwoPhaseCommit(t *testing.T) {
 			Return(nil).
 			Once()
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(baseFileRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, mock.Anything).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
-			}, nil).
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			Return(db.WriteFileAtomicRow{Status: "bad_handle"}, nil).
 			Once()
 
 		mockBS.EXPECT().
@@ -983,286 +919,11 @@ func TestWrite_ContextCanceledAfterPutBlock_CleansUpOrphanBlock(t *testing.T) {
 	assert.Equal(t, 0, regularFiles, "阶段 2 事务因 context 取消失败回滚时，阶段 1 已落盘物理块必须被立即回滚清理，不能残留孤儿块")
 }
 
-// commitAckErrorStore 代理真实 Store，允许在底层真实事务 COMMIT 成功后向调用方注入模拟网络确认断连错误。
-type commitAckErrorStore struct {
-	db.Store
-	onExecTxWithOptions func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error
-}
-
-func (s *commitAckErrorStore) ExecTxWithOptions(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-	if s.onExecTxWithOptions != nil {
-		return s.onExecTxWithOptions(ctx, fn, opts...)
-	}
-	return s.Store.ExecTxWithOptions(ctx, fn, opts...)
-}
-
-func (s *commitAckErrorStore) ExecTx(ctx context.Context, fn func(db.Querier) error) error {
-	return s.ExecTxWithOptions(ctx, fn)
-}
-
-func TestWrite_CommitAckErrorAfterServerCommit_DoesNotDeletePublishedBlock(t *testing.T) {
-	pool, ctx := setupMetaTestDB(t)
-	if pool == nil {
-		return
-	}
-	acquireTestSliceGCAdvisoryLock(t, pool)
-
-	store := db.NewStore(pool)
-	dataDir := t.TempDir()
-	bs := meta.NewLocalFSBlockStore(dataDir)
-
-	t.Run("PublishedBlockPreservedOnCommitAckError", func(t *testing.T) {
-		fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
-			Mode:  int32(meta.S_IFREG | 0o755),
-			Nlink: 1,
-			Uid:   1000,
-			Gid:   1000,
-		})
-		require.NoError(t, err)
-		ino := uint64(fileRow.Ino)
-
-		initMgr := meta.New(store, meta.WithBlockStore(bs))
-		openRes, err := initMgr.Open(ctx, meta.OpenParams{
-			Ino:   ino,
-			Flags: meta.O_RDWR,
-		})
-		require.NoError(t, err)
-		fh := openRes.Fh
-		t.Cleanup(func() {
-			cleanupWriteTestInoAndSlices(t, store, initMgr, fileRow.Ino, fh)
-		})
-
-		mockAckErr := errors.New("commit ack network lost")
-		wrappedStore := &commitAckErrorStore{
-			Store: store,
-			onExecTxWithOptions: func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				if err := store.ExecTxWithOptions(attemptCtx, fn, opts...); err != nil {
-					return err
-				}
-				return mockAckErr
-			},
-		}
-		mgr := meta.New(wrappedStore, meta.WithBlockStore(bs))
-
-		writeData := []byte("important committed data block")
-		_, writeErr := mgr.Write(ctx, &meta.WriteRequest{
-			Ino:    ino,
-			Fh:     fh,
-			Offset: 0,
-			Data:   writeData,
-		})
-		require.Error(t, writeErr)
-		assert.Contains(t, writeErr.Error(), "commit ack network lost")
-
-		// 服务端已成功 COMMIT，物理块不得被误删，随后读操作必须能够成功读取
-		readRes, readErr := initMgr.Read(ctx, &meta.ReadRequest{
-			Ino:    ino,
-			Fh:     fh,
-			Offset: 0,
-			Size:   uint32(len(writeData)),
-		})
-		require.NoError(t, readErr, "已成功 COMMIT 的数据块绝不能因确认阶段断连被误删，Read 不得返回 ErrIO")
-		require.NotNil(t, readRes)
-		assert.Equal(t, writeData, readRes.Data)
-	})
-
-	t.Run("ConcurrentSetAttrZeroAfterCommit_DelegatesToGC", func(t *testing.T) {
-		subDataDir := t.TempDir()
-		subBS := meta.NewLocalFSBlockStore(subDataDir)
-
-		fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
-			Mode:  int32(meta.S_IFREG | 0o755),
-			Nlink: 1,
-			Uid:   1000,
-			Gid:   1000,
-		})
-		require.NoError(t, err)
-		ino := uint64(fileRow.Ino)
-
-		initMgr := meta.New(store, meta.WithBlockStore(subBS))
-		// 排空历史可能残留的待回收垃圾，保证切片计数的纯净与隔离
-		_, _ = initMgr.CollectGarbage(ctx, 1000)
-
-		openRes, err := initMgr.Open(ctx, meta.OpenParams{
-			Ino:   ino,
-			Flags: meta.O_RDWR,
-		})
-		require.NoError(t, err)
-		fh := openRes.Fh
-		t.Cleanup(func() {
-			cleanupWriteTestInoAndSlices(t, store, initMgr, fileRow.Ino, fh)
-		})
-
-		mockAckErr := errors.New("commit ack network lost")
-		wrappedStore := &commitAckErrorStore{
-			Store: store,
-			onExecTxWithOptions: func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				if err := store.ExecTxWithOptions(attemptCtx, fn, opts...); err != nil {
-					return err
-				}
-				// 真实事务 COMMIT 成功后、向 Write 返回 commit ack lost 之前，
-				// 模拟并发请求将文件 truncate 为 0（使该 slice 的 refs 降为 0）
-				zeroSize := uint64(0)
-				_, setAttrErr := initMgr.SetAttr(context.Background(), ino, meta.SetAttrInput{
-					Size: &zeroSize,
-				})
-				if setAttrErr != nil {
-					return setAttrErr
-				}
-				return mockAckErr
-			},
-		}
-		mgr := meta.New(wrappedStore, meta.WithBlockStore(subBS))
-
-		writeData := []byte("data for concurrent truncate to zero test")
-		_, writeErr := mgr.Write(ctx, &meta.WriteRequest{
-			Ino:    ino,
-			Fh:     fh,
-			Offset: 0,
-			Data:   writeData,
-		})
-		require.Error(t, writeErr)
-		assert.Contains(t, writeErr.Error(), "commit ack network lost")
-
-		// 检查物理块：因为 slice_refs 表中已存在该 slice（refs=0），Write 回滚逻辑不得越权提前删块，
-		// 物理块应依然存在，交由 CollectGarbage 回收
-		var regularFilesBeforeGC int
-		walkErr := filepath.WalkDir(subDataDir, func(path string, d os.DirEntry, walkErr error) error {
-			require.NoError(t, walkErr)
-			if !d.IsDir() {
-				regularFilesBeforeGC++
-			}
-			return nil
-		})
-		require.NoError(t, walkErr)
-		assert.Equal(t, 1, regularFilesBeforeGC, "slice_refs 已存在（即便 refs=0）时 Write 不得越权删块，块文件在 GC 前必须依然存在")
-
-		reclaimed, gcErr := initMgr.CollectGarbage(ctx, 10)
-		require.NoError(t, gcErr)
-		assert.Equal(t, 1, reclaimed, "CollectGarbage 应当安全回收此孤儿切片")
-	})
-
-	t.Run("InFlightServerCommitNotYetVisible_DoesNotDeleteBlock", func(t *testing.T) {
-		subDataDir := t.TempDir()
-		subBS := meta.NewLocalFSBlockStore(subDataDir)
-
-		fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
-			Mode:  int32(meta.S_IFREG | 0o755),
-			Nlink: 1,
-			Uid:   1000,
-			Gid:   1000,
-		})
-		require.NoError(t, err)
-		ino := uint64(fileRow.Ino)
-
-		initMgr := meta.New(store, meta.WithBlockStore(subBS))
-		openRes, err := initMgr.Open(ctx, meta.OpenParams{
-			Ino:   ino,
-			Flags: meta.O_RDWR,
-		})
-		require.NoError(t, err)
-		fh := openRes.Fh
-		t.Cleanup(func() {
-			cleanupWriteTestInoAndSlices(t, store, initMgr, fileRow.Ino, fh)
-		})
-
-		allowServerCommitCh := make(chan struct{})
-		var closeOnce sync.Once
-		closeAllowCommit := func() {
-			closeOnce.Do(func() {
-				close(allowServerCommitCh)
-			})
-		}
-		t.Cleanup(closeAllowCommit)
-
-		reachedCommitCh := make(chan struct{})
-		var onceReached sync.Once
-		var bgErr error
-		var bgWg sync.WaitGroup
-
-		wrappedStore := &commitAckErrorStore{
-			Store: store,
-			onExecTxWithOptions: func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				bgWg.Add(1)
-				go func() {
-					defer bgWg.Done()
-					bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
-					defer bgCancel()
-					bgErr = store.ExecTxWithOptions(bgCtx, func(q db.Querier) error {
-						if err := fn(q); err != nil {
-							return err
-						}
-						onceReached.Do(func() {
-							close(reachedCommitCh)
-						})
-						select {
-						case <-allowServerCommitCh:
-							return nil
-						case <-bgCtx.Done():
-							return bgCtx.Err()
-						}
-					}, opts...)
-				}()
-
-				select {
-				case <-reachedCommitCh:
-					return context.DeadlineExceeded
-				case <-attemptCtx.Done():
-					return attemptCtx.Err()
-				}
-			},
-		}
-		mgr := meta.New(wrappedStore, meta.WithBlockStore(subBS))
-
-		writeData := []byte("important in-flight committed data block")
-		_, writeErr := mgr.Write(ctx, &meta.WriteRequest{
-			Ino:    ino,
-			Fh:     fh,
-			Offset: 0,
-			Data:   writeData,
-		})
-		require.Error(t, writeErr)
-		assert.True(t, errors.Is(writeErr, context.DeadlineExceeded) || strings.Contains(writeErr.Error(), context.DeadlineExceeded.Error()))
-
-		// Write 的 txErr != nil 补偿分支已运行完毕。
-		// 放行后台独立 goroutine 执行真正的 PostgreSQL COMMIT 并等待其完成。
-		closeAllowCommit()
-		bgWg.Wait()
-		require.NoError(t, bgErr, "后台服务端事务 COMMIT 必须成功")
-
-		// 服务端已成功 COMMIT，物理块绝不能被误删，随后读操作必须能够成功读取！
-		readRes, readErr := initMgr.Read(ctx, &meta.ReadRequest{
-			Ino:    ino,
-			Fh:     fh,
-			Offset: 0,
-			Size:   uint32(len(writeData)),
-		})
-		require.NoError(t, readErr, "在途 COMMIT 的数据块绝不能因外部超时检查被误删，Read 不得返回 ErrIO")
-		require.NotNil(t, readRes)
-		assert.Equal(t, writeData, readRes.Data)
-	})
-}
-
-// TestWrite_TxRetryResetsEverReachedCommit_CleansUpBlockOnSecondAttemptFailure 验证写事务重试首行重置 everReachedCommit 并精确清理物理块
-func TestWrite_TxRetryResetsEverReachedCommit_CleansUpBlockOnSecondAttemptFailure(t *testing.T) {
+// TestWrite_TxRetryOnRetryableError_CleansUpBlockOnSecondAttemptFailure 验证 WriteFileAtomic 遇到可重试事务错误 (40001) 自动重试，并在第 2 次失败时精确清理物理块
+func TestWrite_TxRetryOnRetryableError_CleansUpBlockOnSecondAttemptFailure(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().Truncate(time.Microsecond)
 	ino := uint64(100)
 	fh := uint64(10)
-
-	baseFileRow := db.Inode{
-		Ino:        int64(ino),
-		Generation: 1,
-		Mode:       int32(meta.S_IFREG | 0o644),
-		Size:       1024,
-		Nlink:      1,
-		Uid:        1000,
-		Gid:        1000,
-		Rdev:       0,
-		Atime:      pgtype.Timestamptz{Time: now, Valid: true},
-		Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
-		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
-	}
 
 	mockStore := dbmock.NewMockStore(t)
 	mockBS := metamock.NewMockBlockStore(t)
@@ -1270,45 +931,17 @@ func TestWrite_TxRetryResetsEverReachedCommit_CleansUpBlockOnSecondAttemptFailur
 	mockBS.EXPECT().PutBlock(mock.Anything, uint64(101), uint32(0), []byte("test-data")).Return(nil).Once()
 	mockStore.EXPECT().NextSliceID(mock.Anything).Return(int64(101), nil).Once()
 
-	mockQuerier1 := dbmock.NewMockQuerier(t)
-	mockQuerier1.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-	mockQuerier1.EXPECT().GetFileHandle(mock.Anything, db.GetFileHandleParams{
-		Fh:  int64(fh),
-		Ino: int64(ino),
-	}).Return(db.FileHandle{
-		Fh:    int64(fh),
-		Ino:   int64(ino),
-		Flags: int32(meta.O_RDWR),
-	}, nil).Once()
-
-	mockQuerier1.EXPECT().InsertSliceRef(mock.Anything, db.InsertSliceRefParams{
-		SliceID: 101,
-		Size:    int32(len("test-data")),
-		Refs:    1,
-	}).Return(nil).Once()
-
-	mockQuerier1.EXPECT().AppendChunkSlice(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
-
-	updatedInode := baseFileRow
-	mockQuerier1.EXPECT().UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).Return(updatedInode, nil).Once()
-
-	// 阶段 2 事务第 2 次尝试（在 GetInodeForUpdate 返回 pgx.ErrNoRows，未到达 Commit）
-	mockQuerier2 := dbmock.NewMockQuerier(t)
-	mockQuerier2.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(db.Inode{}, pgx.ErrNoRows).Once()
-
-	var txCallCount int
-	mockStore.EXPECT().ExecTxWithOptions(mock.Anything, mock.Anything).RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-		txCallCount++
-		if txCallCount == 1 {
-			// 完整跑完闭包 fn(q1)，使 everReachedCommit 置为 true，但事务返回 40001
-			if err := fn(mockQuerier1); err != nil {
-				return err
+	var callCount int
+	mockStore.EXPECT().
+		WriteFileAtomic(mock.Anything, mock.Anything).
+		RunAndReturn(func(attemptCtx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+			callCount++
+			if callCount == 1 {
+				return db.WriteFileAtomicRow{}, &pgconn.PgError{Code: "40001"}
 			}
-			return &pgconn.PgError{Code: "40001"}
-		}
-		// 重试轮次执行 fn(q2)
-		return fn(mockQuerier2)
-	}).Twice()
+			return db.WriteFileAtomicRow{Status: "not_found"}, nil
+		}).
+		Twice()
 
 	// 精确调用 1 次 mockBS.DeleteBlock 清理阶段 1 物理块
 	mockBS.EXPECT().DeleteBlock(mock.Anything, uint64(101), uint32(0), uint32(len("test-data"))).Return(nil).Once()
@@ -1322,7 +955,7 @@ func TestWrite_TxRetryResetsEverReachedCommit_CleansUpBlockOnSecondAttemptFailur
 	})
 	require.Nil(t, resp)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, meta.ErrNotFound, "第 2 次重试首条 GetInodeForUpdate 返回 ErrNoRows 应映射为 ErrNotFound")
+	assert.ErrorIs(t, err, meta.ErrNotFound, "第 2 次重试 WriteFileAtomic 返回 not_found 应映射为 ErrNotFound")
 }
 
 // TestWrite_HighSparseChunkIndxBeyondInt32_PostgresIntegration 验证在超过 128 PiB
@@ -1470,50 +1103,22 @@ func TestWrite_SliceIDBatchPreallocation(t *testing.T) {
 			Times(20)
 
 		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.Anything).
-			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				mockQuerier := dbmock.NewMockQuerier(t)
-				mockQuerier.EXPECT().
-					GetInodeForUpdate(mock.Anything, int64(ino)).
-					Return(db.Inode{
-						Ino:   int64(ino),
-						Mode:  int32(meta.S_IFREG | 0o644),
-						Size:  0,
-						Nlink: 1,
-						Atime: pgtype.Timestamptz{Time: now, Valid: true},
-						Mtime: pgtype.Timestamptz{Time: now, Valid: true},
-						Ctime: pgtype.Timestamptz{Time: now, Valid: true},
-					}, nil).
-					Once()
-				mockQuerier.EXPECT().
-					GetFileHandle(mock.Anything, db.GetFileHandleParams{
-						Fh:  int64(fh),
-						Ino: int64(ino),
-					}).
-					Return(db.FileHandle{
-						Fh:    int64(fh),
-						Ino:   int64(ino),
-						Flags: int32(meta.O_WRONLY),
-					}, nil).
-					Once()
-				mockQuerier.EXPECT().
-					AppendChunkSlice(mock.Anything, mock.Anything).
-					Return(int64(24), nil).
-					Once()
-				mockQuerier.EXPECT().
-					InsertSliceRef(mock.Anything, mock.Anything).
-					Return(nil).
-					Once()
-				mockQuerier.EXPECT().
-					UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
-					Return(db.Inode{
-						Ino:   int64(ino),
-						Mode:  int32(meta.S_IFREG | 0o644),
-						Size:  16,
-						Nlink: 1,
-					}, nil).
-					Once()
-				return fn(mockQuerier)
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			RunAndReturn(func(attemptCtx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+				return db.WriteFileAtomicRow{
+					Status:    "ok",
+					OldSize:   arg.ReqOffset,
+					NewSize:   arg.ReqOffset + arg.DataLen,
+					StartIndx: 0,
+					EndIndx:   0,
+					OctetLen1: 24,
+					Ino:       int64(ino),
+					Mode:      int32(meta.S_IFREG | 0o644),
+					Nlink:     1,
+					Atime:     pgtype.Timestamptz{Time: now, Valid: true},
+					Mtime:     pgtype.Timestamptz{Time: now, Valid: true},
+					Ctime:     pgtype.Timestamptz{Time: now, Valid: true},
+				}, nil
 			}).
 			Times(20)
 
@@ -1662,6 +1267,28 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 
 		handleCreatedAt := now.Add(-5 * time.Minute)
 
+		// 非零字节写入走单语句 WriteFileAtomic，0 字节写入走 writeZeroBytes (ExecTxWithOptions)
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			Return(db.WriteFileAtomicRow{
+				Status:     "ok",
+				OldSize:    1024,
+				NewSize:    1024,
+				StartIndx:  0,
+				EndIndx:    0,
+				OctetLen1:  24,
+				Ino:        int64(ino),
+				Generation: 1,
+				Mode:       int32(meta.S_IFREG | 0o644),
+				Nlink:      1,
+				Uid:        1000,
+				Gid:        1000,
+				Atime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
+			Times(12)
+
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.Anything).
 			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
@@ -1684,24 +1311,13 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 						SessionID: pgtype.Int8{Int64: int64(sessionID), Valid: true},
 					}, nil).
 					Once()
-				mockQuerier.EXPECT().
-					AppendChunkSlice(mock.Anything, mock.Anything).
-					Return(int64(24), nil).
-					Maybe()
-				mockQuerier.EXPECT().
-					InsertSliceRef(mock.Anything, mock.Anything).
-					Return(nil).
-					Maybe()
-				mockQuerier.EXPECT().
-					UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
-					Return(baseFileRow, nil).
-					Maybe()
 				err := fn(mockQuerier)
 				mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
 				mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
 				mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
 				return err
-			})
+			}).
+			Times(4)
 
 		mgr := meta.New(
 			mockStore,
@@ -1734,7 +1350,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		}
 	})
 
-	t.Run("GetFileHandle 内联拦截已超期或已退役重建会话并返回 ErrBadFileHandle 且回滚清理物理块", func(t *testing.T) {
+	t.Run("WriteFileAtomic 内联拦截已超期或已退役重建会话并返回 ErrBadFileHandle 且回滚清理物理块", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		payload := []byte("intercepted-write")
@@ -1755,16 +1371,8 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			Times(2)
 
 		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.Anything).
-			RunAndReturn(func(attemptCtx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
-				mockQuerier := dbmock.NewMockQuerier(t)
-				mockQuerier.EXPECT().GetInodeForUpdate(mock.Anything, int64(ino)).Return(baseFileRow, nil).Once()
-				mockQuerier.EXPECT().GetFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{}, pgx.ErrNoRows).Once()
-				err := fn(mockQuerier)
-				mockQuerier.AssertNotCalled(t, "UpsertClientSession", mock.Anything, mock.Anything)
-				mockQuerier.AssertNotCalled(t, "DeleteExpiredClientSessions", mock.Anything)
-				return err
-			}).
+			WriteFileAtomic(mock.Anything, mock.Anything).
+			Return(db.WriteFileAtomicRow{Status: "bad_handle"}, nil).
 			Times(2)
 
 		mgr := meta.New(
@@ -1772,7 +1380,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 			meta.WithBlockStore(mockBS),
 		)
 
-		// Step 1: 退役旧代际句柄 -> GetFileHandle 返回 pgx.ErrNoRows -> ErrBadFileHandle
+		// Step 1: 退役旧代际句柄 -> WriteFileAtomic 返回 bad_handle -> ErrBadFileHandle
 		_, err := mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,
 			Fh:        fh,
@@ -1782,7 +1390,7 @@ func TestWrite_SessionRenewalThrottleAndStaleSessionIntercept(t *testing.T) {
 		})
 		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 
-		// Step 2: 已超期会话 -> GetFileHandle 返回 pgx.ErrNoRows -> ErrBadFileHandle
+		// Step 2: 已超期会话 -> WriteFileAtomic 返回 bad_handle -> ErrBadFileHandle
 		expiredSess := sessionID + 1
 		_, err = mgr.Write(ctx, &meta.WriteRequest{
 			Ino:       ino,

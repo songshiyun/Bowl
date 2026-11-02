@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	dbmock "github.com/starsrc/bowl/services/storage/internal/db/mock"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
@@ -32,10 +31,6 @@ func TestWrite_CrossChunkBoundary(t *testing.T) {
 	sliceID := int64(1001)
 
 	// 跨越 4 MiB 边界：从 4 MiB - 1024 处写入 4096 字节
-	// actualOffset = ChunkSize - 1024
-	// startIndx = 0, endIndx = 1
-	// firstPos = ChunkSize - 1024, firstLen = 1024
-	// secondPos = 0, secondOff = 1024, secondLen = 3072
 	offset := uint64(meta.ChunkSize - 1024)
 	payload := make([]byte, 4096)
 	for i := range payload {
@@ -58,7 +53,6 @@ func TestWrite_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("普通跨 4 MiB 边界写入透明拆分至 indx 与 indx+1 且 slice_refs.refs 设为 2", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -73,83 +67,36 @@ func TestWrite_CrossChunkBoundary(t *testing.T) {
 			Return(nil).
 			Once()
 
-		// 阶段 2：事务提交
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(baseFileRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_WRONLY), // 非 O_APPEND
-			}, nil).
-			Once()
-
-		// 第一个 Chunk (indx = 0)：[ChunkSize-1024, ChunkSize)，长度 1024
-		firstSliceExpected := meta.EncodeSlice(meta.Slice{
-			Pos:  uint32(meta.ChunkSize - 1024),
-			ID:   uint64(sliceID),
-			Size: uint32(len(payload)),
-			Off:  0,
-			Len:  1024,
-		})
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-				Ino:    int64(ino),
-				Indx:   0,
-				Slices: firstSliceExpected,
-			}).
-			Return(int64(24), nil).
-			Once()
-
-		// 第二个 Chunk (indx = 1)：[0, 3072)，长度 3072
-		secondSliceExpected := meta.EncodeSlice(meta.Slice{
-			Pos:  0,
-			ID:   uint64(sliceID),
-			Size: uint32(len(payload)),
-			Off:  1024,
-			Len:  3072,
-		})
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-				Ino:    int64(ino),
-				Indx:   1,
-				Slices: secondSliceExpected,
-			}).
-			Return(int64(24), nil).
-			Once()
-
-		// 跨界拆分时 slice_refs 记录 refs = 2
-		mockQuerier.EXPECT().
-			InsertSliceRef(mock.Anything, db.InsertSliceRefParams{
-				SliceID: sliceID,
-				Size:    int32(len(payload)),
-				Refs:    2,
-			}).
-			Return(nil).
-			Once()
-
+		// 阶段 2：单语句 CTE WriteFileAtomic 提交
 		expectedNewSize := int64(offset) + int64(len(payload))
-		updatedRow := baseFileRow
-		updatedRow.Size = expectedNewSize
-		updatedRow.Mtime = pgtype.Timestamptz{Time: now, Valid: true}
-		updatedRow.Ctime = pgtype.Timestamptz{Time: now, Valid: true}
-
-		mockQuerier.EXPECT().
-			UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-				Ino:  int64(ino),
-				Size: expectedNewSize,
-				Mode: int32(meta.S_IFREG | 0o644),
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+				Ino:             int64(ino),
+				Fh:              int64(fh),
+				SessionID:       pgtype.Int8{},
+				ReqOffset:       int64(offset),
+				DataLen:         int64(len(payload)),
+				QuotaAvailBytes: math.MaxInt64,
+				SliceID:         sliceID,
 			}).
-			Return(updatedRow, nil).
+			Return(db.WriteFileAtomicRow{
+				Status:     "ok",
+				OldSize:    int64(offset),
+				NewSize:    expectedNewSize,
+				StartIndx:  0,
+				EndIndx:    1,
+				OctetLen1:  24,
+				OctetLen2:  24,
+				Ino:        int64(ino),
+				Generation: 1,
+				Mode:       int32(meta.S_IFREG | 0o644),
+				Nlink:      1,
+				Uid:        1000,
+				Gid:        1000,
+				Atime:      baseFileRow.Atime,
+				Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
 			Once()
 
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -212,7 +159,6 @@ func TestWrite_OAppend_IgnoreClientOffset(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockStore := dbmock.NewMockStore(t)
-			mockQuerier := dbmock.NewMockQuerier(t)
 			mockBS := metamock.NewMockBlockStore(t)
 			mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -226,63 +172,33 @@ func TestWrite_OAppend_IgnoreClientOffset(t *testing.T) {
 				Return(nil).
 				Once()
 
-			setupMockWriteTx(mockStore, mockQuerier)
-
-			mockQuerier.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
-				Return(baseFileRow, nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				GetFileHandle(mock.Anything, db.GetFileHandleParams{
-					Fh:  int64(fh),
-					Ino: int64(ino),
+			mockStore.EXPECT().
+				WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+					Ino:             int64(ino),
+					Fh:              int64(fh),
+					SessionID:       pgtype.Int8{},
+					ReqOffset:       int64(tc.clientOff),
+					DataLen:         int64(len(payload)),
+					QuotaAvailBytes: math.MaxInt64,
+					SliceID:         sliceID,
 				}).
-				Return(db.FileHandle{
-					Fh:    int64(fh),
-					Ino:   int64(ino),
-					Flags: tc.openFlags,
+				Return(db.WriteFileAtomicRow{
+					Status:     "ok",
+					OldSize:    500,
+					NewSize:    tc.expectedSz,
+					StartIndx:  0,
+					EndIndx:    0,
+					OctetLen1:  24,
+					Ino:        int64(ino),
+					Generation: 1,
+					Mode:       int32(meta.S_IFREG | 0o644),
+					Nlink:      1,
+					Uid:        1000,
+					Gid:        1000,
+					Atime:      baseFileRow.Atime,
+					Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+					Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 				}, nil).
-				Once()
-
-			// 写入起始位置必须为 actualOffset = 500，且在单 Chunk 内 (indx = 0)
-			expectedSlice := meta.EncodeSlice(meta.Slice{
-				Pos:  500,
-				ID:   uint64(sliceID),
-				Size: uint32(len(payload)),
-				Off:  0,
-				Len:  uint32(len(payload)),
-			})
-			mockQuerier.EXPECT().
-				AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-					Ino:    int64(ino),
-					Indx:   0,
-					Slices: expectedSlice,
-				}).
-				Return(int64(24), nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				InsertSliceRef(mock.Anything, db.InsertSliceRefParams{
-					SliceID: sliceID,
-					Size:    int32(len(payload)),
-					Refs:    1,
-				}).
-				Return(nil).
-				Once()
-
-			updatedRow := baseFileRow
-			updatedRow.Size = tc.expectedSz
-			updatedRow.Mtime = pgtype.Timestamptz{Time: now, Valid: true}
-			updatedRow.Ctime = pgtype.Timestamptz{Time: now, Valid: true}
-
-			mockQuerier.EXPECT().
-				UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-					Ino:  int64(ino),
-					Size: tc.expectedSz,
-					Mode: int32(meta.S_IFREG | 0o644),
-				}).
-				Return(updatedRow, nil).
 				Once()
 
 			resp, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -331,7 +247,6 @@ func TestWrite_OAppend_CrossChunkBoundary(t *testing.T) {
 
 	t.Run("O_APPEND 恰好跨越 4 MiB 边界时自动拆分至 indx 与 indx+1 且 refs = 2", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
 		mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -345,82 +260,35 @@ func TestWrite_OAppend_CrossChunkBoundary(t *testing.T) {
 			Return(nil).
 			Once()
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInodeForUpdate(mock.Anything, int64(ino)).
-			Return(baseFileRow, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_WRONLY | meta.O_APPEND),
-			}, nil).
-			Once()
-
-		// 第一个 Chunk (indx = 0)：[ChunkSize-2048, ChunkSize)，长度 2048
-		firstSliceExpected := meta.EncodeSlice(meta.Slice{
-			Pos:  uint32(meta.ChunkSize - 2048),
-			ID:   uint64(sliceID),
-			Size: uint32(len(payload)),
-			Off:  0,
-			Len:  2048,
-		})
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-				Ino:    int64(ino),
-				Indx:   0,
-				Slices: firstSliceExpected,
-			}).
-			Return(int64(24), nil).
-			Once()
-
-		// 第二个 Chunk (indx = 1)：[0, 2048)，长度 2048
-		secondSliceExpected := meta.EncodeSlice(meta.Slice{
-			Pos:  0,
-			ID:   uint64(sliceID),
-			Size: uint32(len(payload)),
-			Off:  2048,
-			Len:  2048,
-		})
-		mockQuerier.EXPECT().
-			AppendChunkSlice(mock.Anything, db.AppendChunkSliceParams{
-				Ino:    int64(ino),
-				Indx:   1,
-				Slices: secondSliceExpected,
-			}).
-			Return(int64(24), nil).
-			Once()
-
-		// 跨界引用计数记为 2
-		mockQuerier.EXPECT().
-			InsertSliceRef(mock.Anything, db.InsertSliceRefParams{
-				SliceID: sliceID,
-				Size:    int32(len(payload)),
-				Refs:    2,
-			}).
-			Return(nil).
-			Once()
-
 		expectedNewSize := initialSize + int64(len(payload))
-		updatedRow := baseFileRow
-		updatedRow.Size = expectedNewSize
-		updatedRow.Mtime = pgtype.Timestamptz{Time: now, Valid: true}
-		updatedRow.Ctime = pgtype.Timestamptz{Time: now, Valid: true}
-
-		mockQuerier.EXPECT().
-			UpdateInodeSizeAndTouchForWrite(mock.Anything, db.UpdateInodeSizeAndTouchForWriteParams{
-				Ino:  int64(ino),
-				Size: expectedNewSize,
-				Mode: int32(meta.S_IFREG | 0o644),
+		mockStore.EXPECT().
+			WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+				Ino:             int64(ino),
+				Fh:              int64(fh),
+				SessionID:       pgtype.Int8{},
+				ReqOffset:       0,
+				DataLen:         int64(len(payload)),
+				QuotaAvailBytes: math.MaxInt64,
+				SliceID:         sliceID,
 			}).
-			Return(updatedRow, nil).
+			Return(db.WriteFileAtomicRow{
+				Status:     "ok",
+				OldSize:    initialSize,
+				NewSize:    expectedNewSize,
+				StartIndx:  0,
+				EndIndx:    1,
+				OctetLen1:  24,
+				OctetLen2:  24,
+				Ino:        int64(ino),
+				Generation: 1,
+				Mode:       int32(meta.S_IFREG | 0o644),
+				Nlink:      1,
+				Uid:        1000,
+				Gid:        1000,
+				Atime:      baseFileRow.Atime,
+				Mtime:      pgtype.Timestamptz{Time: now, Valid: true},
+				Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
+			}, nil).
 			Once()
 
 		resp, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -445,18 +313,7 @@ func TestWrite_OAppend_OverflowMaxInt64(t *testing.T) {
 	sliceID := int64(4001)
 	payload := []byte("overflow-test-data")
 
-	// 初始文件大小极为接近 MaxInt64
-	initialSize := int64(math.MaxInt64 - 5)
-
-	baseFileRow := db.Inode{
-		Ino:   int64(ino),
-		Mode:  int32(meta.S_IFREG | 0o644),
-		Size:  initialSize,
-		Nlink: 1,
-	}
-
 	mockStore := dbmock.NewMockStore(t)
-	mockQuerier := dbmock.NewMockQuerier(t)
 	mockBS := metamock.NewMockBlockStore(t)
 	mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
 
@@ -470,26 +327,20 @@ func TestWrite_OAppend_OverflowMaxInt64(t *testing.T) {
 		Return(nil).
 		Once()
 
-	setupMockWriteTx(mockStore, mockQuerier)
-
-	mockQuerier.EXPECT().
-		GetInodeForUpdate(mock.Anything, int64(ino)).
-		Return(baseFileRow, nil).
-		Once()
-
-	mockQuerier.EXPECT().
-		GetFileHandle(mock.Anything, db.GetFileHandleParams{
-			Fh:  int64(fh),
-			Ino: int64(ino),
+	mockStore.EXPECT().
+		WriteFileAtomic(mock.Anything, db.WriteFileAtomicParams{
+			Ino:             int64(ino),
+			Fh:              int64(fh),
+			SessionID:       pgtype.Int8{},
+			ReqOffset:       0,
+			DataLen:         int64(len(payload)),
+			QuotaAvailBytes: math.MaxInt64,
+			SliceID:         sliceID,
 		}).
-		Return(db.FileHandle{
-			Fh:    int64(fh),
-			Ino:   int64(ino),
-			Flags: int32(meta.O_WRONLY | meta.O_APPEND),
-		}, nil).
+		Return(db.WriteFileAtomicRow{Status: "invalid_arg"}, nil).
 		Once()
 
-	// 溢出时事务失败回滚，外层立即调用 DeleteBlock 清理物理块
+	// 溢出时单语句 CTE 返回 invalid_arg，外层立即调用 DeleteBlock 清理物理块
 	mockBS.EXPECT().
 		DeleteBlock(mock.Anything, uint64(sliceID), uint32(0), uint32(len(payload))).
 		Return(nil).
@@ -506,7 +357,7 @@ func TestWrite_OAppend_OverflowMaxInt64(t *testing.T) {
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
 }
 
-// TestWrite_OAppend_Concurrent_NoDataLoss 测试多个并发协程使用 O_APPEND 写入时，事务行锁确保线性追加且零数据覆盖丢失。
+// TestWrite_OAppend_Concurrent_NoDataLoss 测试多个并发协程使用 O_APPEND 写入时，行锁确保线性追加且零数据覆盖丢失。
 func TestWrite_OAppend_Concurrent_NoDataLoss(t *testing.T) {
 	ctx := context.Background()
 	ino := uint64(601)
@@ -532,68 +383,34 @@ func TestWrite_OAppend_Concurrent_NoDataLoss(t *testing.T) {
 		PutBlock(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil)
 
-	// 阶段 2：事务内排他锁
+	// 阶段 2：单语句 CTE 内排他锁
 	mockStore.EXPECT().
-		ExecTxWithOptions(mock.Anything, mock.Anything).
-		RunAndReturn(func(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+		WriteFileAtomic(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
 			mu.Lock()
 			defer mu.Unlock()
 
-			mockQuerier := dbmock.NewMockQuerier(t)
-
-			mockQuerier.EXPECT().
-				GetInodeForUpdate(mock.Anything, int64(ino)).
-				Return(db.Inode{
-					Ino:   int64(ino),
-					Mode:  int32(meta.S_IFREG | 0o644),
-					Size:  currentSize,
-					Nlink: 1,
-				}, nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				GetFileHandle(mock.Anything, db.GetFileHandleParams{
-					Fh:  int64(fh),
-					Ino: int64(ino),
-				}).
-				Return(db.FileHandle{
-					Fh:    int64(fh),
-					Ino:   int64(ino),
-					Flags: int32(meta.O_WRONLY | meta.O_APPEND),
-				}, nil).
-				Once()
-
-			mockQuerier.EXPECT().
-				AppendChunkSlice(mock.Anything, mock.Anything).
-				RunAndReturn(func(ctx context.Context, params db.AppendChunkSliceParams) (int64, error) {
-					slices, err := meta.DecodeSlices(params.Slices)
-					if err != nil {
-						return 0, err
-					}
-					appendedSlices = append(appendedSlices, slices...)
-					return int64(len(appendedSlices) * meta.SliceBytes), nil
-				}).
-				Maybe()
-
-			mockQuerier.EXPECT().
-				InsertSliceRef(mock.Anything, mock.Anything).
-				Return(nil).
-				Maybe()
-
-			mockQuerier.EXPECT().
-				UpdateInodeSizeAndTouchForWrite(mock.Anything, mock.Anything).
-				RunAndReturn(func(ctx context.Context, params db.UpdateInodeSizeAndTouchForWriteParams) (db.Inode, error) {
-					currentSize = params.Size
-					return db.Inode{
-						Ino:   params.Ino,
-						Size:  params.Size,
-						Mode:  params.Mode,
-						Nlink: 1,
-					}, nil
-				}).
-				Once()
-
-			return fn(mockQuerier)
+			oldSize := currentSize
+			actualOff := uint64(oldSize)
+			appendedSlices = append(appendedSlices, meta.Slice{
+				Pos:  uint32(actualOff % meta.ChunkSize),
+				ID:   uint64(arg.SliceID),
+				Size: uint32(arg.DataLen),
+				Off:  0,
+				Len:  uint32(arg.DataLen),
+			})
+			currentSize = oldSize + arg.DataLen
+			return db.WriteFileAtomicRow{
+				Status:    "ok",
+				OldSize:   oldSize,
+				NewSize:   currentSize,
+				StartIndx: int64(actualOff / meta.ChunkSize),
+				EndIndx:   int64((actualOff + uint64(arg.DataLen) - 1) / meta.ChunkSize),
+				OctetLen1: int64(len(appendedSlices) * meta.SliceBytes),
+				Ino:       arg.Ino,
+				Mode:      int32(meta.S_IFREG | 0o644),
+				Nlink:     1,
+			}, nil
 		})
 
 	mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))

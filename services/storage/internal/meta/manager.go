@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -152,53 +151,49 @@ const (
 )
 
 type manager struct {
-	store                  db.Store
-	blockStore             BlockStore
-	entryTimeout           float64
-	attrTimeout            float64
-	dirEntryTimeout        float64
-	openKeepCache          bool
-	openDirCache           bool
-	atimeMode              AtimeMode
-	sessionLeaseTTL        time.Duration
-	gcInterval             time.Duration
-	gcBatchLimit           int32
-	gcOrphanGracePeriod    time.Duration
-	compactSliceThreshold  int
-	sliceIDBatchSize       int
-	sliceIDMu              sync.Mutex
-	sliceIDQueue           []int64
-	lastAllocatedSliceID   int64
-	writeGroupMaxBatchSize int
-	writeInFlightStage1    atomic.Int64
-	writeGroupMu           sync.Mutex
-	writeLeaderActive      bool
-	writePendingQueue      []*writeBatchTask
-	writeCoalesceCh        chan struct{}
-	workerMu               sync.Mutex
-	compactQueue           []chunkKey
-	compactState           map[chunkKey]compactTaskState
-	compactWakeCh          chan struct{}
-	workerCancel           context.CancelFunc
-	workerDoneCh           chan struct{}
-	workerStopped          bool
-	lockNotifyMu           sync.Mutex
-	lockNotifyChans        map[uint64]*lockNotifyEntry
-	crossDirRenameMu       sync.Mutex
-	dirCursorMu            sync.Mutex
-	dirCursors             map[dirCursorKey]dirCursorAnchor
-	dirMutationSeq         map[uint64]uint64
-	inFlightDirMutations   map[uint64]int
-	activeDirReads         map[uint64]*inFlightDirRead
-	nextDirReadID          uint64
-	dirKnownVersions       sync.Map // map[sessionInoKey]dirKnownVersion
-	inFlightGrantMu        sync.Mutex
-	inFlightGrants         map[inFlightGrantKey]*inFlightGrant
-	nextInFlightGrantID    uint64
-	deferredOrphansMu      sync.Mutex
-	deferredOrphanInos     map[int64]struct{}
-	quotaMu                sync.Mutex
-	diskQuotas             map[int64]*diskQuotaState
+	store                 db.Store
+	blockStore            BlockStore
+	entryTimeout          float64
+	attrTimeout           float64
+	dirEntryTimeout       float64
+	openKeepCache         bool
+	openDirCache          bool
+	atimeMode             AtimeMode
+	sessionLeaseTTL       time.Duration
+	gcInterval            time.Duration
+	gcBatchLimit          int32
+	gcOrphanGracePeriod   time.Duration
+	compactSliceThreshold int
+	sliceIDBatchSize      int
+	sliceIDMu             sync.Mutex
+	sliceIDQueue          []int64
+	lastAllocatedSliceID  int64
+	workerMu              sync.Mutex
+	compactQueue          []chunkKey
+	compactState          map[chunkKey]compactTaskState
+	compactWakeCh         chan struct{}
+	workerCancel          context.CancelFunc
+	workerDoneCh          chan struct{}
+	workerStopped         bool
+	lockNotifyMu          sync.Mutex
+	lockNotifyChans       map[uint64]*lockNotifyEntry
+	crossDirRenameMu      sync.Mutex
+	dirCursorMu           sync.Mutex
+	dirCursors            map[dirCursorKey]dirCursorAnchor
+	dirMutationSeq        map[uint64]uint64
+	inFlightDirMutations  map[uint64]int
+	activeDirReads        map[uint64]*inFlightDirRead
+	nextDirReadID         uint64
+	dirKnownVersions      sync.Map // map[sessionInoKey]dirKnownVersion
+	inFlightGrantMu       sync.Mutex
+	inFlightGrants        map[inFlightGrantKey]*inFlightGrant
+	nextInFlightGrantID   uint64
+	deferredOrphansMu     sync.Mutex
+	deferredOrphanInos    map[int64]struct{}
+	quotaMu               sync.Mutex
+	diskQuotas            map[int64]*diskQuotaState
+	inoRootInos           sync.Map // map[uint64]int64
+	writeQuotaMu          sync.Mutex
 }
 
 func (m *manager) markDeferredOrphan(ino int64) {
@@ -362,38 +357,27 @@ func WithSliceIDBatchSize(batchSize int) Option {
 	}
 }
 
-// WithWriteGroupMaxBatchSize 配置 Write 阶段 2 Group Commit 单批次最大聚合请求数（batchSize > 0 时生效，默认 DefaultWriteGroupMaxBatchSize）。
-func WithWriteGroupMaxBatchSize(batchSize int) Option {
-	return func(m *manager) {
-		if batchSize > 0 {
-			m.writeGroupMaxBatchSize = batchSize
-		}
-	}
-}
-
 // New 创建 Manager 实例。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
-		store:                  store,
-		entryTimeout:           DefaultEntryTimeoutSeconds,
-		attrTimeout:            DefaultAttrTimeoutSeconds,
-		dirEntryTimeout:        DefaultEntryTimeoutSeconds,
-		sessionLeaseTTL:        DefaultSessionLeaseTTL,
-		gcInterval:             DefaultGCInterval,
-		gcBatchLimit:           DefaultGCBatchLimit,
-		gcOrphanGracePeriod:    DefaultGCOrphanGracePeriod,
-		compactSliceThreshold:  CompactSliceThreshold,
-		sliceIDBatchSize:       DefaultSliceIDBatchSize,
-		writeGroupMaxBatchSize: DefaultWriteGroupMaxBatchSize,
-		writeCoalesceCh:        make(chan struct{}, 1),
-		compactState:           make(map[chunkKey]compactTaskState),
-		compactWakeCh:          make(chan struct{}, 1),
-		lockNotifyChans:        make(map[uint64]*lockNotifyEntry),
-		dirCursors:             make(map[dirCursorKey]dirCursorAnchor),
-		dirMutationSeq:         make(map[uint64]uint64),
-		inFlightDirMutations:   make(map[uint64]int),
-		activeDirReads:         make(map[uint64]*inFlightDirRead),
-		inFlightGrants:         make(map[inFlightGrantKey]*inFlightGrant),
+		store:                 store,
+		entryTimeout:          DefaultEntryTimeoutSeconds,
+		attrTimeout:           DefaultAttrTimeoutSeconds,
+		dirEntryTimeout:       DefaultEntryTimeoutSeconds,
+		sessionLeaseTTL:       DefaultSessionLeaseTTL,
+		gcInterval:            DefaultGCInterval,
+		gcBatchLimit:          DefaultGCBatchLimit,
+		gcOrphanGracePeriod:   DefaultGCOrphanGracePeriod,
+		compactSliceThreshold: CompactSliceThreshold,
+		sliceIDBatchSize:      DefaultSliceIDBatchSize,
+		compactState:          make(map[chunkKey]compactTaskState),
+		compactWakeCh:         make(chan struct{}, 1),
+		lockNotifyChans:       make(map[uint64]*lockNotifyEntry),
+		dirCursors:            make(map[dirCursorKey]dirCursorAnchor),
+		dirMutationSeq:        make(map[uint64]uint64),
+		inFlightDirMutations:  make(map[uint64]int),
+		activeDirReads:        make(map[uint64]*inFlightDirRead),
+		inFlightGrants:        make(map[inFlightGrantKey]*inFlightGrant),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -905,6 +889,7 @@ func convertDBInodeToEntity(target db.Inode, entryTimeout, attrTimeout float64) 
 }
 
 func (m *manager) newInode(target db.Inode) *Inode {
+	m.recordInodeRootIno(uint64(target.Ino), target.RootIno)
 	entryTimeout := m.entryTimeout
 	if (uint32(target.Mode) & S_IFMT) == S_IFDIR {
 		entryTimeout = m.dirEntryTimeout
