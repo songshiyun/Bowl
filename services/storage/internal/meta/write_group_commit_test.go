@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -26,42 +27,39 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-// gateStagedBlockStore 包装 StagedBlockStore，用于在测试中同步汇聚指定数量的并发请求完成阶段 1 StageBlock，
-// 确保它们确定性地进入同一个阶段 2 WriteThread 批次，同时统计 StageBlock、SyncDirs 与 DeleteBlock 调用次数。
-type gateStagedBlockStore struct {
-	meta.StagedBlockStore
+// gateBlockStore 包装 BlockStore，用于在测试中同步汇聚指定数量的并发请求完成阶段 1 PutBlock，
+// 确保它们确定性地进入同一个阶段 2 WriteThread 批次，同时统计 PutBlock 与 DeleteBlock 调用次数。
+type gateBlockStore struct {
+	meta.BlockStore
 	gateCount   int
 	arrived     atomic.Int64
 	gateCh      chan struct{}
 	gateOnce    sync.Once
-	stageCalls  atomic.Int64
-	syncCalls   atomic.Int64
+	putCalls    atomic.Int64
 	deleteCalls atomic.Int64
 
 	mu         sync.Mutex
 	deletedIDs []uint64
-	failDir    string
 }
 
-func newGateStagedBlockStore(inner meta.StagedBlockStore, gateCount int) *gateStagedBlockStore {
-	return &gateStagedBlockStore{
-		StagedBlockStore: inner,
-		gateCount:        gateCount,
-		gateCh:           make(chan struct{}),
+func newGateBlockStore(inner meta.BlockStore, gateCount int) *gateBlockStore {
+	return &gateBlockStore{
+		BlockStore: inner,
+		gateCount:  gateCount,
+		gateCh:     make(chan struct{}),
 	}
 }
 
-func (g *gateStagedBlockStore) releaseGate() {
+func (g *gateBlockStore) releaseGate() {
 	g.gateOnce.Do(func() {
 		close(g.gateCh)
 	})
 }
 
-func (g *gateStagedBlockStore) StageBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) (string, error) {
-	g.stageCalls.Add(1)
-	dir, err := g.StagedBlockStore.StageBlock(ctx, sliceID, blockIdx, data)
-	if err != nil {
-		return "", err
+func (g *gateBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+	g.putCalls.Add(1)
+	if err := g.BlockStore.PutBlock(ctx, sliceID, blockIdx, data); err != nil {
+		return err
 	}
 	if g.gateCount > 0 {
 		if int(g.arrived.Add(1)) >= g.gateCount {
@@ -70,30 +68,18 @@ func (g *gateStagedBlockStore) StageBlock(ctx context.Context, sliceID uint64, b
 		select {
 		case <-g.gateCh:
 		case <-ctx.Done():
-			return dir, ctx.Err()
+			return ctx.Err()
 		}
 	}
-	return dir, nil
+	return nil
 }
 
-func (g *gateStagedBlockStore) SyncDirs(ctx context.Context, dirs []string) error {
-	g.syncCalls.Add(1)
-	if g.failDir != "" {
-		for _, d := range dirs {
-			if filepath.Clean(d) == filepath.Clean(g.failDir) {
-				return fmt.Errorf("%w: injected sync dir failure on %s", meta.ErrIO, d)
-			}
-		}
-	}
-	return g.StagedBlockStore.SyncDirs(ctx, dirs)
-}
-
-func (g *gateStagedBlockStore) DeleteBlock(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32) error {
+func (g *gateBlockStore) DeleteBlock(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32) error {
 	g.deleteCalls.Add(1)
 	g.mu.Lock()
 	g.deletedIDs = append(g.deletedIDs, sliceID)
 	g.mu.Unlock()
-	return g.StagedBlockStore.DeleteBlock(ctx, sliceID, blockIdx, blockSize)
+	return g.BlockStore.DeleteBlock(ctx, sliceID, blockIdx, blockSize)
 }
 
 // countRegularFilesInDir 统计给定数据目录下残留的物理块常规文件数量。
@@ -118,7 +104,7 @@ func countRegularFilesInDir(t *testing.T, dir string) int {
 
 // TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration 验证高并发 Group Commit 批次聚合与账本守恒：
 // 覆盖同一 Inode 并发写、同一 Disk 下多 Inode 并发扩容写、跨 64 MiB Chunk 边界写，
-// 断言阶段 2 将多个并发请求合并进极少次数的数据库事务与去重目录 Sync，且全文件 Read 数据视图、Inode 属性（含 S_ISUID/S_ISGID 剥离）及 Disk.used_bytes 100% 精确守恒。
+// 断言阶段 2 将多个并发请求合并进极少次数的数据库事务，且全文件 Read 数据视图、Inode 属性（含 S_ISUID/S_ISGID 剥离）及 Disk.used_bytes 100% 精确守恒。
 func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
 	if pool == nil {
@@ -137,17 +123,10 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 	}
 
 	dataDir := t.TempDir()
-	var dirSyncCalls atomic.Int64
-	localBS := meta.NewLocalFSBlockStore(dataDir, meta.WithOpenDirHook(func(dir string) (meta.DirHandle, error) {
-		f, err := os.Open(dir)
-		if err != nil {
-			return nil, err
-		}
-		return &countingDirHandle{File: f, syncCount: &dirSyncCalls}, nil
-	}))
+	localBS := meta.NewLocalFSBlockStore(dataDir)
 
 	const numWriters = 12
-	gatedBS := newGateStagedBlockStore(localBS, numWriters)
+	gatedBS := newGateBlockStore(localBS, numWriters)
 	t.Cleanup(gatedBS.releaseGate)
 
 	mgr := meta.New(
@@ -191,9 +170,8 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		cleanupWriteTestInoAndSlices(t, baseStore, mgr, int64(ino2), fh2)
 	})
 
-	// 重置事务计数与目录同步计数（排除建盘与建文件阶段的调用）
+	// 重置事务计数（排除建盘与建文件阶段的调用）
 	txCalls.Store(0)
-	dirSyncCalls.Store(0)
 
 	// 规划 12 个并发写请求：
 	// - 前 8 个写 ino1 的不重叠 4096B 分段 [0, 32768)
@@ -264,9 +242,9 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 		assert.Equal(t, uint32(meta.S_IFREG|0o755), resps[i].Inode.Attr.Mode)
 	}
 
-	// 1. 验证 Group Commit 事务合并：12 个并发请求在阶段 1 汇合后应合并为 1 次 PG 写事务（远小于 12 次），且普通 Write 热路径不触发 SyncDirs
+	// 1. 验证 Group Commit 事务合并：12 个并发请求在阶段 1 汇合后应合并为 1 次 PG 写事务（远小于 12 次）
 	assert.LessOrEqual(t, txCalls.Load(), int64(2), "12 个并发 Write 请求必须通过 WriteThread 合并进单次或极少次数据库事务")
-	assert.Equal(t, int64(0), gatedBS.syncCalls.Load(), "普通 Write 仅写入页缓存，阶段 2 不得触发 SyncDirs")
+	assert.Equal(t, int64(numWriters), gatedBS.putCalls.Load(), "12 个并发请求各自完成阶段 1 PutBlock")
 
 	// 2. 验证 ino1 的大小与全量数据读取视图
 	expectedIno1Size := uint64(8 * segSize)
@@ -318,18 +296,6 @@ func TestWrite_GroupCommit_BatchAggregationAndConservation_PostgresIntegration(t
 	assert.Equal(t, expectedIno1Size+expectedIno2Size, diskInfo.UsedBytes)
 }
 
-type countingDirHandle struct {
-	*os.File
-	syncCount *atomic.Int64
-}
-
-func (h *countingDirHandle) Sync() error {
-	if h.syncCount != nil {
-		h.syncCount.Add(1)
-	}
-	return h.File.Sync()
-}
-
 // TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres 验证同一批次内多句柄/多协程 O_APPEND 偏移演进：
 // 同一批次内多个 O_APPEND 请求严格按序从最新演进 Inode 大小依次累加偏移，零覆盖、零丢失，
 // 且各调用方收到的 WriteResponse.Inode.Attr.Size 精确对应其自身写入完成时刻的演进大小快照。
@@ -346,7 +312,7 @@ func TestWrite_GroupCommit_OAppendOffsetEvolution_UnitAndPostgres(t *testing.T) 
 
 	dataDir := t.TempDir()
 	localBS := meta.NewLocalFSBlockStore(dataDir)
-	gatedBS := newGateStagedBlockStore(localBS, numAppendTasks)
+	gatedBS := newGateBlockStore(localBS, numAppendTasks)
 	t.Cleanup(gatedBS.releaseGate)
 
 	mockStore := dbmock.NewMockStore(t)
@@ -521,7 +487,7 @@ func TestWrite_GroupCommit_BadFileHandleIsolationAndBlockCleanup(t *testing.T) {
 	// - 请求 4: 只读句柄 (readOnlyFh, O_RDONLY) -> ErrBadFileHandle
 	// - 请求 5: 已超期的 ClientSession 句柄 (expiredFh) -> ErrBadFileHandle
 	const totalReqs = 6
-	gatedBS := newGateStagedBlockStore(localBS, totalReqs)
+	gatedBS := newGateBlockStore(localBS, totalReqs)
 	t.Cleanup(gatedBS.releaseGate)
 
 	mgr := meta.New(countingStore, meta.WithBlockStore(gatedBS))
@@ -717,7 +683,7 @@ func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 	// - 请求 C (原地覆写 2000B: offset=0, len=2000): newEnd=2000 <= 4000, delta=0 -> 不占新配额，必须成功！
 	// - 请求 D (小扩容 800B: offset=4000, len=800): 因 A/B 未推进 evolvedSize，delta=800 <= 剩余 1000 -> 必须成功！
 	const batchReqs = 4
-	gatedBS := newGateStagedBlockStore(localBS, batchReqs)
+	gatedBS := newGateBlockStore(localBS, batchReqs)
 	t.Cleanup(gatedBS.releaseGate)
 	mgr := meta.New(baseStore, meta.WithBlockStore(gatedBS))
 
@@ -790,20 +756,17 @@ func TestWrite_GroupCommit_QuotaExceededIsolationAndBlockCleanup(t *testing.T) {
 }
 
 // TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit 验证：
-//  1. 阶段 1 StageBlock 发布至页缓存后，阶段 2 直接提交数据库事务而不再调用 SyncDirs；
+//  1. 阶段 1 PutBlock 发布至页缓存后，阶段 2 直接提交数据库事务；
 //  2. 步骤 2b 批次内混入不存在的 Inode (ErrNotFound)、目录 Inode (ErrIsDir)、FIFO 节点 (ErrInvalidArgument) 及 O_APPEND 溢出 MaxInt64 时，
 //     各异常请求精确返回对应哨兵错误并清理物理块，不影响同批次合法 Inode 正常提交。
 func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("阶段 2 提交不调用 SyncDirs 且所有合法任务正常合并提交", func(t *testing.T) {
+	t.Run("阶段 1 PutBlock 发布至页缓存后阶段 2 所有合法任务正常合并提交", func(t *testing.T) {
 		dataDir := t.TempDir()
 		localBS := meta.NewLocalFSBlockStore(dataDir)
-		gatedBS := newGateStagedBlockStore(localBS, 3)
+		gatedBS := newGateBlockStore(localBS, 3)
 		t.Cleanup(gatedBS.releaseGate)
-
-		// 即便 failDir 设置了故障目录，由于阶段 2 不再调用 SyncDirs，3 个写请求均应直接成功提交
-		gatedBS.failDir = filepath.Join(dataDir, "chunks", fmt.Sprintf("%02X", 1001%256), "0")
 
 		mockStore := dbmock.NewMockStore(t)
 		mockStore.EXPECT().
@@ -862,7 +825,7 @@ func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing
 		for i, err := range errs {
 			require.NoError(t, err, "请求 %d 应成功提交", i)
 		}
-		assert.Equal(t, int64(0), gatedBS.syncCalls.Load(), "Write 阶段 2 不得调用 SyncDirs")
+		assert.Equal(t, int64(3), gatedBS.putCalls.Load(), "3 个请求各自完成阶段 1 PutBlock")
 		assert.Equal(t, int64(0), gatedBS.deleteCalls.Load(), "全部成功提交的任务不应触发 DeleteBlock")
 		assert.Equal(t, 3, countRegularFilesInDir(t, dataDir), "数据目录中应保留全部 3 个成功任务的物理块")
 	})
@@ -871,7 +834,7 @@ func TestWrite_GroupCommit_PageCachePublishAndInodeModeIsolation_Unit(t *testing
 		dataDir := t.TempDir()
 		localBS := meta.NewLocalFSBlockStore(dataDir)
 		const numTasks = 5
-		gatedBS := newGateStagedBlockStore(localBS, numTasks)
+		gatedBS := newGateBlockStore(localBS, numTasks)
 		t.Cleanup(gatedBS.releaseGate)
 
 		mockStore := dbmock.NewMockStore(t)
@@ -997,30 +960,22 @@ func (t *sqlOrderTracer) snapshot() []string {
 	return slices.Clone(t.queries)
 }
 
-type orderSpyStagedBlockStore struct {
-	meta.StagedBlockStore
-	syncPendingCalls atomic.Int64
-	failErr          error
-	onSyncPending    func()
+type orderSpyBlockStore struct {
+	meta.BlockStore
+	putBlockCalls atomic.Int64
 }
 
-func (s *orderSpyStagedBlockStore) SyncPending(ctx context.Context) error {
-	s.syncPendingCalls.Add(1)
-	if s.onSyncPending != nil {
-		s.onSyncPending()
-	}
-	if s.failErr != nil {
-		return s.failErr
-	}
-	return s.StagedBlockStore.SyncPending(ctx)
+func (s *orderSpyBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+	s.putBlockCalls.Add(1)
+	return s.BlockStore.PutBlock(ctx, sliceID, blockIdx, data)
 }
 
-// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0024：
-//  1. 普通 Write（含单任务与多任务批次）在真实数据库事务内启用 SET LOCAL synchronous_commit = off，且热路径不触发目录 Sync；
+// TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration 验证 ADR-0026：
+//  1. 普通 Write（含单任务与多任务批次）统一调用 BlockStore.PutBlock 写入 OS Page Cache，且在真实数据库事务内启用 SET LOCAL synchronous_commit = off；
 //  2. Write 返回后立即发起 Read、GetAttr、Lookup 100% 读到最新数据与最新属性；
-//  3. Fsync 与 FsyncDir 句柄校验失败时不触发 SyncPending 与 WAL 刷盘；
-//  4. Fsync 与 FsyncDir 句柄校验通过后严格按「先 SyncPending 刷物理数据块、后 SELECT pg_current_wal_flush_lsn() 刷 PG WAL」顺序执行；
-//  5. 无新写入时重复 Fsync/FsyncDir 不触发冗余块刷盘；当 SyncPending 或 WAL 刷盘失败时准确返回 ErrIO，且后续重试可恢复。
+//  3. Fsync 与 FsyncDir 句柄校验失败时不触发 WAL 刷盘；
+//  4. Fsync 与 FsyncDir 句柄校验通过后仅执行 SELECT pg_current_wal_flush_lsn()::text 刷 PG WAL；
+//  5. 当数据库 WAL 刷盘失败时准确返回包装 ErrIO 的错误。
 func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *testing.T) {
 	tracer := &sqlOrderTracer{}
 	pool, ctx := setupMetaTestDBWithTracer(t, tracer)
@@ -1031,30 +986,16 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 
 	store := db.NewStore(pool)
 	dataDir := t.TempDir()
-	var dirSyncCalls atomic.Int64
-	localBS := meta.NewLocalFSBlockStore(dataDir, meta.WithOpenDirHook(func(dir string) (meta.DirHandle, error) {
-		f, err := os.Open(dir)
-		if err != nil {
-			return nil, err
-		}
-		return &countingDirHandle{File: f, syncCount: &dirSyncCalls}, nil
-	}))
+	localBS := meta.NewLocalFSBlockStore(dataDir)
 
-	var eventsMu sync.Mutex
-	var barrierEvents []string
-	spyBS := &orderSpyStagedBlockStore{
-		StagedBlockStore: localBS,
-		onSyncPending: func() {
-			eventsMu.Lock()
-			barrierEvents = append(barrierEvents, "block_sync_pending")
-			eventsMu.Unlock()
-		},
+	spyBS := &orderSpyBlockStore{
+		BlockStore: localBS,
 	}
 
 	mgr := meta.New(store, meta.WithBlockStore(spyBS))
 
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
-		Name:     fmt.Sprintf("adr0024-barrier-%d", time.Now().UnixNano()),
+		Name:     fmt.Sprintf("adr0026-barrier-%d", time.Now().UnixNano()),
 		MaxBytes: 100 * 1024 * 1024,
 	})
 	require.NoError(t, err)
@@ -1089,21 +1030,9 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino), fh)
 	})
 
-	// 预热散列目录并排空首次建目录同步计数
-	warmupPayload := []byte("warmup-first")
-	_, err = mgr.Write(ctx, &meta.WriteRequest{
-		Ino:    ino,
-		Fh:     fh,
-		Offset: 0,
-		Data:   warmupPayload,
-	})
-	require.NoError(t, err)
-	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-
-	// 1. 验证单任务 Write 在已缓存散列目录下零目录 Sync，且事务内执行了 SET LOCAL synchronous_commit = off
-	// 强制分配一个与已预热目录同散列桶的 slice_id，或预热所有目标桶：此处通过写入并檢查 SQL 与 SyncPending
+	// 1. 验证 Write 统一调用 PutBlock，事务内执行了 SET LOCAL synchronous_commit = off
 	tracer.reset()
-	spyBS.syncPendingCalls.Store(0)
+	spyBS.putBlockCalls.Store(0)
 
 	payload1 := []byte("hello-page-cache-immediate-visibility")
 	wRes, err := mgr.Write(ctx, &meta.WriteRequest{
@@ -1114,7 +1043,7 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	})
 	require.NoError(t, err)
 	assert.Equal(t, uint32(len(payload1)), wRes.Size)
-	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "普通 Write 绝不调用 SyncPending")
+	assert.Equal(t, int64(1), spyBS.putBlockCalls.Load(), "Write 阶段 1 必须统一调用 PutBlock")
 
 	queries := tracer.snapshot()
 	var hasAsyncCommitSQL, hasWalFlushSQLOnWrite bool
@@ -1149,54 +1078,27 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 	assert.Equal(t, uint64(len(payload1)), lookupRes.Attr.Size)
 	assert.Equal(t, uint32(meta.S_IFREG|0o755), lookupRes.Attr.Mode)
 
-	// 3. Fsync 与 FsyncDir 句柄校验失败时保持错误优先级，且不触发 SyncPending
+	// 3. Fsync 与 FsyncDir 句柄校验失败时保持错误优先级，且不触发 WAL 刷盘
+	tracer.reset()
 	require.ErrorIs(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: 99999999}), meta.ErrBadFileHandle)
 	require.ErrorIs(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: 99999999}), meta.ErrBadFileHandle)
-	assert.Equal(t, int64(0), spyBS.syncPendingCalls.Load(), "句柄校验失败时不得触发 SyncPending")
-
-	// 4. 注入 SyncPending 非包装错误：Fsync / FsyncDir 必须包装为 ErrIO 返回，且不继续调用 pg_current_wal_flush_lsn
-	tracer.reset()
-	spyBS.failErr = errors.New("raw disk sync failure")
-	fErr := mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh})
-	require.ErrorIs(t, fErr, meta.ErrIO, "SyncPending 报错时 Fsync 必须返回 ErrIO")
-	fdErr := mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh})
-	require.ErrorIs(t, fdErr, meta.ErrIO, "SyncPending 报错时 FsyncDir 必须返回 ErrIO")
 	for _, q := range tracer.snapshot() {
-		assert.False(t, strings.Contains(q, "pg_current_wal_flush_lsn"), "块存储刷盘失败时不得提前刷入数据库 WAL")
+		assert.False(t, strings.Contains(q, "pg_current_wal_flush_lsn"), "句柄校验失败时不得触发数据库 WAL 刷盘")
 	}
 
-	// 5. 恢复正常后调用 Fsync：验证先执行 SyncPending 刷入刚才未完成的批次，再执行 SELECT pg_current_wal_flush_lsn()
-	spyBS.failErr = nil
+	// 4. Fsync 校验通过后仅执行 SELECT pg_current_wal_flush_lsn()::text 刷 PG WAL
 	tracer.reset()
-	dirSyncCalls.Store(0)
-	eventsMu.Lock()
-	barrierEvents = nil
-	eventsMu.Unlock()
-
 	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-	assert.Greater(t, dirSyncCalls.Load(), int64(0), "恢复后 Fsync 必须将挂起的写入批次刷入磁盘")
 
 	var walFlushMeasured bool
 	for _, q := range tracer.snapshot() {
-		if strings.Contains(q, "pg_current_wal_flush_lsn") {
+		if strings.Contains(q, "SELECT pg_current_wal_flush_lsn()::text") {
 			walFlushMeasured = true
-			eventsMu.Lock()
-			barrierEvents = append(barrierEvents, "wal_flush")
-			eventsMu.Unlock()
 		}
 	}
-	assert.True(t, walFlushMeasured, "Fsync 必须执行 SELECT pg_current_wal_flush_lsn()")
-	eventsMu.Lock()
-	assert.Equal(t, []string{"block_sync_pending", "wal_flush"}, barrierEvents)
-	eventsMu.Unlock()
+	assert.True(t, walFlushMeasured, "Fsync 必须执行 SELECT pg_current_wal_flush_lsn()::text")
 
-	// 6. 无新写入时再次调用 Fsync 与 FsyncDir：底层磁盘目录 Sync 计数为 0（不触发冗余刷盘）
-	dirSyncCalls.Store(0)
-	require.NoError(t, mgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh}))
-	require.NoError(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh}))
-	assert.Equal(t, int64(0), dirSyncCalls.Load(), "无新写入时重复 Fsync / FsyncDir 不触发冗余块刷盘")
-
-	// 7. 再次写入新数据后调用 FsyncDir：同样触发 SyncPending + pg_current_wal_flush_lsn
+	// 5. 再次写入新数据后调用 FsyncDir：同样仅执行 SELECT pg_current_wal_flush_lsn()::text
 	_, err = mgr.Write(ctx, &meta.WriteRequest{
 		Ino:    ino,
 		Fh:     fh,
@@ -1204,15 +1106,42 @@ func TestWrite_DeferredSyncAndFsyncDurabilityBarrier_PostgresIntegration(t *test
 		Data:   []byte("-tail"),
 	})
 	require.NoError(t, err)
+	assert.Equal(t, int64(2), spyBS.putBlockCalls.Load(), "第 2 次 Write 同样调用 PutBlock")
+
 	tracer.reset()
-	dirSyncCalls.Store(0)
 	require.NoError(t, mgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh}))
-	assert.Greater(t, dirSyncCalls.Load(), int64(0), "有新写入后调用 FsyncDir 必须触发底层块刷盘")
+
 	var dirWalFlushed bool
 	for _, q := range tracer.snapshot() {
-		if strings.Contains(q, "pg_current_wal_flush_lsn") {
+		if strings.Contains(q, "SELECT pg_current_wal_flush_lsn()::text") {
 			dirWalFlushed = true
 		}
 	}
-	assert.True(t, dirWalFlushed, "FsyncDir 必须执行 SELECT pg_current_wal_flush_lsn()")
+	assert.True(t, dirWalFlushed, "FsyncDir 必须执行 SELECT pg_current_wal_flush_lsn()::text")
+
+	// 6. 验证数据库 WAL 刷盘失败时，Fsync 与 FsyncDir 均返回包装 ErrIO 的错误
+	closedPool, err := pgxpool.New(ctx, getStorageTestDSN())
+	require.NoError(t, err)
+	closedPool.Close()
+
+	walFailStore := &walFlushFailStore{
+		Store:    store,
+		failPool: closedPool,
+	}
+	walFailMgr := meta.New(walFailStore, meta.WithBlockStore(spyBS))
+
+	fsyncWalErr := walFailMgr.Fsync(ctx, meta.FsyncParams{Ino: ino, Fh: fh})
+	require.ErrorIs(t, fsyncWalErr, meta.ErrIO, "WAL 刷盘失败时 Fsync 必须返回包装 ErrIO 的错误")
+
+	fsyncDirWalErr := walFailMgr.FsyncDir(ctx, meta.FsyncDirParams{Ino: disk.RootIno, Fh: dirFh})
+	require.ErrorIs(t, fsyncDirWalErr, meta.ErrIO, "WAL 刷盘失败时 FsyncDir 必须返回包装 ErrIO 的错误")
+}
+
+type walFlushFailStore struct {
+	db.Store
+	failPool *pgxpool.Pool
+}
+
+func (s *walFlushFailStore) Pool() *pgxpool.Pool {
+	return s.failPool
 }

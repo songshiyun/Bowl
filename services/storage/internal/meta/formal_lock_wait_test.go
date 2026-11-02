@@ -1588,6 +1588,11 @@ func runFormalLockT13CancelAndSessionExpiryScenarios(t *testing.T) {
 		Ino: file1, Fh: fhExpF1, LockOwner: ownerA, SessionID: sExp, RequestID: expWaiterReqID,
 		LkFlags: 0, Lk: meta.FileLock{Start: 0, End: 100, Type: meta.F_WRLCK, PID: 1004},
 	}
+	// 续期 sKeep (赋予更长租约以避免等待 sExp/sExp2 过期期间 sKeep 自身过期)
+	longKeepMgr := meta.New(shortEnv.Store, meta.WithSessionLeaseTTL(2*time.Second))
+	_, err = longKeepMgr.RenewSession(shortEnv.Ctx, sKeep)
+	require.NoError(t, err)
+
 	// 通过公开接口 SetLkw (搭配 1ms 租约的 tinyMgr) 让 sExp 在 file1 上真实入队 file_lock_waiters 并在首次轮询间隔内自然超期
 	tinyMgr := meta.New(shortEnv.Store, meta.WithSessionLeaseTTL(1*time.Millisecond))
 	tinyCtx, tinyCancel := context.WithTimeout(shortEnv.Ctx, 2*time.Second)
@@ -1628,8 +1633,8 @@ func runFormalLockT13CancelAndSessionExpiryScenarios(t *testing.T) {
 		Lk: meta.FileLock{Start: 0, End: 100, Type: meta.F_WRLCK, PID: 1005},
 	}, "短租约唤醒:sExp2在file0获取[0,100]写锁")
 
-	// 续期 sKeep 后，sKeep 发起阻塞 SetLkw([0, 100], F_WRLCK) 等待 sExp2
-	_, err = shortEnv.Mgr.RenewSession(shortEnv.Ctx, sKeep)
+	// 续期 sKeep (赋予更长租约以避免等待 sExp2 过期期间 sKeep 自身过期) 后，sKeep 发起阻塞 SetLkw([0, 100], F_WRLCK) 等待 sExp2
+	_, err = longKeepMgr.RenewSession(shortEnv.Ctx, sKeep)
 	require.NoError(t, err)
 
 	shortH.execAndVerifySetLkw(t, meta.SetLkwParams{
