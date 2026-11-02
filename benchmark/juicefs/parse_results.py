@@ -685,6 +685,8 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("服务端顺序读写物理基线、请求大小与并发数见第 2、4 节。不同请求大小与持久化路径的吞吐不能直接解释为云盘利用率。")
     lines.append("")
+    lines.append("本轮 Bowl 使用 ADR-0026：块写入返回时已进入服务端页缓存，显式 `Fsync` 仅同步数据库 WAL，块数据由内核后台回写。本套件未测试整机断电恢复；吞吐结果不能作为断电后数据完整性的证明，也不能与旧版逐块刷盘结果视为相同持久化条件。")
+    lines.append("")
     lines.append("`juicefs bench` 内部清理内核页缓存，但不清理 JuiceFS 客户端本地块缓存；同轮小文件与大文件读取包含缓存行为差异。套件之间的缓存清理不能改变这一边界。")
     lines.append("")
     lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")

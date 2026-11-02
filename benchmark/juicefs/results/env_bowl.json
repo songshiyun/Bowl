@@ -1,0 +1,43 @@
+{
+  "bowl_commit": "df5cb5212dbe6bf3c98870b74e312dba1fabc6da",
+  "source": "bowl-run.log 中的云资源、服务端、客户端与网络基线输出",
+  "server_node": {
+    "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+    "vcpu": "4",
+    "memory_gib": "7.4 GiB",
+    "os_release": "Ubuntu 24.04.5 LTS",
+    "kernel": "6.8.0-147-generic",
+    "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+    "redis_version": "Redis server v=7.0.15",
+    "minio_version": "rclone v1.68.2",
+    "instance_id": "i-rj9ecjp8x6emp6bkp6i2",
+    "private_ip": "172.16.1.202"
+  },
+  "client_node": {
+    "cpu_model": "Intel(R) Xeon(R) 6982P-C",
+    "vcpu": "4",
+    "memory_gib": "7.4 GiB",
+    "os_release": "Ubuntu 24.04.5 LTS",
+    "kernel": "6.8.0-147-generic",
+    "fusermount_version": "fusermount3 version: 3.14.0",
+    "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
+    "fio_version": "fio-3.36",
+    "mdtest_version": "mdtest-3.3.0",
+    "instance_id": "i-rj9ecjp8x6emp6bkp6i3",
+    "private_ip": "172.16.1.203"
+  },
+  "server_disk_baseline": {
+    "local_seq_write_mib_s": "173.54",
+    "local_seq_read_mib_s": "179.19"
+  },
+  "network_baseline": {
+    "ping_rtt_ms": "0.036/0.059/0.203/0.038",
+    "iperf3_gbps": "15.71"
+  },
+  "cleanup_audit": {
+    "key_pair_name": "bowl-jfsbench-kp-20261102-020620",
+    "instances_created_at": "2026-11-02T02:06:26Z",
+    "instances_deleted_at": "2026-11-02T02:16:48Z",
+    "remaining_benchmark_instances": 0
+  }
+}

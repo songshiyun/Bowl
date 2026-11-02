@@ -1,5 +1,5 @@
 {
-  "bowl_commit": "7fbc2fef7564502f94bda34c2c2532c4be6fb760",
+  "bowl_commit": "df5cb5212dbe6bf3c98870b74e312dba1fabc6da",
   "date_local": "2026-11-02",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
@@ -20,32 +20,37 @@
       "cold_cases": 45,
       "hot_cases": 45,
       "samples_per_case": 3,
+      "integrity_fingerprints_match": true,
       "report": "drive9/REPORT.md"
     },
     "juicefs": {
       "status": "partial_failure",
-      "controls": "jfs_pg/jfs_redis 全套完成",
-      "bowl": "两次独立运行均在 fio seq_write_1job 最终 fsync 失败；其余 fio 与 mdtest 未执行",
-      "error": "EIO: flush wal: context deadline exceeded",
+      "controls": "jfs_pg/jfs_redis 全套完成，16 项 fio 错误码均为 0",
+      "bowl": "完成 juicefs bench 与前 6 项 fio；direct_randwrite_4jobs 返回 EIO；direct_randread_4jobs 与两项 mdtest 未执行",
+      "error": "Write: put block: context deadline exceeded; fio error=5",
       "report": "juicefs/REPORT.md"
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-01T18:27:40.940026+00:00",
+    "verified_at_utc": "2026-11-02T02:35:01.285661+00:00",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
-    "created_instances_total": 10
+    "created_instances_total": 8
   },
   "validation": [
-    "报告从已替换原始数据再生成一致",
-    "16 份 JuiceFS 对照组 fio error 均为 0",
-    "失败 fio 吞吐已排除，并以旧解析逻辑反事实验证",
-    "Drive9 冷热各45项且每项3次样本，三组完整性结果齐全",
-    "shell/Python 语法及代码文档 diff 空白检查通过"
+    "pjdfstest 17 个目录退出码为 0，238 个脚本、8798 项通过",
+    "Bowl 成功的 6 项 fio 错误码为 0 且 I/O 字节数完整",
+    "16 份 JuiceFS 对照组 fio 错误码为 0，两组各完成单进程与四进程 mdtest",
+    "失败 fio 吞吐已排除，未执行项为空",
+    "Drive9 冷热各45项且每项3次样本，三组完整性指纹一致",
+    "三套报告与汇总从已替换原始数据再生成一致",
+    "Shell/Python 语法及报告、脚本 diff 空白检查通过"
   ],
   "limitations": [
-    "Bowl 失败结果未修复，不宣称全套通过",
-    "JuiceFS 对照与 Bowl 复跑为同规格不同实例",
+    "Bowl 随机写失败未修复，不宣称全套通过；根因未确认",
+    "JuiceFS 对照与 Bowl 为同规格不同实例",
+    "ADR-0026 使用服务端页缓存，不能与旧版刷盘结果视为相同持久化条件",
+    "本轮未测试整机断电恢复",
     "原始日志保留原始尾随空格"
   ]
 }

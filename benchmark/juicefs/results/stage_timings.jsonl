@@ -1,7 +1,7 @@
-{"target":"jfs_pg","suite":"juicefs_bench","duration_sec":25.554}
-{"target":"jfs_pg","suite":"fio","duration_sec":345.333}
-{"target":"jfs_pg","suite":"mdtest","duration_sec":69.986}
-{"target":"jfs_redis","suite":"juicefs_bench","duration_sec":25.040}
-{"target":"jfs_redis","suite":"fio","duration_sec":345.501}
-{"target":"jfs_redis","suite":"mdtest","duration_sec":32.512}
-{"target":"bowl","suite":"juicefs_bench","duration_sec":26.822}
+{"target":"jfs_pg","suite":"juicefs_bench","duration_sec":25.695}
+{"target":"jfs_pg","suite":"fio","duration_sec":342.456}
+{"target":"jfs_pg","suite":"mdtest","duration_sec":101.363}
+{"target":"jfs_redis","suite":"juicefs_bench","duration_sec":26.287}
+{"target":"jfs_redis","suite":"fio","duration_sec":346.904}
+{"target":"jfs_redis","suite":"mdtest","duration_sec":50.101}
+{"target":"bowl","suite":"juicefs_bench","duration_sec":24.890}

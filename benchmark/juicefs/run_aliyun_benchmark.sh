@@ -850,7 +850,7 @@ jq -n \
       dir_entry_timeout: "1.0s"
     },
     juicefs_config: {
-      storage_backend: "MinIO S3 (Server node cloud_essd)",
+      storage_backend: "rclone S3 (Server node cloud_essd)",
       trash_days: 0,
       block_size: "4MiB (default)",
       chunk_size: "64MiB (default)"
