@@ -2013,6 +2013,79 @@ func (q *Queries) LookupEntryWithParent(ctx context.Context, arg LookupEntryWith
 	return i, err
 }
 
+const releaseFileFast = `-- name: ReleaseFileFast :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+target_inode AS (
+    SELECT ino, mode, nlink
+    FROM inodes
+    WHERE inodes.ino = $1::bigint
+    FOR SHARE
+),
+deleted_handle AS (
+    DELETE FROM file_handles fh
+    USING target_inode ti
+    WHERE fh.fh = $2::bigint
+      AND fh.ino = ti.ino
+      AND (ti.mode & 61440) <> 16384
+      AND ti.nlink > 0
+      AND (
+          ($3::bigint IS NULL AND fh.session_id IS NULL)
+          OR (
+              $3::bigint IS NOT NULL
+              AND fh.session_id = $3::bigint
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_sessions s
+                  WHERE s.session_id = fh.session_id
+                    AND s.expires_at > clock_timestamp()
+                    AND fh.created_at >= s.created_at
+              )
+          )
+      )
+    RETURNING fh.fh, fh.ino, fh.session_id
+),
+cleaned_waiters AS (
+    DELETE FROM file_lock_waiters w
+    USING deleted_handle dh
+    WHERE dh.session_id IS NOT NULL
+      AND w.session_id = dh.session_id
+      AND w.ino = dh.ino
+      AND w.fh = dh.fh
+)
+SELECT
+    CASE
+        WHEN ti.ino IS NULL THEN 'not_found'
+        WHEN (ti.mode & 61440) = 16384 THEN 'is_dir'
+        WHEN ti.nlink = 0 THEN 'orphan'
+        WHEN dh.fh IS NULL THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ti.nlink, 0)::int4 AS nlink
+FROM async_wal
+LEFT JOIN target_inode ti ON true
+LEFT JOIN deleted_handle dh ON true
+`
+
+type ReleaseFileFastParams struct {
+	Ino       int64       `json:"ino"`
+	Fh        int64       `json:"fh"`
+	SessionID pgtype.Int8 `json:"session_id"`
+}
+
+type ReleaseFileFastRow struct {
+	Status string `json:"status"`
+	Nlink  int32  `json:"nlink"`
+}
+
+func (q *Queries) ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error) {
+	row := q.db.QueryRow(ctx, releaseFileFast, arg.Ino, arg.Fh, arg.SessionID)
+	var i ReleaseFileFastRow
+	err := row.Scan(&i.Status, &i.Nlink)
+	return i, err
+}
+
 const touchInodeAtime = `-- name: TouchInodeAtime :exec
 UPDATE inodes
 SET atime = clock_timestamp()
