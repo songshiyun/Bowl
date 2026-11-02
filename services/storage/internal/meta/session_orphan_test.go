@@ -129,16 +129,6 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now, Valid: true},
 	}
 
-	expectVerifyActiveSession := func(mockQuerier *dbmock.MockQuerier, sid uint64) {
-		mockQuerier.EXPECT().
-			HasActiveClientSession(mock.Anything, db.HasActiveClientSessionParams{
-				SessionID: int64(sid),
-				RootIno:   0,
-			}).
-			Return(true, nil).
-			Once()
-	}
-
 	t.Run("Create 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mgr := meta.New(mockStore)
@@ -173,27 +163,21 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 
 	t.Run("Open 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(100)).
-			Return(fileInode, nil).
-			Once()
-		expectVerifyActiveSession(mockQuerier, sessID)
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenFileFast(mock.Anything, db.OpenFileFastParams{
 				Ino:       100,
 				Flags:     int32(meta.O_RDONLY),
 				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
 			}).
-			Return(db.FileHandle{
-				Fh:        502,
-				Ino:       100,
-				Flags:     int32(meta.O_RDONLY),
-				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			Return(db.OpenFileFastRow{
+				Status:  "ok",
+				Fh:      502,
+				Mode:    fileInode.Mode,
+				Size:    fileInode.Size,
+				Mtime:   fileInode.Mtime,
+				RootIno: fileInode.RootIno,
 			}, nil).
 			Once()
 
@@ -208,27 +192,21 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 
 	t.Run("OpenDir 传入 SessionID 时校验会话活跃性并写入 file_handles.session_id", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(1)).
-			Return(dirInode, nil).
-			Once()
-		expectVerifyActiveSession(mockQuerier, sessID)
-		mockQuerier.EXPECT().
-			CreateFileHandle(mock.Anything, db.CreateFileHandleParams{
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
 				Ino:       1,
 				Flags:     int32(meta.O_RDONLY),
 				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
 			}).
-			Return(db.FileHandle{
-				Fh:        503,
-				Ino:       1,
-				Flags:     int32(meta.O_RDONLY),
-				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      503,
+				Nlink:   dirInode.Nlink,
+				Mtime:   dirInode.Mtime,
+				Ctime:   dirInode.Ctime,
+				RootIno: dirInode.RootIno,
 			}, nil).
 			Once()
 
@@ -1487,6 +1465,22 @@ func (s *orphanRaceHookStore) ExecTxWithOptions(ctx context.Context, fn func(db.
 		}
 		return fn(wrapped)
 	}, opts...)
+}
+
+func (s *orphanRaceHookStore) OpenFileFast(ctx context.Context, arg db.OpenFileFastParams) (db.OpenFileFastRow, error) {
+	if s.onCreateFileHandle == nil {
+		return s.Store.OpenFileFast(ctx, arg)
+	}
+	var row db.OpenFileFastRow
+	err := s.Store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		var callErr error
+		row, callErr = q.OpenFileFast(ctx, arg)
+		if callErr == nil && row.Status == "ok" && s.onCreateFileHandle != nil {
+			s.onCreateFileHandle(ctx, arg.Ino)
+		}
+		return callErr
+	})
+	return row, err
 }
 
 // TestSessionOrphan_ConcurrentOpenDuringOrphanSweepSnapshotRace 验证 P1 / Ch1-R1 漏洞：

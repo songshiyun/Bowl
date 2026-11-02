@@ -1959,7 +1959,7 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 				mockQuerier.AssertNotCalled(t, "DeleteUnreferencedOrphanInodes", mock.Anything)
 				return err
 			}).
-			Times(4)
+			Times(2)
 
 		parentDir := db.Inode{
 			Ino:     1,
@@ -2021,9 +2021,21 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 
 		// 3. Open (active)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(100)).Return(regInode, nil).Once()
-		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
-		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 12, Ino: 100}, nil).Once()
+		mockStore.EXPECT().
+			OpenFileFast(mock.Anything, db.OpenFileFastParams{
+				Ino:       100,
+				Flags:     int32(meta.O_RDWR),
+				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			}).
+			Return(db.OpenFileFastRow{
+				Status:  "ok",
+				Fh:      12,
+				Mode:    regInode.Mode,
+				Size:    regInode.Size,
+				Mtime:   regInode.Mtime,
+				RootIno: regInode.RootIno,
+			}, nil).
+			Once()
 
 		_, err = mgr.Open(ctx, meta.OpenParams{
 			Ino:       100,
@@ -2033,9 +2045,21 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, err)
 
 		// 4. OpenDir (active)
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(1)).Return(parentDir, nil).Once()
-		mockQuerier.EXPECT().HasActiveClientSession(mock.Anything, expectedCheck).Return(true, nil).Once()
-		mockQuerier.EXPECT().CreateFileHandle(mock.Anything, mock.Anything).Return(db.FileHandle{Fh: 13, Ino: 1}, nil).Once()
+		mockStore.EXPECT().
+			OpenDirFast(mock.Anything, db.OpenDirFastParams{
+				Ino:       1,
+				Flags:     int32(meta.O_RDONLY),
+				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+			}).
+			Return(db.OpenDirFastRow{
+				Status:  "ok",
+				Fh:      13,
+				Nlink:   parentDir.Nlink,
+				Mtime:   parentDir.Mtime,
+				Ctime:   parentDir.Ctime,
+				RootIno: parentDir.RootIno,
+			}, nil).
+			Once()
 
 		_, err = mgr.OpenDir(ctx, meta.OpenDirParams{
 			Ino:       1,
