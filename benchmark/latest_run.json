@@ -1,5 +1,5 @@
 {
-  "bowl_commit": "df5cb5212dbe6bf3c98870b74e312dba1fabc6da",
+  "bowl_commit": "bc64975dc1aa6100dd6635c1c5bb4d6b1ec78226",
   "date_local": "2026-11-02",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
@@ -24,33 +24,37 @@
       "report": "drive9/REPORT.md"
     },
     "juicefs": {
-      "status": "partial_failure",
-      "controls": "jfs_pg/jfs_redis 全套完成，16 项 fio 错误码均为 0",
-      "bowl": "完成 juicefs bench 与前 6 项 fio；direct_randwrite_4jobs 返回 EIO；direct_randread_4jobs 与两项 mdtest 未执行",
-      "error": "Write: put block: context deadline exceeded; fio error=5",
+      "status": "completed",
+      "targets": [
+        "bowl",
+        "jfs_pg",
+        "jfs_redis"
+      ],
+      "fio_cases": 24,
+      "fio_errors": 0,
+      "mdtest_cases": 6,
+      "same_instance_pair": true,
       "report": "juicefs/REPORT.md"
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-02T02:35:01.285661+00:00",
+    "verified_at_utc": "2026-11-02T06:30:41.780661+00:00",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
-    "created_instances_total": 8
+    "created_instances_total": 6
   },
   "validation": [
-    "pjdfstest 17 个目录退出码为 0，238 个脚本、8798 项通过",
-    "Bowl 成功的 6 项 fio 错误码为 0 且 I/O 字节数完整",
-    "16 份 JuiceFS 对照组 fio 错误码为 0，两组各完成单进程与四进程 mdtest",
-    "失败 fio 吞吐已排除，未执行项为空",
-    "Drive9 冷热各45项且每项3次样本，三组完整性指纹一致",
-    "三套报告与汇总从已替换原始数据再生成一致",
-    "Shell/Python 语法及报告、脚本 diff 空白检查通过"
+    "pjdfstest 17 个目录退出码均为 0，238 个脚本、8798 项通过",
+    "24 份 fio 错误码均为 0，读写字节数符合配置",
+    "三组各完成单进程和四进程 mdtest",
+    "Drive9 冷热各 45 项且每项 3 次样本，三组完整性指纹一致",
+    "性能报告与汇总从已替换原始数据重新生成一致，pjdfstest 原始日志重解析计数一致"
   ],
   "limitations": [
-    "Bowl 随机写失败未修复，不宣称全套通过；根因未确认",
-    "JuiceFS 对照与 Bowl 为同规格不同实例",
-    "ADR-0026 使用服务端页缓存，不能与旧版刷盘结果视为相同持久化条件",
-    "本轮未测试整机断电恢复",
+    "单轮运行不能证明长期稳定性或消除全部超时场景",
+    "ADR-0027 同时调整分块、合并、后台并发、块写入路径及 RPC 超时，不能据此隔离单项优化收益",
+    "ADR-0026 使用服务端页缓存，未测试整机断电恢复",
+    "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读",
     "原始日志保留原始尾随空格"
   ]
 }

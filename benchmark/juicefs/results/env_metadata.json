@@ -1,6 +1,6 @@
 {
-  "test_started_at": "2026-11-02T02:18:56Z",
-  "test_completed_at": "2026-11-02T02:33:55Z",
+  "test_started_at": "2026-11-02T06:05:39Z",
+  "test_completed_at": "2026-11-02T06:29:16Z",
   "cloud": {
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
@@ -24,12 +24,12 @@
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "redis_version": "Redis server v=7.0.15",
     "minio_version": "rclone v1.68.2",
-    "instance_id": "i-rj9br9hokza0u9k8y2qv",
-    "private_ip": "172.16.1.207"
+    "instance_id": "i-rj9cftu5s9p7shzwg5a6",
+    "private_ip": "172.16.1.211"
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": "178.97",
-    "local_seq_read_mib_s": "174.45"
+    "local_seq_write_mib_s": "181.21",
+    "local_seq_read_mib_s": "179.32"
   },
   "client_node": {
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -41,23 +41,22 @@
     "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
     "fio_version": "fio-3.36",
     "mdtest_version": "mdtest-3.3.0",
-    "instance_id": "i-rj9br9hokza0u9k8y2qw",
-    "private_ip": "172.16.1.206"
+    "instance_id": "i-rj9cftu5s9p7shzwg5a7",
+    "private_ip": "172.16.1.210"
   },
   "network_baseline": {
-    "ping_rtt_ms": "0.071/0.102/0.313/0.053",
+    "ping_rtt_ms": "0.071/0.094/0.241/0.038",
     "iperf3_gbps": "15.71"
   },
   "bowl_config": {
-    "bowl_git_commit": "df5cb52",
-    "disk_id": "01a18c0e-61ab-7afb-ab0c-67ffb1f51473",
+    "bowl_git_commit": "bc64975",
+    "disk_id": "01a19add-17fd-70a1-9160-73afddb0409b",
     "root_ino": 2,
     "disk_size": "2PiB",
     "atime_mode": "noatime",
     "entry_timeout": "1.0s",
     "attr_timeout": "1.0s",
-    "dir_entry_timeout": "1.0s",
-    "configuration_source": "env_bowl.json"
+    "dir_entry_timeout": "1.0s"
   },
   "juicefs_config": {
     "storage_backend": "rclone S3 (Server node cloud_essd)",
@@ -66,16 +65,13 @@
     "chunk_size": "64MiB (default)"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-jfsbench-kp-20261102-021647",
-    "instances_created_at": "2026-11-02T02:16:51Z",
-    "instances_deleted_at": "2026-11-02T02:34:27Z",
+    "key_pair_name": "bowl-jfsbench-kp-20261102-060213",
+    "instances_created_at": "2026-11-02T06:02:21Z",
+    "instances_deleted_at": "2026-11-02T06:30:00Z",
     "remaining_benchmark_instances": 0
   },
-  "execution_status": "partial_failure",
   "execution_notes": [
-    "本轮版本为 `df5cb52`，执行日期为 2026-11-02（北京时间）。**Bowl 测试未全部通过**：完成 `juicefs bench` 与前 6 项 fio；第 7 项 `direct_randwrite_4jobs` 返回 EIO（错误码 5），第 8 项随机读和两项 mdtest 未执行。失败与未执行项不计入成功指标，表中显示 `—`。",
-    "上轮失败的 4 GiB 单流顺序写与最终 `fsync` 本轮完成，fio 错误码为 0。本轮随机写失败时，服务端 `Write` 记录 `put block … context deadline exceeded`；根因未确认，不能宣称全套性能问题已解决。",
-    "JuiceFS PG/Redis 对照组在新建同规格双机上完整补跑。第 2、7 节环境与资源审计属于对照组；Bowl 环境、磁盘与网络基线、实例清理记录见 [env_bowl.json](results/env_bowl.json)。跨实例比值仅供观察，不作为严格的优化收益证明。",
-    "失败证据：[fio 原始输出](results/fio_bowl_direct_randwrite_4jobs.json)、[服务端错误摘录](results/bowl-storage-errors.log)、[完整服务端日志](results/bowl-storage.log.gz)、[Bowl 运行日志](results/bowl-run.log)、[对照组运行日志](results/controls-run.log)。生产代码、超时与测试负载均保持本轮主分支原样。"
+    "本轮于 2026-11-02 测试 Bowl bc64975。Bowl、JuiceFS PostgreSQL、JuiceFS Redis 在同一对硅谷 ECS 上依次完成全部基础测试、8 项 fio 及单进程/四进程 mdtest；24 份 fio 错误码均为 0，完成字节数符合配置。",
+    "上轮 df5cb52 的 Bowl 随机写曾返回 EIO；本轮随机写与后续随机读、mdtest 均完成。Bowl 采用 ADR-0027：4 MiB Chunk、满 64 条 Slice 整体合并、后台串行整理与回收、PutBlock 直写目标路径、默认 RPC 超时从 5 秒调整为 30 秒；不能将改善归因于其中某一项。"
   ]
 }

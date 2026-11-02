@@ -2,54 +2,54 @@
 
 - Schema: `drive9-bench/v1`
 - Version: `b529a36f`
-- Host: `iZrj9f3lh7wxbe9ef3t03hZ`
+- Host: `iZrj912d5rbcy2stqm8dwjZ`
 - Environment: `lan`
 - Cache state: `cold`
 
 | Target | Workload | Median | P95 | Unit |
 |---|---|---:|---:|---|
-| bowl | sequential_write | 354.564 | 370.210 | MiB/s |
-| bowl | sequential_read | 459.659 | 637.168 | MiB/s |
-| bowl | random_read_4k | 6.686 | 6.792 | MiB/s |
-| bowl | small_write_4k_fsync | 198.643 | 205.283 | ops/s |
-| bowl | mkdir | 477.342 | 485.002 | ops/s |
-| bowl | rename | 356.397 | 358.331 | ops/s |
-| bowl | unlink | 429.451 | 435.070 | ops/s |
-| bowl | readdir_small | 4784.302 | 4816.661 | ops/s |
-| bowl | readdir_large | 3037.984 | 11558.613 | ops/s |
-| bowl | stat | 2653.597 | 2770.490 | ops/s |
-| bowl | macro_git_clone | 3.321 | 3.337 | seconds |
-| bowl | macro_git_status_dirty | 0.288 | 0.291 | seconds |
-| bowl | macro_git_diff_dirty | 0.188 | 0.216 | seconds |
-| bowl | macro_find_files | 0.076 | 0.083 | seconds |
-| bowl | macro_go_build | 0.561 | 2.113 | seconds |
-| drive9_default | sequential_write | 288.655 | 433.195 | MiB/s |
-| drive9_default | sequential_read | 183.038 | 183.695 | MiB/s |
-| drive9_default | random_read_4k | 2.775 | 2.776 | MiB/s |
-| drive9_default | small_write_4k_fsync | 1042.405 | 1042.542 | ops/s |
-| drive9_default | mkdir | 257.438 | 257.551 | ops/s |
-| drive9_default | rename | 99.147 | 100.155 | ops/s |
-| drive9_default | unlink | 100.383 | 102.405 | ops/s |
-| drive9_default | readdir_small | 7533.093 | 7824.775 | ops/s |
-| drive9_default | readdir_large | 49945.065 | 53322.352 | ops/s |
-| drive9_default | stat | 20875.073 | 21078.404 | ops/s |
-| drive9_default | macro_git_clone | 1.829 | 1.866 | seconds |
-| drive9_default | macro_git_status_dirty | 2.027 | 2.062 | seconds |
-| drive9_default | macro_git_diff_dirty | 0.755 | 0.755 | seconds |
-| drive9_default | macro_find_files | 0.014 | 0.027 | seconds |
-| drive9_default | macro_go_build | 0.355 | 0.362 | seconds |
-| drive9_sync | sequential_write | 191.379 | 262.669 | MiB/s |
-| drive9_sync | sequential_read | 56.764 | 56.969 | MiB/s |
-| drive9_sync | random_read_4k | 5.071 | 5.087 | MiB/s |
-| drive9_sync | small_write_4k_fsync | 149.547 | 150.518 | ops/s |
-| drive9_sync | mkdir | 253.700 | 256.397 | ops/s |
-| drive9_sync | rename | 62.648 | 63.070 | ops/s |
-| drive9_sync | unlink | 56.213 | 56.251 | ops/s |
-| drive9_sync | readdir_small | 17121.690 | 17335.772 | ops/s |
-| drive9_sync | readdir_large | 115467.174 | 122151.015 | ops/s |
-| drive9_sync | stat | 39476.077 | 40946.857 | ops/s |
-| drive9_sync | macro_git_clone | 5.944 | 5.972 | seconds |
-| drive9_sync | macro_git_status_dirty | 0.267 | 0.303 | seconds |
-| drive9_sync | macro_git_diff_dirty | 0.029 | 0.034 | seconds |
-| drive9_sync | macro_find_files | 0.039 | 0.044 | seconds |
-| drive9_sync | macro_go_build | 0.315 | 0.318 | seconds |
+| bowl | sequential_write | 374.274 | 381.962 | MiB/s |
+| bowl | sequential_read | 531.053 | 533.126 | MiB/s |
+| bowl | random_read_4k | 6.916 | 7.404 | MiB/s |
+| bowl | small_write_4k_fsync | 211.652 | 224.109 | ops/s |
+| bowl | mkdir | 585.137 | 590.826 | ops/s |
+| bowl | rename | 466.637 | 467.924 | ops/s |
+| bowl | unlink | 559.877 | 584.791 | ops/s |
+| bowl | readdir_small | 6701.544 | 7210.700 | ops/s |
+| bowl | readdir_large | 13694.964 | 14858.161 | ops/s |
+| bowl | stat | 3140.304 | 3144.086 | ops/s |
+| bowl | macro_git_clone | 3.234 | 3.238 | seconds |
+| bowl | macro_git_status_dirty | 0.305 | 0.313 | seconds |
+| bowl | macro_git_diff_dirty | 0.122 | 0.207 | seconds |
+| bowl | macro_find_files | 0.081 | 0.091 | seconds |
+| bowl | macro_go_build | 0.629 | 2.021 | seconds |
+| drive9_default | sequential_write | 324.496 | 443.481 | MiB/s |
+| drive9_default | sequential_read | 184.118 | 184.912 | MiB/s |
+| drive9_default | random_read_4k | 2.779 | 2.787 | MiB/s |
+| drive9_default | small_write_4k_fsync | 1010.420 | 1025.963 | ops/s |
+| drive9_default | mkdir | 260.193 | 261.130 | ops/s |
+| drive9_default | rename | 99.933 | 100.522 | ops/s |
+| drive9_default | unlink | 101.080 | 101.111 | ops/s |
+| drive9_default | readdir_small | 6552.925 | 6971.796 | ops/s |
+| drive9_default | readdir_large | 42682.951 | 43429.061 | ops/s |
+| drive9_default | stat | 20482.837 | 21826.497 | ops/s |
+| drive9_default | macro_git_clone | 1.864 | 1.864 | seconds |
+| drive9_default | macro_git_status_dirty | 2.016 | 2.121 | seconds |
+| drive9_default | macro_git_diff_dirty | 0.760 | 0.764 | seconds |
+| drive9_default | macro_find_files | 0.016 | 0.027 | seconds |
+| drive9_default | macro_go_build | 0.375 | 0.377 | seconds |
+| drive9_sync | sequential_write | 189.903 | 256.660 | MiB/s |
+| drive9_sync | sequential_read | 56.209 | 56.597 | MiB/s |
+| drive9_sync | random_read_4k | 5.123 | 5.162 | MiB/s |
+| drive9_sync | small_write_4k_fsync | 149.413 | 150.294 | ops/s |
+| drive9_sync | mkdir | 256.567 | 257.997 | ops/s |
+| drive9_sync | rename | 63.169 | 64.058 | ops/s |
+| drive9_sync | unlink | 57.212 | 57.582 | ops/s |
+| drive9_sync | readdir_small | 15299.187 | 16922.665 | ops/s |
+| drive9_sync | readdir_large | 106676.270 | 127407.775 | ops/s |
+| drive9_sync | stat | 39206.707 | 44409.200 | ops/s |
+| drive9_sync | macro_git_clone | 5.871 | 5.945 | seconds |
+| drive9_sync | macro_git_status_dirty | 0.267 | 0.307 | seconds |
+| drive9_sync | macro_git_diff_dirty | 0.034 | 0.037 | seconds |
+| drive9_sync | macro_find_files | 0.041 | 0.042 | seconds |
+| drive9_sync | macro_go_build | 0.332 | 0.336 | seconds |

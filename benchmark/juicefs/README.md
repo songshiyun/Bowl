@@ -1,6 +1,6 @@
 # Bowl vs JuiceFS 阿里云硅谷双机内网存储性能基准测试套件
 
-> 最新复跑：2026-11-02，Bowl `df5cb52`。完成基础测试和前 6 项 fio；Direct I/O 随机写返回 EIO，剩余随机读与 mdtest 未执行。JuiceFS PG/Redis 对照组完整完成。详见 [REPORT.md](REPORT.md) 的执行说明与失败证据。
+> 最新复跑：2026-11-02，Bowl `bc64975`。Bowl 已完整完成基础测试、8 项 fio 和两项 mdtest，随机写错误码为 0。完整对照结果与环境见 [REPORT.md](REPORT.md)。
 
 本目录包含对标 [JuiceFS 官方常规测试](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 [`juicefs bench`](https://juicefs.com/docs/zh/community/performance_evaluation_guide/#juicefs-bench)、[`fio` 吞吐量测试](https://juicefs.com/docs/zh/community/fio/)、[`mdtest` 元数据 IOPS 测试](https://juicefs.com/docs/zh/community/mdtest/)）的端到端自动化评测脚本、实测原始数据及完整对比报告。
 

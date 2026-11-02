@@ -161,6 +161,8 @@ def render_report(summary: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Bowl vs Drive9 (mem9-ai/drive9) — 阿里云硅谷双机内网性能基准测试报告")
     lines.append("")
+    for note in env.get("execution_notes", []):
+        lines.extend([f"> {note}", ""])
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
     lines.append(
