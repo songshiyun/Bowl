@@ -292,7 +292,7 @@ func (m *manager) Flush(ctx context.Context, params FlushParams) error {
 func (m *manager) flushDurabilityBarrier(ctx context.Context) error {
 	if pp, ok := m.store.(poolProvider); ok && pp != nil && pp.Pool() != nil {
 		var lsn string
-		if err := pp.Pool().QueryRow(ctx, "SELECT pg_current_wal_flush_lsn()::text").Scan(&lsn); err != nil {
+		if err := pp.Pool().QueryRow(ctx, "SELECT pg_current_wal_flush_lsn()::text FROM pg_logical_emit_message(true, 'bowl_fsync', '')").Scan(&lsn); err != nil {
 			return fmt.Errorf("%w: flush wal: %v", ErrIO, err)
 		}
 	}
