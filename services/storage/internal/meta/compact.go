@@ -91,13 +91,13 @@ type compactNewSliceDesc struct {
 //   - 仅对被替换的尾部旧切片 origTailBytes 调用 decrementDeletedSlicesRefs 递减旧 slice_id 的引用计数；
 //   - 若写事务执行失败，事务外立即清理新物理块并返回错误。
 func (m *manager) CompactChunk(ctx context.Context, ino uint64, indx int64) error {
-	_, _, err := m.compactChunkWithCount(ctx, ino, indx, false)
+	_, _, _, err := m.compactChunkWithCount(ctx, ino, indx, false)
 	return err
 }
 
-func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx int64, enforceThreshold bool) (int, bool, error) {
+func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx int64, enforceThreshold bool) (int, bool, bool, error) {
 	if ino == 0 || ino > math.MaxInt64 || indx < 0 || indx > math.MaxInt64/int64(ChunkSize) {
-		return 0, false, ErrInvalidArgument
+		return 0, false, false, ErrInvalidArgument
 	}
 
 	// 阶段 1：在短读保护事务内读取旧 Chunk，跳过无重叠大块前缀，锁定尾部 slice_refs 并从 BlockStore 读出尾部各段数据拼装到内存
@@ -241,10 +241,10 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		return nil
 	})
 	if readTxErr != nil {
-		return 0, false, readTxErr
+		return 0, false, false, readTxErr
 	}
 	if len(originSlices) == 0 {
-		return shortCircuitTailCount, false, nil
+		return shortCircuitTailCount, false, false, nil
 	}
 
 	var writtenBlocks []compactWrittenBlock
@@ -266,7 +266,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		newID, err := m.store.NextSliceID(ctx)
 		if err != nil {
 			cleanupBlocks()
-			return 0, false, fmt.Errorf("next slice id for compact: %w", err)
+			return 0, false, false, fmt.Errorf("next slice id for compact: %w", err)
 		}
 
 		blocks := SliceBlocks(seg.length)
@@ -276,7 +276,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 			bData := segData[start:end]
 			if err := bs.PutBlock(ctx, uint64(newID), b.BlockIdx, bData); err != nil {
 				cleanupBlocks()
-				return 0, false, fmt.Errorf("%w: put block for compact (slice_id=%d, block_idx=%d): %v", ErrIO, newID, b.BlockIdx, err)
+				return 0, false, false, fmt.Errorf("%w: put block for compact (slice_id=%d, block_idx=%d): %v", ErrIO, newID, b.BlockIdx, err)
 			}
 			writtenBlocks = append(writtenBlocks, compactWrittenBlock{
 				sliceID:   uint64(newID),
@@ -382,86 +382,52 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		if !everReachedCommit {
 			cleanupBlocks()
 		}
-		return 0, false, txErr
+		return 0, false, false, txErr
 	}
 
 	if casAborted {
 		cleanupBlocks()
-		return 0, true, nil
+		return 0, true, false, nil
 	}
 
-	return finalSliceCount, false, nil
+	return finalSliceCount, false, true, nil
 }
 
-// maybeTriggerAsyncCompact 当追加后的切片字节长度达到压缩阈值时，异步触发 Chunk 碎片整理。
+// maybeTriggerAsyncCompact 当追加后的切片字节长度达到压缩阈值时，将目标 Chunk 去重非阻塞地投递至唯一后台 Worker。
 func (m *manager) maybeTriggerAsyncCompact(ino uint64, indx int64, octetLen int64) {
 	if m.compactSliceThreshold <= 0 || int(octetLen)/SliceBytes < m.compactSliceThreshold {
 		return
 	}
 	key := chunkKey{ino: ino, indx: indx}
-	m.inFlightCompactsMu.Lock()
-	if _, inFlight := m.inFlightCompacts[key]; inFlight {
-		m.inFlightCompacts[key] = true
-		m.inFlightCompactsMu.Unlock()
+
+	m.workerMu.Lock()
+	if m.workerStopped {
+		m.workerMu.Unlock()
 		return
 	}
-	m.inFlightCompacts[key] = false
-	m.inFlightCompactsMu.Unlock()
+	if m.compactState == nil {
+		m.compactState = make(map[chunkKey]compactTaskState)
+	}
+	if m.compactWakeCh == nil {
+		m.compactWakeCh = make(chan struct{}, 1)
+	}
 
-	go func() {
-		defer func() {
-			m.inFlightCompactsMu.Lock()
-			delete(m.inFlightCompacts, key)
-			m.inFlightCompactsMu.Unlock()
-		}()
+	switch m.compactState[key] {
+	case compactStateIdle:
+		m.compactState[key] = compactStateQueued
+		m.compactQueue = append(m.compactQueue, key)
+	case compactStateRunning:
+		m.compactState[key] = compactStateRerun
+	case compactStateQueued, compactStateRerun:
+		// 同一 Chunk 的重复通知自动合并去重
+	}
 
-		const maxRounds = 16
-		for round := 0; round < maxRounds; round++ {
-			compactCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			finalCount, casAborted, err := m.compactChunkWithCount(compactCtx, ino, indx, true)
-			cancel()
-			if err != nil {
-				return
-			}
-
-			m.inFlightCompactsMu.Lock()
-			pending := m.inFlightCompacts[key]
-			if !casAborted && finalCount < m.compactSliceThreshold && !pending {
-				delete(m.inFlightCompacts, key)
-				m.inFlightCompactsMu.Unlock()
-				return
-			}
-			m.inFlightCompacts[key] = false
-			m.inFlightCompactsMu.Unlock()
-
-			if !casAborted && finalCount >= m.compactSliceThreshold {
-				continue
-			}
-
-			queryCtx, qCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			chunk, qErr := m.store.GetChunk(queryCtx, db.GetChunkParams{
-				Ino:  int64(ino),
-				Indx: indx,
-			})
-			qCancel()
-			if qErr != nil {
-				return
-			}
-			rawLatest, decErr := DecodeSlices(chunk.Slices)
-			if decErr != nil {
-				return
-			}
-			latestCount := len(rawLatest) - skipSome(rawLatest)
-			if latestCount < m.compactSliceThreshold {
-				m.inFlightCompactsMu.Lock()
-				if !m.inFlightCompacts[key] {
-					delete(m.inFlightCompacts, key)
-					m.inFlightCompactsMu.Unlock()
-					return
-				}
-				m.inFlightCompacts[key] = false
-				m.inFlightCompactsMu.Unlock()
-			}
-		}
-	}()
+	if m.workerDoneCh == nil {
+		m.startBackgroundWorkerLocked(context.Background(), m.gcInterval, m.gcBatchLimit, false)
+	}
+	select {
+	case m.compactWakeCh <- struct{}{}:
+	default:
+	}
+	m.workerMu.Unlock()
 }
