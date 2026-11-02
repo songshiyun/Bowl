@@ -702,6 +702,44 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		require.Equal(t, uint32(0), written)
 		require.Equal(t, fuse.EBADF, status)
 	})
+
+	t.Run("Write 发起前 cancel 已关闭返回 EINTR，在途发出后忽略中途 cancel 正常完成避免重复追加", func(t *testing.T) {
+		var rpcCalls int
+		inFlightCancel := make(chan struct{})
+		mockSrv := &rwMockStorageServer{
+			writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+				rpcCalls++
+				close(inFlightCancel)
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				return connect.NewResponse(&storagev1.WriteResponse{Size: uint32(len(req.Msg.GetData()))}), nil
+			},
+		}
+
+		client := setupRWTestRPCServer(t, mockSrv)
+		mgr := setupTestSessionManager(t, client)
+		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+
+		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		input := &fuse.WriteIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   0,
+		}
+
+		preCanceled := make(chan struct{})
+		close(preCanceled)
+		writtenPre, stPre := fs.Write(preCanceled, input, []byte("hello"))
+		require.Equal(t, uint32(0), writtenPre)
+		require.Equal(t, fuse.Status(syscall.EINTR), stPre)
+		require.Equal(t, 0, rpcCalls, "发起前已取消不得调用服务端 Write RPC")
+
+		writtenInFlight, stInFlight := fs.Write(inFlightCancel, input, []byte("hello"))
+		require.Equal(t, fuse.OK, stInFlight)
+		require.Equal(t, uint32(5), writtenInFlight)
+		require.Equal(t, 1, rpcCalls)
+	})
 }
 
 func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {

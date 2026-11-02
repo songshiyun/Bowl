@@ -112,9 +112,14 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 
 	var row db.WriteFileAtomicRow
 	err = tx.Retry(ctx, func(attemptCtx context.Context) error {
+		if err := attemptCtx.Err(); err != nil {
+			return err
+		}
 		qAvail := m.getWriteQuotaAvailBytes(req.Ino)
+		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(attemptCtx), 30*time.Second)
+		defer cancel()
 		var callErr error
-		row, callErr = m.store.WriteFileAtomic(attemptCtx, db.WriteFileAtomicParams{
+		row, callErr = m.store.WriteFileAtomic(commitCtx, db.WriteFileAtomicParams{
 			Ino:             int64(req.Ino),
 			Fh:              int64(req.Fh),
 			SessionID:       toPgSessionID(req.SessionID),
@@ -161,7 +166,7 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	m.recordInodeRootIno(req.Ino, row.RootIno)
 	if row.RootIno > 0 {
 		deltaBytes := max(int64(0), row.NewSize-row.OldSize)
-		m.commitDirectQuotaDelta(ctx, row.RootIno, deltaBytes, 0)
+		m.commitDirectQuotaDelta(context.WithoutCancel(ctx), row.RootIno, deltaBytes, 0)
 	}
 
 	m.maybeTriggerAsyncCompact(req.Ino, row.StartIndx, row.OctetLen1)

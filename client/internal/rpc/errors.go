@@ -5,10 +5,16 @@ import (
 	"errors"
 	"sync"
 	"syscall"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
+
+// inFlightCancelGracePeriod 为在途 RPC 收到内核 cancel (FUSE_INTERRUPT) 信号后的宽限期。
+// Go 运行时每 ~10ms 发送 SIGURG 抢占信号会触发 Linux FUSE 内核下发 FUSE_INTERRUPT；
+// 对已在途且可在数毫秒内完成的快速 RPC 给予短暂宽限，避免被 SIGURG 中途打断返回伪 EINTR。
+const inFlightCancelGracePeriod = 15 * time.Millisecond
 
 // ErrKernelInterrupted 表示因内核中断信号（例如 FUSE_INTERRUPT 导致 cancel 通道关闭）而引发的取消。
 var ErrKernelInterrupted = errors.New("operation interrupted by kernel signal")
@@ -36,7 +42,14 @@ func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (cont
 	go func() {
 		select {
 		case <-cancel:
-			cancelCause(ErrKernelInterrupted)
+			timer := time.NewTimer(inFlightCancelGracePeriod)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				cancelCause(ErrKernelInterrupted)
+			case <-ctx.Done():
+			case <-stop:
+			}
 		case <-ctx.Done():
 		case <-stop:
 		}

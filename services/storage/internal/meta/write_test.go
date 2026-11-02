@@ -958,6 +958,48 @@ func TestWrite_TxRetryOnRetryableError_CleansUpBlockOnSecondAttemptFailure(t *te
 	assert.ErrorIs(t, err, meta.ErrNotFound, "第 2 次重试 WriteFileAtomic 返回 not_found 应映射为 ErrNotFound")
 }
 
+// TestWrite_ContextCanceledDuringInFlightWriteFileAtomic_CompletesWithoutDeletingCommittedBlock 验证一旦进入 WriteFileAtomic 在途提交，
+// 即使客户端连接断开或取消 reqCtx，WriteFileAtomic 仍使用独立的未取消上下文完成提交，绝不误删已提交的物理块。
+func TestWrite_ContextCanceledDuringInFlightWriteFileAtomic_CompletesWithoutDeletingCommittedBlock(t *testing.T) {
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	defer reqCancel()
+
+	ino := uint64(100)
+	fh := uint64(10)
+	data := []byte("in-flight-commit-data")
+
+	mockStore := dbmock.NewMockStore(t)
+	mockBS := metamock.NewMockBlockStore(t)
+
+	mockBS.EXPECT().PutBlock(mock.Anything, uint64(101), uint32(0), data).Return(nil).Once()
+	mockStore.EXPECT().NextSliceID(mock.Anything).Return(int64(101), nil).Once()
+
+	mockStore.EXPECT().
+		WriteFileAtomic(mock.Anything, mock.Anything).
+		RunAndReturn(func(commitCtx context.Context, arg db.WriteFileAtomicParams) (db.WriteFileAtomicRow, error) {
+			// 模拟客户端在 WriteFileAtomic SQL 在途执行期间触发 FUSE_INTERRUPT / RST_STREAM 取消请求上下文
+			reqCancel()
+			assert.NoError(t, commitCtx.Err(), "在途 WriteFileAtomic 的 commitCtx 不得随请求取消而中断")
+			return db.WriteFileAtomicRow{
+				Status:  "ok",
+				OldSize: 0,
+				NewSize: int64(len(data)),
+			}, nil
+		}).
+		Once()
+
+	mgr := meta.New(mockStore, meta.WithBlockStore(mockBS))
+	resp, err := mgr.Write(reqCtx, &meta.WriteRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 0,
+		Data:   data,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, uint32(len(data)), resp.Size)
+}
+
 // TestWrite_HighSparseChunkIndxBeyondInt32_PostgresIntegration 验证在超过 128 PiB
 // (indx >= 1<<31) 的高稀疏偏移处写入与跨块写入时，chunks.indx 保持 64 位精度，
 // 绝不因 uint32/int32 截断回绕覆盖 indx=0 或产生负数索引违规。
