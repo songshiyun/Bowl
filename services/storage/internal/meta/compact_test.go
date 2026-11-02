@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,8 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/fx"
 
 	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	dbmock "github.com/starsrc/bowl/services/storage/internal/db/mock"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
@@ -60,13 +63,15 @@ func cleanupCompactTestIno(ctx context.Context, store db.Store, ino int64) {
 
 // recordingBlockStore 包装实际 BlockStore 用于统计记录与注入回调
 type recordingBlockStore struct {
-	realBS           meta.BlockStore
-	mu               sync.Mutex
-	gets             []uint64
-	puts             []uint64
-	deletes          []uint64
-	onBeforePutBlock func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error
-	onAfterPutBlock  func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error
+	realBS              meta.BlockStore
+	mu                  sync.Mutex
+	gets                []uint64
+	puts                []uint64
+	deletes             []uint64
+	onBeforePutBlock    func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error
+	onAfterPutBlock     func(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error
+	onBeforeGetBlock    func(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32, offset uint32) error
+	onBeforeDeleteBlock func(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32) error
 }
 
 func (r *recordingBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
@@ -90,6 +95,11 @@ func (r *recordingBlockStore) PutBlock(ctx context.Context, sliceID uint64, bloc
 }
 
 func (r *recordingBlockStore) GetBlock(ctx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32, offset uint32, dst []byte) error {
+	if r.onBeforeGetBlock != nil {
+		if err := r.onBeforeGetBlock(ctx, sliceID, blockIdx, blockSize, offset); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	r.gets = append(r.gets, sliceID)
 	r.mu.Unlock()
@@ -100,6 +110,11 @@ func (r *recordingBlockStore) DeleteBlock(ctx context.Context, sliceID uint64, b
 	r.mu.Lock()
 	r.deletes = append(r.deletes, sliceID)
 	r.mu.Unlock()
+	if r.onBeforeDeleteBlock != nil {
+		if err := r.onBeforeDeleteBlock(ctx, sliceID, blockIdx, blockSize); err != nil {
+			return err
+		}
+	}
 	return r.realBS.DeleteBlock(ctx, sliceID, blockIdx, blockSize)
 }
 
@@ -2090,24 +2105,708 @@ func TestCompactChunk_SkipSome_CleanPrefixPreservedAndTailCompacted(t *testing.T
 		assert.Equal(t, int32(1), ref.Refs, "前部第 %d 个 Slice 的 refs 必须保持为 1", i)
 	}
 
-	// 断言后部旧 Slice 的 refs 全部降为 0，且新尾部 Slice 的 refs 为 1
-	for _, oldTailID := range tailOldSliceIDs {
-		ref, err := store.GetSliceRef(ctx, oldTailID)
-		require.NoError(t, err)
-		assert.Equal(t, int32(0), ref.Refs, "后部旧碎片 slice_id=%d 的 refs 必须递减为 0", oldTailID)
-	}
+	// 断言后部旧 Slice 已被同一后台 Worker 立即回收（或递减至 0 后由 GC 清理），且新尾部 Slice 的 refs 为 1
 	newTailRef, err := store.GetSliceRef(ctx, int64(slicesAfter[prefixCount].ID))
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), newTailRef.Refs, "后部新合并 Slice 的 refs 必须为 1")
 
-	// 执行 GC 回收后部旧块，验证前部块与新尾部块不受影响
-	reclaimed, err := mgr.CollectGarbage(ctx, 200)
+	require.Eventually(t, func() bool {
+		for _, oldTailID := range tailOldSliceIDs {
+			_, gErr := store.GetSliceRef(ctx, oldTailID)
+			if !errors.Is(gErr, pgx.ErrNoRows) {
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, 20*time.Millisecond, "后部旧碎片 slice_refs 应在后台 Worker 合并后立即被回收")
+
+	// 再次执行 GC 应幂等无误，验证前部块与新尾部块不受影响
+	_, err = mgr.CollectGarbage(ctx, 200)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, reclaimed, tailCount)
 
 	// 验证全块 Read 数据与独立构造的内存黄金期望数组 100% 一致
 	readData := readFullFileForCompactTest(t, ctx, mgr, ino, fh, len(expected))
 	assert.Equal(t, expected, readData)
+}
+
+func TestSingleWorker_SerializesMultipleChunkCompactionsAndGC_NonBlockingEnqueue(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, _, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	var (
+		activeStorageOps atomic.Int32
+		maxConcurrentOps atomic.Int32
+		chunk0EnteredCh  = make(chan struct{})
+		releaseBarrierCh = make(chan struct{})
+		enteredOnce      sync.Once
+		releaseOnce      sync.Once
+	)
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseBarrierCh) })
+	})
+
+	recordConcurrency := func() func() {
+		cur := activeStorageOps.Add(1)
+		for {
+			prev := maxConcurrentOps.Load()
+			if cur <= prev || maxConcurrentOps.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		return func() {
+			activeStorageOps.Add(-1)
+		}
+	}
+
+	barrierBS := &recordingBlockStore{
+		realBS: realBS,
+		onBeforePutBlock: func(putCtx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+			if putCtx.Value(fgWriteContextKey{}) != nil {
+				return nil
+			}
+			done := recordConcurrency()
+			defer done()
+
+			enteredOnce.Do(func() {
+				close(chunk0EnteredCh)
+			})
+			select {
+			case <-releaseBarrierCh:
+				return nil
+			case <-putCtx.Done():
+				return putCtx.Err()
+			}
+		},
+	}
+
+	mgr := meta.New(
+		store,
+		meta.WithBlockStore(barrierBS),
+		meta.WithCompactSliceThreshold(4),
+		meta.WithGCInterval(30*time.Millisecond),
+	)
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	defer workerCancel()
+	mgr.StartGCWorker(workerCtx, 30*time.Millisecond, 50)
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	fgCtx := context.WithValue(ctx, fgWriteContextKey{}, true)
+
+	// 1. 触发 Chunk 0 的自动合并并使其停留在后台 PutBlock 屏障上
+	for i := 0; i < 4; i++ {
+		_, err := mgr.Write(fgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(i * 4096),
+			Data:   bytes.Repeat([]byte{byte(0x10 + i)}, 4096),
+		})
+		require.NoError(t, err)
+	}
+
+	select {
+	case <-chunk0EnteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("超时: Chunk 0 后台合并未进入 PutBlock 屏障")
+	}
+
+	// 2. 在 Chunk 0 后台合并被阻塞期间，向 Chunk 1 和 Chunk 2 各写入 4 次触发自动合并，
+	// 验证前台投递非阻塞立即返回，且后台唯一 Worker 不会并发启动第 2、第 3 个合并协程。
+	enqueueStart := time.Now()
+	for chunkIndx := int64(1); chunkIndx <= 2; chunkIndx++ {
+		baseOff := uint64(chunkIndx) * uint64(meta.ChunkSize)
+		for i := 0; i < 4; i++ {
+			_, err := mgr.Write(fgCtx, &meta.WriteRequest{
+				Ino:    ino,
+				Fh:     fh,
+				Offset: baseOff + uint64(i*4096),
+				Data:   bytes.Repeat([]byte{byte(0x20 + int(chunkIndx)*4 + i)}, 4096),
+			})
+			require.NoError(t, err)
+		}
+	}
+	assert.Less(t, time.Since(enqueueStart), 2*time.Second, "前台任务投递不能等待被阻塞的后台合并完成")
+
+	// 给一点时间观察是否有其他后台协程并发进入 PutBlock
+	time.Sleep(80 * time.Millisecond)
+	assert.Equal(t, int32(1), maxConcurrentOps.Load(), "唯一后台 Worker 在屏障阻塞期间绝不能并发执行其他 Chunk 的合并操作")
+
+	// 3. 放行屏障，等待 Chunk 0、1、2 依次完成合并
+	releaseOnce.Do(func() { close(releaseBarrierCh) })
+
+	for chunkIndx := int64(0); chunkIndx <= 2; chunkIndx++ {
+		idx := chunkIndx
+		require.Eventually(t, func() bool {
+			c, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: idx})
+			if gErr != nil {
+				return false
+			}
+			return len(c.Slices)/meta.SliceBytes == 1
+		}, 5*time.Second, 25*time.Millisecond, "Chunk %d 应当在单 Worker 队列中依次得到合并", idx)
+	}
+
+	assert.Equal(t, int32(1), maxConcurrentOps.Load(), "全过程后台存储操作的最大并发数必须严格为 1")
+}
+
+// TestSingleWorker_ImmediatePostCompactBlockReclamation_ProtectsSharedAndInFlightRead_AndRetriesDeleteError
+// 验证验收标准 4、5：
+// 1. 后台 Worker 成功合并并扣减引用后，在同一个 Worker 内立即推进 refs <= 0 的废弃 Block 物理删除与 slice_refs 清理（无需等待长 gcInterval）；
+// 2. 仍有引用（refs > 0）或受在途读取保护（isSliceReadInFlight）的 Block 绝不提前删除；在途读取释放后可被后续回收；
+// 3. 物理删除失败时保留 slice_refs 记录供后续重试，不谎报完成且不阻塞后续 Chunk 合并。
+func TestSingleWorker_ImmediatePostCompactBlockReclamation_ProtectsSharedAndInFlightRead_AndRetriesDeleteError(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, tmpDir, pool := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	blockFilePath := func(sliceID uint64, blockIdx uint32, size uint32) string {
+		h1 := sliceID % 256
+		h2 := sliceID / 1000000
+		return filepath.Join(tmpDir, "chunks", fmt.Sprintf("%02X", h1), fmt.Sprintf("%d", h2), fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, size))
+	}
+
+	var (
+		failDeleteSliceID atomic.Uint64
+		readInFlightID    atomic.Uint64
+		readEnteredCh     = make(chan struct{})
+		releaseReadCh     = make(chan struct{})
+		readEnteredOnce   sync.Once
+		releaseReadOnce   sync.Once
+	)
+	t.Cleanup(func() {
+		releaseReadOnce.Do(func() { close(releaseReadCh) })
+	})
+
+	hookBS := &recordingBlockStore{
+		realBS: realBS,
+		onBeforeGetBlock: func(getCtx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32, blockOff uint32) error {
+			if getCtx.Value(fgWriteContextKey{}) != nil && sliceID == readInFlightID.Load() {
+				readEnteredOnce.Do(func() { close(readEnteredCh) })
+				select {
+				case <-releaseReadCh:
+				case <-getCtx.Done():
+					return getCtx.Err()
+				}
+			}
+			return nil
+		},
+		onBeforeDeleteBlock: func(delCtx context.Context, sliceID uint64, blockIdx uint32, blockSize uint32) error {
+			if failID := failDeleteSliceID.Load(); failID != 0 && sliceID == failID {
+				return fmt.Errorf("%w: injected delete failure for slice %d", meta.ErrIO, sliceID)
+			}
+			return nil
+		},
+	}
+
+	// 将 gcInterval 设为极长（10 分钟），证明废弃块回收是由合并完成后的同一 Worker 立即触发，而非依赖周期 GC 定时器
+	mgr := meta.New(
+		store,
+		meta.WithBlockStore(hookBS),
+		meta.WithCompactSliceThreshold(4),
+		meta.WithGCInterval(10*time.Minute),
+	)
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	defer workerCancel()
+	mgr.StartGCWorker(workerCtx, 10*time.Minute, 50)
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	// 先在 Chunk 0 写入 3 个 4KiB 切片（低于阈值 4，尚未触发自动合并）
+	for i := 0; i < 3; i++ {
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(i * 4096),
+			Data:   bytes.Repeat([]byte{byte(0x31 + i)}, 4096),
+		})
+		require.NoError(t, err)
+	}
+
+	cBefore, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+	require.NoError(t, err)
+	slicesBefore, err := meta.DecodeSlices(cBefore.Slices)
+	require.NoError(t, err)
+	require.Len(t, slicesBefore, 3)
+
+	// S0: 模拟仍有额外引用的共享切片（refs 从 1 增加到 2，合并扣减 1 后仍剩 refs == 1）
+	sharedSliceID := slicesBefore[0].ID
+	_, err = pool.Exec(ctx, "UPDATE slice_refs SET refs = refs + 1 WHERE slice_id = $1", int64(sharedSliceID))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = store.DeleteSliceRef(context.Background(), int64(sharedSliceID))
+		_ = realBS.DeleteBlock(context.Background(), sharedSliceID, 0, 4096)
+	})
+
+	// S1: 模拟受在途读取保护（isSliceReadInFlight）的切片
+	inFlightSliceID := slicesBefore[1].ID
+	readInFlightID.Store(inFlightSliceID)
+
+	// S2: 模拟物理删除失败的切片
+	failSliceID := slicesBefore[2].ID
+	failDeleteSliceID.Store(failSliceID)
+
+	// 启动一个针对 S1 的前台在途 Read 并停留在 GetBlock 屏障中（此时 isSliceReadInFlight(S1) == true）
+	readDoneCh := make(chan error, 1)
+	go func() {
+		readCtx := context.WithValue(ctx, fgWriteContextKey{}, true)
+		_, rErr := mgr.Read(readCtx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 4096,
+			Size:   4096,
+		})
+		readDoneCh <- rErr
+	}()
+
+	select {
+	case <-readEnteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("超时: 前台 Read 未进入 GetBlock 屏障")
+	}
+
+	// 写入第 4 个切片 S3，达到阈值 4 触发后台 Worker 合并并立即推进废弃块回收
+	_, err = mgr.Write(ctx, &meta.WriteRequest{
+		Ino:    ino,
+		Fh:     fh,
+		Offset: 3 * 4096,
+		Data:   bytes.Repeat([]byte{0x34}, 4096),
+	})
+	require.NoError(t, err)
+
+	// 等待 Chunk 0 合并为 1 条紧致 Slice 且第 4 个旧切片 S3 的物理文件与 slice_refs 被同一 Worker 立即回收
+	var normalOldSliceID uint64
+	require.Eventually(t, func() bool {
+		c, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		if gErr != nil {
+			return false
+		}
+		sl, dErr := meta.DecodeSlices(c.Slices)
+		if dErr != nil || len(sl) != 1 {
+			return false
+		}
+		// 检查 hookBS.deletes 中是否已对 S2（失败）和 S3（成功）发起了立即删除
+		hookBS.mu.Lock()
+		delCount := len(hookBS.deletes)
+		for _, id := range hookBS.deletes {
+			if id != sharedSliceID && id != inFlightSliceID && id != failSliceID {
+				normalOldSliceID = id
+			}
+		}
+		hookBS.mu.Unlock()
+		if delCount < 2 || normalOldSliceID == 0 {
+			return false
+		}
+		_, refErr := store.GetSliceRef(ctx, int64(normalOldSliceID))
+		return errors.Is(refErr, pgx.ErrNoRows)
+	}, 5*time.Second, 20*time.Millisecond, "合并后同一 Worker 必须立即物理删除并清除无保护的 refs==0 旧切片 S3")
+
+	assert.NoFileExists(t, blockFilePath(normalOldSliceID, 0, 4096), "无保护的旧切片 S3 物理文件必须已被立即删除")
+
+	// 校验 S0（refs == 1）：物理文件与 slice_refs 必须完好保留
+	ref0, err := store.GetSliceRef(ctx, int64(sharedSliceID))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), ref0.Refs, "仍有引用的 Block (refs=1) 绝不能被提前删除")
+	assert.FileExists(t, blockFilePath(sharedSliceID, 0, 4096))
+
+	// 校验 S1（refs == 0 但受在途 Read 保护）：物理文件与 slice_refs 必须完好保留
+	ref1, err := store.GetSliceRef(ctx, int64(inFlightSliceID))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), ref1.Refs, "在途 Read 保护的切片 refs 已降为 0 但记录不可提前删除")
+	assert.FileExists(t, blockFilePath(inFlightSliceID, 0, 4096), "在途 Read 保护的物理块文件绝不能提前删除")
+
+	// 校验 S2（DeleteBlock 失败）：物理文件与 slice_refs 记录必须保留供后续重试
+	ref2, err := store.GetSliceRef(ctx, int64(failSliceID))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), ref2.Refs, "物理删除失败的切片必须保留 slice_refs 记录")
+	assert.FileExists(t, blockFilePath(failSliceID, 0, 4096), "物理删除失败的块文件仍在磁盘上")
+
+	// 验证 S2 的删除失败不阻塞其他任务：向 Chunk 1 写入 4 个切片触发合并，Chunk 1 正常合并并立即回收其旧块，
+	// 同时放行 S1 的在途 Read 并解除 S2 的删除故障，验证在 Chunk 1 合并后的立即回收中 S1 与 S2 一并被成功清理！
+	releaseReadOnce.Do(func() { close(releaseReadCh) })
+	require.NoError(t, <-readDoneCh)
+	failDeleteSliceID.Store(0)
+
+	chunk1Base := uint64(meta.ChunkSize)
+	for i := 0; i < 4; i++ {
+		_, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: chunk1Base + uint64(i*4096),
+			Data:   bytes.Repeat([]byte{byte(0x41 + i)}, 4096),
+		})
+		require.NoError(t, err)
+	}
+
+	require.Eventually(t, func() bool {
+		c1, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 1})
+		if gErr != nil || len(c1.Slices)/meta.SliceBytes != 1 {
+			return false
+		}
+		_, err1 := store.GetSliceRef(ctx, int64(inFlightSliceID))
+		_, err2 := store.GetSliceRef(ctx, int64(failSliceID))
+		return errors.Is(err1, pgx.ErrNoRows) && errors.Is(err2, pgx.ErrNoRows)
+	}, 5*time.Second, 20*time.Millisecond, "在途读取结束及删除故障恢复后，S1 与 S2 应在后续回收中被彻底清除")
+
+	assert.NoFileExists(t, blockFilePath(inFlightSliceID, 0, 4096))
+	assert.NoFileExists(t, blockFilePath(failSliceID, 0, 4096))
+}
+
+// TestSingleWorker_PeriodicGCInterleavesDuringContinuousCompaction_AndAuditsChildTablesDirectly
+// 验证验收标准 6、7、9：
+// 持续有合并任务到来时，唯一后台 Worker 在到达 gcInterval 周期时仍能穿插推进：
+// 1. 超期 ClientSession（直接按目标 ID 审计 client_sessions、file_handles、file_locks、file_lock_waiters 子表物理清零）；
+// 2. 无活跃句柄的 Orphan Inode（直接按目标 Ino 审计 inodes、chunks 物理清零，其释放的块被回收）；
+// 3. 超过安全宽限期的未登记孤儿 Block 文件（未满宽限期的在途未登记文件与已登记有效块不被误删）。
+func TestSingleWorker_PeriodicGCInterleavesDuringContinuousCompaction_AndAuditsChildTablesDirectly(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, tmpDir, pool := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	blockFilePath := func(sliceID uint64, blockIdx uint32, size uint32) string {
+		h1 := sliceID % 256
+		h2 := sliceID / 1000000
+		return filepath.Join(tmpDir, "chunks", fmt.Sprintf("%02X", h1), fmt.Sprintf("%d", h2), fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, size))
+	}
+
+	var compactPutCount atomic.Int32
+	slowCompactBS := &recordingBlockStore{
+		realBS: realBS,
+		onBeforePutBlock: func(putCtx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+			if putCtx.Value(fgWriteContextKey{}) != nil {
+				return nil
+			}
+			compactPutCount.Add(1)
+			// 每次后台 Compaction PutBlock 耗时 35ms，制造多 Chunk 持续合并积压（超过 45ms 的 gcInterval）
+			select {
+			case <-time.After(35 * time.Millisecond):
+				return nil
+			case <-putCtx.Done():
+				return putCtx.Err()
+			}
+		},
+	}
+
+	// forwardingBlockStore 同时暴露底层 LocalFSBlockStore 的 BlockLister 能力
+	listerBS := &listerForwardingBlockStore{
+		recordingBlockStore: slowCompactBS,
+		lister:              realBS.(meta.BlockLister),
+	}
+
+	mgr := meta.New(
+		store,
+		meta.WithBlockStore(listerBS),
+		meta.WithCompactSliceThreshold(4),
+		meta.WithGCInterval(45*time.Millisecond),
+		meta.WithGCOrphanGracePeriod(time.Hour),
+	)
+	workerCtx, workerCancel := context.WithCancel(ctx)
+	defer workerCancel()
+	mgr.StartGCWorker(workerCtx, 45*time.Millisecond, 50)
+
+	diskName := fmt.Sprintf("test_interleave_gc_%d", time.Now().UnixNano())
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: diskName, MaxBytes: 1024 * 1024 * 1024})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+	})
+
+	// 准备待由周期 GC 清理的目标：
+	// (a) 绑定会话 sessID 的孤儿 Inode（含 file_handles、file_locks、file_lock_waiters）
+	sessID := uint64(880192)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
+	})
+	_, err = mgr.RenewSession(ctx, sessID)
+	require.NoError(t, err)
+
+	orphanRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("interleave_orphan.bin"),
+		Mode:      meta.S_IFREG | 0o644,
+		Flags:     meta.O_RDWR,
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+	orphanIno := orphanRes.Inode.Ino
+	orphanFh := orphanRes.Fh
+
+	fgCtx := context.WithValue(ctx, fgWriteContextKey{}, true)
+	_, err = mgr.Write(fgCtx, &meta.WriteRequest{
+		Ino:       orphanIno,
+		Fh:        orphanFh,
+		Offset:    0,
+		Data:      bytes.Repeat([]byte{0x7A}, 4096),
+		SessionID: &sessID,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.SetLk(ctx, meta.SetLkParams{
+		Ino:       orphanIno,
+		Fh:        orphanFh,
+		SessionID: sessID,
+		LockOwner: 2001,
+		Lk: meta.FileLock{
+			Start: 0,
+			End:   64,
+			Type:  meta.F_WRLCK,
+			PID:   4321,
+		},
+	}))
+	_, err = pool.Exec(ctx, `
+		INSERT INTO file_lock_waiters (session_id, request_id, ino, fh, lock_owner, lk_flags, start_offset, end_offset, lock_type, pid)
+		VALUES ($1, 1, $2, $3, 2002, 0, 0, 64, $4, 4322)
+	`, int64(sessID), int64(orphanIno), int64(orphanFh), int16(meta.F_WRLCK))
+	require.NoError(t, err)
+
+	require.NoError(t, mgr.Unlink(ctx, disk.RootIno, []byte("interleave_orphan.bin")))
+
+	// 令 sessID 立即超期
+	_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '10 seconds' WHERE session_id = $1", int64(sessID))
+	require.NoError(t, err)
+
+	// (b) 1 个超过安全宽限期的未登记孤儿 Block 文件，以及 1 个未满宽限期的在途未登记 Block 文件
+	agedUnregisteredSliceID := uint64(910000001)
+	freshUnregisteredSliceID := uint64(910000002)
+	require.NoError(t, realBS.PutBlock(ctx, agedUnregisteredSliceID, 0, bytes.Repeat([]byte("A"), 4096)))
+	require.NoError(t, realBS.PutBlock(ctx, freshUnregisteredSliceID, 0, bytes.Repeat([]byte("N"), 4096)))
+	t.Cleanup(func() {
+		_ = realBS.DeleteBlock(context.Background(), agedUnregisteredSliceID, 0, 4096)
+		_ = realBS.DeleteBlock(context.Background(), freshUnregisteredSliceID, 0, 4096)
+	})
+	agedPath := blockFilePath(agedUnregisteredSliceID, 0, 4096)
+	freshPath := blockFilePath(freshUnregisteredSliceID, 0, 4096)
+	twoHoursAgo := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(agedPath, twoHoursAgo, twoHoursAgo))
+
+	// 创建持续触发多 Chunk 合并的常规文件，一次性向 6 个不同 Chunk 各写入 4 次（共 6 个待合并任务排队，总合并时间 > 200ms）
+	compRes, err := mgr.Create(ctx, meta.CreateParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("continuous_compact.bin"),
+		Mode:      meta.S_IFREG | 0o644,
+		Flags:     meta.O_RDWR,
+	})
+	require.NoError(t, err)
+	compIno := compRes.Inode.Ino
+	compFh := compRes.Fh
+
+	for chunkIndx := int64(0); chunkIndx < 6; chunkIndx++ {
+		baseOff := uint64(chunkIndx) * uint64(meta.ChunkSize)
+		for i := 0; i < 4; i++ {
+			_, err := mgr.Write(fgCtx, &meta.WriteRequest{
+				Ino:    compIno,
+				Fh:     compFh,
+				Offset: baseOff + uint64(i*4096),
+				Data:   bytes.Repeat([]byte{byte(0x50 + int(chunkIndx)*4 + i)}, 4096),
+			})
+			require.NoError(t, err)
+		}
+	}
+
+	// 验证在多 Chunk 持续合并期间（无需等待全部 6 个 Chunk 合并结束），周期 GC 已穿插推进并清理了超期会话、孤儿 Inode 及老化未登记块
+	require.Eventually(t, func() bool {
+		var sessCnt, fhCnt, lockCnt, waiterCnt, inodeCnt, chunkCnt, entryCnt int64
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM client_sessions WHERE session_id = $1", int64(sessID)).Scan(&sessCnt); err != nil || sessCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM file_handles WHERE fh = $1", int64(orphanFh)).Scan(&fhCnt); err != nil || fhCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM file_locks WHERE session_id = $1", int64(sessID)).Scan(&lockCnt); err != nil || lockCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM file_lock_waiters WHERE session_id = $1", int64(sessID)).Scan(&waiterCnt); err != nil || waiterCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM inodes WHERE ino = $1", int64(orphanIno)).Scan(&inodeCnt); err != nil || inodeCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM chunks WHERE ino = $1", int64(orphanIno)).Scan(&chunkCnt); err != nil || chunkCnt != 0 {
+			return false
+		}
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE parent_ino = $1 AND ino = $2", int64(disk.RootIno), int64(orphanIno)).Scan(&entryCnt); err != nil || entryCnt != 0 {
+			return false
+		}
+		_, agedStatErr := os.Stat(agedPath)
+		return errors.Is(agedStatErr, os.ErrNotExist)
+	}, 5*time.Second, 20*time.Millisecond, "持续合并期间必须按 gcInterval 穿插推进超期会话、孤儿 Inode 与未登记孤儿 Block 回收")
+
+	// 未超宽限期的在途未登记物理块绝不能被误删
+	assert.FileExists(t, freshPath, "未满安全宽限期的在途未登记物理块必须受到保护")
+
+	// 最终所有 6 个排队的 Chunk 合并任务也全部完成收敛
+	for chunkIndx := int64(0); chunkIndx < 6; chunkIndx++ {
+		idx := chunkIndx
+		require.Eventually(t, func() bool {
+			c, gErr := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(compIno), Indx: idx})
+			return gErr == nil && len(c.Slices)/meta.SliceBytes == 1
+		}, 5*time.Second, 25*time.Millisecond, "Chunk %d 最终必须完成合并", idx)
+	}
+}
+
+type listerForwardingBlockStore struct {
+	*recordingBlockStore
+	lister meta.BlockLister
+}
+
+func (l *listerForwardingBlockStore) ListBlocksBefore(ctx context.Context, before time.Time, limit int) ([]meta.PhysicalBlockFile, error) {
+	return l.lister.ListBlocksBefore(ctx, before, limit)
+}
+
+// TestSingleWorker_FxLifecycle_StartAndStopDrainsCleanlyWithoutDetachedTasks
+// 验证验收标准 8：
+// 通过真实生产生命周期启动路径（meta.Module + Fx OnStart/OnStop）验证：
+// 1. 服务启动只启用唯一一套后台执行器；
+// 2. 服务停止（OnStop）时取消并等待后台执行器退出，停止后无脱离生命周期的自动整理任务继续运行。
+func TestSingleWorker_FxLifecycle_StartAndStopDrainsCleanlyWithoutDetachedTasks(t *testing.T) {
+	ctx := context.Background()
+	store, realBS, _, tmpDir, _ := setupPostgresForCompact(t)
+	if store == nil {
+		return
+	}
+
+	var (
+		bgPutEnteredCh = make(chan struct{})
+		bgPutExitedCh  = make(chan struct{})
+		bgPutCalls     atomic.Int32
+		enteredOnce    sync.Once
+		exitedOnce     sync.Once
+	)
+
+	hookBS := &recordingBlockStore{
+		realBS: realBS,
+		onBeforePutBlock: func(putCtx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
+			if putCtx.Value(fgWriteContextKey{}) != nil {
+				return nil
+			}
+			bgPutCalls.Add(1)
+			enteredOnce.Do(func() { close(bgPutEnteredCh) })
+			defer exitedOnce.Do(func() { close(bgPutExitedCh) })
+
+			<-putCtx.Done()
+			return putCtx.Err()
+		},
+	}
+
+	metaCfg := &config.MetaConfig{
+		DataDirVal:    tmpDir,
+		GCIntervalVal: 40 * time.Millisecond,
+	}
+
+	var mgr meta.Manager
+	app := fx.New(
+		fx.NopLogger,
+		fx.Provide(func() db.Store { return store }),
+		fx.Provide(func() meta.BlockStore { return hookBS }),
+		fx.Supply(metaCfg),
+		meta.Module,
+		fx.Populate(&mgr),
+	)
+
+	startCtx, startCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer startCancel()
+	require.NoError(t, app.Start(startCtx))
+
+	fileRow, err := store.CreateInode(ctx, db.CreateInodeParams{
+		Mode:  int32(meta.S_IFREG | 0o644),
+		Nlink: 1,
+		Uid:   1000,
+		Gid:   1000,
+	})
+	require.NoError(t, err)
+	ino := uint64(fileRow.Ino)
+	t.Cleanup(func() {
+		cleanupCompactTestIno(context.Background(), store, fileRow.Ino)
+	})
+
+	openRes, err := mgr.Open(ctx, meta.OpenParams{Ino: ino, Flags: meta.O_RDWR})
+	require.NoError(t, err)
+	fh := openRes.Fh
+	t.Cleanup(func() {
+		_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+	})
+
+	fgCtx := context.WithValue(ctx, fgWriteContextKey{}, true)
+	for i := 0; i < meta.CompactSliceThreshold; i++ {
+		_, err := mgr.Write(fgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(i * 64),
+			Data:   bytes.Repeat([]byte{byte(0x60 + (i % 32))}, 64),
+		})
+		require.NoError(t, err)
+	}
+
+	select {
+	case <-bgPutEnteredCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("超时: Fx 启动的后台 Worker 未处理自动 Compaction 任务")
+	}
+
+	// 调用 app.Stop：必须取消正在执行的后台 Worker 并等待其彻底退出后才返回
+	stopCtx, stopCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer stopCancel()
+	require.NoError(t, app.Stop(stopCtx))
+
+	select {
+	case <-bgPutExitedCh:
+	default:
+		t.Fatal("app.Stop 返回时后台 Worker 必须已完全退出")
+	}
+
+	callsAfterStop := bgPutCalls.Load()
+
+	// 服务停止后再次写入达到阈值的数据，验证绝不会重新拉起脱离生命周期的后台整理协程
+	for i := 0; i < meta.CompactSliceThreshold; i++ {
+		_, err := mgr.Write(fgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: uint64(meta.ChunkSize) + uint64(i*64),
+			Data:   bytes.Repeat([]byte{byte(0x70 + (i % 32))}, 64),
+		})
+		require.NoError(t, err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	assert.Equal(t, callsAfterStop, bgPutCalls.Load(), "服务停止后绝不能再启动脱离生命周期的后台自动整理任务")
 }
 
 // TestCompactChunk_SkipSome_StopsAtFirstOverlappedOrHolePrefix 验收标准 3：
