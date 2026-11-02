@@ -753,7 +753,10 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 		return nil, err
 	}
 
-	var result *OpenDirResult
+	var (
+		result  *OpenDirResult
+		txInode db.Inode
+	)
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		inode, err := q.GetInode(ctx, int64(params.Ino))
 		if err != nil {
@@ -804,13 +807,9 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 			return fmt.Errorf("create file handle for inode %d: %w", inode.Ino, err)
 		}
 
-		var openFlags uint32
-		if m.openDirCache {
-			openFlags = FOPEN_CACHE_DIR
-		}
+		txInode = inode
 		result = &OpenDirResult{
-			Fh:        uint64(handle.Fh),
-			OpenFlags: openFlags,
+			Fh: uint64(handle.Fh),
 		}
 		return nil
 	})
@@ -829,6 +828,24 @@ func (m *manager) OpenDir(ctx context.Context, params OpenDirParams) (*OpenDirRe
 			return nil, fmt.Errorf("opendir tx: %w", err)
 		}
 	}
+
+	curVer := dirKnownVersion{
+		mtimeNano: txInode.Mtime.Time.UnixNano(),
+		ctimeNano: txInode.Ctime.Time.UnixNano(),
+		nlink:     txInode.Nlink,
+		mutSeq:    m.getDirMutationSeq(params.Ino),
+	}
+	key := sessionInoKey{
+		sessionID: sessionKeyFromPtr(params.SessionID),
+		ino:       params.Ino,
+	}
+	prevVal, hadPrev := m.dirKnownVersions.Swap(key, curVer)
+
+	var openFlags uint32
+	if m.openDirCache || (hadPrev && prevVal.(dirKnownVersion) == curVer) {
+		openFlags |= FOPEN_CACHE_DIR
+	}
+	result.OpenFlags = openFlags
 
 	return result, nil
 }

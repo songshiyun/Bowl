@@ -108,6 +108,25 @@ type dirHandleKey struct {
 	fh  uint64
 }
 
+type sessionInoKey struct {
+	sessionID uint64
+	ino       uint64
+}
+
+type dirKnownVersion struct {
+	mtimeNano int64
+	ctimeNano int64
+	nlink     int32
+	mutSeq    uint64
+}
+
+func sessionKeyFromPtr(sessionID *uint64) uint64 {
+	if sessionID == nil {
+		return 0
+	}
+	return *sessionID
+}
+
 type inFlightDirRead struct {
 	ino                 uint64
 	fh                  uint64
@@ -172,6 +191,7 @@ type manager struct {
 	inFlightDirMutations   map[uint64]int
 	activeDirReads         map[uint64]*inFlightDirRead
 	nextDirReadID          uint64
+	dirKnownVersions       sync.Map // map[sessionInoKey]dirKnownVersion
 	inFlightGrantMu        sync.Mutex
 	inFlightGrants         map[inFlightGrantKey]*inFlightGrant
 	nextInFlightGrantID    uint64
