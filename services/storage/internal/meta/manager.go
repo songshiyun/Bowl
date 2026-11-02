@@ -969,7 +969,28 @@ func isRetryableTxError(err error) bool {
 	return tx.IsRetryable(err, errRetryTx)
 }
 
+// enableAsyncWALInTx 在当前显式写事务内启用事务级 synchronous_commit = off（仅作用于当前事务生命周期，随 COMMIT/ROLLBACK 自动失效）。
+// 当底层 Querier 为 Mock（未实现 RawDBTX 或返回 nil）时无副作用跳过，保持单测兼容。
+func enableAsyncWALInTx(ctx context.Context, q db.Querier) error {
+	if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
+		if _, err := r.RawDBTX().Exec(ctx, "SELECT set_config('synchronous_commit', 'off', true)"); err != nil {
+			return fmt.Errorf("enable async wal in tx: %w", err)
+		}
+	}
+	return nil
+}
+
 func (m *manager) execWriteTxWithRetry(ctx context.Context, fn func(q db.Querier) error) error {
+	return m.execWriteTxWithRetryMode(ctx, true, fn)
+}
+
+// execSyncWriteTxWithRetry 专用于控制面磁盘生命周期写事务（CreateDisk、UpdateDisk、DeleteDisk），
+// 保持连接池默认的 synchronous_commit = on 同步提交契约，不启用异步 WAL。
+func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(q db.Querier) error) error {
+	return m.execWriteTxWithRetryMode(ctx, false, fn)
+}
+
+func (m *manager) execWriteTxWithRetryMode(ctx context.Context, asyncWAL bool, fn func(q db.Querier) error) error {
 	var buffered *quotaBufferedQuerier
 	err := tx.Retry(ctx, func(attemptCtx context.Context) error {
 		if buffered != nil {
@@ -977,6 +998,11 @@ func (m *manager) execWriteTxWithRetry(ctx context.Context, fn func(q db.Querier
 			buffered = nil
 		}
 		return m.store.ExecTxWithOptions(attemptCtx, func(q db.Querier) error {
+			if asyncWAL {
+				if err := enableAsyncWALInTx(attemptCtx, q); err != nil {
+					return err
+				}
+			}
 			buffered = &quotaBufferedQuerier{
 				Querier: q,
 				m:       m,

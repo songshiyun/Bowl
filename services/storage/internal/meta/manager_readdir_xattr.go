@@ -480,6 +480,9 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 
 	// 开启读写事务
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		if err := enableAsyncWALInTx(ctx, q); err != nil {
+			return err
+		}
 		// 第 2 步：排他锁与存在性校验
 		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
 		if err != nil {
@@ -717,6 +720,9 @@ func (m *manager) RemoveXattr(ctx context.Context, ino uint64, name []byte) erro
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		if err := enableAsyncWALInTx(ctx, q); err != nil {
+			return err
+		}
 		// 第 2 步：Inode 行级排他锁与存在性校验
 		inode, err := q.GetInodeForUpdate(ctx, int64(ino))
 		if err != nil {
