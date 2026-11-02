@@ -2087,7 +2087,7 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		mockStore.EXPECT().
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
 			RunAndReturn(assertTxNotRenewing).
-			Times(2)
+			Once()
 
 		regInode := db.Inode{
 			Ino:   200,
@@ -2156,8 +2156,11 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.ErrorIs(t, mgr.Flush(ctx, meta.FlushParams{Ino: 200, Fh: 20, SessionID: &sessID}), meta.ErrBadFileHandle)
 
 		// 6. Release
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(200)).Return(regInode, nil).Once()
-		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
+		mockStore.EXPECT().ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
+			Ino:       200,
+			Fh:        20,
+			SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+		}).Return(db.ReleaseFileFastRow{Status: "ok", Nlink: 1}, nil).Once()
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
 		// 7. ReleaseDir

@@ -88,6 +88,7 @@ type Querier interface {
 	LockValidSliceRefsKeyShare(ctx context.Context, sliceIds []int64) ([]int64, error)
 	LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error)
 	NextSliceID(ctx context.Context) (int64, error)
+	ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error)
 	TouchInodeAtime(ctx context.Context, ino int64) error
 	TouchInodeCtime(ctx context.Context, ino int64) error
 	TouchInodeTimestamps(ctx context.Context, ino int64) error

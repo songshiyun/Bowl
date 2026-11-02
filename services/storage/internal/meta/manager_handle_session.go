@@ -311,11 +311,10 @@ func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
 }
 
 // Release 关闭并销毁文件句柄，按标志位清理 BSD flock 句柄锁，且在孤儿节点无活跃句柄时执行最终物理回收。
-// 遵循 ADR-0012 / ADR-0023：
+// 遵循 ADR-0012 / ADR-0023 / ADR-0028：
 // 1. 静态校验 ino、fh、release_flags（允许 0、FuseReleaseFlush、FuseReleaseFlockUnlock 及其组合）与可选 session_id 范围；
-// 2. 对正常未解链节点（nlink > 0）且未置位 FuseReleaseFlockUnlock 时，先通过 GetInode 无锁校验节点存在与类型，免除 GetInodeForUpdate 排他锁；
-// 3. 优先核验/续期会话并删除 file_handles(fh)；仅当 (release_flags & FuseReleaseFlockUnlock) != 0 时，锁定 Inode 并原子删除该 (session_id, ino, fh)（未传 session_id 时按 (ino, fh)）绑定的 BSD flock 锁（lk_flags == FuseLkFlock），绝不越权清理 POSIX 记录锁；
-// 4. 若 nlink == 0（含并发 Unlink/Rename 导致 nlink 归零）且无剩余活跃句柄，在同一事务内对 Inode 加排他锁并执行孤儿节点物理回收与配额退还。
+// 2. 对未置位 FuseReleaseFlockUnlock 且无 POSIX 记录锁活动的文件，直接走 ReleaseFileFast 单语句 CTE + 内联异步提交快速路径；
+// 3. 当 ReleaseFileFast 发现 nlink == 0（孤儿节点）或需要解锁时，无缝转入显式写事务慢路径：GetInodeForUpdate -> 校验非目录 -> DeleteFileHandle -> 按需清理 flock 锁 -> 若 nlink == 0 且无剩余活跃句柄则执行物理回收与配额退还。
 func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -325,6 +324,43 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	}
 	if err := validateOptionalSessionID(params.SessionID); err != nil {
 		return err
+	}
+
+	if (params.ReleaseFlags&FuseReleaseFlockUnlock) == 0 && !m.hasPosixLockActivity(params.Ino) {
+		var row db.ReleaseFileFastRow
+		fastErr := tx.Retry(ctx, func(attemptCtx context.Context) error {
+			var err error
+			row, err = m.store.ReleaseFileFast(attemptCtx, db.ReleaseFileFastParams{
+				Ino:       int64(params.Ino),
+				Fh:        int64(params.Fh),
+				SessionID: toPgSessionID(params.SessionID),
+			})
+			return err
+		}, tx.WithDefaultRetry())
+		if fastErr != nil {
+			if errors.Is(fastErr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("release tx: %w", fastErr)
+		}
+
+		switch row.Status {
+		case "ok":
+			if params.SessionID != nil {
+				m.notifyLockWaiters(params.Ino)
+			}
+			return nil
+		case "not_found":
+			return ErrNotFound
+		case "is_dir":
+			return ErrIsDir
+		case "bad_handle":
+			return ErrBadFileHandle
+		case "orphan":
+			// 孤儿节点（nlink == 0）在 CTE 中保持句柄未删，无缝进入下方写事务慢路径执行排他锁回收
+		default:
+			return fmt.Errorf("release tx: unexpected status %q", row.Status)
+		}
 	}
 
 	var lastUndo *inFlightTxUndo
@@ -342,41 +378,12 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 		currentUndo := newInFlightTxUndo(m, params.Ino)
 		lastUndo = currentUndo
 
-		var (
-			inode       db.Inode
-			err         error
-			lockedInode bool
-		)
-		if (params.ReleaseFlags&FuseReleaseFlockUnlock) != 0 || m.hasPosixLockActivity(params.Ino) {
-			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
 			}
-			lockedInode = true
-		} else {
-			inode, err = q.GetInode(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode %d: %w", params.Ino, err)
-			}
-			if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
-				return ErrIsDir
-			}
-			if inode.Nlink == 0 {
-				inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-				if err != nil {
-					if errors.Is(err, pgx.ErrNoRows) {
-						return ErrNotFound
-					}
-					return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
-				}
-				lockedInode = true
-			}
+			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
 		}
 
 		if (uint32(inode.Mode) & S_IFMT) == S_IFDIR {
@@ -416,22 +423,6 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 				}
 			}
 			m.markInFlightGrantsFlushedOrReleased(params.Ino, params.SessionID, params.Fh, currentUndo)
-		}
-
-		if !lockedInode {
-			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r.RawDBTX() != nil {
-				var curNlink int32
-				if err := r.RawDBTX().QueryRow(ctx, `SELECT nlink FROM inodes WHERE ino = $1`, int64(params.Ino)).Scan(&curNlink); err == nil && curNlink == 0 {
-					inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-					if err != nil {
-						if errors.Is(err, pgx.ErrNoRows) {
-							return nil
-						}
-						return fmt.Errorf("get inode %d for update on orphan check: %w", params.Ino, err)
-					}
-					lockedInode = true
-				}
-			}
 		}
 
 		if inode.Nlink == 0 {

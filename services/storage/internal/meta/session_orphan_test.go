@@ -295,24 +295,20 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("Release 未传 FuseReleaseFlockUnlock 但传 SessionID 时通过 DeleteFileHandle 校验删除", func(t *testing.T) {
+	t.Run("Release 未传 FuseReleaseFlockUnlock 但传 SessionID 时通过 ReleaseFileFast 校验删除", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(100)).
-			Return(fileInode, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:        502,
+		mockStore.EXPECT().
+			ReleaseFileFast(mock.Anything, db.ReleaseFileFastParams{
 				Ino:       100,
+				Fh:        502,
 				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
 			}).
-			Return(int64(502), nil).
+			Return(db.ReleaseFileFastRow{
+				Status: "ok",
+				Nlink:  1,
+			}, nil).
 			Once()
 
 		err := mgr.Release(ctx, meta.ReleaseParams{
