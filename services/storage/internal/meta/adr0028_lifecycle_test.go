@@ -12,13 +12,70 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
+
+// txSyncCommitInspector 包装 db.Store，在每次写事务回调内部读取真实的 PostgreSQL current_setting('synchronous_commit')，
+// 并支持按事务尝试次数注入可重试冲突错误（如 SQLSTATE 40001）以验证回滚重试后的事务级设置。
+type txSyncCommitInspector struct {
+	db.Store
+	mu             sync.Mutex
+	attemptCount   int
+	observed       []string
+	onBeforeReturn func(ctx context.Context, attempt int, q db.Querier) error
+}
+
+func (s *txSyncCommitInspector) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attemptCount = 0
+	s.observed = nil
+	s.onBeforeReturn = nil
+}
+
+func (s *txSyncCommitInspector) snapshotObserved() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.observed)
+}
+
+func (s *txSyncCommitInspector) ExecTxWithOptions(ctx context.Context, fn func(db.Querier) error, opts ...tx.Option) error {
+	return s.Store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+		s.mu.Lock()
+		s.attemptCount++
+		attempt := s.attemptCount
+		hook := s.onBeforeReturn
+		s.mu.Unlock()
+
+		err := fn(q)
+		if raw, ok := q.(interface{ RawDBTX() db.DBTX }); ok && raw.RawDBTX() != nil {
+			var setting string
+			if qErr := raw.RawDBTX().QueryRow(ctx, "SELECT current_setting('synchronous_commit')").Scan(&setting); qErr == nil {
+				s.mu.Lock()
+				s.observed = append(s.observed, setting)
+				s.mu.Unlock()
+			}
+		}
+		if err != nil {
+			return err
+		}
+		if hook != nil {
+			return hook(ctx, attempt, q)
+		}
+		return nil
+	}, opts...)
+}
+
+func (s *txSyncCommitInspector) ExecTx(ctx context.Context, fn func(db.Querier) error) error {
+	return s.ExecTxWithOptions(ctx, fn)
+}
 
 // adr0028QueryTracer 拦截并记录通过 pgxpool.Pool 发送到 PostgreSQL 的每一条 SQL 查询。
 type adr0028QueryTracer struct {
@@ -332,9 +389,12 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 }
 
 // TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit 验证：
-//  1. 执行 Create、Write、Release 后，在连接池（包括设置 MaxConns = 1 强制复用同一物理连接的 pgxpool.Pool）上执行 SHOW synchronous_commit，返回值恒为 "on"；
-//  2. 通过 QueryTracer 执行控制面操作 CreateDisk、UpdateDisk、DeleteDisk、RenewSession，断言其执行的 SQL 语句中绝不包含 synchronous_commit 为 off 的设置，
-//     且在事务内查询 current_setting('synchronous_commit') 恒为 "on"。
+//  1. 执行单语句快路径（Create、Write、Release）与多语句数据面写事务（Mkdir、SetAttr、SetXattr、RemoveXattr、SetLk、Open(O_TRUNC)、
+//     Rename、Unlink、Rmdir、RenewSession、CloseSession）时，事务内均执行 set_config('synchronous_commit', 'off', true) 且事务内
+//     current_setting('synchronous_commit') 为 "off"；事务提交或回滚归还连接后，在 MaxConns = 1 连接池上执行 SHOW synchronous_commit 恒为 "on"；
+//  2. 当数据面写事务遇到可重试冲突（如 SQLSTATE 40001）回滚并重开新事务重试时，重试事务内依然生效 synchronous_commit = off；
+//  3. 通过 QueryTracer 与事务内探针执行控制面操作 CreateDisk、UpdateDisk、DeleteDisk，断言其执行的 SQL 语句中绝不包含
+//     synchronous_commit 为 off 的设置，且在控制面事务内查询 current_setting('synchronous_commit') 恒为 "on"。
 func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 	basePool, ctx := setupMetaTestDB(t)
 	if basePool == nil {
@@ -354,10 +414,17 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 	t.Cleanup(singlePool.Close)
 	require.NoError(t, singlePool.Ping(ctx))
 
-	store := db.NewStore(singlePool)
+	rawStore := db.NewStore(singlePool)
+	inspector := &txSyncCommitInspector{Store: rawStore}
 	dataDir := t.TempDir()
 	localBS := meta.NewLocalFSBlockStore(dataDir)
-	mgr := meta.New(store, meta.WithBlockStore(localBS))
+	mgr := meta.New(inspector, meta.WithBlockStore(localBS))
+
+	assertPoolSyncCommitOn := func(step string) {
+		var syncCommit string
+		require.NoError(t, singlePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommit))
+		require.Equal(t, "on", syncCommit, "%s 后复用同一物理连接执行 SHOW synchronous_commit 必须为 on", step)
+	}
 
 	// 1. 先创建测试磁盘并在单连接池上执行 Create -> Write -> Release（全部使用内联 set_config('synchronous_commit', 'off', true)）
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
@@ -385,13 +452,11 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 	fh := createRes.Fh
 	t.Cleanup(func() {
 		if !diskDeleted {
-			cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino), fh)
+			cleanupWriteTestInoAndSlices(t, rawStore, mgr, int64(ino), fh)
 		}
 	})
 
-	var syncCommitAfterCreate string
-	require.NoError(t, singlePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommitAfterCreate))
-	require.Equal(t, "on", syncCommitAfterCreate, "Create 后复用同一物理连接执行 SHOW synchronous_commit 必须为 on")
+	assertPoolSyncCommitOn("Create")
 
 	_, err = mgr.Write(ctx, &meta.WriteRequest{
 		Ino:    ino,
@@ -400,31 +465,193 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 		Data:   bytes.Repeat([]byte{'W'}, 4096),
 	})
 	require.NoError(t, err)
-
-	var syncCommitAfterWrite string
-	require.NoError(t, singlePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommitAfterWrite))
-	require.Equal(t, "on", syncCommitAfterWrite, "Write 后复用同一物理连接执行 SHOW synchronous_commit 必须为 on")
+	assertPoolSyncCommitOn("Write")
 
 	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
 		Ino: ino,
 		Fh:  fh,
 	}))
-
-	var syncCommitAfterRelease string
-	require.NoError(t, singlePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&syncCommitAfterRelease))
-	require.Equal(t, "on", syncCommitAfterRelease, "Release 后复用同一物理连接执行 SHOW synchronous_commit 必须为 on")
+	assertPoolSyncCommitOn("Release")
 
 	// 在默认多连接池上同样验证 SHOW synchronous_commit 为 "on"
 	var basePoolSyncCommit string
 	require.NoError(t, basePool.QueryRow(ctx, "SHOW synchronous_commit").Scan(&basePoolSyncCommit))
 	require.Equal(t, "on", basePoolSyncCommit)
 
-	// 清理测试文件的 chunks/slice_refs，为后续 DeleteDisk 控制面操作做准备
-	cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino))
+	// 2. 验证数据面多语句写事务（含 execWriteTxWithRetry 及 SetXattr/RemoveXattr）开启事务级 synchronous_commit = off 且无连接池状态泄漏
+	assertDataPlaneAsyncWAL := func(opName string, fn func() error) {
+		tracer.reset()
+		inspector.reset()
+		require.NoError(t, fn(), "数据面写操作 %s 必须成功", opName)
 
-	// 2. 通过 QueryTracer 执行控制面操作 CreateDisk、UpdateDisk、DeleteDisk、RenewSession
+		queries := tracer.snapshot()
+		require.NotEmpty(t, queries, "数据面写操作 %s 必须触发数据库查询", opName)
+		hasAsyncWALConfig := false
+		for _, q := range queries {
+			lower := strings.ToLower(q)
+			if strings.Contains(lower, "set_config('synchronous_commit', 'off', true)") {
+				hasAsyncWALConfig = true
+				break
+			}
+		}
+		assert.True(t, hasAsyncWALConfig, "数据面写事务 %s 必须执行 set_config('synchronous_commit', 'off', true), queries: %v", opName, queries)
+
+		observed := inspector.snapshotObserved()
+		require.NotEmpty(t, observed, "数据面写事务 %s 必须在事务内被观测到 synchronous_commit 设置", opName)
+		for i, val := range observed {
+			assert.Equal(t, "off", val, "数据面写事务 %s 第 %d 次尝试事务内 current_setting('synchronous_commit') 必须为 off", opName, i+1)
+		}
+
+		assertPoolSyncCommitOn(opName)
+	}
+
+	var dirInode *meta.Inode
+	assertDataPlaneAsyncWAL("Mkdir", func() error {
+		var mErr error
+		dirInode, mErr = mgr.Mkdir(ctx, meta.MkdirParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("sub_dir"),
+			Mode:      0o755,
+			UID:       1000,
+			GID:       1000,
+		})
+		return mErr
+	})
+
+	// 验证数据面写事务回滚路径（重复 Mkdir 触发唯一约束冲突回滚 + Unlink 目录触发 ErrIsDir 业务错误回滚）
+	// 同样开启异步 WAL，且回滚归还连接后连接池 SHOW synchronous_commit 恒为 "on"
+	tracer.reset()
+	inspector.reset()
+	_, dupErr := mgr.Mkdir(ctx, meta.MkdirParams{
+		ParentIno: disk.RootIno,
+		Name:      []byte("sub_dir"),
+		Mode:      0o755,
+		UID:       1000,
+		GID:       1000,
+	})
+	require.ErrorIs(t, dupErr, meta.ErrAlreadyExists)
+	assertPoolSyncCommitOn("Mkdir(Rollback)")
+
+	tracer.reset()
+	inspector.reset()
+	unlinkDirErr := mgr.Unlink(ctx, disk.RootIno, []byte("sub_dir"))
+	require.ErrorIs(t, unlinkDirErr, meta.ErrIsDir)
+	assert.Equal(t, []string{"off"}, inspector.snapshotObserved(), "回滚的数据面写事务内 current_setting('synchronous_commit') 必须为 off")
+	assertPoolSyncCommitOn("Unlink(ErrIsDir Rollback)")
+
+	// 验证数据面写事务遇到可重试冲突（首次尝试返回 SQLSTATE 40001 回滚并重开新事务重试）时，重试事务内依然保持 synchronous_commit = off
+	tracer.reset()
+	inspector.reset()
+	inspector.onBeforeReturn = func(_ context.Context, attempt int, _ db.Querier) error {
+		if attempt == 1 {
+			return &pgconn.PgError{Code: "40001", Message: "injected serialization_failure for retry test"}
+		}
+		return nil
+	}
+	newMode := uint32(0o600)
+	_, err = mgr.SetAttr(ctx, ino, meta.SetAttrInput{
+		Mode: &newMode,
+	})
+	require.NoError(t, err, "注入一次 40001 后 SetAttr 重试必须成功")
+	assert.Equal(t, []string{"off", "off"}, inspector.snapshotObserved(),
+		"首次回滚尝试与重开的重试事务内 current_setting('synchronous_commit') 必须均为 off")
+	assertPoolSyncCommitOn("SetAttr(RetryAfter40001)")
+	inspector.reset()
+
+	assertDataPlaneAsyncWAL("SetAttr", func() error {
+		mode644 := uint32(0o644)
+		_, sErr := mgr.SetAttr(ctx, ino, meta.SetAttrInput{
+			Mode: &mode644,
+		})
+		return sErr
+	})
+
+	assertDataPlaneAsyncWAL("SetXattr", func() error {
+		return mgr.SetXattr(ctx, meta.SetXattrParams{
+			Ino:   ino,
+			Name:  []byte("user.adr0028"),
+			Value: []byte("async-wal"),
+			Flags: 0,
+		})
+	})
+
+	assertDataPlaneAsyncWAL("RemoveXattr", func() error {
+		return mgr.RemoveXattr(ctx, ino, []byte("user.adr0028"))
+	})
+
+	sessID := uint64(time.Now().UnixNano() & 0x3fffffffffffffff)
+	t.Cleanup(func() {
+		_, _ = singlePool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
+	})
+
+	assertDataPlaneAsyncWAL("RenewSession", func() error {
+		_, rErr := mgr.RenewSession(ctx, sessID)
+		return rErr
+	})
+
+	var truncFh uint64
+	assertDataPlaneAsyncWAL("Open(O_TRUNC)", func() error {
+		openRes, oErr := mgr.Open(ctx, meta.OpenParams{
+			Ino:       ino,
+			Flags:     meta.O_RDWR | meta.O_TRUNC,
+			SessionID: &sessID,
+		})
+		if oErr == nil {
+			truncFh = openRes.Fh
+		}
+		return oErr
+	})
+
+	assertDataPlaneAsyncWAL("SetLk", func() error {
+		return mgr.SetLk(ctx, meta.SetLkParams{
+			Ino:       ino,
+			Fh:        truncFh,
+			SessionID: sessID,
+			LockOwner: 1001,
+			Lk: meta.FileLock{
+				Start: 0,
+				End:   127,
+				Type:  meta.F_WRLCK,
+				PID:   1234,
+			},
+		})
+	})
+
+	require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{
+		Ino:       ino,
+		Fh:        truncFh,
+		SessionID: &sessID,
+	}))
+	assertPoolSyncCommitOn("Release(truncFh)")
+
+	assertDataPlaneAsyncWAL("Rename", func() error {
+		return mgr.Rename(ctx, meta.RenameParams{
+			OldParentIno: disk.RootIno,
+			OldName:      []byte("async_wal_check.bin"),
+			NewParentIno: dirInode.Ino,
+			NewName:      []byte("renamed_check.bin"),
+		})
+	})
+
+	assertDataPlaneAsyncWAL("Unlink", func() error {
+		return mgr.Unlink(ctx, dirInode.Ino, []byte("renamed_check.bin"))
+	})
+
+	assertDataPlaneAsyncWAL("Rmdir", func() error {
+		return mgr.Rmdir(ctx, disk.RootIno, []byte("sub_dir"))
+	})
+
+	assertDataPlaneAsyncWAL("CloseSession", func() error {
+		return mgr.CloseSession(ctx, sessID)
+	})
+
+	// 清理测试文件的 chunks/slice_refs，为后续 DeleteDisk 控制面操作做准备
+	cleanupWriteTestInoAndSlices(t, rawStore, mgr, int64(ino))
+
+	// 3. 通过 QueryTracer 与事务内探针执行控制面操作 CreateDisk、UpdateDisk、DeleteDisk
 	assertControlPlaneSyncCommit := func(opName string, fn func() error) {
 		tracer.reset()
+		inspector.reset()
 		require.NoError(t, fn(), "控制面操作 %s 必须成功", opName)
 		queries := tracer.snapshot()
 		require.NotEmpty(t, queries, "控制面操作 %s 必须触发数据库查询", opName)
@@ -434,18 +661,13 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 				"控制面操作 %s 的 SQL 语句中绝不得包含将 synchronous_commit 设为 off 的设置, got: %s", opName, q)
 		}
 
-		// 在同一物理连接的显式事务内查询 current_setting('synchronous_commit') 恒为 "on"
-		err := store.ExecTxWithOptions(ctx, func(q db.Querier) error {
-			raw, ok := q.(interface{ RawDBTX() db.DBTX })
-			require.True(t, ok, "Querier 必须实现 RawDBTX")
-			var setting string
-			if err := raw.RawDBTX().QueryRow(ctx, "SELECT current_setting('synchronous_commit')").Scan(&setting); err != nil {
-				return err
-			}
-			assert.Equal(t, "on", setting, "%s 执行后事务内 current_setting('synchronous_commit') 必须恒为 on", opName)
-			return nil
-		})
-		require.NoError(t, err)
+		observed := inspector.snapshotObserved()
+		require.NotEmpty(t, observed, "控制面操作 %s 必须在事务内被观测到 synchronous_commit 设置", opName)
+		for i, val := range observed {
+			assert.Equal(t, "on", val, "控制面操作 %s 第 %d 次尝试事务内 current_setting('synchronous_commit') 必须恒为 on", opName, i+1)
+		}
+
+		assertPoolSyncCommitOn(opName)
 	}
 
 	var ctrlDisk *meta.Disk
@@ -473,15 +695,6 @@ func TestADR0028_AsyncWAL_NonLeakageAndControlPlaneSyncCommit(t *testing.T) {
 			MaxBytes: &newMax,
 		})
 		return uErr
-	})
-
-	sessID := uint64(time.Now().UnixNano() & 0x3fffffffffffffff)
-	t.Cleanup(func() {
-		_, _ = singlePool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id = $1", int64(sessID))
-	})
-	assertControlPlaneSyncCommit("RenewSession", func() error {
-		_, rErr := mgr.RenewSession(ctx, sessID)
-		return rErr
 	})
 
 	assertControlPlaneSyncCommit("DeleteDisk", func() error {
