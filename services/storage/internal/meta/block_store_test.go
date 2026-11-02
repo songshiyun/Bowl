@@ -6,12 +6,15 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -467,7 +470,7 @@ func TestManager_BlockStoreInjection(t *testing.T) {
 func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("PutBlock 原子 Rename 发布至 OS Page Cache 不阻塞等待叶子分片目录 dir.Sync", func(t *testing.T) {
+	t.Run("PutBlock 直接创建最终块文件发布至 OS Page Cache 不阻塞等待叶子分片目录 dir.Sync", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("requires non-root user to enforce directory 0o300 read permission")
 		}
@@ -487,11 +490,11 @@ func TestLocalFSBlockStore_DirectorySyncEnforcedOnPutAndDelete(t *testing.T) {
 			_ = os.Chmod(shardDir, 0o755)
 		})
 
-		// 设为 0o300（d-wx------）：允许在该目录内创建临时文件、写入并 os.Rename，但禁止 os.Open(shardDir) 获取目录 fd 执行 Sync()
+		// 设为 0o300（d-wx------）：允许在该目录内直接创建最终块文件并写入，但禁止 os.Open(shardDir) 获取目录 fd 执行 Sync()
 		require.NoError(t, os.Chmod(shardDir, 0o300))
 
 		err := store.PutBlock(ctx, sliceID, blockIdx, payload)
-		require.NoError(t, err, "PutBlock 发布至 OS Page Cache，不再在 Rename 后同步叶子分片目录")
+		require.NoError(t, err, "PutBlock 直接创建最终块文件发布至 OS Page Cache，不打开叶子分片目录执行 Sync")
 
 		require.NoError(t, os.Chmod(shardDir, 0o755))
 		finalPath := filepath.Join(shardDir, fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
@@ -700,5 +703,314 @@ func TestLocalFSBlockStore_DirSyncedCacheFastPathAndSelfHeal(t *testing.T) {
 		err = storeStatErr.PutBlock(ctx, 11, 0, []byte("stat-err-payload"))
 		require.ErrorIs(t, err, meta.ErrIO, "WithStatHook 注入错误时必须返回包装 ErrIO 的错误")
 		assert.Contains(t, err.Error(), injectedErr.Error())
+	})
+}
+
+func TestLocalFSBlockStore_PutBlockDirectWriteAndFailureCleanup(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("正常 PutBlock 直接创建最终块文件 <slice_id>_<block_idx>_<block_size>，不产生 .tmp_* 临时文件且不调用 Rename，成功后 GetBlock 立即可读", func(t *testing.T) {
+		dataDir := t.TempDir()
+		store := meta.NewLocalFSBlockStore(dataDir)
+
+		const sliceID = uint64(513) // 513 % 256 == 1 ("01"), 513 / 1000 / 1000 == 0
+		const blockIdx = uint32(0)
+		payload := []byte("direct-final-block-payload")
+		blockSize := uint32(len(payload))
+		expectedDir := filepath.Join(dataDir, "chunks", "01", "0")
+		expectedPath := filepath.Join(expectedDir, fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
+
+		var observedDuringWrite bool
+		storeWithProbe := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithWriteFileHook(func(f *os.File, data []byte) (int, error) {
+				// 写入途中目标最终路径文件已直接存在，且目录内无任何 .tmp_* 临时文件
+				assert.Equal(t, expectedPath, f.Name(), "PutBlock 必须直接打开最终块文件路径写入，而非临时文件")
+				entries, readErr := os.ReadDir(expectedDir)
+				require.NoError(t, readErr)
+				for _, e := range entries {
+					assert.False(t, strings.HasPrefix(e.Name(), ".tmp_"), "直接写入期间目录内绝不能创建 .tmp_* 临时文件: %s", e.Name())
+				}
+				observedDuringWrite = true
+				return f.Write(data)
+			}),
+		)
+
+		require.NoError(t, storeWithProbe.PutBlock(ctx, sliceID, blockIdx, payload))
+		assert.True(t, observedDuringWrite, "写钩子必须在 PutBlock 期间被调用")
+
+		// 写入完成后立即通过 GetBlock 读取到完整载荷
+		got := make([]byte, blockSize)
+		require.NoError(t, store.GetBlock(ctx, sliceID, blockIdx, blockSize, 0, got))
+		assert.Equal(t, payload, got)
+
+		// DeleteBlock 删除后再重复 DeleteBlock 仍保持幂等成功
+		require.NoError(t, store.DeleteBlock(ctx, sliceID, blockIdx, blockSize))
+		assert.NoFileExists(t, expectedPath)
+		require.NoError(t, store.DeleteBlock(ctx, sliceID, blockIdx, blockSize))
+	})
+
+	t.Run("写入失败（含部分字节写入后报错）时关闭并清理未完成的最终块文件，GetBlock 读取不到半截文件", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeErr := errors.New("simulated disk write I/O error")
+		const sliceID = uint64(514)
+		const blockIdx = uint32(0)
+		payload := []byte("partial-write-must-be-cleaned-up")
+		blockSize := uint32(len(payload))
+		expectedPath := filepath.Join(dataDir, "chunks", "02", "0", fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
+
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithWriteFileHook(func(f *os.File, data []byte) (int, error) {
+				// 模拟先写入前半部分字节（产生半截文件）随后返回 I/O 错误
+				_, _ = f.Write(data[:len(data)/2])
+				return len(data) / 2, writeErr
+			}),
+		)
+
+		err := store.PutBlock(ctx, sliceID, blockIdx, payload)
+		require.ErrorIs(t, err, meta.ErrIO)
+		assert.ErrorIs(t, err, writeErr)
+
+		// 断言未完成的最终块文件已被彻底清理
+		assert.NoFileExists(t, expectedPath, "写入失败时必须删除未完成的最终块文件")
+		dst := make([]byte, blockSize)
+		getErr := store.GetBlock(ctx, sliceID, blockIdx, blockSize, 0, dst)
+		require.ErrorIs(t, getErr, meta.ErrBlockNotFound)
+	})
+
+	t.Run("Close 失败时清理本次最终块文件并准确返回包装 ErrIO 的错误", func(t *testing.T) {
+		dataDir := t.TempDir()
+		closeErr := errors.New("simulated file close flush error")
+		const sliceID = uint64(515)
+		const blockIdx = uint32(0)
+		payload := []byte("close-failure-must-remove-final-file")
+		blockSize := uint32(len(payload))
+		expectedPath := filepath.Join(dataDir, "chunks", "03", "0", fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
+
+		var closeHookCalls atomic.Int64
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithCloseFileHook(func(f *os.File) error {
+				closeHookCalls.Add(1)
+				_ = f.Close()
+				return closeErr
+			}),
+		)
+
+		err := store.PutBlock(ctx, sliceID, blockIdx, payload)
+		require.ErrorIs(t, err, meta.ErrIO)
+		assert.ErrorIs(t, err, closeErr)
+		assert.Equal(t, int64(1), closeHookCalls.Load(), "Close 失败分支不应在 defer 中重复调用 close")
+
+		// 断言 Close 失败时目标最终文件同样被 os.Remove 清理
+		assert.NoFileExists(t, expectedPath, "Close 失败时必须清理未成功关闭的最终块文件")
+		dst := make([]byte, blockSize)
+		getErr := store.GetBlock(ctx, sliceID, blockIdx, blockSize, 0, dst)
+		require.ErrorIs(t, getErr, meta.ErrBlockNotFound)
+	})
+
+	t.Run("写入字节数不足 (short write) 时关闭并清理本次最终块文件且返回 io.ErrShortWrite", func(t *testing.T) {
+		dataDir := t.TempDir()
+		const sliceID = uint64(517)
+		const blockIdx = uint32(0)
+		payload := []byte("short-write-without-explicit-error")
+		blockSize := uint32(len(payload))
+		expectedPath := filepath.Join(dataDir, "chunks", "05", "0", fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
+
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithWriteFileHook(func(f *os.File, data []byte) (int, error) {
+				n, _ := f.Write(data[:5])
+				return n, nil
+			}),
+		)
+
+		err := store.PutBlock(ctx, sliceID, blockIdx, payload)
+		require.ErrorIs(t, err, meta.ErrIO)
+		assert.ErrorIs(t, err, io.ErrShortWrite)
+		assert.NoFileExists(t, expectedPath, "写入字节数不足时必须删除未完成的最终块文件")
+	})
+
+	t.Run("写入期间 Context 取消时关闭并清理本次未完成文件，准确返回 context.Canceled", func(t *testing.T) {
+		dataDir := t.TempDir()
+		cancelCtx, cancel := context.WithCancel(ctx)
+		const sliceID = uint64(516)
+		const blockIdx = uint32(0)
+		payload := []byte("canceled-during-write-payload")
+		blockSize := uint32(len(payload))
+		expectedPath := filepath.Join(dataDir, "chunks", "04", "0", fmt.Sprintf("%d_%d_%d", sliceID, blockIdx, blockSize))
+
+		store := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithWriteFileHook(func(f *os.File, data []byte) (int, error) {
+				n, wErr := f.Write(data)
+				cancel()
+				return n, wErr
+			}),
+		)
+
+		err := store.PutBlock(cancelCtx, sliceID, blockIdx, payload)
+		require.ErrorIs(t, err, context.Canceled)
+
+		// 断言取消时目标最终文件已被删除，不留半截或未发布文件
+		assert.NoFileExists(t, expectedPath, "Context 取消时必须清理本次创建的最终块文件")
+		dst := make([]byte, blockSize)
+		getErr := store.GetBlock(ctx, sliceID, blockIdx, blockSize, 0, dst)
+		require.ErrorIs(t, getErr, meta.ErrBlockNotFound)
+	})
+
+	t.Run("Write、Group Commit 与 Compaction 路径下 PutBlock 写入或关闭失败时不发布元数据引用且清理未完成最终文件", func(t *testing.T) {
+		pool, pgCtx := setupMetaTestDB(t)
+		if pool == nil {
+			return
+		}
+		acquireTestSliceGCAdvisoryLock(t, pool)
+
+		store := db.NewStore(pool)
+		dataDir := t.TempDir()
+
+		var failNextWrite atomic.Bool
+		var failNextClose atomic.Bool
+		var lastFailedPath atomic.Value
+		injectedIOErr := errors.New("injected underlying block file failure")
+
+		localBS := meta.NewLocalFSBlockStore(
+			dataDir,
+			meta.WithWriteFileHook(func(f *os.File, data []byte) (int, error) {
+				if failNextWrite.CompareAndSwap(true, false) {
+					lastFailedPath.Store(f.Name())
+					_, _ = f.Write(data[:len(data)/2])
+					return len(data) / 2, injectedIOErr
+				}
+				return f.Write(data)
+			}),
+			meta.WithCloseFileHook(func(f *os.File) error {
+				if failNextClose.CompareAndSwap(true, false) {
+					lastFailedPath.Store(f.Name())
+					_ = f.Close()
+					return injectedIOErr
+				}
+				return f.Close()
+			}),
+		)
+
+		mgr := meta.New(store, meta.WithBlockStore(localBS))
+
+		disk, err := mgr.CreateDisk(pgCtx, meta.CreateDiskParams{
+			Name:     fmt.Sprintf("direct-putblock-chain-%d", time.Now().UnixNano()),
+			MaxBytes: 50 * 1024 * 1024,
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+		})
+
+		createRes, err := mgr.Create(pgCtx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("direct_putblock.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR,
+		})
+		require.NoError(t, err)
+		ino := createRes.Inode.Ino
+		fh := createRes.Fh
+		t.Cleanup(func() {
+			cleanupWriteTestInoAndSlices(t, store, mgr, int64(ino), fh)
+		})
+
+		// 1. 单请求 Write 成功 -> 立即可读，GetAttr 反映精确大小
+		payload1 := bytes.Repeat([]byte{'A'}, 4096)
+		wResp1, err := mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Data:   payload1,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(4096), wResp1.Size)
+
+		attr1, err := mgr.GetAttr(pgCtx, ino)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(4096), attr1.Attr.Size)
+
+		read1, err := mgr.Read(pgCtx, &meta.ReadRequest{Ino: ino, Fh: fh, Offset: 0, Size: 4096})
+		require.NoError(t, err)
+		assert.Equal(t, payload1, read1.Data)
+
+		// 2. 单请求 Write 在 PutBlock Close 阶段失败 -> 返回 ErrIO，清理未完成最终文件，不发布新 Slice 元数据，Read 仍返回旧数据
+		failNextClose.Store(true)
+		failedWritePayload := bytes.Repeat([]byte{'X'}, 4096)
+		_, wErr := mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Data:   failedWritePayload,
+		})
+		require.ErrorIs(t, wErr, meta.ErrIO)
+		assert.Contains(t, wErr.Error(), injectedIOErr.Error())
+
+		failedWritePath, ok := lastFailedPath.Load().(string)
+		require.True(t, ok && failedWritePath != "")
+		assert.NoFileExists(t, failedWritePath, "Write PutBlock Close 失败时必须清理未完成最终块文件")
+
+		readAfterFailedWrite, err := mgr.Read(pgCtx, &meta.ReadRequest{Ino: ino, Fh: fh, Offset: 0, Size: 4096})
+		require.NoError(t, err)
+		assert.Equal(t, payload1, readAfterFailedWrite.Data, "失败的 Write 绝不能污染已提交数据视图")
+
+		// 3. 再追加第 2 段有效写入，随后触发 CompactChunk 并在新块写入阶段注入失败 -> 旧映射完好保留且失败新块文件被清理
+		payload2 := bytes.Repeat([]byte{'B'}, 4096)
+		_, err = mgr.Write(pgCtx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 4096,
+			Data:   payload2,
+		})
+		require.NoError(t, err)
+
+		failNextWrite.Store(true)
+		compactErr := mgr.CompactChunk(pgCtx, ino, 0)
+		require.ErrorIs(t, compactErr, meta.ErrIO)
+		assert.Contains(t, compactErr.Error(), injectedIOErr.Error())
+
+		failedCompactPath, ok := lastFailedPath.Load().(string)
+		require.True(t, ok && failedCompactPath != "")
+		assert.NoFileExists(t, failedCompactPath, "Compaction PutBlock 写入失败时必须清理未完成的新块文件")
+
+		// 恢复后再次执行 CompactChunk 成功合并，Read 完整返回 [payload1, payload2]
+		require.NoError(t, mgr.CompactChunk(pgCtx, ino, 0))
+		readAfterCompact, err := mgr.Read(pgCtx, &meta.ReadRequest{Ino: ino, Fh: fh, Offset: 0, Size: 8192})
+		require.NoError(t, err)
+		assert.Equal(t, append(slices.Clone(payload1), payload2...), readAfterCompact.Data)
+
+		// 4. 模拟进程在阶段 1 PutBlock 成功关闭最终块文件后、阶段 2 提交数据库前中断遗留未登记最终块文件：
+		//    安全宽限期内 CollectGarbage 不回收，超过安全宽限期后 CollectGarbage 识别并物理回收。
+		graceMgr := meta.New(store, meta.WithBlockStore(localBS), meta.WithGCOrphanGracePeriod(10*time.Minute))
+		unregisteredSliceID := uint64(888000001)
+		unregisteredPayload := bytes.Repeat([]byte{'U'}, 4096)
+		require.NoError(t, localBS.PutBlock(pgCtx, unregisteredSliceID, 0, unregisteredPayload))
+		unregisteredPath := filepath.Join(
+			dataDir,
+			"chunks",
+			fmt.Sprintf("%02X", unregisteredSliceID%256),
+			fmt.Sprintf("%d", unregisteredSliceID/1000/1000),
+			fmt.Sprintf("%d_0_4096", unregisteredSliceID),
+		)
+		require.FileExists(t, unregisteredPath)
+
+		// 宽限期内（刚写入）执行 CollectGarbage：不回收该未登记最终块文件
+		_, err = graceMgr.CollectGarbage(pgCtx, 100)
+		require.NoError(t, err)
+		assert.FileExists(t, unregisteredPath, "安全宽限期内的未登记最终块文件不得被 GC 误删")
+
+		// 超过安全宽限期（将 mtime 设为 20 分钟前）执行 CollectGarbage：识别并回收该未登记最终块文件
+		pastGrace := time.Now().Add(-20 * time.Minute)
+		require.NoError(t, os.Chtimes(unregisteredPath, pastGrace, pastGrace))
+		reclaimedOrphans, err := graceMgr.CollectGarbage(pgCtx, 100)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, reclaimedOrphans, 1)
+		assert.NoFileExists(t, unregisteredPath, "超过安全宽限期的未登记最终块文件必须被 GC 识别并回收")
 	})
 }

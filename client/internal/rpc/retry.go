@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	// DefaultMaxElapsedTime 为重试总预算上限，默认为 5s。
-	DefaultMaxElapsedTime = 5 * time.Second
+	// DefaultMaxElapsedTime 为重试总预算上限，默认为 30s。
+	DefaultMaxElapsedTime = 30 * time.Second
 
 	// DefaultInitialInterval 为初始退避等待时长，默认为 100ms。
 	DefaultInitialInterval = 100 * time.Millisecond
@@ -34,7 +34,7 @@ type RetryConfig struct {
 	// Disable 为 true 时彻底禁用重试拦截器。
 	Disable bool
 
-	// MaxElapsedTime 为重试总预算上限（默认 5s）。
+	// MaxElapsedTime 为重试总预算上限（默认 30s）。
 	MaxElapsedTime time.Duration
 
 	// InitialInterval 为初始退避等待时长（默认 100ms）。

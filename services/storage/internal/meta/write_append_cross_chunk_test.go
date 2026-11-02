@@ -23,7 +23,7 @@ import (
 	metamock "github.com/starsrc/bowl/services/storage/internal/meta/mock"
 )
 
-// TestWrite_CrossChunkBoundary 测试写入跨越 64 MiB Chunk 边界时自动切分为两个 Chunk 且 refs = 2。
+// TestWrite_CrossChunkBoundary 测试写入跨越 4 MiB Chunk 边界时自动切分为两个 Chunk 且 refs = 2。
 func TestWrite_CrossChunkBoundary(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
@@ -31,7 +31,7 @@ func TestWrite_CrossChunkBoundary(t *testing.T) {
 	fh := uint64(21)
 	sliceID := int64(1001)
 
-	// 跨越 64 MiB 边界：从 64 MiB - 1024 处写入 4096 字节
+	// 跨越 4 MiB 边界：从 4 MiB - 1024 处写入 4096 字节
 	// actualOffset = ChunkSize - 1024
 	// startIndx = 0, endIndx = 1
 	// firstPos = ChunkSize - 1024, firstLen = 1024
@@ -56,7 +56,7 @@ func TestWrite_CrossChunkBoundary(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
 	}
 
-	t.Run("普通跨 64 MiB 边界写入透明拆分至 indx 与 indx+1 且 slice_refs.refs 设为 2", func(t *testing.T) {
+	t.Run("普通跨 4 MiB 边界写入透明拆分至 indx 与 indx+1 且 slice_refs.refs 设为 2", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -300,7 +300,7 @@ func TestWrite_OAppend_IgnoreClientOffset(t *testing.T) {
 	}
 }
 
-// TestWrite_OAppend_CrossChunkBoundary 测试 O_APPEND 追加写恰好跨越 64 MiB 边界时的双 Chunk 拆分与 refs = 2。
+// TestWrite_OAppend_CrossChunkBoundary 测试 O_APPEND 追加写恰好跨越 4 MiB 边界时的双 Chunk 拆分与 refs = 2。
 func TestWrite_OAppend_CrossChunkBoundary(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Microsecond)
@@ -308,7 +308,7 @@ func TestWrite_OAppend_CrossChunkBoundary(t *testing.T) {
 	fh := uint64(41)
 	sliceID := int64(3001)
 
-	// 初始文件大小距 64 MiB 边界仅剩 2048 字节
+	// 初始文件大小距 4 MiB 边界仅剩 2048 字节
 	initialSize := int64(meta.ChunkSize - 2048)
 	payload := make([]byte, 4096)
 	for i := range payload {
@@ -329,7 +329,7 @@ func TestWrite_OAppend_CrossChunkBoundary(t *testing.T) {
 		Ctime:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
 	}
 
-	t.Run("O_APPEND 恰好跨越 64 MiB 边界时自动拆分至 indx 与 indx+1 且 refs = 2", func(t *testing.T) {
+	t.Run("O_APPEND 恰好跨越 4 MiB 边界时自动拆分至 indx 与 indx+1 且 refs = 2", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -653,7 +653,7 @@ func TestWrite_OAppend_Concurrent_NoDataLoss(t *testing.T) {
 	}
 }
 
-// TestWrite_CrossChunkBoundary_PostgresIntegration 真实 PostgreSQL 容器跨 64 MiB 边界与 O_APPEND 集成测试。
+// TestWrite_CrossChunkBoundary_PostgresIntegration 真实 PostgreSQL 容器跨 4 MiB 边界与 O_APPEND 集成测试。
 func TestWrite_CrossChunkBoundary_PostgresIntegration(t *testing.T) {
 	pool, ctx := setupMetaTestDB(t)
 	if pool == nil {
@@ -676,7 +676,7 @@ func TestWrite_CrossChunkBoundary_PostgresIntegration(t *testing.T) {
 	require.NoError(t, err)
 	ino := uint64(fileRow.Ino)
 
-	// 1. 测试普通跨 64 MiB 边界写入
+	// 1. 测试普通跨 4 MiB 边界写入
 	openRes, err := mgr.Open(ctx, meta.OpenParams{
 		Ino:   ino,
 		Flags: meta.O_RDWR,
@@ -696,7 +696,7 @@ func TestWrite_CrossChunkBoundary_PostgresIntegration(t *testing.T) {
 		cleanupWriteTestInoAndSlices(t, store, mgr, fileRow.Ino, fh, appendFh)
 	})
 
-	// 在 64 MiB - 1024 处写入 4096 字节
+	// 在 4 MiB - 1024 处写入 4096 字节
 	crossOffset := uint64(meta.ChunkSize - 1024)
 	payload := make([]byte, 4096)
 	for i := range payload {
@@ -910,4 +910,238 @@ func TestWrite_ConcurrentOAppend_PostgresIntegration(t *testing.T) {
 	for i := 0; i < numWorkers; i++ {
 		assert.True(t, seenWorkers[byte('A'+i)], "特征字节 %c 必须存在", byte('A'+i))
 	}
+}
+
+// TestWrite_4MiBChunkBoundaryMatrix_PostgresIntegration 全面覆盖 4 MiB Chunk 边界写入与回读矩阵：
+// 1. 4 MiB 边界前、恰好对齐 4 MiB 边界（[0, 4 MiB) 与 [4 MiB, 8 MiB)）、4 MiB 边界后；
+// 2. 非对齐最大 4 MiB 负载（len(Data) == 4 MiB）跨越 4 MiB 边界写入与回读（单物理块 block_idx=0、相邻双 Chunk 共享 slice_id、refs=2）；
+// 3. 并发 O_APPEND 跨越 4 MiB 边界（包含恰好跨界双 Chunk 拆分的写入）线性追加零丢失。
+func TestWrite_4MiBChunkBoundaryMatrix_PostgresIntegration(t *testing.T) {
+	pool, ctx := setupMetaTestDB(t)
+	if pool == nil {
+		return
+	}
+	acquireTestSliceGCAdvisoryLock(t, pool)
+
+	store := db.NewStore(pool)
+	dataDir := t.TempDir()
+	bs := meta.NewLocalFSBlockStore(dataDir)
+	mgr := meta.New(store, meta.WithBlockStore(bs))
+
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{
+		Name:     fmt.Sprintf("4mib-boundary-matrix-%d", time.Now().UnixNano()),
+		MaxBytes: 100 * 1024 * 1024,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = mgr.DeleteDisk(context.Background(), disk.DiskID)
+	})
+
+	t.Run("恰好对齐 4 MiB 边界单次满块写入与非对齐最大 4 MiB 跨界写入回读", func(t *testing.T) {
+		createRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("max_4mib_cross.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR,
+		})
+		require.NoError(t, err)
+		ino := createRes.Inode.Ino
+		fh := createRes.Fh
+		t.Cleanup(func() {
+			_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+			for indx := int64(0); indx < 4; indx++ {
+				if c, cErr := store.GetChunk(context.Background(), db.GetChunkParams{Ino: int64(ino), Indx: indx}); cErr == nil && len(c.Slices) > 0 {
+					if sls, dErr := meta.DecodeSlices(c.Slices); dErr == nil {
+						for _, s := range sls {
+							if s.ID > 0 {
+								_ = store.DeleteSliceRef(context.Background(), int64(s.ID))
+							}
+						}
+					}
+				}
+			}
+			_ = meta.DeleteAllChunksByInos(context.Background(), store, []int64{int64(ino)})
+			_ = store.DeleteInode(context.Background(), int64(ino))
+		})
+
+		// 1. 恰好对齐 4 MiB 边界：在 [0, 4 MiB) 写入满 4 MiB 数据，必须落入单一 Chunk 0 且 refs = 1
+		alignedPayload := make([]byte, meta.ChunkSize)
+		for i := range alignedPayload {
+			alignedPayload[i] = byte((i*3 + 7) % 251)
+		}
+		wAligned, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Data:   alignedPayload,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(meta.ChunkSize), wAligned.Size)
+		assert.Equal(t, uint64(meta.ChunkSize), wAligned.Inode.Attr.Size)
+
+		c0Aligned, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		sls0Aligned, err := meta.DecodeSlices(c0Aligned.Slices)
+		require.NoError(t, err)
+		require.Len(t, sls0Aligned, 1)
+		assert.Equal(t, uint32(0), sls0Aligned[0].Pos)
+		assert.Equal(t, uint32(meta.ChunkSize), sls0Aligned[0].Len)
+		refAligned, err := store.GetSliceRef(ctx, int64(sls0Aligned[0].ID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(1), refAligned.Refs, "恰好对齐 4 MiB 边界的单次写入不得跨块拆分，refs 必须为 1")
+
+		// 2. 非对齐最大 4 MiB 负载跨越 4 MiB 边界：在 Offset = 2 MiB 处写入完整 4 MiB 数据（覆盖 [2 MiB, 6 MiB)）
+		unalignedOff := uint64(meta.ChunkSize / 2) // 2 MiB
+		crossMaxPayload := make([]byte, meta.ChunkSize)
+		for i := range crossMaxPayload {
+			crossMaxPayload[i] = byte((i*11 + 19) % 253)
+		}
+		wCross, err := mgr.Write(ctx, &meta.WriteRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: unalignedOff,
+			Data:   crossMaxPayload,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, uint32(meta.ChunkSize), wCross.Size)
+		assert.Equal(t, unalignedOff+uint64(meta.ChunkSize), wCross.Inode.Attr.Size)
+
+		// 验证 Chunk 0 的第二条切片与 Chunk 1 的第一条切片共享同一 slice_id 且 refs = 2
+		c0After, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 0})
+		require.NoError(t, err)
+		sls0After, err := meta.DecodeSlices(c0After.Slices)
+		require.NoError(t, err)
+		require.Len(t, sls0After, 2)
+
+		c1After, err := store.GetChunk(ctx, db.GetChunkParams{Ino: int64(ino), Indx: 1})
+		require.NoError(t, err)
+		sls1After, err := meta.DecodeSlices(c1After.Slices)
+		require.NoError(t, err)
+		require.Len(t, sls1After, 1)
+
+		sharedID := sls0After[1].ID
+		assert.Equal(t, sharedID, sls1After[0].ID, "跨 4 MiB 边界最大负载写入必须共享同一 slice_id")
+		assert.Equal(t, uint32(meta.ChunkSize/2), sls0After[1].Pos)
+		assert.Equal(t, uint32(0), sls0After[1].Off)
+		assert.Equal(t, uint32(meta.ChunkSize/2), sls0After[1].Len)
+		assert.Equal(t, uint32(0), sls1After[0].Pos)
+		assert.Equal(t, uint32(meta.ChunkSize/2), sls1After[0].Off)
+		assert.Equal(t, uint32(meta.ChunkSize/2), sls1After[0].Len)
+
+		refCross, err := store.GetSliceRef(ctx, int64(sharedID))
+		require.NoError(t, err)
+		assert.Equal(t, int32(2), refCross.Refs, "跨 4 MiB 边界最大负载写入的 slice_refs.refs 必须为 2")
+		assert.Equal(t, int32(meta.ChunkSize), refCross.Size)
+
+		// 3. 回读验证：[0, 2 MiB) 保持 alignedPayload 前半部分，[2 MiB, 6 MiB) 完整匹配 crossMaxPayload
+		readCross, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: unalignedOff,
+			Size:   uint32(meta.ChunkSize),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, crossMaxPayload, readCross.Data, "跨 4 MiB 边界读取完整 4 MiB 负载必须逐字节一致")
+
+		readHead, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: 0,
+			Size:   uint32(unalignedOff),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, alignedPayload[:unalignedOff], readHead.Data)
+	})
+
+	t.Run("并发 O_APPEND 跨越 4 MiB 边界线性追加无丢失且跨界切片 refs 准确", func(t *testing.T) {
+		createRes, err := mgr.Create(ctx, meta.CreateParams{
+			ParentIno: disk.RootIno,
+			Name:      []byte("concurrent_append_cross_4mib.bin"),
+			Mode:      meta.S_IFREG | 0o644,
+			UID:       1000,
+			GID:       1000,
+			Flags:     meta.O_RDWR | meta.O_APPEND,
+		})
+		require.NoError(t, err)
+		ino := createRes.Inode.Ino
+		fh := createRes.Fh
+		t.Cleanup(func() {
+			_ = mgr.Release(context.Background(), meta.ReleaseParams{Ino: ino, Fh: fh})
+			for indx := int64(0); indx < 4; indx++ {
+				if c, cErr := store.GetChunk(context.Background(), db.GetChunkParams{Ino: int64(ino), Indx: indx}); cErr == nil && len(c.Slices) > 0 {
+					if sls, dErr := meta.DecodeSlices(c.Slices); dErr == nil {
+						for _, s := range sls {
+							if s.ID > 0 {
+								_ = store.DeleteSliceRef(context.Background(), int64(s.ID))
+							}
+						}
+					}
+				}
+			}
+			_ = meta.DeleteAllChunksByInos(context.Background(), store, []int64{int64(ino)})
+			_ = store.DeleteInode(context.Background(), int64(ino))
+		})
+
+		// 先将文件大小推进到 4 MiB - 6144（距离 4 MiB 边界差 1.5 个 4096B 块），
+		// 这样后续 8 个并发 4096B 的 O_APPEND 必然有 1 个恰好在 4 MiB 边界处横跨 Chunk 0 与 Chunk 1！
+		initSize := uint64(meta.ChunkSize - 6144)
+		_, err = mgr.SetAttr(ctx, ino, meta.SetAttrInput{Size: &initSize})
+		require.NoError(t, err)
+
+		const workers = 8
+		const appendSize = 4096
+		startCh := make(chan struct{})
+		errCh := make(chan error, workers)
+		var wg sync.WaitGroup
+
+		for w := 0; w < workers; w++ {
+			workerID := w
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-startCh
+				payload := bytes.Repeat([]byte{byte('a' + workerID)}, appendSize)
+				_, wErr := mgr.Write(ctx, &meta.WriteRequest{
+					Ino:    ino,
+					Fh:     fh,
+					Offset: 0,
+					Data:   payload,
+				})
+				errCh <- wErr
+			}()
+		}
+
+		close(startCh)
+		wg.Wait()
+		close(errCh)
+		for wErr := range errCh {
+			require.NoError(t, wErr)
+		}
+
+		expectedFinalSize := initSize + uint64(workers*appendSize)
+		attr, err := mgr.GetAttr(ctx, ino)
+		require.NoError(t, err)
+		assert.Equal(t, expectedFinalSize, attr.Attr.Size)
+
+		// 跨 4 MiB 边界读取全部追加区域 [initSize, expectedFinalSize)
+		readAppended, err := mgr.Read(ctx, &meta.ReadRequest{
+			Ino:    ino,
+			Fh:     fh,
+			Offset: initSize,
+			Size:   uint32(workers * appendSize),
+		})
+		require.NoError(t, err)
+		require.Len(t, readAppended.Data, workers*appendSize)
+
+		seen := make(map[byte]bool)
+		for i := 0; i < workers; i++ {
+			blk := readAppended.Data[i*appendSize : (i+1)*appendSize]
+			ch := blk[0]
+			seen[ch] = true
+			assert.Equal(t, bytes.Repeat([]byte{ch}, appendSize), blk, "并发跨 4 MiB 边界 O_APPEND 块 %d 严禁撕裂或混杂", i)
+		}
+		assert.Len(t, seen, workers, "所有并发 O_APPEND 块必须 100% 完整落盘")
+	})
 }

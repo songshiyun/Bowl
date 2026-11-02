@@ -106,7 +106,7 @@ func TestCollectGarbage_Unit(t *testing.T) {
 		mockBS.AssertNotCalled(t, "DeleteBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("多 Block 大切片完整删除所有子块后清理 slice_refs", func(t *testing.T) {
+	t.Run("单个 4 MiB Block 满块切片删除物理文件后清理 slice_refs", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
 		mockQuerier := dbmock.NewMockQuerier(t)
 		mockBS := metamock.NewMockBlockStore(t)
@@ -114,8 +114,8 @@ func TestCollectGarbage_Unit(t *testing.T) {
 
 		setupMockWriteTx(mockStore, mockQuerier)
 
-		// 10 MiB 大小：含 3 个块（4 MiB, 4 MiB, 2 MiB）
-		sliceSize := int32(10 * 1024 * 1024)
+		// 4 MiB 满块大小：1 个 Block (block_idx = 0, block_size = 4 MiB)
+		sliceSize := int32(meta.BlockSize)
 		sliceID := int64(1001)
 
 		garbageRows := []db.SliceRef{
@@ -137,14 +137,6 @@ func TestCollectGarbage_Unit(t *testing.T) {
 
 		mockBS.EXPECT().
 			DeleteBlock(mock.Anything, uint64(sliceID), uint32(0), uint32(meta.BlockSize)).
-			Return(nil).
-			Once()
-		mockBS.EXPECT().
-			DeleteBlock(mock.Anything, uint64(sliceID), uint32(1), uint32(meta.BlockSize)).
-			Return(nil).
-			Once()
-		mockBS.EXPECT().
-			DeleteBlock(mock.Anything, uint64(sliceID), uint32(2), uint32(2*1024*1024)).
 			Return(nil).
 			Once()
 
@@ -533,7 +525,7 @@ func TestGC_PostgresIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 跨越 64 MiB Chunk 边界写入两个 Chunk (indx 0 与 indx 1)
+		// 跨越 4 MiB Chunk 边界写入两个 Chunk (indx 0 与 indx 1)
 		// 写入 indx 0
 		payload1 := bytes.Repeat([]byte("A"), 4096)
 		_, err = mgr.Write(ctx, &meta.WriteRequest{
@@ -597,7 +589,7 @@ func TestGC_PostgresIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 将文件扩容至 2 个 Chunk (128 MiB)
+		// 将文件扩容至 2 个 Chunk (8 MiB)
 		newSize := uint64(2 * meta.ChunkSize)
 		_, err = mgr.SetAttr(ctx, fRes.Inode.Ino, meta.SetAttrInput{Size: &newSize})
 		require.NoError(t, err)
@@ -620,7 +612,7 @@ func TestGC_PostgresIntegration(t *testing.T) {
 		pPath := blockFilePath(sliceID, 0, 8192)
 		require.FileExists(t, pPath)
 
-		// 对 indx 1 的整整 64 MiB 区间 [ChunkSize, 2*ChunkSize) 打洞
+		// 对 indx 1 的整整 4 MiB 区间 [ChunkSize, 2*ChunkSize) 打洞
 		err = mgr.Fallocate(ctx, meta.FallocateParams{
 			Ino:    fRes.Inode.Ino,
 			Fh:     fRes.Fh,

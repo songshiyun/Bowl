@@ -123,6 +123,15 @@ type dirCursorAnchor struct {
 	handleCreatedAt time.Time
 }
 
+type compactTaskState uint8
+
+const (
+	compactStateIdle compactTaskState = iota
+	compactStateQueued
+	compactStateRunning
+	compactStateRerun
+)
+
 type manager struct {
 	store                  db.Store
 	blockStore             BlockStore
@@ -147,8 +156,13 @@ type manager struct {
 	writeLeaderActive      bool
 	writePendingQueue      []*writeBatchTask
 	writeCoalesceCh        chan struct{}
-	inFlightCompactsMu     sync.Mutex
-	inFlightCompacts       map[chunkKey]bool
+	workerMu               sync.Mutex
+	compactQueue           []chunkKey
+	compactState           map[chunkKey]compactTaskState
+	compactWakeCh          chan struct{}
+	workerCancel           context.CancelFunc
+	workerDoneCh           chan struct{}
+	workerStopped          bool
 	lockNotifyMu           sync.Mutex
 	lockNotifyChans        map[uint64]*lockNotifyEntry
 	crossDirRenameMu       sync.Mutex
@@ -352,7 +366,8 @@ func New(store db.Store, opts ...Option) Manager {
 		sliceIDBatchSize:       DefaultSliceIDBatchSize,
 		writeGroupMaxBatchSize: DefaultWriteGroupMaxBatchSize,
 		writeCoalesceCh:        make(chan struct{}, 1),
-		inFlightCompacts:       make(map[chunkKey]bool),
+		compactState:           make(map[chunkKey]compactTaskState),
+		compactWakeCh:          make(chan struct{}, 1),
 		lockNotifyChans:        make(map[uint64]*lockNotifyEntry),
 		dirCursors:             make(map[dirCursorKey]dirCursorAnchor),
 		dirMutationSeq:         make(map[uint64]uint64),

@@ -32,7 +32,7 @@ const (
 // TestStorageDataLifecycle_ReadWriteTruncatePunchHoleOrphanAndQuota 覆盖面向 live storage-service 的
 // 数据层全生命周期黑盒端到端验收测试。
 // 验证链路：
-// CreateDisk -> Create -> 顺序与跨 64 MiB Chunk 边界 Write/Read -> 多层高频随机覆写 (>= 64 次 Compaction)
+// CreateDisk -> Create -> 顺序与跨 4 MiB Chunk 边界 Write/Read -> 多层高频随机覆写 (>= 64 次 Compaction)
 // -> O_APPEND 强制尾部追加 -> SetAttr 缩容/扩容与 Fallocate(PUNCH_HOLE) 区间打洞全零断言
 // -> ENOSPC 配额拦截与 EISDIR / EBADF / EINVAL 错误契约校验
 // -> Unlink 孤儿句柄持续读写 -> Release 孤儿回收与 StatFS used_bytes 归零 -> DeleteDisk
@@ -62,8 +62,8 @@ func TestStorageDataLifecycle_ReadWriteTruncatePunchHoleOrphanAndQuota(t *testin
 		}))
 	})
 
-	// 2. 顺序与跨 64 MiB Chunk 边界 Write/Read
-	t.Run("顺序与跨 64 MiB Chunk 边界 Write/Read 校验", func(t *testing.T) {
+	// 2. 顺序与跨 4 MiB Chunk 边界 Write/Read
+	t.Run("顺序与跨 4 MiB Chunk 边界 Write/Read 校验", func(t *testing.T) {
 		createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
 			ParentIno: rootIno,
 			Name:      []byte("cross_chunk_file.dat"),
@@ -99,8 +99,8 @@ func TestStorageDataLifecycle_ReadWriteTruncatePunchHoleOrphanAndQuota(t *testin
 		require.NoError(t, err)
 		assert.Equal(t, headData, readHead.Msg.GetData(), "顺序写入数据回读必须完全一致")
 
-		// 2.2 跨 64 MiB Chunk 边界写入 (64 MiB - 2048 处写入 4096 字节)
-		chunkSize := uint64(64 * 1024 * 1024)
+		// 2.2 跨 4 MiB Chunk 边界写入 (4 MiB - 2048 处写入 4096 字节)
+		chunkSize := uint64(4 * 1024 * 1024)
 		crossOffset := chunkSize - 2048
 		crossData := make([]byte, 4096)
 		for i := range crossData {
@@ -122,7 +122,7 @@ func TestStorageDataLifecycle_ReadWriteTruncatePunchHoleOrphanAndQuota(t *testin
 			Size:   uint32(len(crossData)),
 		}))
 		require.NoError(t, err)
-		assert.Equal(t, crossData, readCross.Msg.GetData(), "跨 64 MiB 边界读取数据必须逐字节完全一致")
+		assert.Equal(t, crossData, readCross.Msg.GetData(), "跨 4 MiB 边界读取数据必须逐字节完全一致")
 
 		// 2.3 验证跨 Chunk 前部稀疏区间为 0x00
 		sparseBefore, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{

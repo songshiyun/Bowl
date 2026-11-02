@@ -164,6 +164,24 @@ func WithStatHook(fn func(name string) (os.FileInfo, error)) LocalFSBlockStoreOp
 	}
 }
 
+// WithWriteFileHook 注入写入物理块文件载荷的钩子（默认调用 (*os.File).Write）。
+func WithWriteFileHook(fn func(f *os.File, data []byte) (int, error)) LocalFSBlockStoreOption {
+	return func(s *LocalFSBlockStore) {
+		if fn != nil {
+			s.writeFileFn = fn
+		}
+	}
+}
+
+// WithCloseFileHook 注入关闭物理块文件的钩子（默认调用 (*os.File).Close）。
+func WithCloseFileHook(fn func(f *os.File) error) LocalFSBlockStoreOption {
+	return func(s *LocalFSBlockStore) {
+		if fn != nil {
+			s.closeFileFn = fn
+		}
+	}
+}
+
 type blockScanCursor struct {
 	lvl1 string
 	lvl2 string
@@ -172,12 +190,14 @@ type blockScanCursor struct {
 
 // LocalFSBlockStore 实现基于本地 NVMe SSD 文件系统的两级散列目录存储引擎。
 type LocalFSBlockStore struct {
-	dataDir    string
-	dirMu      sync.RWMutex
-	syncedDirs map[string]struct{}
-	statFn     func(name string) (os.FileInfo, error)
-	scanMu     sync.Mutex
-	scanCursor blockScanCursor
+	dataDir     string
+	dirMu       sync.RWMutex
+	syncedDirs  map[string]struct{}
+	statFn      func(name string) (os.FileInfo, error)
+	writeFileFn func(f *os.File, data []byte) (int, error)
+	closeFileFn func(f *os.File) error
+	scanMu      sync.Mutex
+	scanCursor  blockScanCursor
 }
 
 var (
@@ -188,9 +208,11 @@ var (
 // NewLocalFSBlockStore 创建基于本地文件系统的 BlockStore 实例。
 func NewLocalFSBlockStore(dataDir string, opts ...LocalFSBlockStoreOption) *LocalFSBlockStore {
 	s := &LocalFSBlockStore{
-		dataDir:    dataDir,
-		syncedDirs: make(map[string]struct{}),
-		statFn:     os.Stat,
+		dataDir:     dataDir,
+		syncedDirs:  make(map[string]struct{}),
+		statFn:      os.Stat,
+		writeFileFn: func(f *os.File, data []byte) (int, error) { return f.Write(data) },
+		closeFileFn: func(f *os.File) error { return f.Close() },
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -205,6 +227,20 @@ func (s *LocalFSBlockStore) statDir(name string) (os.FileInfo, error) {
 		return s.statFn(name)
 	}
 	return os.Stat(name)
+}
+
+func (s *LocalFSBlockStore) writeBlockFile(f *os.File, data []byte) (int, error) {
+	if s.writeFileFn != nil {
+		return s.writeFileFn(f, data)
+	}
+	return f.Write(data)
+}
+
+func (s *LocalFSBlockStore) closeBlockFile(f *os.File) error {
+	if s.closeFileFn != nil {
+		return s.closeFileFn(f)
+	}
+	return f.Close()
 }
 
 func (s *LocalFSBlockStore) invalidateSyncedDir(targetDir string) {
@@ -297,7 +333,8 @@ func (s *LocalFSBlockStore) ensureDir(targetDir string) error {
 	return nil
 }
 
-// PutBlock 采用两级目录散列，通过写入同目录唯一临时文件并原子重命名发布到目标路径（OS Page Cache）。
+// PutBlock 采用两级目录散列，直接创建并写入目标物理块文件 <slice_id>_<block_idx>_<block_size>（OS Page Cache），
+// 完整写入并成功关闭后返回；若写入失败、关闭失败或上下文取消则关闭并清理本次未完成文件。
 func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockIdx uint32, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -311,32 +348,39 @@ func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockI
 		return fmt.Errorf("%w: failed to create chunk directory %s: %v", ErrIO, dir, err)
 	}
 
-	tmpPattern := fmt.Sprintf(".tmp_%d_%d_*", sliceID, blockIdx)
-	tmpFile, err := os.CreateTemp(dir, tmpPattern)
+	file, err := os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		// 防御性自愈：若已缓存的父目录被外部移除，剔除该目录缓存后重新创建并重试一次
 		s.invalidateSyncedDir(dir)
 		if mkErr := s.ensureDir(dir); mkErr != nil {
 			return fmt.Errorf("%w: failed to create chunk directory %s: %v", ErrIO, dir, mkErr)
 		}
-		tmpFile, err = os.CreateTemp(dir, tmpPattern)
+		file, err = os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 		if err != nil {
-			return fmt.Errorf("%w: failed to create temp block file: %v", ErrIO, err)
+			return fmt.Errorf("%w: failed to create block file %s: %v", ErrIO, finalPath, err)
 		}
 	}
-	tmpPath := tmpFile.Name()
 
-	var success bool
+	var (
+		closed  bool
+		success bool
+	)
 	defer func() {
 		if !success {
-			_ = tmpFile.Close()
-			_ = os.Remove(tmpPath)
+			if !closed {
+				_ = s.closeBlockFile(file)
+			}
+			_ = os.Remove(finalPath)
 		}
 	}()
 
 	if len(data) > 0 {
-		if _, err := tmpFile.Write(data); err != nil {
-			return fmt.Errorf("%w: failed to write block data: %v", ErrIO, err)
+		n, err := s.writeBlockFile(file, data)
+		if err != nil {
+			return fmt.Errorf("%w: failed to write block data: %w", ErrIO, err)
+		}
+		if n < len(data) {
+			return fmt.Errorf("%w: failed to write block data: %w", ErrIO, io.ErrShortWrite)
 		}
 	}
 
@@ -344,12 +388,9 @@ func (s *LocalFSBlockStore) PutBlock(ctx context.Context, sliceID uint64, blockI
 		return err
 	}
 
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("%w: failed to close temp block file: %v", ErrIO, err)
-	}
-
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("%w: failed to rename temp block to %s: %v", ErrIO, finalPath, err)
+	closed = true
+	if err := s.closeBlockFile(file); err != nil {
+		return fmt.Errorf("%w: failed to close block file %s: %w", ErrIO, finalPath, err)
 	}
 
 	success = true

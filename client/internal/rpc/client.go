@@ -42,7 +42,7 @@ type ClientConfig struct {
 	// TLSConfig 为可选的自定义 TLS 配置（例如自签名证书信任）。
 	TLSConfig *tls.Config
 
-	// RetryConfig 为可选的重试策略配置。若为 nil 则默认使用 5s 有界指数退避策略。
+	// RetryConfig 为可选的重试策略配置。若为 nil 则默认使用 30s 有界指数退避策略。
 	RetryConfig *RetryConfig
 }
 
