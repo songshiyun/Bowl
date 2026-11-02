@@ -61,6 +61,7 @@ type Querier interface {
 	GetFirstConflictingFileLock(ctx context.Context, arg GetFirstConflictingFileLockParams) (FileLock, error)
 	GetInode(ctx context.Context, ino int64) (Inode, error)
 	GetInodeByEntry(ctx context.Context, arg GetInodeByEntryParams) (Inode, error)
+	GetInodeChunksAndHandleForRead(ctx context.Context, arg GetInodeChunksAndHandleForReadParams) ([]GetInodeChunksAndHandleForReadRow, error)
 	GetInodeForUpdate(ctx context.Context, ino int64) (Inode, error)
 	GetInodeSizeAndChunksInRange(ctx context.Context, arg GetInodeSizeAndChunksInRangeParams) ([]GetInodeSizeAndChunksInRangeRow, error)
 	GetInodeXattr(ctx context.Context, arg GetInodeXattrParams) (InodeXattr, error)

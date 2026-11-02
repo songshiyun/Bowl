@@ -125,6 +125,53 @@ LEFT JOIN chunks c ON c.ino = i.ino AND c.indx >= @start_indx::bigint AND c.indx
 WHERE i.ino = @ino::bigint
 ORDER BY c.indx ASC;
 
+-- name: GetInodeChunksAndHandleForRead :many
+SELECT
+    i.ino,
+    i.generation,
+    i.mode,
+    i.size,
+    i.nlink,
+    i.uid,
+    i.gid,
+    i.rdev,
+    i.atime,
+    i.mtime,
+    i.ctime,
+    i.symlink_target,
+    i.flags,
+    i.parent_ino,
+    i.root_ino,
+    (vh.fh IS NOT NULL)::boolean AS fh_found,
+    COALESCE(vh.flags, 0)::int4 AS fh_flags,
+    c.indx AS chunk_indx,
+    c.slices AS chunk_slices
+FROM inodes i
+LEFT JOIN LATERAL (
+    SELECT fh.fh, fh.flags
+    FROM file_handles fh
+    WHERE fh.fh = @fh::bigint
+      AND fh.ino = i.ino
+      AND (
+          (sqlc.narg('session_id')::bigint IS NULL AND fh.session_id IS NULL)
+          OR (
+              sqlc.narg('session_id')::bigint IS NOT NULL
+              AND fh.session_id = sqlc.narg('session_id')::bigint
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_sessions s
+                  WHERE s.session_id = fh.session_id
+                    AND s.expires_at > clock_timestamp()
+                    AND fh.created_at >= s.created_at
+              )
+          )
+      )
+    LIMIT 1
+) vh ON true
+LEFT JOIN chunks c ON c.ino = i.ino AND c.indx >= @start_indx::bigint AND c.indx <= @end_indx::bigint
+WHERE i.ino = @ino::bigint
+ORDER BY c.indx ASC;
+
 -- name: LockValidSliceRefsKeyShare :many
 SELECT slice_id
 FROM slice_refs

@@ -431,15 +431,15 @@ func TestTruncateZero_ExpandAndReadZero(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 3. 模拟 Read[0, 8192) 阶段：因 chunks 表记录已被彻底清空，GetInodeSizeAndChunksInRange 返回 ChunkIndx 为 NULL，直接全零返回且无 BlockStore IO
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		// 3. 模拟 Read[0, 8192) 阶段：因 chunks 表记录已被彻底清空，GetInodeChunksAndHandleForRead 返回 ChunkIndx 为 NULL，直接全零返回且无 BlockStore IO
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   0,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
+			Return([]db.GetInodeChunksAndHandleForReadRow{
 				{
 					Ino:       fileRowExpanded.Ino,
 					Mode:      fileRowExpanded.Mode,
@@ -447,20 +447,10 @@ func TestTruncateZero_ExpandAndReadZero(t *testing.T) {
 					Atime:     fileRowExpanded.Atime,
 					Mtime:     fileRowExpanded.Mtime,
 					Ctime:     fileRowExpanded.Ctime,
+					FhFound:   true,
+					FhFlags:   int32(meta.O_RDONLY),
 					ChunkIndx: pgtype.Int8{Valid: false},
 				},
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDONLY),
 			}, nil).
 			Once()
 
@@ -575,14 +565,14 @@ func TestTruncateZero_ExpandAndReadZero(t *testing.T) {
 		require.NoError(t, err)
 
 		// 3. 模拟 Read[0, 4096) 阶段
-		setupMockWriteTx(mockStore, mockQuerier)
-		mockQuerier.EXPECT().
-			GetInodeSizeAndChunksInRange(mock.Anything, db.GetInodeSizeAndChunksInRangeParams{
+		mockStore.EXPECT().
+			GetInodeChunksAndHandleForRead(mock.Anything, db.GetInodeChunksAndHandleForReadParams{
 				Ino:       int64(ino),
+				Fh:        int64(fh),
 				StartIndx: 0,
 				EndIndx:   0,
 			}).
-			Return([]db.GetInodeSizeAndChunksInRangeRow{
+			Return([]db.GetInodeChunksAndHandleForReadRow{
 				{
 					Ino:       fileRowAllocated.Ino,
 					Mode:      fileRowAllocated.Mode,
@@ -590,20 +580,10 @@ func TestTruncateZero_ExpandAndReadZero(t *testing.T) {
 					Atime:     fileRowAllocated.Atime,
 					Mtime:     fileRowAllocated.Mtime,
 					Ctime:     fileRowAllocated.Ctime,
+					FhFound:   true,
+					FhFlags:   int32(meta.O_RDWR),
 					ChunkIndx: pgtype.Int8{Valid: false},
 				},
-			}, nil).
-			Once()
-
-		mockQuerier.EXPECT().
-			GetFileHandle(mock.Anything, db.GetFileHandleParams{
-				Fh:  int64(fh),
-				Ino: int64(ino),
-			}).
-			Return(db.FileHandle{
-				Fh:    int64(fh),
-				Ino:   int64(ino),
-				Flags: int32(meta.O_RDWR),
 			}, nil).
 			Once()
 
