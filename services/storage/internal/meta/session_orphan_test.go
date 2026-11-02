@@ -276,24 +276,20 @@ func TestSessionBindingAndRenewal_Unit(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("ReleaseDir 传入 SessionID 时通过 DeleteFileHandle 校验删除", func(t *testing.T) {
+	t.Run("ReleaseDir 传入 SessionID 时通过 ReleaseDirFast 校验删除", func(t *testing.T) {
 		mockStore := dbmock.NewMockStore(t)
-		mockQuerier := dbmock.NewMockQuerier(t)
 		mgr := meta.New(mockStore)
 
-		setupMockWriteTx(mockStore, mockQuerier)
-
-		mockQuerier.EXPECT().
-			GetInode(mock.Anything, int64(1)).
-			Return(dirInode, nil).
-			Once()
-		mockQuerier.EXPECT().
-			DeleteFileHandle(mock.Anything, db.DeleteFileHandleParams{
-				Fh:        503,
+		mockStore.EXPECT().
+			ReleaseDirFast(mock.Anything, db.ReleaseDirFastParams{
 				Ino:       1,
+				Fh:        503,
 				SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
 			}).
-			Return(int64(503), nil).
+			Return(db.ReleaseDirFastRow{
+				Status: "ok",
+				Nlink:  dirInode.Nlink,
+			}, nil).
 			Once()
 
 		err := mgr.ReleaseDir(ctx, meta.ReleaseDirParams{

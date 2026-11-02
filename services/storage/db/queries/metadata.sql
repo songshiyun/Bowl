@@ -312,6 +312,52 @@ FROM async_wal
 LEFT JOIN target_inode ti ON true
 LEFT JOIN deleted_handle dh ON true;
 
+-- name: ReleaseDirFast :one
+WITH async_wal AS (
+    SELECT set_config('synchronous_commit', 'off', true)
+),
+target_inode AS (
+    SELECT ino, mode, nlink
+    FROM inodes
+    WHERE inodes.ino = @ino::bigint
+    FOR SHARE
+),
+deleted_handle AS (
+    DELETE FROM file_handles fh
+    USING target_inode ti
+    WHERE fh.fh = @fh::bigint
+      AND fh.ino = ti.ino
+      AND (ti.mode & 61440) = 16384
+      AND ti.nlink > 0
+      AND (
+          (sqlc.narg('session_id')::bigint IS NULL AND fh.session_id IS NULL)
+          OR (
+              sqlc.narg('session_id')::bigint IS NOT NULL
+              AND fh.session_id = sqlc.narg('session_id')::bigint
+              AND EXISTS (
+                  SELECT 1
+                  FROM client_sessions s
+                  WHERE s.session_id = fh.session_id
+                    AND s.expires_at > clock_timestamp()
+                    AND fh.created_at >= s.created_at
+              )
+          )
+      )
+    RETURNING fh.fh, fh.ino, fh.session_id
+)
+SELECT
+    CASE
+        WHEN ti.ino IS NULL THEN 'not_found'
+        WHEN (ti.mode & 61440) <> 16384 THEN 'not_dir'
+        WHEN ti.nlink = 0 THEN 'orphan'
+        WHEN dh.fh IS NULL THEN 'bad_handle'
+        ELSE 'ok'
+    END::text AS status,
+    COALESCE(ti.nlink, 0)::int4 AS nlink
+FROM async_wal
+LEFT JOIN target_inode ti ON true
+LEFT JOIN deleted_handle dh ON true;
+
 -- name: DeleteInode :exec
 DELETE FROM inodes
 WHERE ino = $1;

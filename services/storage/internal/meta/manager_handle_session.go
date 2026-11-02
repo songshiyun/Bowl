@@ -506,32 +506,50 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 		return err
 	}
 
+	var row db.ReleaseDirFastRow
+	fastErr := tx.Retry(ctx, func(attemptCtx context.Context) error {
+		var err error
+		row, err = m.store.ReleaseDirFast(attemptCtx, db.ReleaseDirFastParams{
+			Ino:       int64(params.Ino),
+			Fh:        int64(params.Fh),
+			SessionID: toPgSessionID(params.SessionID),
+		})
+		return err
+	}, tx.WithDefaultRetry())
+	if fastErr != nil {
+		if errors.Is(fastErr, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("releasedir tx: %w", fastErr)
+	}
+
+	switch row.Status {
+	case "ok":
+		m.clearDirCursors(params.Ino, params.Fh)
+		return nil
+	case "not_found":
+		return ErrNotFound
+	case "not_dir":
+		return ErrNotDir
+	case "bad_handle":
+		return ErrBadFileHandle
+	case "orphan":
+		// 孤儿目录（nlink == 0）在 CTE 中保持句柄未删，无缝进入下方写事务慢路径执行排他锁回收
+	default:
+		return fmt.Errorf("releasedir tx: unexpected status %q", row.Status)
+	}
+
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
-		lockedInode := false
-		inode, err := q.GetInode(ctx, int64(params.Ino))
+		inode, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			return fmt.Errorf("get inode %d: %w", params.Ino, err)
+			return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
 		}
 
 		if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
 			return ErrNotDir
-		}
-
-		if inode.Nlink == 0 {
-			inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					return ErrNotFound
-				}
-				return fmt.Errorf("get inode %d for update: %w", params.Ino, err)
-			}
-			lockedInode = true
-			if (uint32(inode.Mode) & S_IFMT) != S_IFDIR {
-				return ErrNotDir
-			}
 		}
 
 		// 删除目录句柄（DeleteFileHandle 内联校验会话活跃性与重建代次，不满足则返回 pgx.ErrNoRows -> ErrBadFileHandle）
@@ -545,22 +563,6 @@ func (m *manager) ReleaseDir(ctx context.Context, params ReleaseDirParams) error
 				return ErrBadFileHandle
 			}
 			return fmt.Errorf("delete file handle (fh=%d, ino=%d): %w", params.Fh, params.Ino, err)
-		}
-
-		if !lockedInode {
-			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r.RawDBTX() != nil {
-				var curNlink int32
-				if err := r.RawDBTX().QueryRow(ctx, `SELECT nlink FROM inodes WHERE ino = $1`, int64(params.Ino)).Scan(&curNlink); err == nil && curNlink == 0 {
-					inode, err = q.GetInodeForUpdate(ctx, int64(params.Ino))
-					if err != nil {
-						if errors.Is(err, pgx.ErrNoRows) {
-							return nil
-						}
-						return fmt.Errorf("get inode %d for update on orphan check: %w", params.Ino, err)
-					}
-					lockedInode = true
-				}
-			}
 		}
 
 		if inode.Nlink == 0 {

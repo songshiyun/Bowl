@@ -2128,21 +2128,12 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error"), mock.Anything, mock.Anything).
 			RunAndReturn(assertTxNotRenewing).
 			Once()
-		mockStore.EXPECT().
-			ExecTxWithOptions(mock.Anything, mock.AnythingOfType("func(db.Querier) error")).
-			RunAndReturn(assertTxNotRenewing).
-			Once()
 
 		regInode := db.Inode{
 			Ino:   200,
 			Mode:  int32(meta.S_IFREG | 0o644),
 			Nlink: 1,
 			Size:  0,
-		}
-		dirInode := db.Inode{
-			Ino:   201,
-			Mode:  int32(meta.S_IFDIR | 0o755),
-			Nlink: 2,
 		}
 		validFh := db.FileHandle{
 			Fh:        20,
@@ -2208,8 +2199,11 @@ func TestUnidirectionalSessionCheck_AllPaths_Unit(t *testing.T) {
 		require.NoError(t, mgr.Release(ctx, meta.ReleaseParams{Ino: 200, Fh: 20, SessionID: &sessID}))
 
 		// 7. ReleaseDir
-		mockQuerier.EXPECT().GetInode(mock.Anything, int64(201)).Return(dirInode, nil).Once()
-		mockQuerier.EXPECT().DeleteFileHandle(mock.Anything, mock.Anything).Return(int64(1), nil).Once()
+		mockStore.EXPECT().ReleaseDirFast(mock.Anything, db.ReleaseDirFastParams{
+			Ino:       201,
+			Fh:        21,
+			SessionID: pgtype.Int8{Int64: int64(sessID), Valid: true},
+		}).Return(db.ReleaseDirFastRow{Status: "ok", Nlink: 2}, nil).Once()
 		require.NoError(t, mgr.ReleaseDir(ctx, meta.ReleaseDirParams{Ino: 201, Fh: 21, SessionID: &sessID}))
 	})
 }

@@ -1454,7 +1454,7 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		// 外部事务持有目标文件 FOR SHARE（兼容并发 ReleaseFileFast 的 FOR SHARE）与目录 Inode 的 FOR UPDATE 排他锁
+		// 外部事务持有目标文件与目录 Inode 的 FOR SHARE 协同锁（兼容并发 ReleaseFileFast / ReleaseDirFast 的 FOR SHARE）
 		extTx, err := pool.Begin(ctx)
 		require.NoError(t, err)
 		defer func() {
@@ -1463,7 +1463,7 @@ func TestRelease_QuotaReclaim_PostgresIntegration(t *testing.T) {
 
 		var lockedFileIno, lockedDirIno int64
 		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR SHARE`, int64(createRes.Inode.Ino)).Scan(&lockedFileIno))
-		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR UPDATE`, int64(subDir.Ino)).Scan(&lockedDirIno))
+		require.NoError(t, extTx.QueryRow(ctx, `SELECT ino FROM inodes WHERE ino = $1 FOR SHARE`, int64(subDir.Ino)).Scan(&lockedDirIno))
 
 		opCtx, opCancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 		defer opCancel()
