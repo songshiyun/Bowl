@@ -458,7 +458,7 @@ func (m *manager) executeCompactTaskInWorker(ctx context.Context, key chunkKey, 
 			clearRunningState()
 			return
 		}
-		latestCount := len(rawLatest) - skipSome(rawLatest)
+		latestCount := len(rawLatest)
 		if latestCount < m.compactSliceThreshold {
 			m.workerMu.Lock()
 			if m.compactState[key] != compactStateRerun {

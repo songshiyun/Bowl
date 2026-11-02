@@ -14,32 +14,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
 
-// CompactSkipSliceMinSize 定义 Compaction 跳过已规整前缀切片的最小长度阈值（1 MiB）。
-const CompactSkipSliceMinSize uint32 = 1 << 20
-
-// skipSome 从切片序列头部顺序扫描可跳过的已规整前缀切片数量。
-// 满足以下全部条件的前缀 Slice 可被跳过：
-//  1. 实心数据切片（ID > 0）且长度 Len >= CompactSkipSliceMinSize（1 MiB）；
-//  2. 其字节区间 [Pos, Pos+Len) 与其后方任何切片（j > i）的区间均无重叠。
-//
-// 一旦遇到首个不满足条件的切片立即停止扫描，返回可跳过的前缀切片数量。
-func skipSome(slices []Slice) int {
-	for i, s := range slices {
-		if s.ID == 0 || s.Len < CompactSkipSliceMinSize {
-			return i
-		}
-		sEnd := s.Pos + s.Len
-		for j := i + 1; j < len(slices); j++ {
-			later := slices[j]
-			laterEnd := later.Pos + later.Len
-			if !(sEnd <= later.Pos || laterEnd <= s.Pos) {
-				return i
-			}
-		}
-	}
-	return len(slices)
-}
-
 type chunkAppendStat struct {
 	indx     int64
 	octetLen int64
@@ -65,13 +39,13 @@ type compactNewSliceDesc struct {
 	length uint32
 }
 
-// CompactChunk 对指定 Inode 与 ChunkIndx 执行无重叠大块前缀跳过（skipSome）与尾部增量合并及乐观前缀 CAS 替换。
-// 遵循 ADR-0019 与 ADR-0022 数据层碎片整理与 CAS 替换架构：
+// CompactChunk 对指定 Inode 与 ChunkIndx 执行整体合并与乐观前缀 CAS 替换。
+// 遵循 ADR-0019、ADR-0022 与 ADR-0027 数据层碎片整理与 CAS 替换架构：
 // 1. 静态边界校验：ino 非零且在 int64 范围内，indx 在合法非负范围且不超过 math.MaxInt64/int64(ChunkSize)；
-// 2. 阶段 1（锁外读取与新物理块落盘）：
+// 2. 阶段 1（短读保护事务内读取与锁外新物理块落盘）：
 //   - 调用 GetChunk 获取 originSlices（若 pgx.ErrNoRows 或 len(originSlices) == 0 直接返回 nil）；
-//   - DecodeSlices 并通过 skipSome 跳过头部长度 >= 1 MiB 且与后方任何切片无重叠的实心前缀切片（skippedPrefix），若尾部无待合并切片则直接短路返回；
-//   - 对未跳过的尾部子序列 tailSlices 调用 BuildSlice 计算有效切片视图 view []Slice；
+//   - DecodeSlices 获取当前原始切片序列 rawSlices，若 enforceThreshold && len(rawSlices) < m.compactSliceThreshold 则直接短路返回；
+//   - 对整个 rawSlices 调用 BuildSlice 计算最新有效切片视图 view []Slice；
 //   - 将 view 中连续的非空洞数据切片（s.ID > 0 且相邻切片连续）合并为紧致连续数据段；
 //   - 对每个连续有效数据段：
 //   - 从 BlockStore 读出各有效 Slice 对应的字节数据拼接为完整 segData；
@@ -85,11 +59,11 @@ type compactNewSliceDesc struct {
 //   - 若行不存在或 !bytes.HasPrefix(currentChunk.Slices, originSlices)：
 //   - 安全中止放弃替换，事务返回 nil，并在事务外立即清理阶段 1 生成的全部新物理块；
 //   - 若 bytes.HasPrefix 成立：
-//   - 构造 updatedSlices = skippedPrefixBytes || compactedSlices || currentChunk.Slices[len(originSlices):]；
+//   - 构造 updatedSlices = compactedSlices || currentChunk.Slices[len(originSlices):]；
 //   - 更新 chunks.slices；
 //   - 插入新 slice_refs（refs = 1）；
-//   - 仅对被替换的尾部旧切片 origTailBytes 调用 decrementDeletedSlicesRefs 递减旧 slice_id 的引用计数；
-//   - 若写事务执行失败，事务外立即清理新物理块并返回错误。
+//   - 对全部被替换的旧切片 originSlices 调用 decrementDeletedSlicesRefs 递减旧 slice_id 的引用计数；
+//   - 若写事务执行失败，在确认未到达提交边界时于事务外立即清理新物理块并返回错误。
 func (m *manager) CompactChunk(ctx context.Context, ino uint64, indx int64) error {
 	_, _, _, err := m.compactChunkWithCount(ctx, ino, indx, false)
 	return err
@@ -100,11 +74,10 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		return 0, false, false, ErrInvalidArgument
 	}
 
-	// 阶段 1：在短读保护事务内读取旧 Chunk，跳过无重叠大块前缀，锁定尾部 slice_refs 并从 BlockStore 读出尾部各段数据拼装到内存
+	// 阶段 1：在短读保护事务内读取旧 Chunk，锁定有效 slice_refs 并从 BlockStore 读出各段数据拼装到内存
 	var originSlices []byte
 	var segments []compactDataSegment
-	var skippedPrefixCount int
-	var shortCircuitTailCount int
+	var shortCircuitSliceCount int
 
 	bs := m.getBlockStore()
 
@@ -119,8 +92,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 				if errors.Is(err, pgx.ErrNoRows) {
 					originSlices = nil
 					segments = nil
-					skippedPrefixCount = 0
-					shortCircuitTailCount = 0
+					shortCircuitSliceCount = 0
 					return nil
 				}
 				return fmt.Errorf("get chunk for compact (ino=%d, indx=%d): %w", ino, indx, err)
@@ -128,8 +100,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 			if len(chunk.Slices) == 0 {
 				originSlices = nil
 				segments = nil
-				skippedPrefixCount = 0
-				shortCircuitTailCount = 0
+				shortCircuitSliceCount = 0
 				return nil
 			}
 
@@ -138,17 +109,14 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 				return fmt.Errorf("decode origin slices (ino=%d, indx=%d): %w", ino, indx, err)
 			}
 
-			skipCount := skipSome(rawSlices)
-			tailSlices := rawSlices[skipCount:]
-			if len(tailSlices) == 0 || (enforceThreshold && skipCount > 0 && len(tailSlices) < m.compactSliceThreshold) {
+			if len(rawSlices) == 0 || (enforceThreshold && len(rawSlices) < m.compactSliceThreshold) {
 				originSlices = nil
 				segments = nil
-				skippedPrefixCount = skipCount
-				shortCircuitTailCount = len(tailSlices)
+				shortCircuitSliceCount = len(rawSlices)
 				return nil
 			}
 
-			view := BuildSlice(tailSlices)
+			view := BuildSlice(rawSlices)
 
 			var segs []compactDataSegment
 			var curSeg *compactDataSegment
@@ -234,8 +202,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 
 			originSlices = chunk.Slices
 			segments = segs
-			skippedPrefixCount = skipCount
-			shortCircuitTailCount = 0
+			shortCircuitSliceCount = 0
 			return nil
 		}
 		return nil
@@ -244,7 +211,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		return 0, false, false, readTxErr
 	}
 	if len(originSlices) == 0 {
-		return shortCircuitTailCount, false, false, nil
+		return shortCircuitSliceCount, false, false, nil
 	}
 
 	var writtenBlocks []compactWrittenBlock
@@ -301,7 +268,7 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 		})
 	}
 
-	if skippedPrefixCount == 0 && len(compactedSlices) == 0 {
+	if len(compactedSlices) == 0 {
 		compactedSlices = EncodeSlice(Slice{
 			Pos:  0,
 			ID:   0,
@@ -336,17 +303,13 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 			return nil
 		}
 
-		prefixByteLen := skippedPrefixCount * SliceBytes
-		skippedPrefixBytes := originSlices[:prefixByteLen]
-		origTailBytes := originSlices[prefixByteLen:]
 		concurrentSuffix := currentChunk.Slices[len(originSlices):]
 
 		var updatedSlices []byte
-		if len(skippedPrefixBytes) == 0 && len(concurrentSuffix) == 0 {
+		if len(concurrentSuffix) == 0 {
 			updatedSlices = compactedSlices
 		} else {
-			updatedSlices = make([]byte, 0, len(skippedPrefixBytes)+len(compactedSlices)+len(concurrentSuffix))
-			updatedSlices = append(updatedSlices, skippedPrefixBytes...)
+			updatedSlices = make([]byte, 0, len(compactedSlices)+len(concurrentSuffix))
 			updatedSlices = append(updatedSlices, compactedSlices...)
 			updatedSlices = append(updatedSlices, concurrentSuffix...)
 		}
@@ -369,11 +332,11 @@ func (m *manager) compactChunkWithCount(ctx context.Context, ino uint64, indx in
 			}
 		}
 
-		if err := decrementDeletedSlicesRefs(ctx, q, origTailBytes); err != nil {
+		if err := decrementDeletedSlicesRefs(ctx, q, originSlices); err != nil {
 			return fmt.Errorf("decrement deleted slices refs in compact: %w", err)
 		}
 
-		finalSliceCount = len(updatedSlices)/SliceBytes - skippedPrefixCount
+		finalSliceCount = len(updatedSlices) / SliceBytes
 		everReachedCommit = true
 		return nil
 	})
