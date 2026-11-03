@@ -15,20 +15,37 @@ type Chunk struct {
 }
 
 type ClientSession struct {
-	SessionID int64              `json:"session_id"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	DiskID    pgtype.UUID        `json:"disk_id"`
+	SessionID    int64              `json:"session_id"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	DiskID       pgtype.UUID        `json:"disk_id"`
+	BranchName   string             `json:"branch_name"`
+	ReadOnly     bool               `json:"read_only"`
+	CommitID     pgtype.UUID        `json:"commit_id"`
+	LeaseManaged bool               `json:"lease_managed"`
+}
+
+type Commit struct {
+	CommitID            pgtype.UUID        `json:"commit_id"`
+	DiskID              pgtype.UUID        `json:"disk_id"`
+	BranchName          string             `json:"branch_name"`
+	ParentCommitID      pgtype.UUID        `json:"parent_commit_id"`
+	MergeParentCommitID pgtype.UUID        `json:"merge_parent_commit_id"`
+	Message             string             `json:"message"`
+	CheckpointDir       string             `json:"checkpoint_dir"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
 type Disk struct {
-	DiskID    pgtype.UUID        `json:"disk_id"`
-	Name      string             `json:"name"`
-	RootIno   int64              `json:"root_ino"`
-	MaxBytes  int64              `json:"max_bytes"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	DiskID     pgtype.UUID        `json:"disk_id"`
+	Name       string             `json:"name"`
+	RootIno    int64              `json:"root_ino"`
+	MaxBytes   int64              `json:"max_bytes"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	StorageDir string             `json:"storage_dir"`
+	Branches   []byte             `json:"branches"`
 }
 
 type Entry struct {
