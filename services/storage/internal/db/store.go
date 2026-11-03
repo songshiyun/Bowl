@@ -109,7 +109,7 @@ WITH ts AS (
 target AS (
     SELECT session_id, (expires_at <= (SELECT now FROM ts)) AS is_expired
     FROM client_sessions
-    WHERE session_id = $1
+    WHERE session_id = $1 AND NOT lease_managed
 ),
 purged_locks AS (
     DELETE FROM file_locks
@@ -139,7 +139,8 @@ SET expires_at = (SELECT now FROM ts) + ($2::bigint * interval '1 microsecond'),
     END
 FROM ts, target t
 WHERE s.session_id = $1
-RETURNING s.session_id, s.expires_at, s.updated_at, s.created_at, s.disk_id
+RETURNING s.session_id, s.expires_at, s.updated_at, s.created_at, s.disk_id,
+          s.branch_name, s.read_only, s.commit_id, s.lease_managed
 `
 
 const upsertClientSessionExplicitExpiresAt = `-- name: upsertClientSessionExplicitExpiresAt :one
@@ -149,7 +150,7 @@ WITH ts AS (
 target AS (
     SELECT session_id, (expires_at <= (SELECT now FROM ts)) AS is_expired
     FROM client_sessions
-    WHERE session_id = $1
+    WHERE session_id = $1 AND NOT lease_managed
 ),
 purged_locks AS (
     DELETE FROM file_locks
@@ -179,7 +180,8 @@ SET expires_at = $2,
     END
 FROM ts, target t
 WHERE s.session_id = $1
-RETURNING s.session_id, s.expires_at, s.updated_at, s.created_at, s.disk_id
+RETURNING s.session_id, s.expires_at, s.updated_at, s.created_at, s.disk_id,
+          s.branch_name, s.read_only, s.commit_id, s.lease_managed
 `
 
 func upsertClientSessionTx(ctx context.Context, dbtx DBTX, arg UpsertClientSessionParams) (ClientSession, error) {
@@ -269,6 +271,10 @@ func upsertClientSessionTx(ctx context.Context, dbtx DBTX, arg UpsertClientSessi
 		&i.UpdatedAt,
 		&i.CreatedAt,
 		&i.DiskID,
+		&i.BranchName,
+		&i.ReadOnly,
+		&i.CommitID,
+		&i.LeaseManaged,
 	); err != nil {
 		return ClientSession{}, err
 	}
