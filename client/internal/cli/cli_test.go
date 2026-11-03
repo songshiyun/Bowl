@@ -54,6 +54,9 @@ func TestCLI_Help(t *testing.T) {
 			out := stdout.String()
 			require.Contains(t, out, "用法:", "帮助信息应包含用法")
 			require.Contains(t, out, "disk", "帮助信息应包含 disk 命令")
+			for _, command := range []string{"branch", "commit", "rollback", "merge", "diff"} {
+				require.Contains(t, out, command)
+			}
 			require.Contains(t, out, "mount", "帮助信息应包含 mount 命令")
 			require.Contains(t, out, "umount", "帮助信息应包含 umount 命令")
 			require.Contains(t, out, "version", "帮助信息应包含 version 命令")

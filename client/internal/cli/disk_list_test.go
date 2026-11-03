@@ -276,3 +276,38 @@ func TestDiskList_RPCFailure(t *testing.T) {
 	require.Empty(t, stdout.String())
 	require.Contains(t, stderr.String(), "列出虚拟磁盘失败")
 }
+
+func TestDiskList_BranchSummary(t *testing.T) {
+	id, head := uuid.NewString(), uuid.NewString()
+	defaultBranch, parent := "main", "main"
+	mockSrv := &diskMockStorageHandler{listDisksFn: func(_ context.Context, _ *connect.Request[storagev1.ListDisksRequest]) (*connect.Response[storagev1.ListDisksResponse], error) {
+		return connect.NewResponse(&storagev1.ListDisksResponse{Disks: []*storagev1.Disk{{
+			DiskId: id, MaxBytes: 1000, UsedBytes: 250, DefaultBranch: &defaultBranch,
+			Branches: []*storagev1.Branch{{Name: "main", HeadCommitId: &head}, {Name: "B", ParentBranch: &parent, HeadCommitId: &head}},
+		}}}), nil
+	}}
+	endpoint := setupTestStorageServer(t, mockSrv)
+	code, out, errOut := runVersionCLI("disk", "list", "--endpoint", endpoint)
+	require.Equal(t, 0, code, errOut)
+	require.Contains(t, out, "BRANCHES")
+	require.Contains(t, out, "main (2)")
+	require.Contains(t, out, "250 B")
+	code, out, errOut = runVersionCLI("disk", "list", "--endpoint", endpoint, "--json")
+	require.Equal(t, 0, code, errOut)
+	var result struct {
+		Disks []struct {
+			UsedBytes     uint64 `json:"used_bytes"`
+			DefaultBranch string `json:"default_branch"`
+			Branches      []struct {
+				Name   string `json:"name"`
+				Parent string `json:"parent_branch"`
+			} `json:"branches"`
+		} `json:"disks"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	require.Len(t, result.Disks, 1)
+	require.Equal(t, uint64(250), result.Disks[0].UsedBytes)
+	require.Equal(t, "main", result.Disks[0].DefaultBranch)
+	require.Len(t, result.Disks[0].Branches, 2)
+	require.Equal(t, "main", result.Disks[0].Branches[1].Parent)
+}
