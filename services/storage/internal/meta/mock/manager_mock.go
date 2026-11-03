@@ -611,6 +611,74 @@ func (_c *MockManager_DeleteDisk_Call) RunAndReturn(run func(ctx context.Context
 	return _c
 }
 
+// Diff provides a mock function for the type MockManager
+func (_mock *MockManager) Diff(ctx context.Context, params meta.DiffParams) ([]meta.DiffEntry, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Diff")
+	}
+
+	var r0 []meta.DiffEntry
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DiffParams) ([]meta.DiffEntry, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DiffParams) []meta.DiffEntry); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]meta.DiffEntry)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.DiffParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Diff_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Diff'
+type MockManager_Diff_Call struct {
+	*mock.Call
+}
+
+// Diff is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.DiffParams
+func (_e *MockManager_Expecter) Diff(ctx any, params any) *MockManager_Diff_Call {
+	return &MockManager_Diff_Call{Call: _e.mock.On("Diff", ctx, params)}
+}
+
+func (_c *MockManager_Diff_Call) Run(run func(ctx context.Context, params meta.DiffParams)) *MockManager_Diff_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.DiffParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.DiffParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Diff_Call) Return(diffEntrys []meta.DiffEntry, err error) *MockManager_Diff_Call {
+	_c.Call.Return(diffEntrys, err)
+	return _c
+}
+
+func (_c *MockManager_Diff_Call) RunAndReturn(run func(ctx context.Context, params meta.DiffParams) ([]meta.DiffEntry, error)) *MockManager_Diff_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Fallocate provides a mock function for the type MockManager
 func (_mock *MockManager) Fallocate(ctx context.Context, params meta.FallocateParams) error {
 	ret := _mock.Called(ctx, params)

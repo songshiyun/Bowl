@@ -91,6 +91,7 @@ type Manager interface {
 	DeleteBranch(ctx context.Context, params DeleteBranchParams) error
 	Commit(ctx context.Context, params CommitParams) (*CommitInfo, error)
 	Rollback(ctx context.Context, params RollbackParams) error
+	Diff(ctx context.Context, params DiffParams) ([]DiffEntry, error)
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error)
 	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)

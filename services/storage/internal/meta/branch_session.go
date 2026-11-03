@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -39,6 +42,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
 	var result RenewSessionResult
+	var checkpointDir string
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
 		raw, ok := q.(interface{ RawDBTX() db.DBTX })
 		if !ok || raw.RawDBTX() == nil {
@@ -95,7 +99,13 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 				id := previousCommit.String()
 				commit = &id
 			} else if commit == nil {
-				commit = target.HeadCommitID
+				var id pgtype.UUID
+				id, checkpointDir, err = m.snapshotBranchSession(ctx, q, diskID, target)
+				if err != nil {
+					return err
+				}
+				value := id.String()
+				commit = &value
 			}
 			if commit == nil {
 				return ErrNotFound
@@ -190,7 +200,55 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 		return nil
 	})
 	if err != nil {
+		if checkpointDir != "" {
+			err = errors.Join(err, os.RemoveAll(checkpointDir))
+		}
 		return RenewSessionResult{}, err
 	}
 	return result, nil
+}
+
+// snapshotBranchSession 为新只读会话固定工作区，且不推进分支头。
+func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskID pgtype.UUID, target *storedBranch) (id pgtype.UUID, checkpointDir string, err error) {
+	unlock := m.lockBranch(diskID.String(), target.Name)
+	defer unlock()
+	branch, err := m.pebble.OpenBranch(diskID.String(), target.Name)
+	if err != nil {
+		return id, "", err
+	}
+	defer func() { err = errors.Join(err, branch.Close()) }()
+	dirty, err := branchHasDirty(branch.DB())
+	if err != nil {
+		return id, "", err
+	}
+	var parent pgtype.UUID
+	if target.HeadCommitID != nil {
+		parent, err = parseDiskID(*target.HeadCommitID)
+		if err != nil {
+			return id, "", err
+		}
+		if !dirty {
+			return parent, "", nil
+		}
+	}
+	newID, err := uuid.NewV7()
+	if err != nil {
+		return id, "", err
+	}
+	id = pgtype.UUID{Bytes: newID, Valid: true}
+	path := filepath.Join(m.storageRoot, "disks", diskID.String(), "commits", newID.String())
+	if _, err := os.Stat(path); err == nil {
+		return id, "", ErrAlreadyExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return id, "", err
+	}
+	checkpointDir = path
+	if err := branch.Checkpoint(newID.String()); err != nil {
+		return id, checkpointDir, err
+	}
+	_, err = q.CreateCommit(ctx, db.CreateCommitParams{
+		CommitID: id, DiskID: diskID, BranchName: target.Name,
+		ParentCommitID: parent, CheckpointDir: checkpointDir,
+	})
+	return id, checkpointDir, err
 }
