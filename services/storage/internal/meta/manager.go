@@ -86,6 +86,11 @@ type Manager interface {
 	ListDisks(ctx context.Context, params ListDisksParams) (*ListDisksResult, error)
 	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
 	DeleteDisk(ctx context.Context, diskID string) error
+	CreateBranch(ctx context.Context, params CreateBranchParams) (*Branch, error)
+	ListBranches(ctx context.Context, diskID string) ([]Branch, error)
+	DeleteBranch(ctx context.Context, params DeleteBranchParams) error
+	Commit(ctx context.Context, params CommitParams) (*CommitInfo, error)
+	Rollback(ctx context.Context, params RollbackParams) error
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error)
 	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)

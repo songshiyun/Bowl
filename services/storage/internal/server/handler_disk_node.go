@@ -59,15 +59,7 @@ func toProtoDisk(d *meta.Disk) *storagev1.Disk {
 		result.DefaultBranch = &d.DefaultBranch
 	}
 	for _, branch := range d.Branches {
-		state := storagev1.BranchState_BRANCH_STATE_NORMAL
-		if branch.State == "MERGING" {
-			state = storagev1.BranchState_BRANCH_STATE_MERGING
-		}
-		result.Branches = append(result.Branches, &storagev1.Branch{
-			BranchId: branch.BranchID, DiskId: branch.DiskID, Name: branch.Name,
-			ParentBranch: branch.ParentBranch, ForkCommitId: branch.ForkCommitID,
-			HeadCommitId: branch.HeadCommitID, State: state, CreatedAt: timestamppb.New(branch.CreatedAt),
-		})
+		result.Branches = append(result.Branches, toProtoBranch(branch))
 	}
 	return result
 }

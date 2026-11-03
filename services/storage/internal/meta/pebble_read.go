@@ -104,7 +104,7 @@ func (m *manager) resolveDirReadSession(ctx context.Context, fh uint64, paramID 
 	return session, true, nil
 }
 
-func (m *manager) withPebbleSession(session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
+func (m *manager) withPebbleSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
 		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
@@ -116,6 +116,13 @@ func (m *manager) withPebbleSession(session pebbleReadSession, fn func(*pebble.D
 	}
 	unlock := m.lockBranch(disk, session.branch)
 	defer unlock()
+	current, err := m.requirePebbleSession(ctx, &session.id)
+	if err != nil {
+		return err
+	}
+	if current.diskID != session.diskID || current.branch != session.branch || current.readOnly || !current.createdAt.Equal(session.createdAt) {
+		return ErrBadFileHandle
+	}
 	branch, err := m.pebble.OpenBranch(disk, session.branch)
 	if err != nil {
 		return err
@@ -154,6 +161,25 @@ func checkPebbleInodeLive(store *pebble.DB, inode pebblekv.Inode) error {
 		return err
 	}
 	return closer.Close()
+}
+
+func checkPebbleSessionInodeLive(session pebbleReadSession, store *pebble.DB, inode pebblekv.Inode) error {
+	if session.readOnly && inode.Nlink == 0 {
+		return ErrNotFound
+	}
+	return checkPebbleInodeLive(store, inode)
+}
+
+func writePebbleAtime(store *pebble.DB, ino uint64, value []byte) (err error) {
+	batch := store.NewBatch()
+	defer func() { err = errors.Join(err, batch.Close()) }()
+	if err := batch.Set(pebblekv.InodeKey(ino), value, nil); err != nil {
+		return err
+	}
+	if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
+		return err
+	}
+	return batch.Commit(pebble.Sync)
 }
 
 func (m *manager) newPebbleInode(target pebblekv.Inode) *Inode {
@@ -209,7 +235,7 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		parent, err := readPebbleInode(store, parentIno)
 		if err != nil {
 			return err
@@ -218,7 +244,7 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 			return ErrNotDir
 		}
 		if bytes.Equal(name, []byte("..")) {
-			if err := checkPebbleInodeLive(store, parent); err != nil {
+			if err := checkPebbleSessionInodeLive(session, store, parent); err != nil {
 				return err
 			}
 			if parentIno == RootIno {
@@ -232,7 +258,7 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 			if err != nil {
 				return err
 			}
-			if err := checkPebbleInodeLive(store, grandparent); err != nil {
+			if err := checkPebbleSessionInodeLive(session, store, grandparent); err != nil {
 				return err
 			}
 			result = m.newPebbleInode(grandparent)
@@ -278,12 +304,12 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		result = m.newPebbleInode(inode)
@@ -298,12 +324,12 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		if inode.Mode&S_IFMT != S_IFLNK {
@@ -323,7 +349,7 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 				if err != nil {
 					return err
 				}
-				if err := store.Set(pebblekv.InodeKey(ino), value, pebble.Sync); err != nil {
+				if err := writePebbleAtime(store, ino, value); err != nil {
 					return err
 				}
 			}
@@ -353,7 +379,7 @@ func (m *manager) pebbleReadDirPlus(ctx context.Context, session pebbleReadSessi
 func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntryPlus, error) {
 	entries := make([]DirEntryPlus, 0, min(int(limit), 16))
 	anchors := make(map[pebbleDirCursorKey][]byte)
-	err := m.withPebbleSession(session, func(store *pebble.DB) (err error) {
+	err := m.withPebbleSession(ctx, session, func(store *pebble.DB) (err error) {
 		dir, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -362,7 +388,7 @@ func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, 
 			return ErrNotDir
 		}
 		if dir.Nlink == 0 {
-			return checkPebbleInodeLive(store, dir)
+			return checkPebbleSessionInodeLive(session, store, dir)
 		}
 		appendEntry := func(name []byte, target pebblekv.Inode, next uint64, dot bool) {
 			inode := m.newPebbleInode(target)
@@ -466,12 +492,12 @@ func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*S
 	if err != nil {
 		return nil, err
 	}
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		return checkPebbleInodeLive(store, inode)
+		return checkPebbleSessionInodeLive(session, store, inode)
 	})
 	if err != nil {
 		return nil, err

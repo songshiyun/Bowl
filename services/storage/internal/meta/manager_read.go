@@ -302,7 +302,7 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 		return nil, err
 	}
 	if usePebble {
-		return m.pebbleRead(view, req)
+		return m.pebbleRead(ctx, view, req)
 	}
 	if req.Fh == 0 {
 		return nil, ErrInvalidArgument

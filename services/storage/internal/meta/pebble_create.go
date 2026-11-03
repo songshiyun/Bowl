@@ -73,8 +73,9 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 	var diskID pgtype.UUID
 	var branchName string
 	var readOnly, managed, active bool
-	err = m.store.(poolProvider).Pool().QueryRow(ctx, `SELECT disk_id, branch_name, read_only, lease_managed, expires_at > clock_timestamp()
-		FROM client_sessions WHERE session_id = $1`, int64(*sid)).Scan(&diskID, &branchName, &readOnly, &managed, &active)
+	var createdAt time.Time
+	err = m.store.(poolProvider).Pool().QueryRow(ctx, `SELECT disk_id, branch_name, read_only, lease_managed, expires_at > clock_timestamp(), created_at
+		FROM client_sessions WHERE session_id = $1`, int64(*sid)).Scan(&diskID, &branchName, &readOnly, &managed, &active, &createdAt)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !active {
 		return ErrBadFileHandle
 	}
@@ -110,6 +111,13 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 	disk := diskID.String()
 	unlock := m.lockBranch(disk, branchName)
 	defer unlock()
+	current, err := m.requirePebbleSession(ctx, sid)
+	if err != nil {
+		return err
+	}
+	if current.diskID != diskID || current.branch != branchName || current.readOnly || !current.createdAt.Equal(createdAt) {
+		return ErrBadFileHandle
+	}
 	branch, err := m.pebble.OpenBranch(disk, branchName)
 	if err != nil {
 		return err

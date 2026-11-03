@@ -129,12 +129,12 @@ func (m *manager) pebbleGetXattr(ctx context.Context, sid *uint64, ino uint64, n
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		if bytes.HasPrefix(name, []byte("user.")) && !isAllowedUserXattrFileType(inode.Mode) {
@@ -159,12 +159,12 @@ func (m *manager) pebbleListXattr(ctx context.Context, sid *uint64, ino uint64) 
 		return nil, err
 	}
 	var names [][]byte
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		names, err = pebbleXattrNames(ctx, store, ino)

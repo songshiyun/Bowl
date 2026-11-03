@@ -56,7 +56,15 @@ func branchOptions(readOnly bool) *pebble.Options {
 }
 
 func validID(id string) bool {
-	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\\x00")
+	if id == "" || id == "." || id == ".." || strings.ContainsRune(id, '\x00') {
+		return false
+	}
+	for i := range len(id) {
+		if os.IsPathSeparator(id[i]) {
+			return false
+		}
+	}
+	return true
 }
 func (m *Manager) path(disk, kind, id string) (string, error) {
 	if !validID(disk) || !validID(id) {

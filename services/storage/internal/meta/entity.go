@@ -527,6 +527,45 @@ type Branch struct {
 	CreatedAt    time.Time
 }
 
+// CreateBranchParams 定义分支派生参数。
+type CreateBranchParams struct {
+	DiskID         string
+	Name           string
+	SourceBranch   *string
+	SourceCommitID *string
+}
+
+// DeleteBranchParams 定义分支删除参数。
+type DeleteBranchParams struct {
+	DiskID string
+	Name   string
+}
+
+// CommitParams 定义版本快照参数。
+type CommitParams struct {
+	DiskID     string
+	BranchName string
+	Message    string
+}
+
+// CommitInfo 描述版本快照及其父版本。
+type CommitInfo struct {
+	CommitID            string
+	DiskID              string
+	BranchName          string
+	ParentCommitID      *string
+	MergeParentCommitID *string
+	Message             string
+	CreatedAt           time.Time
+}
+
+// RollbackParams 定义版本回档参数。
+type RollbackParams struct {
+	DiskID     string
+	BranchName string
+	CommitID   string
+}
+
 // CreateDiskParams 描述创建虚拟磁盘入参。
 type CreateDiskParams struct {
 	Name     string

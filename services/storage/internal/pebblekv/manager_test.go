@@ -204,7 +204,7 @@ func TestCommitConcurrentReferencesAndManagerLifecycle(t *testing.T) {
 
 func TestManagerRejectsInvalidIdentifiersAndExistingTargets(t *testing.T) {
 	manager := pebblekv.NewManager(t.TempDir())
-	for _, id := range []string{"", ".", "..", "../escape", "a/b", "a\\b", "a\x00b"} {
+	for _, id := range []string{"", ".", "..", "../escape", "a/b", "a\x00b"} {
 		_, err := manager.OpenBranch(id, "main")
 		require.ErrorIs(t, err, pebblekv.ErrInvalidID)
 		_, err = manager.OpenCommit("disk", id)

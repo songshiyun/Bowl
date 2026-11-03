@@ -105,28 +105,7 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	const disk = "11111111-1111-7111-8111-111111111111"
-	const commit = "22222222-2222-7222-8222-222222222222"
 	calls := map[string]func() error{
-		"CreateBranch": func() error {
-			_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: disk, Name: "dev"}))
-			return err
-		},
-		"ListBranches": func() error {
-			_, err := client.ListBranches(ctx, connect.NewRequest(&storagev1.ListBranchesRequest{DiskId: disk}))
-			return err
-		},
-		"DeleteBranch": func() error {
-			_, err := client.DeleteBranch(ctx, connect.NewRequest(&storagev1.DeleteBranchRequest{DiskId: disk, Name: "dev"}))
-			return err
-		},
-		"Commit": func() error {
-			_, err := client.Commit(ctx, connect.NewRequest(&storagev1.CommitRequest{DiskId: disk, BranchName: "main"}))
-			return err
-		},
-		"Rollback": func() error {
-			_, err := client.Rollback(ctx, connect.NewRequest(&storagev1.RollbackRequest{DiskId: disk, BranchName: "main", CommitId: commit}))
-			return err
-		},
 		"Merge": func() error {
 			_, err := client.Merge(ctx, connect.NewRequest(&storagev1.MergeRequest{DiskId: disk, SourceBranch: "dev", TargetBranch: "main"}))
 			return err
@@ -308,5 +287,46 @@ func TestSessionCreateAndLinkHandlers(t *testing.T) {
 	_, err = client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{ParentIno: 1, Name: []byte("sym"), Target: []byte("target"), SessionId: &sid}))
 	require.NoError(t, err)
 	_, err = client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: 2, NewParentIno: 1, NewName: []byte("link"), SessionId: &sid}))
+	require.NoError(t, err)
+}
+
+func TestVersionHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	ctx := context.Background()
+	const disk = "11111111-1111-7111-8111-111111111111"
+	const commit = "22222222-2222-7222-8222-222222222222"
+	const branchID = "33333333-3333-7333-8333-333333333333"
+	parent := "main"
+	created := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	branch := meta.Branch{BranchID: branchID, DiskID: disk, Name: "dev", ParentBranch: &parent, ForkCommitID: proto.String(commit), HeadCommitID: proto.String(commit), State: "NORMAL", CreatedAt: created}
+	mgr.EXPECT().CreateBranch(mock.Anything, meta.CreateBranchParams{DiskID: disk, Name: "dev", SourceBranch: &parent, SourceCommitID: proto.String(commit)}).Return(&branch, nil).Once()
+	mgr.EXPECT().ListBranches(mock.Anything, disk).Return([]meta.Branch{branch}, nil).Once()
+	mgr.EXPECT().Commit(mock.Anything, meta.CommitParams{DiskID: disk, BranchName: "dev", Message: "保存"}).Return(&meta.CommitInfo{CommitID: commit, DiskID: disk, BranchName: "dev", ParentCommitID: proto.String(commit), Message: "保存", CreatedAt: created}, nil).Once()
+	mgr.EXPECT().Rollback(mock.Anything, meta.RollbackParams{DiskID: disk, BranchName: "dev", CommitID: commit}).Return(meta.ErrBusy).Once()
+	mgr.EXPECT().DeleteBranch(mock.Anything, meta.DeleteBranchParams{DiskID: disk, Name: "dev"}).Return(nil).Once()
+
+	createdBranch, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: disk, Name: "dev", SourceBranch: &parent, SourceCommitId: proto.String(commit)}))
+	require.NoError(t, err)
+	require.Equal(t, branchID, createdBranch.Msg.Branch.BranchId)
+	require.Equal(t, &parent, createdBranch.Msg.Branch.ParentBranch)
+	require.Equal(t, proto.String(commit), createdBranch.Msg.Branch.HeadCommitId)
+	require.Equal(t, storagev1.BranchState_BRANCH_STATE_NORMAL, createdBranch.Msg.Branch.State)
+	require.Equal(t, created, createdBranch.Msg.Branch.CreatedAt.AsTime())
+	list, err := client.ListBranches(ctx, connect.NewRequest(&storagev1.ListBranchesRequest{DiskId: disk}))
+	require.NoError(t, err)
+	require.Len(t, list.Msg.Branches, 1)
+	require.Equal(t, createdBranch.Msg.Branch, list.Msg.Branches[0])
+	version, err := client.Commit(ctx, connect.NewRequest(&storagev1.CommitRequest{DiskId: disk, BranchName: "dev", Message: "保存"}))
+	require.NoError(t, err)
+	require.Equal(t, commit, version.Msg.Commit.CommitId)
+	require.Equal(t, proto.String(commit), version.Msg.Commit.ParentCommitId)
+	require.Equal(t, "保存", version.Msg.Commit.Message)
+	require.Equal(t, created, version.Msg.Commit.CreatedAt.AsTime())
+	_, err = client.Rollback(ctx, connect.NewRequest(&storagev1.RollbackRequest{DiskId: disk, BranchName: "dev", CommitId: commit}))
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	require.Equal(t, "EBUSY", server.ExtractErrorInfo(err).GetReason())
+	_, err = client.DeleteBranch(ctx, connect.NewRequest(&storagev1.DeleteBranchRequest{DiskId: disk, Name: "dev"}))
 	require.NoError(t, err)
 }

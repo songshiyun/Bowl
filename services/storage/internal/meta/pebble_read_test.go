@@ -181,9 +181,8 @@ func TestPebbleReadIntegration(t *testing.T) {
 		require.ErrorIs(t, err, meta.ErrNotFound)
 		_, err = f.mgr.Lookup(snapshot, 1, []byte("feature"))
 		require.ErrorIs(t, err, meta.ErrNotFound)
-		got, err = f.mgr.GetAttr(snapshot, 9)
-		require.NoError(t, err)
-		require.Zero(t, got.Attr.Nlink)
+		_, err = f.mgr.GetAttr(snapshot, 9)
+		require.ErrorIs(t, err, meta.ErrNotFound)
 		results := make(chan error, 2)
 		for _, view := range []context.Context{feature, snapshot} {
 			go func(view context.Context) {

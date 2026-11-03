@@ -162,6 +162,74 @@ func (_c *MockManager_CollectGarbage_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// Commit provides a mock function for the type MockManager
+func (_mock *MockManager) Commit(ctx context.Context, params meta.CommitParams) (*meta.CommitInfo, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Commit")
+	}
+
+	var r0 *meta.CommitInfo
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CommitParams) (*meta.CommitInfo, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CommitParams) *meta.CommitInfo); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.CommitInfo)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CommitParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Commit_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Commit'
+type MockManager_Commit_Call struct {
+	*mock.Call
+}
+
+// Commit is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.CommitParams
+func (_e *MockManager_Expecter) Commit(ctx any, params any) *MockManager_Commit_Call {
+	return &MockManager_Commit_Call{Call: _e.mock.On("Commit", ctx, params)}
+}
+
+func (_c *MockManager_Commit_Call) Run(run func(ctx context.Context, params meta.CommitParams)) *MockManager_Commit_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.CommitParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.CommitParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Commit_Call) Return(commitInfo *meta.CommitInfo, err error) *MockManager_Commit_Call {
+	_c.Call.Return(commitInfo, err)
+	return _c
+}
+
+func (_c *MockManager_Commit_Call) RunAndReturn(run func(ctx context.Context, params meta.CommitParams) (*meta.CommitInfo, error)) *MockManager_Commit_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CompactChunk provides a mock function for the type MockManager
 func (_mock *MockManager) CompactChunk(ctx context.Context, ino uint64, indx int64) error {
 	ret := _mock.Called(ctx, ino, indx)
@@ -293,6 +361,74 @@ func (_c *MockManager_Create_Call) RunAndReturn(run func(ctx context.Context, pa
 	return _c
 }
 
+// CreateBranch provides a mock function for the type MockManager
+func (_mock *MockManager) CreateBranch(ctx context.Context, params meta.CreateBranchParams) (*meta.Branch, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateBranch")
+	}
+
+	var r0 *meta.Branch
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateBranchParams) (*meta.Branch, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateBranchParams) *meta.Branch); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.Branch)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CreateBranchParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_CreateBranch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateBranch'
+type MockManager_CreateBranch_Call struct {
+	*mock.Call
+}
+
+// CreateBranch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.CreateBranchParams
+func (_e *MockManager_Expecter) CreateBranch(ctx any, params any) *MockManager_CreateBranch_Call {
+	return &MockManager_CreateBranch_Call{Call: _e.mock.On("CreateBranch", ctx, params)}
+}
+
+func (_c *MockManager_CreateBranch_Call) Run(run func(ctx context.Context, params meta.CreateBranchParams)) *MockManager_CreateBranch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.CreateBranchParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.CreateBranchParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_CreateBranch_Call) Return(branch *meta.Branch, err error) *MockManager_CreateBranch_Call {
+	_c.Call.Return(branch, err)
+	return _c
+}
+
+func (_c *MockManager_CreateBranch_Call) RunAndReturn(run func(ctx context.Context, params meta.CreateBranchParams) (*meta.Branch, error)) *MockManager_CreateBranch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateDisk provides a mock function for the type MockManager
 func (_mock *MockManager) CreateDisk(ctx context.Context, params meta.CreateDiskParams) (*meta.Disk, error) {
 	ret := _mock.Called(ctx, params)
@@ -357,6 +493,63 @@ func (_c *MockManager_CreateDisk_Call) Return(disk *meta.Disk, err error) *MockM
 }
 
 func (_c *MockManager_CreateDisk_Call) RunAndReturn(run func(ctx context.Context, params meta.CreateDiskParams) (*meta.Disk, error)) *MockManager_CreateDisk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteBranch provides a mock function for the type MockManager
+func (_mock *MockManager) DeleteBranch(ctx context.Context, params meta.DeleteBranchParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteBranch")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DeleteBranchParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_DeleteBranch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteBranch'
+type MockManager_DeleteBranch_Call struct {
+	*mock.Call
+}
+
+// DeleteBranch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.DeleteBranchParams
+func (_e *MockManager_Expecter) DeleteBranch(ctx any, params any) *MockManager_DeleteBranch_Call {
+	return &MockManager_DeleteBranch_Call{Call: _e.mock.On("DeleteBranch", ctx, params)}
+}
+
+func (_c *MockManager_DeleteBranch_Call) Run(run func(ctx context.Context, params meta.DeleteBranchParams)) *MockManager_DeleteBranch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.DeleteBranchParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.DeleteBranchParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_DeleteBranch_Call) Return(err error) *MockManager_DeleteBranch_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_DeleteBranch_Call) RunAndReturn(run func(ctx context.Context, params meta.DeleteBranchParams) error) *MockManager_DeleteBranch_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1056,6 +1249,74 @@ func (_c *MockManager_Link_Call) Return(inode *meta.Inode, err error) *MockManag
 }
 
 func (_c *MockManager_Link_Call) RunAndReturn(run func(ctx context.Context, params meta.LinkParams) (*meta.Inode, error)) *MockManager_Link_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListBranches provides a mock function for the type MockManager
+func (_mock *MockManager) ListBranches(ctx context.Context, diskID string) ([]meta.Branch, error) {
+	ret := _mock.Called(ctx, diskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListBranches")
+	}
+
+	var r0 []meta.Branch
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]meta.Branch, error)); ok {
+		return returnFunc(ctx, diskID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []meta.Branch); ok {
+		r0 = returnFunc(ctx, diskID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]meta.Branch)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, diskID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_ListBranches_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListBranches'
+type MockManager_ListBranches_Call struct {
+	*mock.Call
+}
+
+// ListBranches is a helper method to define mock.On call
+//   - ctx context.Context
+//   - diskID string
+func (_e *MockManager_Expecter) ListBranches(ctx any, diskID any) *MockManager_ListBranches_Call {
+	return &MockManager_ListBranches_Call{Call: _e.mock.On("ListBranches", ctx, diskID)}
+}
+
+func (_c *MockManager_ListBranches_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_ListBranches_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_ListBranches_Call) Return(branchs []meta.Branch, err error) *MockManager_ListBranches_Call {
+	_c.Call.Return(branchs, err)
+	return _c
+}
+
+func (_c *MockManager_ListBranches_Call) RunAndReturn(run func(ctx context.Context, diskID string) ([]meta.Branch, error)) *MockManager_ListBranches_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2434,6 +2695,63 @@ func (_c *MockManager_Rmdir_Call) Return(err error) *MockManager_Rmdir_Call {
 }
 
 func (_c *MockManager_Rmdir_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name []byte) error) *MockManager_Rmdir_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Rollback provides a mock function for the type MockManager
+func (_mock *MockManager) Rollback(ctx context.Context, params meta.RollbackParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Rollback")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RollbackParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_Rollback_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Rollback'
+type MockManager_Rollback_Call struct {
+	*mock.Call
+}
+
+// Rollback is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.RollbackParams
+func (_e *MockManager_Expecter) Rollback(ctx any, params any) *MockManager_Rollback_Call {
+	return &MockManager_Rollback_Call{Call: _e.mock.On("Rollback", ctx, params)}
+}
+
+func (_c *MockManager_Rollback_Call) Run(run func(ctx context.Context, params meta.RollbackParams)) *MockManager_Rollback_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.RollbackParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.RollbackParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Rollback_Call) Return(err error) *MockManager_Rollback_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_Rollback_Call) RunAndReturn(run func(ctx context.Context, params meta.RollbackParams) error) *MockManager_Rollback_Call {
 	_c.Call.Return(run)
 	return _c
 }

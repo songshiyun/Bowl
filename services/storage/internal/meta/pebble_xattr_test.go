@@ -265,8 +265,7 @@ func TestPebbleXattrSemantics(t *testing.T) {
 		}
 	}
 	value, err = f.mgr.GetXattr(snapshot, 9, []byte("user.orphan"))
-	require.NoError(t, err)
-	require.Equal(t, []byte("孤儿"), value)
+	require.ErrorIs(t, err, meta.ErrNotFound)
 	require.NoError(t, f.mgr.SetXattr(ctx, meta.SetXattrParams{Ino: 9, Name: name, Value: []byte("孤儿")}))
 	value, err = f.mgr.GetXattr(ctx, 9, name)
 	require.NoError(t, err)

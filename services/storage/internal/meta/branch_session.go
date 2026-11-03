@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -28,7 +27,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 	if params.BranchName != nil {
 		branchName = *params.BranchName
 	}
-	if branchName == "" || branchName == "." || branchName == ".." || strings.ContainsAny(branchName, "/\\\x00") {
+	if validateBranchName(branchName) != nil {
 		return RenewSessionResult{}, ErrInvalidArgument
 	}
 	if !params.ReadOnly && params.CommitID != nil && *params.CommitID != "" {
@@ -37,6 +36,8 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
 		return RenewSessionResult{}, err
 	}
+	m.writeQuotaMu.Lock()
+	defer m.writeQuotaMu.Unlock()
 	var result RenewSessionResult
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
 		raw, ok := q.(interface{ RawDBTX() db.DBTX })
@@ -47,7 +48,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 		if err := lockSession(ctx, conn, params.SessionID); err != nil {
 			return err
 		}
-		control, err := q.GetDiskControlPlane(ctx, diskID)
+		control, err := q.GetDiskControlPlaneForUpdate(ctx, diskID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}

@@ -334,11 +334,10 @@ func TestPebbleDataSparseRangeAndTimestamps(t *testing.T) {
 
 func TestPebbleDataSnapshotOrphans(t *testing.T) {
 	f := newPebbleReadFixture(t)
-	got, err := f.mgr.Read(f.ctx, &meta.ReadRequest{Ino: 9, Size: 20, SessionID: &f.snap})
-	require.NoError(t, err)
-	require.Equal(t, make([]byte, 11), got.Data)
-	require.NoError(t, f.mgr.Fsync(f.ctx, meta.FsyncParams{Ino: 9, SessionID: &f.snap}))
-	require.NoError(t, f.mgr.FsyncDir(f.ctx, meta.FsyncDirParams{Ino: 11, SessionID: &f.snap}))
+	_, err := f.mgr.Read(f.ctx, &meta.ReadRequest{Ino: 9, Size: 20, SessionID: &f.snap})
+	require.ErrorIs(t, err, meta.ErrNotFound)
+	require.ErrorIs(t, f.mgr.Fsync(f.ctx, meta.FsyncParams{Ino: 9, SessionID: &f.snap}), meta.ErrNotFound)
+	require.ErrorIs(t, f.mgr.FsyncDir(f.ctx, meta.FsyncDirParams{Ino: 11, SessionID: &f.snap}), meta.ErrNotFound)
 	_, err = f.mgr.Read(f.ctx, &meta.ReadRequest{Ino: 10, Size: 1, SessionID: &f.snap})
 	require.ErrorIs(t, err, meta.ErrNotFound)
 }

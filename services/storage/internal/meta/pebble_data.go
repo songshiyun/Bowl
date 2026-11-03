@@ -36,13 +36,13 @@ func (m *manager) resolveDataSession(ctx context.Context, fh uint64, paramID *ui
 	return sid, session.managed, nil
 }
 
-func (m *manager) pebbleRead(session pebbleReadSession, req *ReadRequest) (result *ReadResponse, err error) {
-	err = m.withPebbleSession(session, func(store *pebble.DB) error {
+func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req *ReadRequest) (result *ReadResponse, err error) {
+	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, req.Ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		switch inode.Mode & S_IFMT {
@@ -381,12 +381,12 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 	if err != nil {
 		return err
 	}
-	return m.withPebbleSession(session, func(store *pebble.DB) error {
+	return m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
+		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
 		if dir && inode.Mode&S_IFMT != S_IFDIR {

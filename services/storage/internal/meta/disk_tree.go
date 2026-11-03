@@ -221,8 +221,12 @@ func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]u
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
+	return readBranchSizesFromDB(branch.DB())
+}
+
+func readBranchSizesFromDB(store *pebble.DB) (sizes map[uint64]uint64, err error) {
 	lower, upper := pebblekv.InodeRange()
-	iter, err := branch.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	iter, err := store.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +245,7 @@ func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]u
 			return nil, fmt.Errorf("Inode 编号与键不一致")
 		}
 		if inode.Nlink == 0 {
-			_, closer, err := branch.DB().Get(pebblekv.OrphanKey(ino))
+			_, closer, err := store.Get(pebblekv.OrphanKey(ino))
 			if errors.Is(err, pebble.ErrNotFound) {
 				continue
 			}
