@@ -47,6 +47,10 @@ func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
 		return nil, err
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.linkPebbleNode(ctx, sid, params)
+	}
+
 	mutationTracker := m.newDirMutationTracker()
 	defer mutationTracker.done()
 

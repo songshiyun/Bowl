@@ -12,7 +12,7 @@ import (
 // Link 创建硬链接，返回更新后的 Inode 实体元数据与内核缓存超时时长。
 func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRequest]) (*connect.Response[storagev1.LinkResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	inode, err := s.metaManager.Link(ctx, meta.LinkParams{
 		Ino:          req.Msg.GetIno(),

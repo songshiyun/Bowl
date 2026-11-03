@@ -166,24 +166,8 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			_, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
 			return err
 		},
-		"按会话创建节点": func() error {
-			_, err := client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话创建目录": func() error {
-			_, err := client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话创建软链接": func() error {
-			_, err := client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{ParentIno: 1, Name: []byte("x"), Target: []byte("y"), SessionId: proto.Uint64(1)}))
-			return err
-		},
 		"按会话读取软链接": func() error {
 			_, err := client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{Ino: 1, SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话创建硬链接": func() error {
-			_, err := client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: 1, NewParentIno: 1, NewName: []byte("x"), SessionId: proto.Uint64(1)}))
 			return err
 		},
 		"按会话删除目录": func() error {
@@ -266,4 +250,33 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 		})
 	}
+}
+
+func TestSessionCreateAndLinkHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	ctx := context.Background()
+	sid := uint64(41)
+	withSession := mock.MatchedBy(func(ctx context.Context) bool {
+		id, ok := meta.SessionIDFromContext(ctx)
+		return ok && id != nil && *id == sid
+	})
+	inode := sampleTestInode(2, meta.S_IFREG|0o644)
+	mgr.EXPECT().Create(withSession, mock.Anything).Return(&meta.CreateResult{Inode: inode, Fh: 1}, nil).Once()
+	mgr.EXPECT().Mknod(withSession, mock.Anything).Return(inode, nil).Once()
+	mgr.EXPECT().Mkdir(withSession, mock.Anything).Return(inode, nil).Once()
+	mgr.EXPECT().Symlink(withSession, mock.Anything).Return(inode, nil).Once()
+	mgr.EXPECT().Link(withSession, mock.Anything).Return(inode, nil).Once()
+
+	_, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{ParentIno: 1, Name: []byte("create"), Mode: 0o644, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{ParentIno: 1, Name: []byte("node"), Mode: meta.S_IFREG | 0o644, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{ParentIno: 1, Name: []byte("dir"), Mode: 0o755, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{ParentIno: 1, Name: []byte("sym"), Target: []byte("target"), SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: 2, NewParentIno: 1, NewName: []byte("link"), SessionId: &sid}))
+	require.NoError(t, err)
 }
