@@ -199,6 +199,7 @@ type manager struct {
 	crossDirRenameMu      sync.Mutex
 	dirCursorMu           sync.Mutex
 	dirCursors            map[dirCursorKey]dirCursorAnchor
+	pebbleDirCursors      map[pebbleDirCursorKey][]byte
 	dirMutationSeq        map[uint64]uint64
 	inFlightDirMutations  map[uint64]int
 	activeDirReads        map[uint64]*inFlightDirRead
@@ -1274,6 +1275,11 @@ func (m *manager) invalidateDirCursorsBySession(sessionID uint64) {
 	for k, anchor := range m.dirCursors {
 		if anchor.sessionID == sessionID {
 			delete(m.dirCursors, k)
+		}
+	}
+	for key := range m.pebbleDirCursors {
+		if key.sessionID == sessionID {
+			delete(m.pebbleDirCursors, key)
 		}
 	}
 }

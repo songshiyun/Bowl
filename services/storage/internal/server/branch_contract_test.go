@@ -162,10 +162,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	calls := map[string]func() error{
-		"按会话查找": func() error {
-			_, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
-			return err
-		},
 		"按会话创建节点": func() error {
 			_, err := client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
 			return err
@@ -176,10 +172,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 		},
 		"按会话创建软链接": func() error {
 			_, err := client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{ParentIno: 1, Name: []byte("x"), Target: []byte("y"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话读取软链接": func() error {
-			_, err := client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{Ino: 1, SessionId: proto.Uint64(1)}))
 			return err
 		},
 		"按会话创建硬链接": func() error {
@@ -210,14 +202,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			_, err := client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
 			return err
 		},
-		"按会话查询配额": func() error {
-			_, err := client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{Ino: 1, SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话读取属性": func() error {
-			_, err := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: 1, SessionId: proto.Uint64(1)}))
-			return err
-		},
 		"按会话删除": func() error {
 			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), SessionId: proto.Uint64(1)}))
 			return err
@@ -246,14 +230,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			_, err := client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{Ino: 1}))
 			return err
 		},
-		"本地句柄读目录": func() error {
-			_, err := client.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: 1, Limit: 1}))
-			return err
-		},
-		"本地句柄读目录属性": func() error {
-			_, err := client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{Ino: 1, Limit: 1}))
-			return err
-		},
 		"本地句柄预分配": func() error {
 			_, err := client.Fallocate(ctx, connect.NewRequest(&storagev1.FallocateRequest{Ino: 1, Length: 1}))
 			return err
@@ -266,4 +242,37 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 		})
 	}
+}
+
+func TestSessionReadAndReadDirHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	ctx := context.Background()
+	sid := uint64(1)
+	withSession := mock.MatchedBy(func(ctx context.Context) bool {
+		value, ok := meta.SessionIDFromContext(ctx)
+		return ok && value != nil && *value == sid
+	})
+	inode := &meta.Inode{Ino: 1}
+	mgr.EXPECT().Lookup(withSession, uint64(1), []byte("x")).Return(inode, nil).Once()
+	mgr.EXPECT().GetAttr(withSession, uint64(1)).Return(inode, nil).Once()
+	mgr.EXPECT().Readlink(withSession, uint64(1)).Return([]byte("目标"), nil).Once()
+	mgr.EXPECT().StatFS(withSession, uint64(1)).Return(&meta.StatFSResult{}, nil).Once()
+	mgr.EXPECT().ReadDir(withSession, meta.ReadDirParams{Ino: 1, Limit: 1, SessionID: &sid}).Return([]meta.DirEntry{}, nil).Once()
+	mgr.EXPECT().ReadDirPlus(withSession, meta.ReadDirPlusParams{Ino: 1, Limit: 1, SessionID: &sid}).Return([]meta.DirEntryPlus{}, nil).Once()
+
+	_, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("x"), SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	response, err := client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{Ino: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	require.Equal(t, []byte("目标"), response.Msg.Target)
+	_, err = client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{Ino: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: 1, Limit: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{Ino: 1, Limit: 1, SessionId: &sid}))
+	require.NoError(t, err)
 }

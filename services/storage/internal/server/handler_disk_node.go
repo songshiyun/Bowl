@@ -142,7 +142,7 @@ func (s *Server) DeleteDisk(ctx context.Context, req *connect.Request[storagev1.
 // StatFS 查询指定 Inode 所在虚拟磁盘的文件系统统计状态。
 func (s *Server) StatFS(ctx context.Context, req *connect.Request[storagev1.StatFSRequest]) (*connect.Response[storagev1.StatFSResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	res, err := s.metaManager.StatFS(ctx, req.Msg.Ino)
 	if err != nil {
@@ -166,7 +166,7 @@ func (s *Server) StatFS(ctx context.Context, req *connect.Request[storagev1.Stat
 // Lookup 执行单级目录项查找。
 func (s *Server) Lookup(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	inode, err := s.metaManager.Lookup(ctx, req.Msg.ParentIno, req.Msg.Name)
 	if err != nil {
@@ -182,7 +182,7 @@ func (s *Server) Lookup(ctx context.Context, req *connect.Request[storagev1.Look
 // GetAttr 获取指定 Inode 的属性与内核缓存时效。
 func (s *Server) GetAttr(ctx context.Context, req *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	inode, err := s.metaManager.GetAttr(ctx, req.Msg.Ino)
 	if err != nil {
@@ -297,7 +297,7 @@ func (s *Server) Symlink(ctx context.Context, req *connect.Request[storagev1.Sym
 // Readlink 获取符号链接节点指向的目标路径。
 func (s *Server) Readlink(ctx context.Context, req *connect.Request[storagev1.ReadlinkRequest]) (*connect.Response[storagev1.ReadlinkResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	target, err := s.metaManager.Readlink(ctx, req.Msg.Ino)
 	if err != nil {

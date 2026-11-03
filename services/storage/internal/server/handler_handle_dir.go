@@ -182,8 +182,8 @@ func (s *Server) ReleaseDir(ctx context.Context, req *connect.Request[storagev1.
 
 // ReadDir 读取指定目录的子项流（基本条目）。
 func (s *Server) ReadDir(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	msg := req.Msg
 	res, err := s.metaManager.ReadDir(ctx, meta.ReadDirParams{
@@ -209,8 +209,8 @@ func (s *Server) ReadDir(ctx context.Context, req *connect.Request[storagev1.Rea
 
 // ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 func (s *Server) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	msg := req.Msg
 	res, err := s.metaManager.ReadDirPlus(ctx, meta.ReadDirPlusParams{

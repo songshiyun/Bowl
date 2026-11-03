@@ -64,7 +64,7 @@ func (m *manager) validateDirHandle(ctx context.Context, q db.Querier, ino, fh u
 // ReadDir 读取指定目录的子项流（基本条目），支持确定性分页游标与 . / .. 合成。
 func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error) {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
-		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
 		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
 		params.Offset > math.MaxInt64 {
 		return nil, ErrInvalidArgument
@@ -73,13 +73,21 @@ func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry
 		return nil, err
 	}
 
+	view, usePebble, err := m.resolveDirReadSession(ctx, params.Fh, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if usePebble {
+		return m.pebbleReadDir(ctx, view, params.Ino, params.Offset, params.Limit)
+	}
+
 	readID := m.beginDirCursorRead(params.Ino, params.Fh)
 	defer m.endDirCursorRead(readID)
 	startMutationSeq := m.getDirMutationSeq(params.Ino)
 
 	var entries []DirEntry
 	var pendingCursors []pendingDirCursor
-	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+	err = m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
 		dirInode, handle, err := m.validateDirHandleWithHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
 		if err != nil {
 			return err
@@ -245,7 +253,7 @@ func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry
 // ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效，支持确定性分页游标与 . / .. 合成。
 func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error) {
 	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
-		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
 		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
 		params.Offset > math.MaxInt64 {
 		return nil, ErrInvalidArgument
@@ -254,13 +262,21 @@ func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]
 		return nil, err
 	}
 
+	view, usePebble, err := m.resolveDirReadSession(ctx, params.Fh, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if usePebble {
+		return m.pebbleReadDirPlus(ctx, view, params.Ino, params.Offset, params.Limit)
+	}
+
 	readID := m.beginDirCursorRead(params.Ino, params.Fh)
 	defer m.endDirCursorRead(readID)
 	startMutationSeq := m.getDirMutationSeq(params.Ino)
 
 	var entries []DirEntryPlus
 	var pendingCursors []pendingDirCursor
-	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+	err = m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
 		dirInode, handle, err := m.validateDirHandleWithHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
 		if err != nil {
 			return err

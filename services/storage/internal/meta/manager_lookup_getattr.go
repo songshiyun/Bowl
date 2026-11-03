@@ -26,6 +26,10 @@ func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*I
 		return nil, ErrInvalidArgument
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleLookup(ctx, sid, parentIno, name)
+	}
+
 	// 常规目录项单语句无事务外框直查（STARSRC-535）
 	if len(name) > 0 && !isDotOrDotDot(name) {
 		row, err := m.store.LookupEntryWithParent(ctx, db.LookupEntryWithParentParams{
@@ -167,6 +171,10 @@ func (m *manager) GetAttr(ctx context.Context, ino uint64) (*Inode, error) {
 		return nil, ErrInvalidArgument
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleGetAttr(ctx, sid, ino)
+	}
+
 	target, err := m.store.GetInode(ctx, int64(ino))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -193,6 +201,10 @@ func (m *manager) GetAttr(ctx context.Context, ino uint64) (*Inode, error) {
 func (m *manager) Readlink(ctx context.Context, ino uint64) ([]byte, error) {
 	if ino == 0 || ino > math.MaxInt64 {
 		return nil, ErrInvalidArgument
+	}
+
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleReadlink(ctx, sid, ino)
 	}
 
 	row, err := m.store.GetSymlinkTarget(ctx, int64(ino))

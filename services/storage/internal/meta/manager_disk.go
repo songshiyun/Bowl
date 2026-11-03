@@ -533,6 +533,10 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		return nil, fmt.Errorf("%w: ino must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), ino)
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleStatFS(ctx, sid, ino)
+	}
+
 	// 1. 查询目标 Inode（支持已解链但仍打开的孤儿节点 nlink == 0）
 	inode, err := m.store.GetInode(ctx, int64(ino))
 	if err != nil {
@@ -558,6 +562,10 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		return nil, err
 	}
 
+	return statFSForDisk(disk), nil
+}
+
+func statFSForDisk(disk *Disk) *StatFSResult {
 	// 3. 计算容量与 4096 字节块统计信息
 	totalBytes := disk.MaxBytes
 	usedBytes := disk.UsedBytes
@@ -593,5 +601,5 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		Files:      files,
 		Ffree:      0,
 		Namelen:    MaxFileNameBytes,
-	}, nil
+	}
 }
