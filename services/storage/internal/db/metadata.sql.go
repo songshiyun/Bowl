@@ -148,10 +148,15 @@ const createFileAtomic = `-- name: CreateFileAtomic :one
 WITH async_wal AS (
     SELECT set_config('synchronous_commit', 'off', true)
 ),
+managed_session AS (
+    SELECT 1 FROM client_sessions
+    WHERE session_id = $2::bigint AND lease_managed
+),
 locked_parent AS (
     SELECT ino, mode, nlink, gid, root_ino
     FROM inodes
     WHERE inodes.ino = $3::bigint
+      AND NOT EXISTS (SELECT 1 FROM managed_session)
     FOR UPDATE
 ),
 valid_session AS (
@@ -226,6 +231,7 @@ inserted_handle AS (
 )
 SELECT
     CASE
+        WHEN EXISTS (SELECT 1 FROM managed_session) THEN 'branch_session'
         WHEN lp.ino IS NULL THEN 'not_found'
         WHEN (lp.mode & 61440) <> 16384 THEN 'not_dir'
         WHEN lp.nlink = 0 THEN 'not_found'

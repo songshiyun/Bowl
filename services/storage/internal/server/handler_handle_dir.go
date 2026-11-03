@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 
 	"connectrpc.com/connect"
 
@@ -12,7 +13,11 @@ import (
 // Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
 func (s *Server) Create(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 	msg := req.Msg
-	res, err := s.metaManager.Create(ctx, meta.CreateParams{
+	legacyCtx := ctx
+	if msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, msg.SessionId)
+	}
+	params := meta.CreateParams{
 		ParentIno: msg.ParentIno,
 		Name:      msg.Name,
 		Mode:      msg.Mode,
@@ -20,7 +25,11 @@ func (s *Server) Create(ctx context.Context, req *connect.Request[storagev1.Crea
 		GID:       msg.Gid,
 		Flags:     msg.Flags,
 		SessionID: msg.SessionId,
-	})
+	}
+	res, err := s.metaManager.Create(ctx, params)
+	if errors.Is(err, meta.ErrLegacySession) {
+		res, err = s.metaManager.Create(legacyCtx, params)
+	}
 	if err != nil {
 		return nil, toConnectError(err)
 	}

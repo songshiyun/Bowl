@@ -35,6 +35,10 @@ func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 		return nil, ErrInvalidArgument
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.createPebbleNode(ctx, sid, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: modeType | ((params.Mode & PermMask) &^ (params.Umask & PermMask)), uid: params.UID, gid: params.GID, rdev: params.Rdev})
+	}
+
 	rdev := uint32(0)
 	if modeType == S_IFCHR || modeType == S_IFBLK {
 		rdev = params.Rdev
@@ -148,6 +152,10 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 		return nil, ErrInvalidArgument
 	}
 
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.createPebbleNode(ctx, sid, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: S_IFDIR | ((params.Mode & PermMask) &^ (params.Umask & PermMask)), uid: params.UID, gid: params.GID})
+	}
+
 	mutationTracker := m.newDirMutationTracker()
 	defer mutationTracker.done()
 
@@ -259,6 +267,10 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 	}
 	if len(params.Target) > MaxSymlinkTargetBytes {
 		return nil, ErrNameTooLong
+	}
+
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.createPebbleNode(ctx, sid, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: S_IFLNK | 0o777, uid: params.UID, gid: params.GID, target: params.Target})
 	}
 
 	mutationTracker := m.newDirMutationTracker()
@@ -379,11 +391,19 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 	effectivePerm := (params.Mode & PermMask) &^ (params.Umask & (PermMask & 0o777))
 	mode := S_IFREG | effectivePerm
 
+	sid, branchSession, err := createBranchSession(ctx, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if branchSession {
+		return m.pebbleCreateResult(ctx, sid, params, mode)
+	}
+
 	mutationTracker := m.newDirMutationTracker()
 	defer mutationTracker.done()
 
 	var row db.CreateFileAtomicRow
-	err := tx.Retry(ctx, func(attemptCtx context.Context) error {
+	err = tx.Retry(ctx, func(attemptCtx context.Context) error {
 		var callErr error
 		row, callErr = m.store.CreateFileAtomic(attemptCtx, db.CreateFileAtomicParams{
 			Name:      params.Name,
@@ -409,6 +429,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 	}
 
 	switch row.Status {
+	case "branch_session":
+		return m.pebbleCreateResult(ctx, sid, params, mode)
 	case "ok":
 	case "not_found":
 		return nil, ErrNotFound
