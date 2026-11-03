@@ -21,6 +21,7 @@ import (
 	"github.com/starsrc/Aether/pkg/tx"
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
+	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
 // validateEntryName 校验目录项名称合法性。
@@ -84,6 +85,7 @@ type Manager interface {
 	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
 	DeleteDisk(ctx context.Context, diskID string) error
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
+	TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error)
 	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)
 	Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error)
 	CompactChunk(ctx context.Context, ino uint64, indx int64) error
@@ -211,6 +213,11 @@ type manager struct {
 	diskQuotas            map[int64]*diskQuotaState
 	inoRootInos           sync.Map // map[uint64]int64
 	writeQuotaMu          sync.Mutex
+	storageRoot           string
+	pebble                *pebblekv.Manager
+	treeQuotaMu           sync.Mutex
+	treeQuotas            map[string]*TreeQuota
+	treeQuotaRoots        sync.Map // map[int64]*TreeQuota
 }
 
 func (m *manager) markDeferredOrphan(ino int64) {
@@ -378,6 +385,7 @@ func WithSliceIDBatchSize(batchSize int) Option {
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{
 		store:                 store,
+		storageRoot:           config.DefaultDataDir,
 		entryTimeout:          DefaultEntryTimeoutSeconds,
 		attrTimeout:           DefaultAttrTimeoutSeconds,
 		dirEntryTimeout:       DefaultEntryTimeoutSeconds,
@@ -401,7 +409,13 @@ func New(store db.Store, opts ...Option) Manager {
 			opt(m)
 		}
 	}
+	m.pebble = pebblekv.NewManager(m.storageRoot)
 	return m
+}
+
+// WithStorageRoot 设置磁盘分支和快照的存储根目录。
+func WithStorageRoot(root string) Option {
+	return func(m *manager) { m.storageRoot = root }
 }
 
 // allocSliceID 从内存号段分配器领取一个全局唯一 slice_id；当缓存号段耗尽时按步长向底层 Store 批量预取。
@@ -790,6 +804,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 	}
 
 	if metaCfg != nil {
+		opts = append(opts, WithStorageRoot(metaCfg.DataDir()))
 		var atimeMode AtimeMode
 		switch metaCfg.AtimeMode() {
 		case "relatime":
@@ -1275,6 +1290,7 @@ func (m *manager) reclaimUnreferencedOrphansInTx(ctx context.Context, q db.Queri
 		if row.RootIno <= 0 {
 			continue
 		}
+		m.recordLegacyInodeChange(q, row.RootIno, row.Ino, false)
 		agg, ok := quotaDeltas[row.RootIno]
 		if !ok {
 			agg = &quotaDelta{}
@@ -1348,6 +1364,7 @@ func (m *manager) reclaimOrphanIfNoHandles(ctx context.Context, q db.Querier, in
 	m.clearDirCursorsForInos(uint64(inode.Ino))
 
 	if inode.RootIno > 0 {
+		m.recordLegacyInodeChange(q, inode.RootIno, inode.Ino, false)
 		var deltaBytes int64
 		if (uint32(inode.Mode)&S_IFMT) == S_IFREG && inode.Size > 0 {
 			deltaBytes = -inode.Size

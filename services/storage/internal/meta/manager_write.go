@@ -100,14 +100,43 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 		}
 		writtenBlocks = append(writtenBlocks, b)
 	}
+	var tree *TreeQuota
+	if m.hasPool() {
+		var rootIno int64
+		if value, ok := m.inoRootInos.Load(req.Ino); ok {
+			rootIno = value.(int64)
+		} else {
+			inode, err := m.store.GetInode(ctx, int64(req.Ino))
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				cleanupBlocks()
+				return nil, err
+			}
+			if err == nil {
+				rootIno = inode.RootIno
+				m.recordInodeRootIno(req.Ino, rootIno)
+			}
+		}
+		if rootIno > 0 {
+			var err error
+			tree, err = m.treeQuotaForRoot(ctx, rootIno)
+			if err != nil {
+				cleanupBlocks()
+				return nil, err
+			}
+		}
+	}
 
 	// 阶段 2：单语句 CTE 原子提交
 	const tightQuotaThreshold int64 = 64 * 1024 * 1024 // 64 MiB
 	availBytes := m.getWriteQuotaAvailBytes(req.Ino)
-	serializeQuota := availBytes < 0 || availBytes < tightQuotaThreshold || int64(req.Offset)+int64(dataLen) > availBytes
+	serializeQuota := tree != nil || availBytes < 0 || availBytes < tightQuotaThreshold || int64(req.Offset)+int64(dataLen) > availBytes
 	if serializeQuota {
 		m.writeQuotaMu.Lock()
 		defer m.writeQuotaMu.Unlock()
+	}
+	if tree != nil {
+		tree.mu.Lock()
+		defer tree.mu.Unlock()
 	}
 
 	var row db.WriteFileAtomicRow
@@ -116,6 +145,9 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 			return err
 		}
 		qAvail := m.getWriteQuotaAvailBytes(req.Ino)
+		if tree != nil {
+			qAvail = tree.legacyWriteAllowanceLocked(req.Ino)
+		}
 		commitCtx, cancel := context.WithTimeout(context.WithoutCancel(attemptCtx), 30*time.Second)
 		defer cancel()
 		var callErr error
@@ -164,6 +196,11 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	}
 
 	m.recordInodeRootIno(req.Ino, row.RootIno)
+	if tree != nil && row.RootIno > 0 {
+		if err := tree.applyLocked(legacyQuotaBranch, req.Ino, uint64(row.NewSize), true, nil, false); err != nil {
+			return nil, err
+		}
+	}
 	if row.RootIno > 0 {
 		deltaBytes := max(int64(0), row.NewSize-row.OldSize)
 		m.commitDirectQuotaDelta(context.WithoutCancel(ctx), row.RootIno, deltaBytes, 0)

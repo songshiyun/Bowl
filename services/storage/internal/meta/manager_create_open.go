@@ -105,6 +105,7 @@ func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error)
 			if err := m.recordQuotaDelta(ctx, q, parent.RootIno, 0, 1); err != nil {
 				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
 			}
+			m.recordLegacyInodeChange(q, parent.RootIno, newInode.Ino, true)
 		}
 
 		result = m.newInode(newInode)
@@ -217,6 +218,7 @@ func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error)
 			if err := m.recordQuotaDelta(ctx, q, parent.RootIno, 0, 1); err != nil {
 				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
 			}
+			m.recordLegacyInodeChange(q, parent.RootIno, newInode.Ino, true)
 		}
 
 		result = m.newInode(newInode)
@@ -324,6 +326,7 @@ func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, er
 			if err := m.recordQuotaDelta(ctx, q, parent.RootIno, 0, 1); err != nil {
 				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
 			}
+			m.recordLegacyInodeChange(q, parent.RootIno, newInode.Ino, true)
 		}
 
 		result = m.newInode(newInode)
@@ -421,6 +424,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResul
 
 	if row.RootIno > 0 {
 		m.commitDirectQuotaDelta(ctx, row.RootIno, 0, 1)
+		m.recordLegacyInodeChange(nil, row.RootIno, row.Ino, true)
+		m.recordInodeRootIno(uint64(row.Ino), row.RootIno)
 	}
 
 	mutationTracker.track(params.ParentIno)
@@ -534,6 +539,7 @@ func (m *manager) TmpFile(ctx context.Context, params TmpFileParams) (*CreateRes
 			if err := m.recordQuotaDelta(ctx, q, parent.RootIno, 0, 1); err != nil {
 				return fmt.Errorf("increment disk used_inodes for root_ino %d: %w", parent.RootIno, err)
 			}
+			m.recordLegacyInodeChange(q, parent.RootIno, newInode.Ino, true)
 		}
 		m.markDeferredOrphan(newInode.Ino)
 
@@ -579,6 +585,10 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 	}
 	if (params.Flags & O_TMPFILE) != 0 {
 		return nil, ErrInvalidArgument
+	}
+	if (params.Flags&O_TRUNC) != 0 && m.hasPool() {
+		m.writeQuotaMu.Lock()
+		defer m.writeQuotaMu.Unlock()
 	}
 
 	if (params.Flags & O_TRUNC) == 0 {
@@ -683,7 +693,7 @@ func (m *manager) Open(ctx context.Context, params OpenParams) (*OpenResult, err
 				return fmt.Errorf("truncate inode attr for inode %d: %w", inode.Ino, err)
 			}
 			if inode.RootIno > 0 && inode.Size > 0 {
-				if err := m.recordQuotaDelta(ctx, q, inode.RootIno, -inode.Size, 0); err != nil {
+				if err := m.recordLegacySizeChange(ctx, q, inode.RootIno, inode.Ino, uint64(inode.Size), 0); err != nil {
 					return fmt.Errorf("deduct disk used_bytes on open truncate for inode %d: %w", inode.Ino, err)
 				}
 			}

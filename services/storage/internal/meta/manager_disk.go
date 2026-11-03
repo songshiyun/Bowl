@@ -72,9 +72,20 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		Bytes: id,
 		Valid: true,
 	}
+	var commitID uuid.UUID
+	if m.hasPool() {
+		commitID, err = uuid.NewV7()
+		if err != nil {
+			return nil, fmt.Errorf("生成初始快照编号: %w", err)
+		}
+		if err := m.createDiskStorage(id.String(), commitID.String()); err != nil {
+			return nil, errors.Join(fmt.Errorf("初始化磁盘存储: %w", err), m.pebble.RemoveDisk(id.String()))
+		}
+	}
 
 	// 4. 单次读写事务内原子创建根目录 Inode 与 Disk 记录（控制面保持 synchronous_commit = on 同步提交）
 	var createdDisk db.GetDiskRow
+	var branches []byte
 	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
 		rootInode, err := q.CreateRootInode(ctx, db.CreateRootInodeParams{
 			Mode:  int32(S_IFDIR | 0o755),
@@ -103,14 +114,29 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		}
 
 		createdDisk = db.GetDiskRow(row)
+		if m.hasPool() {
+			branches, err = m.registerDiskStorage(ctx, q, createdDisk, commitID)
+			if err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
+		if m.hasPool() {
+			return nil, errors.Join(err, m.pebble.RemoveDisk(id.String()))
+		}
 		return nil, err
 	}
 
 	m.initDiskQuotaOnCreate(createdDisk)
-	return toDomainDisk(createdDisk), nil
+	disk := toDomainDisk(createdDisk)
+	if len(branches) > 0 {
+		if err := setDiskBranches(disk, branches); err != nil {
+			return nil, err
+		}
+	}
+	return disk, nil
 }
 
 // parseDiskID 解析字符串形式的 UUID 为 pgtype.UUID，并拦截非法格式或全零 Nil UUID。
@@ -139,9 +165,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 		}
 		return nil, err
 	}
-	m.syncDiskRowWithQuotaState(&row)
-
-	return toDomainDisk(row), nil
+	return m.diskWithBranches(ctx, row)
 }
 
 // diskPageCursor 定义 ListDisks 游标令牌的序列化载荷。
@@ -233,8 +257,11 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	disks := make([]*Disk, 0, len(rows))
 	for i := range rows {
 		r := db.GetDiskRow(rows[i])
-		m.syncDiskRowWithQuotaState(&r)
-		disks = append(disks, toDomainDisk(r))
+		disk, err := m.diskWithBranches(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		disks = append(disks, disk)
 	}
 
 	return &ListDisksResult{
@@ -264,6 +291,18 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		if err := validateDiskName(*params.Name); err != nil {
 			return nil, err
 		}
+	}
+	if m.hasPool() {
+		m.writeQuotaMu.Lock()
+		defer m.writeQuotaMu.Unlock()
+	}
+	var tree *TreeQuota
+	if m.hasPool() {
+		tree, err = m.TreeQuota(ctx, params.DiskID)
+		if err != nil {
+			return nil, err
+		}
+		tree.mu.Lock()
 	}
 
 	var (
@@ -302,6 +341,9 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 
 		// 缩容水位保护：严禁缩容至当前已用空间以下
 		currentUsedBytes := m.currentDiskUsedBytes(current.RootIno, current.UsedBytes)
+		if tree != nil {
+			currentUsedBytes = max(currentUsedBytes, tree.usage.Bytes)
+		}
 		if params.MaxBytes != nil && *params.MaxBytes < currentUsedBytes {
 			return ErrInvalidShrink
 		}
@@ -321,6 +363,12 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		m.updateDiskQuotaOnUpdate(updatedRow)
 		return nil
 	})
+	if tree != nil {
+		if err == nil {
+			tree.maxBytes = uint64(updatedRow.MaxBytes)
+		}
+		tree.mu.Unlock()
+	}
 	if err != nil {
 		if hasPrevRow {
 			m.updateDiskQuotaOnUpdate(prevRow)
@@ -328,8 +376,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil, err
 	}
 
-	m.syncDiskRowWithQuotaState(&updatedRow)
-	return toDomainDisk(updatedRow), nil
+	return m.diskWithBranches(ctx, updatedRow)
 }
 
 // DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
@@ -340,6 +387,32 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	pgID, err := parseDiskID(diskID)
 	if err != nil {
 		return err
+	}
+	diskID = pgID.String()
+	var tree *TreeQuota
+	var temporaryTree bool
+	if m.hasPool() {
+		m.writeQuotaMu.Lock()
+		defer m.writeQuotaMu.Unlock()
+		m.treeQuotaMu.Lock()
+		if m.treeQuotas == nil {
+			m.treeQuotas = make(map[string]*TreeQuota)
+		}
+		tree = m.treeQuotas[diskID]
+		if tree == nil {
+			tree = NewTreeQuota(0)
+			m.treeQuotas[diskID] = tree
+			temporaryTree = true
+		}
+		tree.mu.Lock()
+		if tree.closed {
+			tree.mu.Unlock()
+			m.treeQuotaMu.Unlock()
+			return ErrNotFound
+		}
+		tree.closed = true
+		tree.mu.Unlock()
+		m.treeQuotaMu.Unlock()
 	}
 
 	var (
@@ -412,8 +485,28 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 
 		return nil
 	})
+	if tree != nil {
+		if err != nil {
+			m.treeQuotaMu.Lock()
+			if temporaryTree {
+				delete(m.treeQuotas, diskID)
+			}
+			tree.mu.Lock()
+			tree.closed = false
+			tree.mu.Unlock()
+			m.treeQuotaMu.Unlock()
+		}
+	}
 	if err != nil {
 		return err
+	}
+	m.treeQuotaMu.Lock()
+	delete(m.treeQuotas, diskID)
+	m.treeQuotaMu.Unlock()
+	if m.hasPool() {
+		if err := m.pebble.RemoveDisk(diskID); err != nil {
+			return fmt.Errorf("清理磁盘存储目录: %w", err)
+		}
 	}
 
 	// 6. 事务成功提交后，主动清理孤儿节点状态、锁等待通道、配额状态与目录游标，并通知锁等待者
@@ -421,6 +514,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	m.finalizeReclaimedOrphans(deletedInos)
 	if rootIno > 0 {
 		m.deleteDiskQuotaState(rootIno)
+		m.treeQuotaRoots.Delete(rootIno)
 		m.clearDirCursorsForInos(uint64(rootIno))
 	}
 	if expiredCount > 0 {
@@ -459,12 +553,14 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		}
 		return nil, fmt.Errorf("get disk by root_ino %d: %w", inode.RootIno, err)
 	}
-	diskRow := db.GetDiskRow(row)
-	m.syncDiskRowWithQuotaState(&diskRow)
+	disk, err := m.diskWithBranches(ctx, db.GetDiskRow(row))
+	if err != nil {
+		return nil, err
+	}
 
 	// 3. 计算容量与 4096 字节块统计信息
-	totalBytes := uint64(diskRow.MaxBytes)
-	usedBytes := uint64(diskRow.UsedBytes)
+	totalBytes := disk.MaxBytes
+	usedBytes := disk.UsedBytes
 
 	var availBytes uint64
 	if totalBytes > usedBytes {
@@ -481,8 +577,8 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	bfree := bavail
 
 	var files uint64
-	if diskRow.UsedInodes > 0 {
-		files = uint64(diskRow.UsedInodes)
+	if disk.UsedInodes > 0 {
+		files = disk.UsedInodes
 	}
 
 	return &StatFSResult{

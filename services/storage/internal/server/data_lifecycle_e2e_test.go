@@ -124,6 +124,9 @@ func scanDataDirFiles(dataDir string) (regularFiles []string, tmpFiles []string,
 			}
 			return walkErr
 		}
+		if d.IsDir() && path == filepath.Join(dataDir, "disks") {
+			return filepath.SkipDir
+		}
 		if !d.IsDir() {
 			if strings.Contains(filepath.Base(path), ".tmp") {
 				tmpFiles = append(tmpFiles, path)

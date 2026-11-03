@@ -486,14 +486,28 @@ type RenewSessionResult struct {
 
 // Disk 描述虚拟磁盘领域实体。
 type Disk struct {
-	DiskID     string
-	Name       string
-	RootIno    uint64
-	MaxBytes   uint64
-	UsedBytes  uint64
-	UsedInodes uint64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	DiskID        string
+	Name          string
+	RootIno       uint64
+	MaxBytes      uint64
+	UsedBytes     uint64
+	UsedInodes    uint64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DefaultBranch string
+	Branches      []Branch
+}
+
+// Branch 描述磁盘中的逻辑分支。
+type Branch struct {
+	BranchID     string
+	DiskID       string
+	Name         string
+	ParentBranch *string
+	ForkCommitID *string
+	HeadCommitID *string
+	State        string
+	CreatedAt    time.Time
 }
 
 // CreateDiskParams 描述创建虚拟磁盘入参。

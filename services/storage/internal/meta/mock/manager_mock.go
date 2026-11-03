@@ -2816,6 +2816,74 @@ func (_c *MockManager_TmpFile_Call) RunAndReturn(run func(ctx context.Context, p
 	return _c
 }
 
+// TreeQuota provides a mock function for the type MockManager
+func (_mock *MockManager) TreeQuota(ctx context.Context, diskID string) (*meta.TreeQuota, error) {
+	ret := _mock.Called(ctx, diskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for TreeQuota")
+	}
+
+	var r0 *meta.TreeQuota
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*meta.TreeQuota, error)); ok {
+		return returnFunc(ctx, diskID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *meta.TreeQuota); ok {
+		r0 = returnFunc(ctx, diskID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.TreeQuota)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, diskID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_TreeQuota_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TreeQuota'
+type MockManager_TreeQuota_Call struct {
+	*mock.Call
+}
+
+// TreeQuota is a helper method to define mock.On call
+//   - ctx context.Context
+//   - diskID string
+func (_e *MockManager_Expecter) TreeQuota(ctx any, diskID any) *MockManager_TreeQuota_Call {
+	return &MockManager_TreeQuota_Call{Call: _e.mock.On("TreeQuota", ctx, diskID)}
+}
+
+func (_c *MockManager_TreeQuota_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_TreeQuota_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_TreeQuota_Call) Return(treeQuota *meta.TreeQuota, err error) *MockManager_TreeQuota_Call {
+	_c.Call.Return(treeQuota, err)
+	return _c
+}
+
+func (_c *MockManager_TreeQuota_Call) RunAndReturn(run func(ctx context.Context, diskID string) (*meta.TreeQuota, error)) *MockManager_TreeQuota_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Unlink provides a mock function for the type MockManager
 func (_mock *MockManager) Unlink(ctx context.Context, parentIno uint64, name []byte) error {
 	ret := _mock.Called(ctx, parentIno, name)

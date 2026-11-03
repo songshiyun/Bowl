@@ -222,6 +222,35 @@ type quotaBufferedQuerier struct {
 	txReservedBytes   map[int64]int64
 	txUnreservedBytes map[int64]int64
 	txInodes          map[int64]int64
+	treeReservations  []*legacyQuotaReservation
+	treeChanges       []legacyInodeChange
+}
+
+type legacyInodeChange struct {
+	quota *TreeQuota
+	ino   uint64
+	live  bool
+}
+
+func (m *manager) recordLegacyInodeChange(q db.Querier, rootIno, ino int64, live bool) {
+	value, ok := m.treeQuotaRoots.Load(rootIno)
+	if !ok || ino <= 0 {
+		return
+	}
+	change := legacyInodeChange{quota: value.(*TreeQuota), ino: uint64(ino), live: live}
+	if bq := quotaTxFromQuerier(q); bq != nil {
+		bq.treeChanges = append(bq.treeChanges, change)
+	} else {
+		change.commit()
+	}
+}
+
+func (c legacyInodeChange) commit() {
+	c.quota.mu.Lock()
+	defer c.quota.mu.Unlock()
+	if !c.quota.closed {
+		_ = c.quota.applyLocked(legacyQuotaBranch, c.ino, 0, c.live, nil, false)
+	}
 }
 
 func (q *quotaBufferedQuerier) RawDBTX() db.DBTX {
@@ -308,6 +337,51 @@ func (m *manager) recordQuotaDelta(ctx context.Context, q db.Querier, rootIno in
 	return nil
 }
 
+func (m *manager) recordLegacySizeChange(ctx context.Context, q db.Querier, rootIno, ino int64, oldSize, newSize uint64) error {
+	delta := int64(newSize) - int64(oldSize)
+	if delta > 0 {
+		if err := m.reserveQuotaBytes(ctx, q, rootIno, delta); err != nil {
+			return err
+		}
+	} else if delta < 0 {
+		if err := m.recordQuotaDelta(ctx, q, rootIno, delta, 0); err != nil {
+			return err
+		}
+	}
+	bq := quotaTxFromQuerier(q)
+	if bq == nil || !m.hasPool() {
+		return nil
+	}
+	tree, err := m.treeQuotaForRoot(ctx, rootIno)
+	if err != nil || tree == nil {
+		return err
+	}
+	reservation, err := tree.reserveLegacy(uint64(ino), oldSize, newSize)
+	if err != nil {
+		return err
+	}
+	bq.treeReservations = append(bq.treeReservations, reservation)
+	return nil
+}
+
+func (m *manager) treeQuotaForRoot(ctx context.Context, rootIno int64) (*TreeQuota, error) {
+	if value, ok := m.treeQuotaRoots.Load(rootIno); ok {
+		return value.(*TreeQuota), nil
+	}
+	row, err := m.store.GetDiskByRootIno(ctx, rootIno)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	control, err := m.store.GetDiskControlPlane(ctx, row.DiskID)
+	if err != nil {
+		return nil, err
+	}
+	return m.loadTreeQuota(ctx, db.GetDiskRow(row), control)
+}
+
 func (q *quotaBufferedQuerier) rollback() {
 	if len(q.txReservedBytes) > 0 {
 		q.m.quotaMu.Lock()
@@ -321,10 +395,15 @@ func (q *quotaBufferedQuerier) rollback() {
 	clear(q.txReservedBytes)
 	clear(q.txUnreservedBytes)
 	clear(q.txInodes)
+	for _, reservation := range q.treeReservations {
+		reservation.finish(false)
+	}
+	q.treeReservations = nil
+	q.treeChanges = nil
 }
 
 func (q *quotaBufferedQuerier) commit() {
-	if len(q.txReservedBytes) == 0 && len(q.txUnreservedBytes) == 0 && len(q.txInodes) == 0 {
+	if len(q.txReservedBytes) == 0 && len(q.txUnreservedBytes) == 0 && len(q.txInodes) == 0 && len(q.treeReservations) == 0 && len(q.treeChanges) == 0 {
 		return
 	}
 
@@ -359,6 +438,14 @@ func (q *quotaBufferedQuerier) commit() {
 	clear(q.txReservedBytes)
 	clear(q.txUnreservedBytes)
 	clear(q.txInodes)
+	for _, reservation := range q.treeReservations {
+		reservation.finish(true)
+	}
+	q.treeReservations = nil
+	for _, change := range q.treeChanges {
+		change.commit()
+	}
+	q.treeChanges = nil
 }
 
 func (m *manager) commitDirectQuotaDelta(ctx context.Context, rootIno int64, deltaBytes int64, deltaInodes int64) {
