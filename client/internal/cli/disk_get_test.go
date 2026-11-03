@@ -190,3 +190,43 @@ func TestDiskGet_Errors(t *testing.T) {
 		require.Contains(t, stderr.String(), "获取磁盘元数据失败")
 	})
 }
+
+func TestDiskGet_BranchSummary(t *testing.T) {
+	id, head := uuid.NewString(), uuid.NewString()
+	defaultBranch, parent := "main", "main"
+	mockSrv := &cliMockStorageHandler{getDiskFn: func(_ context.Context, _ *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
+		return connect.NewResponse(&storagev1.GetDiskResponse{Disk: &storagev1.Disk{
+			DiskId: id, MaxBytes: 1000, UsedBytes: 250, DefaultBranch: &defaultBranch,
+			Branches: []*storagev1.Branch{
+				{Name: "main", HeadCommitId: &head, State: storagev1.BranchState_BRANCH_STATE_NORMAL},
+				{Name: "B", ParentBranch: &parent, HeadCommitId: &head, State: storagev1.BranchState_BRANCH_STATE_MERGING},
+			},
+		}}), nil
+	}}
+	endpoint := setupTestStorageServer(t, mockSrv)
+	code, out, errOut := runVersionCLI("disk", "get", id, "--endpoint", endpoint)
+	require.Equal(t, 0, code, errOut)
+	require.Contains(t, out, "Used Bytes:   250")
+	require.Contains(t, out, "Usage:        25.00%")
+	require.Contains(t, out, "Default Branch: main")
+	require.Contains(t, out, "Branches:       2")
+	require.Contains(t, out, "main@"+head+"[NORMAL]")
+	require.Contains(t, out, "B@"+head+"[MERGING] <- main")
+	code, out, errOut = runVersionCLI("disk", "get", id, "--endpoint", endpoint, "--json")
+	require.Equal(t, 0, code, errOut)
+	var result struct {
+		UsedBytes     uint64 `json:"used_bytes"`
+		DefaultBranch string `json:"default_branch"`
+		Branches      []struct {
+			Name   string `json:"name"`
+			Parent string `json:"parent_branch"`
+			State  string `json:"state"`
+		} `json:"branches"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	require.Equal(t, uint64(250), result.UsedBytes)
+	require.Equal(t, "main", result.DefaultBranch)
+	require.Len(t, result.Branches, 2)
+	require.Equal(t, "main", result.Branches[1].Parent)
+	require.Equal(t, "MERGING", result.Branches[1].State)
+}
