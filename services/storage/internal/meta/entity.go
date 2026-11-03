@@ -611,6 +611,34 @@ type MergeResult struct {
 	Conflicts     []MergeConflict
 }
 
+// DiffChangeType 表示路径的变更类型。
+type DiffChangeType int32
+
+const (
+	DiffChangeTypeUnspecified DiffChangeType = 0
+	DiffChangeTypeAdded       DiffChangeType = 1
+	DiffChangeTypeModified    DiffChangeType = 2
+	DiffChangeTypeDeleted     DiffChangeType = 3
+	DiffChangeTypeRenamed     DiffChangeType = 4
+)
+
+// DiffParams 指定待比较的磁盘和版本。
+type DiffParams struct {
+	DiskID  string
+	FromRef string
+	ToRef   string
+}
+
+// DiffEntry 描述路径、属性及变更的数据块。
+type DiffEntry struct {
+	ChangeType           DiffChangeType
+	Path                 string
+	OldPath              string
+	OldAttr              *Inode
+	NewAttr              *Inode
+	ModifiedBlockIndices []uint64
+}
+
 // CreateDiskParams 描述创建虚拟磁盘入参。
 type CreateDiskParams struct {
 	Name     string

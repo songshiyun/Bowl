@@ -114,10 +114,6 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 			_, err := client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: "main"}))
 			return err
 		},
-		"Diff": func() error {
-			_, err := client.Diff(ctx, connect.NewRequest(&storagev1.DiffRequest{DiskId: disk, FromRef: "main", ToRef: "dev"}))
-			return err
-		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -129,6 +125,34 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 	_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: "bad", Name: "dev"}))
 	require.Error(t, err)
 	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestDiffHandler(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	const disk = "11111111-1111-7111-8111-111111111111"
+	old := sampleTestInode(2, meta.S_IFREG|0o600)
+	newAttr := sampleTestInode(2, meta.S_IFREG|0o644)
+	old.Attr.Size, newAttr.Attr.Size = 3, 7
+	mgr.EXPECT().Diff(mock.Anything, meta.DiffParams{DiskID: disk, FromRef: "main", ToRef: "dev"}).Return([]meta.DiffEntry{{
+		ChangeType: meta.DiffChangeTypeRenamed, Path: "dir/new", OldPath: "old", OldAttr: old, NewAttr: newAttr, ModifiedBlockIndices: []uint64{0, 3},
+	}}, nil).Once()
+	response, err := client.Diff(context.Background(), connect.NewRequest(&storagev1.DiffRequest{DiskId: disk, FromRef: "main", ToRef: "dev"}))
+	require.NoError(t, err)
+	require.Len(t, response.Msg.Entries, 1)
+	entry := response.Msg.Entries[0]
+	require.Equal(t, storagev1.DiffChangeType_DIFF_CHANGE_TYPE_RENAMED, entry.ChangeType)
+	require.Equal(t, "dir/new", entry.Path)
+	require.Equal(t, "old", entry.OldPath)
+	require.Equal(t, uint64(3), entry.OldAttr.Size)
+	require.Equal(t, uint64(7), entry.NewAttr.Size)
+	require.Equal(t, []uint64{0, 3}, entry.ModifiedBlockIndices)
+	_, err = client.Diff(context.Background(), connect.NewRequest(&storagev1.DiffRequest{DiskId: "bad", FromRef: "main", ToRef: "dev"}))
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	mgr.EXPECT().Diff(mock.Anything, meta.DiffParams{DiskID: disk, FromRef: "main", ToRef: "missing"}).Return(nil, meta.ErrNotFound).Once()
+	_, err = client.Diff(context.Background(), connect.NewRequest(&storagev1.DiffRequest{DiskId: disk, FromRef: "main", ToRef: "missing"}))
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
 }
 
 func TestSessionTopologyAndReclaimHandlers(t *testing.T) {

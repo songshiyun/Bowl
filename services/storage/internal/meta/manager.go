@@ -92,6 +92,7 @@ type Manager interface {
 	Commit(ctx context.Context, params CommitParams) (*CommitInfo, error)
 	Merge(ctx context.Context, params MergeParams) (*MergeResult, error)
 	Rollback(ctx context.Context, params RollbackParams) error
+	Diff(ctx context.Context, params DiffParams) ([]DiffEntry, error)
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error)
 	Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error)
