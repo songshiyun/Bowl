@@ -32,6 +32,31 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		return st
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	var source, target uint64
+	var targetAttr *storagev1.Inode
+	if fs.handles.AnyOpen() {
+		old, oldStatus := fs.lookupInode(cancel, input.NodeId, oldName)
+		if oldStatus != fuse.OK {
+			return oldStatus
+		}
+		source = fs.ToKernelIno(old.inode.GetIno())
+		cached, targetStatus := fs.lookupInode(cancel, input.Newdir, newName)
+		if targetStatus != fuse.OK && targetStatus != fuse.ENOENT {
+			return targetStatus
+		}
+		if targetStatus == fuse.OK {
+			targetAttr = cached.inode
+			target = fs.ToKernelIno(targetAttr.GetIno())
+		}
+	} else {
+		source, _ = fs.cache.entry(input.NodeId, oldName)
+		target, _ = fs.cache.entry(input.Newdir, newName)
+	}
+	targetOpen := target != 0 && fs.handles.IsOpen(target)
+	sid := fs.currentSession()
+
 	var protoFlags uint32
 	if (input.Flags & renameNoReplace) != 0 {
 		protoFlags |= 0x1
@@ -51,15 +76,28 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 	defer cancelFunc()
 
 	_, err := fs.client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{
-		OldParentIno: oldParentIno,
-		OldName:      []byte(oldName),
-		NewParentIno: newParentIno,
-		NewName:      []byte(newName),
-		Flags:        protoFlags,
+		OldParentIno:       oldParentIno,
+		OldName:            []byte(oldName),
+		NewParentIno:       newParentIno,
+		NewName:            []byte(newName),
+		Flags:              protoFlags,
+		SessionId:          sid,
+		TargetOpenInClient: &targetOpen,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.invalidateDir(input.Newdir)
+	if source != 0 {
+		fs.cache.invalidateInode(source)
+	}
+	if target != 0 && target != source {
+		fs.cache.invalidateInode(target)
+	}
+	if targetOpen && target != source && input.Flags&renameExchange == 0 && targetAttr != nil && targetAttr.GetAttr().GetNlink() == 1 {
+		fs.markOrphan(target, sid)
+	}
 	return fuse.OK
 }

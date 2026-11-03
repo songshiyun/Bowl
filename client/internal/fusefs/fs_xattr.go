@@ -21,6 +21,8 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -30,6 +32,7 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 		Value: data,
 		Flags: input.Flags,
 	}))
+	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
@@ -123,6 +126,8 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -130,6 +135,7 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 		Ino:  ino,
 		Name: []byte(attr),
 	}))
+	fs.cache.invalidateInode(header.NodeId)
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}

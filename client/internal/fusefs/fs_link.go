@@ -20,11 +20,15 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(linkName),
 		Target:    []byte(pointedTo),
 		Uid:       header.Uid,
@@ -34,6 +38,13 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(header.NodeId)
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, header.NodeId, linkName, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -66,6 +77,11 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return st
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	if status, local := fs.linkTmp(cancel, input, filename, out); local {
+		return status
+	}
 	srcIno, status := fs.ToServerIno(input.Oldnodeid)
 	if status != fuse.OK {
 		return status
@@ -76,6 +92,7 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return status
 	}
 
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -83,11 +100,15 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		Ino:          srcIno,
 		NewParentIno: newParentIno,
 		NewName:      []byte(filename),
+		SessionId:    fs.currentSession(),
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.putEntryAt(epoch, input.NodeId, filename, input.Oldnodeid)
+	fs.cache.putInodeAt(epoch, input.Oldnodeid, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }

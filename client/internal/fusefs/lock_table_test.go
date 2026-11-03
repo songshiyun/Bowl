@@ -46,9 +46,9 @@ func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
 	}
 	client := setupLockTestRPCServer(t, server)
 	sessions := setupTestSessionManager(t, client)
-	sessions.BindHandle(11, sessions.CurrentSessionID())
-	sessions.BindHandle(12, sessions.CurrentSessionID())
 	fs := fusefs.NewRawFS(client, sessions, fusefs.Config{RootIno: 1001})
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2001, 11, syscall.O_RDWR, false))
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2001, 12, syscall.O_RDWR, false))
 	t.Cleanup(fs.OnUnmount)
 
 	first := &fuse.LkIn{
@@ -72,6 +72,9 @@ func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
 func TestLocalPOSIXLockRangesAndConversions(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	request := func(owner, start, end uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: owner, Owner: owner,
 			Lk: fuse.FileLock{Start: start, End: end, Typ: typ, Pid: 10}}
@@ -100,6 +103,9 @@ func TestLocalPOSIXLockRangesAndConversions(t *testing.T) {
 func TestLocalSetLkwWaitsAndWakes(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2, 3} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	first := &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: 1, Owner: 1,
 		Lk: fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_RDLCK)}}
 	second := *first
@@ -130,6 +136,9 @@ func TestLocalSetLkwWaitsAndWakes(t *testing.T) {
 func TestWaitingWriterPreventsNewReadersFromOvertaking(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2, 3} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	read := func(owner uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: owner, Owner: owner,
 			Lk: fuse.FileLock{Start: 0, End: 10, Typ: typ}}
@@ -151,6 +160,9 @@ func TestWaitingWriterPreventsNewReadersFromOvertaking(t *testing.T) {
 func TestLocalPOSIXDeadlockCycle(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2, 3} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	req := func(owner, start, end uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: owner, Owner: owner,
 			Lk: fuse.FileLock{Start: start, End: end, Typ: typ}}
@@ -186,6 +198,9 @@ func TestLocalPOSIXDeadlockCycle(t *testing.T) {
 func TestLocalFlockNamespaceAndConversion(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{11, 12} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	read, write := uint32(syscall.F_RDLCK), uint32(syscall.F_WRLCK)
 	posix := &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: 11, Owner: 1,
 		Lk: fuse.FileLock{Start: 1, End: 2, Typ: write}}
@@ -208,9 +223,11 @@ func TestLocalFlockNamespaceAndConversion(t *testing.T) {
 
 	fallback := flock1
 	fallback.NodeId, fallback.Fh, fallback.Owner = 3, 0, 55
-	require.Equal(t, fuse.OK, fs.SetLk(nil, &fallback))
+	table := fusefs.NewLockTable()
+	defer table.Close()
+	require.Equal(t, fuse.OK, table.SetLk(&fallback))
 	fallback.Owner = 56
-	require.Equal(t, fuse.EAGAIN, fs.SetLk(nil, &fallback))
+	require.Equal(t, fuse.EAGAIN, table.SetLk(&fallback))
 }
 
 func TestPOSIXLockRespectsKnownOpenMode(t *testing.T) {
@@ -222,25 +239,23 @@ func TestPOSIXLockRespectsKnownOpenMode(t *testing.T) {
 		},
 		createFn: func(_ context.Context, _ *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 			nextFH++
-			return connect.NewResponse(&storagev1.CreateResponse{Fh: nextFH, Inode: &storagev1.Inode{Ino: 2}}), nil
+			return connect.NewResponse(&storagev1.CreateResponse{Fh: nextFH, Inode: &storagev1.Inode{Ino: 2, Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}}}), nil
 		},
 	}
 	client := setupHandleTestRPCServer(t, srv)
 	sessions := setupTestSessionManager(t, client)
 	fs := fusefs.NewRawFS(client, sessions, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
-	var readHandle, writeHandle, otherHandle fuse.OpenOut
+	var readHandle, writeHandle fuse.OpenOut
 	require.Equal(t, fuse.OK, fs.Open(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: 2}, Flags: syscall.O_RDONLY}, &readHandle))
 	require.Equal(t, fuse.OK, fs.Open(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: 2}, Flags: syscall.O_WRONLY}, &writeHandle))
-	require.Equal(t, fuse.OK, fs.Open(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: 2}, Flags: syscall.O_ACCMODE}, &otherHandle))
+	require.Equal(t, fuse.EINVAL, fs.Open(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: 2}, Flags: syscall.O_ACCMODE}, &fuse.OpenOut{}))
 	request := func(fh uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: fh, Owner: fh,
 			Lk: fuse.FileLock{Start: fh, End: fh, Typ: typ}}
 	}
 	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(readHandle.Fh, uint32(syscall.F_WRLCK))))
 	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(writeHandle.Fh, uint32(syscall.F_RDLCK))))
-	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(otherHandle.Fh, uint32(syscall.F_RDLCK))))
-	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(otherHandle.Fh, uint32(syscall.F_WRLCK))))
 	var created fuse.CreateOut
 	require.Equal(t, fuse.OK, fs.Create(nil, &fuse.CreateIn{InHeader: fuse.InHeader{NodeId: 1}, Flags: syscall.O_CREAT | syscall.O_RDONLY}, "file", &created))
 	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(created.Fh, uint32(syscall.F_WRLCK))))
@@ -252,16 +267,17 @@ func TestPOSIXLockRespectsKnownOpenMode(t *testing.T) {
 	require.Equal(t, fuse.OK, fs.SetLk(nil, request(readHandle.Fh, uint32(syscall.F_RDLCK))))
 	require.Equal(t, fuse.OK, fs.SetLk(nil, request(writeHandle.Fh, uint32(syscall.F_WRLCK))))
 	require.Equal(t, fuse.OK, fs.SetLk(nil, request(readHandle.Fh, uint32(syscall.F_UNLCK))))
-	sessions.BindHandle(200, sessions.CurrentSessionID())
+	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request(200, uint32(syscall.F_WRLCK))))
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, 200, syscall.O_RDWR, false))
 	require.Equal(t, fuse.OK, fs.SetLk(nil, request(200, uint32(syscall.F_WRLCK))))
 }
 
 func TestFlushAndReleaseCleanOnlyTheirLockNamespace(t *testing.T) {
 	client := setupHandleTestRPCServer(t, &handleMockStorageServer{})
 	sessions := setupTestSessionManager(t, client)
-	sessions.BindHandle(11, sessions.CurrentSessionID())
-	sessions.BindHandle(12, sessions.CurrentSessionID())
 	fs := fusefs.NewRawFS(client, sessions, fusefs.Config{RootIno: 1})
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, 11, syscall.O_RDWR, false))
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, 12, syscall.O_RDWR, false))
 	t.Cleanup(fs.OnUnmount)
 	request := func(fh, owner uint64, flags uint32, start uint64) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: fh, Owner: owner, LkFlags: flags,
@@ -371,6 +387,9 @@ func TestFlushCancelsSameOwnerWaiter(t *testing.T) {
 func TestLocalPOSIXThreeOwnerDeadlockCycle(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2, 3, 9} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	req := func(owner, start uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: owner, Owner: owner,
 			Lk: fuse.FileLock{Start: start, End: start + 9, Typ: typ}}
@@ -418,6 +437,9 @@ func TestLocalPOSIXThreeOwnerDeadlockCycle(t *testing.T) {
 func TestReleaseWakesFlockWaiterAndFallbackOwner(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{11, 12, 13} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	flock := func(ino, fh, owner uint64, typ uint32) *fuse.LkIn {
 		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: ino}, Fh: fh, Owner: owner,
 			LkFlags: fuse.FUSE_LK_FLOCK, Lk: fuse.FileLock{Typ: typ}}
@@ -438,9 +460,11 @@ func TestReleaseWakesFlockWaiterAndFallbackOwner(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Release 后 flock 等待者未被唤醒")
 	}
-	require.Equal(t, fuse.OK, fs.SetLk(nil, flock(3, 0, 7, uint32(syscall.F_WRLCK))))
-	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 3}, Fh: 0, LockOwner: 7})
-	require.Equal(t, fuse.OK, fs.SetLk(nil, flock(3, 0, 8, uint32(syscall.F_WRLCK))))
+	table := fusefs.NewLockTable()
+	defer table.Close()
+	require.Equal(t, fuse.OK, table.SetLk(flock(3, 0, 7, uint32(syscall.F_WRLCK))))
+	table.ReleaseFlockByFH(3, 0, 7)
+	require.Equal(t, fuse.OK, table.SetLk(flock(3, 0, 8, uint32(syscall.F_WRLCK))))
 }
 
 func TestConcurrentPOSIXWritersRemainExclusive(t *testing.T) {
@@ -483,8 +507,11 @@ func TestConcurrentPOSIXWritersRemainExclusive(t *testing.T) {
 func TestDeadlockGraphsDoNotMixLockNamespaces(t *testing.T) {
 	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
+	for _, fh := range []uint64{1, 2, 3} {
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, fh, syscall.O_RDWR, false))
+	}
 	req := func(owner, start uint64, typ, flags uint32) *fuse.LkIn {
-		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Owner: owner, LkFlags: flags,
+		return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: owner, Owner: owner, LkFlags: flags,
 			Lk: fuse.FileLock{Start: start, End: start + 9, Typ: typ}}
 	}
 	read, write, unlock := uint32(syscall.F_RDLCK), uint32(syscall.F_WRLCK), uint32(syscall.F_UNLCK)
@@ -527,7 +554,7 @@ func TestRawFSLockRejectsInvalidRequests(t *testing.T) {
 	request := &fuse.LkIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: 10, Owner: 1,
 		Lk: fuse.FileLock{Start: 0, End: 10, Typ: uint32(syscall.F_WRLCK)}}
 	require.Equal(t, fuse.EBADF, fs.SetLk(nil, request))
-	sessions.BindHandle(10, sessions.CurrentSessionID())
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(2, 10, syscall.O_RDWR, false))
 	request.Lk.Typ = 999
 	require.Equal(t, fuse.EINVAL, fs.SetLk(nil, request))
 	request.Lk.Typ, request.Lk.Start, request.Lk.End = uint32(syscall.F_WRLCK), 20, 10

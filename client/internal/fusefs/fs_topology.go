@@ -18,11 +18,16 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
@@ -32,6 +37,13 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(input.NodeId)
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -47,11 +59,16 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
@@ -62,6 +79,13 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(input.NodeId)
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -77,17 +101,27 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
+	child, _ := fs.cache.entry(header.NodeId, name)
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(header.NodeId)
+	if child != 0 {
+		fs.cache.invalidateInode(child)
+		fs.cache.invalidateDir(child)
+	}
 	return fuse.OK
 }
 
@@ -102,16 +136,40 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		return status
 	}
 
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
+	child, _ := fs.cache.entry(header.NodeId, name)
+	var inode *storagev1.Inode
+	if fs.handles.AnyOpen() {
+		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		if st != fuse.OK {
+			return st
+		}
+		inode = cached.inode
+		child = fs.ToKernelIno(inode.GetIno())
+	}
+	open := child != 0 && fs.handles.IsOpen(child)
+	sid := fs.currentSession()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
-		ParentIno: parentIno,
-		Name:      []byte(name),
+		ParentIno:    parentIno,
+		Name:         []byte(name),
+		OpenInClient: &open,
+		SessionId:    sid,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDir(header.NodeId)
+	if child != 0 {
+		fs.cache.invalidateInode(child)
+	}
+	if open && inode != nil && inode.GetAttr().GetNlink() == 1 {
+		fs.markOrphan(child, sid)
+	}
 	return fuse.OK
 }

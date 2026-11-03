@@ -287,7 +287,7 @@ func TestRawFS_SetAttr(t *testing.T) {
 		mgr := newTestSessionManagerForSetAttr(t, client)
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
 
-		mgr.BindHandle(42, mgr.CurrentSessionID())
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2002, 42, syscall.O_RDWR, false))
 
 		in := &fuse.SetAttrIn{
 			SetAttrInCommon: fuse.SetAttrInCommon{
@@ -301,8 +301,7 @@ func TestRawFS_SetAttr(t *testing.T) {
 		status := fs.SetAttr(nil, in, &out)
 		require.Equal(t, fuse.OK, status)
 		require.NotNil(t, capturedReq)
-		require.NotNil(t, capturedReq.Fh)
-		require.Equal(t, uint64(42), capturedReq.GetFh())
+		require.Nil(t, capturedReq.Fh)
 		require.NotNil(t, capturedReq.SessionId)
 		require.Equal(t, mgr.CurrentSessionID(), capturedReq.GetSessionId())
 	})
@@ -421,7 +420,7 @@ func TestRawFS_Fallocate(t *testing.T) {
 		client := setupSetAttrFallocateRPCServer(t, &mockSetAttrFallocateServer{})
 		mgr := newTestSessionManagerForSetAttr(t, client)
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
-		mgr.BindHandle(42, mgr.CurrentSessionID())
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2002, 42, syscall.O_RDWR, false))
 
 		unsupportedModes := []uint32{
 			unix.FALLOC_FL_PUNCH_HOLE,                                // 单独 0x02 未带 KEEP_SIZE
@@ -461,7 +460,7 @@ func TestRawFS_Fallocate(t *testing.T) {
 			client := setupSetAttrFallocateRPCServer(t, srv)
 			mgr := newTestSessionManagerForSetAttr(t, client)
 			fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
-			mgr.BindHandle(42, mgr.CurrentSessionID())
+			require.Equal(t, fuse.OK, fs.PrepareTestHandle(2002, 42, syscall.O_RDWR, false))
 
 			status := fs.Fallocate(nil, &fuse.FallocateIn{
 				InHeader: fuse.InHeader{NodeId: 2002},
@@ -473,7 +472,7 @@ func TestRawFS_Fallocate(t *testing.T) {
 			require.Equal(t, fuse.OK, status)
 			require.NotNil(t, capturedReq)
 			require.Equal(t, uint64(2002), capturedReq.GetIno())
-			require.Equal(t, uint64(42), capturedReq.GetFh())
+			require.Zero(t, capturedReq.GetFh())
 			require.Equal(t, uint64(8192), capturedReq.GetOffset())
 			require.Equal(t, uint64(16384), capturedReq.GetLength())
 			require.Equal(t, mode, capturedReq.GetMode())
@@ -482,29 +481,13 @@ func TestRawFS_Fallocate(t *testing.T) {
 		}
 	})
 
-	t.Run("root inode 1 maps to RootIno in Fallocate", func(t *testing.T) {
-		var capturedReq *storagev1.FallocateRequest
-		srv := &mockSetAttrFallocateServer{
-			fallocateFn: func(ctx context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
-				capturedReq = req.Msg
-				return connect.NewResponse(&storagev1.FallocateResponse{}), nil
-			},
-		}
-		client := setupSetAttrFallocateRPCServer(t, srv)
+	t.Run("句柄节点不匹配时拒绝 Fallocate", func(t *testing.T) {
+		client := setupSetAttrFallocateRPCServer(t, &mockSetAttrFallocateServer{})
 		mgr := newTestSessionManagerForSetAttr(t, client)
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
-		mgr.BindHandle(10, mgr.CurrentSessionID())
-
-		status := fs.Fallocate(nil, &fuse.FallocateIn{
-			InHeader: fuse.InHeader{NodeId: 1}, // 根目录
-			Fh:       10,
-			Offset:   0,
-			Length:   4096,
-			Mode:     0,
-		})
-		require.Equal(t, fuse.OK, status)
-		require.NotNil(t, capturedReq)
-		require.Equal(t, uint64(1001), capturedReq.GetIno())
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2002, 10, syscall.O_RDWR, false))
+		status := fs.Fallocate(nil, &fuse.FallocateIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: 10, Length: 4096})
+		require.Equal(t, fuse.EBADF, status)
 	})
 
 	t.Run("server error mapped to fuse.Status", func(t *testing.T) {
@@ -516,7 +499,7 @@ func TestRawFS_Fallocate(t *testing.T) {
 		client := setupSetAttrFallocateRPCServer(t, srv)
 		mgr := newTestSessionManagerForSetAttr(t, client)
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
-		mgr.BindHandle(42, mgr.CurrentSessionID())
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(2002, 42, syscall.O_RDWR, false))
 
 		status := fs.Fallocate(nil, &fuse.FallocateIn{
 			InHeader: fuse.InHeader{NodeId: 2002},
