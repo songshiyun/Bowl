@@ -2,14 +2,9 @@ package fusefs
 
 import (
 	"context"
-	"math"
 	"syscall"
 
-	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
-
-	"github.com/starsrc/bowl/client/internal/rpc"
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // 锁类型协议常量（对应 storagev1.FileLock.type）
@@ -49,18 +44,10 @@ func ToHostLockType(protoType uint32) (uint32, fuse.Status) {
 	}
 }
 
-// NormalizeLockRange 归一化并校验锁区间。
-// lkFlags & 0x1 == 1 时为 BSD flock，强制归一化为整文件区间 [0, math.MaxInt64]；
-// lkFlags & 0x1 == 0 时为 POSIX 记录锁：若 start > math.MaxInt64 返回 EINVAL，若 end > math.MaxInt64 钳位为 math.MaxInt64；若 end < start 返回 EINVAL。
+// NormalizeLockRange 校验 POSIX 区间，并将 flock 归一化为整个文件。
 func NormalizeLockRange(lkFlags uint32, start, end uint64) (uint64, uint64, fuse.Status) {
-	if (lkFlags & 0x1) == 1 {
-		return 0, math.MaxInt64, fuse.OK
-	}
-	if start > math.MaxInt64 {
-		return 0, 0, fuse.EINVAL
-	}
-	if end > math.MaxInt64 {
-		end = math.MaxInt64
+	if lkFlags&fuse.FUSE_LK_FLOCK != 0 {
+		return 0, ^uint64(0), fuse.OK
 	}
 	if end < start {
 		return 0, 0, fuse.EINVAL
@@ -68,164 +55,55 @@ func NormalizeLockRange(lkFlags uint32, start, end uint64) (uint64, uint64, fuse
 	return start, end, fuse.OK
 }
 
-// GetLk 实现探测冲突文件锁，对应 Linux FUSE FUSE_GETLK (31) 协议。
-func (fs *RawFS) GetLk(cancel <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fuse.Status {
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
-		return status
+// prepareLock 校验句柄和锁参数，并归一化锁区间。
+func (fs *RawFS) prepareLock(input *fuse.LkIn, get bool) (fuse.LkIn, fuse.Status) {
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
+		return fuse.LkIn{}, status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
-		return status
-	}
-
-	protoType, status := ToProtoLockType(input.Lk.Typ)
-	if status != fuse.OK {
-		return status
-	}
-
-	lkFlags := input.LkFlags & 0x1
-	start, end, status := NormalizeLockRange(lkFlags, input.Lk.Start, input.Lk.End)
-	if status != fuse.OK {
-		return status
-	}
-
-	ctx, cancelRPC := fs.RPCContext(cancel)
-	defer cancelRPC()
-
-	resp, err := fs.client.GetLk(ctx, connect.NewRequest(&storagev1.GetLkRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		LockOwner: input.Owner,
-		Lk: &storagev1.FileLock{
-			Start: start,
-			End:   end,
-			Type:  protoType,
-			Pid:   input.Lk.Pid,
-		},
-		LkFlags:   lkFlags,
-		SessionId: sid,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	respLk := resp.Msg.GetLk()
-	if respLk != nil {
-		hostType, status := ToHostLockType(respLk.GetType())
-		if status != fuse.OK {
-			return status
+	if fs.sessions != nil && input.Fh != 0 {
+		if _, status := fs.ResolveHandle(input.Fh); status != fuse.OK {
+			return fuse.LkIn{}, status
 		}
-		out.Lk.Start = respLk.GetStart()
-		out.Lk.End = respLk.GetEnd()
-		out.Lk.Typ = hostType
-		out.Lk.Pid = respLk.GetPid()
 	}
+	if _, status := ToProtoLockType(input.Lk.Typ); status != fuse.OK {
+		return fuse.LkIn{}, status
+	}
+	if get && input.Lk.Typ == uint32(syscall.F_UNLCK) {
+		return fuse.LkIn{}, fuse.EINVAL
+	}
+	start, end, status := NormalizeLockRange(input.LkFlags, input.Lk.Start, input.Lk.End)
+	if status != fuse.OK {
+		return fuse.LkIn{}, status
+	}
+	in := *input
+	in.Lk.Start, in.Lk.End = start, end
+	return in, fuse.OK
+}
 
+// GetLk 在本地查询冲突文件锁。
+func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fuse.Status {
+	in, status := fs.prepareLock(input, true)
+	if status != fuse.OK {
+		return status
+	}
+	out.Lk = fs.locks.GetLk(&in)
 	return fuse.OK
 }
 
-// SetLk 实现非阻塞设置或释放文件锁，对应 Linux FUSE FUSE_SETLK (32) 协议。
-func (fs *RawFS) SetLk(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
-	ino, status := fs.ToServerIno(input.NodeId)
+// SetLk 在本地非阻塞设置文件锁。
+func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) fuse.Status {
+	in, status := fs.prepareLock(input, false)
 	if status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
-		return status
-	}
-
-	protoType, status := ToProtoLockType(input.Lk.Typ)
-	if status != fuse.OK {
-		return status
-	}
-
-	lkFlags := input.LkFlags & 0x1
-	start, end, status := NormalizeLockRange(lkFlags, input.Lk.Start, input.Lk.End)
-	if status != fuse.OK {
-		return status
-	}
-
-	if lkFlags == 0 {
-		fs.markPosixLockActivity(sid, ino)
-	}
-
-	ctx, cancelRPC := fs.RPCContext(cancel)
-	defer cancelRPC()
-
-	_, err := fs.client.SetLk(ctx, connect.NewRequest(&storagev1.SetLkRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		LockOwner: input.Owner,
-		Lk: &storagev1.FileLock{
-			Start: start,
-			End:   end,
-			Type:  protoType,
-			Pid:   input.Lk.Pid,
-		},
-		LkFlags:   lkFlags,
-		SessionId: sid,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	return fuse.OK
+	return fs.locks.SetLk(&in)
 }
 
-// SetLkw 实现阻塞设置或释放文件锁，对应 Linux FUSE FUSE_SETLKW (33) 协议。
-// 使用原子递增分配器生成唯一 RequestId，并在 cancel 通道触发关闭时立即取消在途 RPC 并返回 EINTR。
+// SetLkw 在本地阻塞设置文件锁。
 func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
-	ino, status := fs.ToServerIno(input.NodeId)
+	in, status := fs.prepareLock(input, false)
 	if status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
-		return status
-	}
-
-	protoType, status := ToProtoLockType(input.Lk.Typ)
-	if status != fuse.OK {
-		return status
-	}
-
-	lkFlags := input.LkFlags & 0x1
-	start, end, status := NormalizeLockRange(lkFlags, input.Lk.Start, input.Lk.End)
-	if status != fuse.OK {
-		return status
-	}
-
-	if lkFlags == 0 {
-		fs.markPosixLockActivity(sid, ino)
-	}
-
-	reqID := fs.NextRequestID()
-
-	ctx, cancelRPC := rpc.ContextWithCancelChan(context.Background(), cancel)
-	defer cancelRPC()
-
-	_, err := fs.client.SetLkw(ctx, connect.NewRequest(&storagev1.SetLkwRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		LockOwner: input.Owner,
-		Lk: &storagev1.FileLock{
-			Start: start,
-			End:   end,
-			Type:  protoType,
-			Pid:   input.Lk.Pid,
-		},
-		LkFlags:   lkFlags,
-		SessionId: sid,
-		RequestId: reqID,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	return fuse.OK
+	return fs.locks.SetLkw(context.Background(), cancel, &in)
 }
