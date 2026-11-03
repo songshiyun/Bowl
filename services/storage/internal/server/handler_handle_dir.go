@@ -103,9 +103,6 @@ func (s *Server) Flush(ctx context.Context, req *connect.Request[storagev1.Flush
 
 // Fsync 同步并持久化文件节点与句柄关联的状态。
 func (s *Server) Fsync(ctx context.Context, req *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
-	}
 	msg := req.Msg
 	err := s.metaManager.Fsync(ctx, meta.FsyncParams{
 		Ino:       msg.Ino,
@@ -157,9 +154,6 @@ func (s *Server) OpenDir(ctx context.Context, req *connect.Request[storagev1.Ope
 
 // FsyncDir 同步并持久化目录节点与目录句柄关联的状态。
 func (s *Server) FsyncDir(ctx context.Context, req *connect.Request[storagev1.FsyncDirRequest]) (*connect.Response[storagev1.FsyncDirResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
-	}
 	msg := req.Msg
 	err := s.metaManager.FsyncDir(ctx, meta.FsyncDirParams{
 		Ino:       msg.Ino,
@@ -243,11 +237,8 @@ func (s *Server) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1
 	}), nil
 }
 
-// Fallocate 为常规文件预分配物理空间或打洞去分配空间。
+// Fallocate 为常规文件扩展逻辑空间或清零指定区间。
 func (s *Server) Fallocate(ctx context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
-	}
 	msg := req.Msg
 	err := s.metaManager.Fallocate(ctx, meta.FallocateParams{
 		Ino:       msg.Ino,

@@ -299,10 +299,23 @@ func (m *manager) flushDurabilityBarrier(ctx context.Context) error {
 	return nil
 }
 
-// Fsync 同步文件节点与句柄关联的状态，并触发数据库 WAL 物理落盘屏障。
+// Fsync 同步文件节点，并触发对应存储引擎的 WAL 落盘屏障。
 func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
 	if err := validateOptionalSessionID(params.SessionID); err != nil {
 		return err
+	}
+	sid, usePebble, err := m.resolveDataSession(ctx, params.Fh, params.SessionID)
+	if err != nil {
+		return err
+	}
+	if usePebble {
+		return m.pebbleSync(ctx, sid, params.Ino, false)
+	}
+	if params.Fh == 0 {
+		return ErrInvalidArgument
 	}
 	if err := m.checkFileHandleReadOnly(ctx, params.Ino, params.Fh, params.SessionID, "fsync"); err != nil {
 		return err
@@ -465,16 +478,26 @@ func (m *manager) Release(ctx context.Context, params ReleaseParams) error {
 	return nil
 }
 
-// FsyncDir 同步目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议），并触发数据库 WAL 物理落盘屏障。
+// FsyncDir 同步目录节点，并触发对应存储引擎的 WAL 落盘屏障。
 func (m *manager) FsyncDir(ctx context.Context, params FsyncDirParams) error {
-	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh == 0 || params.Fh > math.MaxInt64 {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
 	if err := validateOptionalSessionID(params.SessionID); err != nil {
 		return err
 	}
+	sid, usePebble, err := m.resolveDataSession(ctx, params.Fh, params.SessionID)
+	if err != nil {
+		return err
+	}
+	if usePebble {
+		return m.pebbleSync(ctx, sid, params.Ino, true)
+	}
+	if params.Fh == 0 {
+		return ErrInvalidArgument
+	}
 
-	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
+	err = m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {
 		_, err := m.validateDirHandle(ctx, q, params.Ino, params.Fh, params.SessionID)
 		return err
 	}, tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead))

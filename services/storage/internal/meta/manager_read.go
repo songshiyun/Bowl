@@ -264,8 +264,8 @@ func ProjectChunkSlices(rawSlices []Slice, chunkReadStart, chunkReadEnd uint32) 
 	return result
 }
 
-// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
-// 遵循 ADR-0019 / ADR-0028 数据层架构与 POSIX pread(2) 语义：
+// Read 读取指定文件的数据块内容。分支会话读取 Pebble，旧版句柄使用以下 PostgreSQL 路径。
+// 旧版路径遵循 ADR-0019 / ADR-0028 数据层架构与 POSIX pread(2) 语义：
 //  1. 静态边界校验：参数非空、(ino, fh, offset) 在合法正数范围内、size <= BlockSize (4 MiB)、session_id 合法；
 //  2. 权限与类型校验：校验目标 Inode 必须为常规文件 S_IFREG（目录返回 ErrIsDir，其他非常规文件返回 ErrInvalidArgument），
 //     校验 (ino, fh) 对应的 FileHandle 存在且具备读权限（O_RDONLY 或 O_RDWR；若是 O_WRONLY、句柄不存在或 ino 不匹配均返回 ErrBadFileHandle）；
@@ -285,7 +285,7 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 	if req.Ino == 0 || req.Ino > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if req.Fh == 0 || req.Fh > math.MaxInt64 {
+	if req.Fh > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
 	if req.Offset > math.MaxInt64 {
@@ -296,6 +296,16 @@ func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, er
 	}
 	if err := validateOptionalSessionID(req.SessionID); err != nil {
 		return nil, err
+	}
+	view, usePebble, err := m.resolveDirReadSession(ctx, req.Fh, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if usePebble {
+		return m.pebbleRead(view, req)
+	}
+	if req.Fh == 0 {
+		return nil, ErrInvalidArgument
 	}
 
 	startIndx := int64(req.Offset / ChunkSize)

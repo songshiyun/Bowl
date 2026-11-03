@@ -63,6 +63,20 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 	if input.Flags != nil && *input.Flags > math.MaxInt32 {
 		return nil, ErrInvalidArgument
 	}
+	sid, explicit, err := createBranchSession(ctx, input.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	usePebble := explicit
+	if !explicit && input.Fh == nil && sid != nil && m.hasPool() {
+		_, usePebble, err = m.resolveDataSession(ctx, 1, sid)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if usePebble {
+		return m.pebbleSetAttr(ctx, sid, ino, input)
+	}
 	if input.Size != nil && m.hasPool() {
 		m.writeQuotaMu.Lock()
 		defer m.writeQuotaMu.Unlock()
@@ -71,7 +85,7 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 	var result *Inode
 	var truncatedBorderIndx int64
 	var truncatedOctetLen int64
-	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		truncatedOctetLen = 0
 		current, err := q.GetInodeForUpdate(ctx, int64(ino))
 		if err != nil {
@@ -242,12 +256,12 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 	return result, nil
 }
 
-// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
+// Fallocate 为常规文件扩展逻辑空间或清零指定区间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 // 遵循 Linux fallocate(2) 与 ADR-0010 规范。
 func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 	// 1. 入参边界与整型溢出防御
 	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
-		params.Fh == 0 || params.Fh > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
 		params.Length == 0 || params.Length > math.MaxInt64 ||
 		params.Offset > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -257,6 +271,16 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 	}
 	if err := validateOptionalSessionID(params.SessionID); err != nil {
 		return err
+	}
+	sid, usePebble, err := m.resolveDataSession(ctx, params.Fh, params.SessionID)
+	if err != nil {
+		return err
+	}
+	if usePebble {
+		return m.pebbleFallocate(ctx, sid, params)
+	}
+	if params.Fh == 0 {
+		return ErrInvalidArgument
 	}
 
 	// 2. 模式位校验
@@ -273,7 +297,7 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 
 	// 3. 开启读写事务
 	var punchStats []chunkAppendStat
-	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execWriteTxWithRetry(ctx, func(q db.Querier) error {
 		punchStats = nil
 		current, err := q.GetInodeForUpdate(ctx, int64(params.Ino))
 		if err != nil {

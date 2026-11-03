@@ -11,9 +11,6 @@ import (
 
 // Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 func (s *Server) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
-	}
 	msg := req.Msg
 	res, err := s.metaManager.Read(ctx, &meta.ReadRequest{
 		Ino:       msg.Ino,
@@ -33,9 +30,6 @@ func (s *Server) Read(ctx context.Context, req *connect.Request[storagev1.ReadRe
 
 // Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 func (s *Server) Write(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
-	if req.Msg.Fh == 0 {
-		return nil, branchContextUnimplemented()
-	}
 	msg := req.Msg
 	res, err := s.metaManager.Write(ctx, &meta.WriteRequest{
 		Ino:       msg.Ino,
