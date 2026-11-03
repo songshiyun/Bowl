@@ -473,6 +473,7 @@ func isAllowedUserXattrFileType(mode uint32) bool {
 }
 
 // SetXattr 设置指定 Inode 的扩展属性。
+// 携带会话时访问 Pebble，以下事务步骤描述无会话的 PostgreSQL 路径。
 // 遵循 Linux FUSE FUSE_SETXATTR 协议与 POSIX setxattr(2) 语义，执行 4 步求值状态机：
 //  1. 入参静态校验（不查库）：校验 Ino、Flags、Name 与 Value 边界及非法字符；
 //  2. 排他锁与存在性校验：读写事务内通过 GetInodeForUpdate 获取行锁，支持孤儿节点；
@@ -492,6 +493,9 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 	}
 	if len(params.Value) > MaxXattrValueBytes {
 		return ErrRange
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleSetXattr(ctx, sid, params)
 	}
 
 	// 开启读写事务
@@ -597,6 +601,7 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 }
 
 // GetXattr 获取指定 Inode 的扩展属性值。
+// 携带会话时访问 Pebble，以下事务步骤描述无会话的 PostgreSQL 路径。
 // 遵循 Linux FUSE FUSE_GETXATTR 协议与 POSIX getxattr(2) 语义，执行 4 步求值状态机：
 // 1. 入参静态校验（不查库）：校验 Ino 与 Name 边界及非法空字符；
 // 2. 只读快照隔离与存在性校验：在 RepeatableRead 只读事务内通过 GetInode 查询节点，支持孤儿节点；
@@ -609,6 +614,9 @@ func (m *manager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte
 	}
 	if err := validateXattrName(name); err != nil {
 		return nil, err
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleGetXattr(ctx, sid, ino, name)
 	}
 
 	var value []byte
@@ -664,6 +672,7 @@ func (m *manager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte
 }
 
 // ListXattr 列出指定 Inode 的全部扩展属性名称列表。
+// 携带会话时访问 Pebble，以下事务步骤描述无会话的 PostgreSQL 路径。
 // 遵循 Linux FUSE FUSE_LISTXATTR 协议与 POSIX listxattr(2) 语义，执行 3 步求值状态机：
 // 1. 入参静态校验（不查库）：校验 Ino 必须大于 0 且在 int64 正数范围内 (<= math.MaxInt64)，否则返回 ErrInvalidArgument；
 // 2. 只读快照隔离与 Inode 存在性校验：在 RepeatableRead 只读事务（tx.WithReadOnly(), tx.WithIsoLevel(tx.RepeatableRead)）中调用 GetInode(ino)；若未命中返回 ErrNotFound；支持孤儿节点 (nlink == 0)；
@@ -675,6 +684,9 @@ func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
 	// 第 1 步：入参静态校验（不查库）
 	if ino == 0 || ino > math.MaxInt64 {
 		return nil, ErrInvalidArgument
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleListXattr(ctx, sid, ino)
 	}
 
 	names := [][]byte{}
@@ -717,6 +729,7 @@ func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
 }
 
 // RemoveXattr 移除指定 Inode 的扩展属性。
+// 携带会话时访问 Pebble，以下事务步骤描述无会话的 PostgreSQL 路径。
 // 遵循 Linux FUSE FUSE_REMOVEXATTR 协议与 POSIX removexattr(2) 语义，执行 4 步求值状态机：
 // 1. 入参静态校验（不查库）：
 //   - ino == 0 || ino > math.MaxInt64 返回 ErrInvalidArgument；
@@ -733,6 +746,9 @@ func (m *manager) RemoveXattr(ctx context.Context, ino uint64, name []byte) erro
 	}
 	if err := validateXattrName(name); err != nil {
 		return err
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.pebbleRemoveXattr(ctx, sid, ino, name)
 	}
 
 	err := m.store.ExecTxWithOptions(ctx, func(q db.Querier) error {

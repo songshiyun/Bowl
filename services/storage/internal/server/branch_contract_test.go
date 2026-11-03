@@ -170,22 +170,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			_, err := client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), SessionId: proto.Uint64(1)}))
 			return err
 		},
-		"按会话设置扩展属性": func() error {
-			_, err := client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话读取扩展属性": func() error {
-			_, err := client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话列出扩展属性": func() error {
-			_, err := client.ListXattr(ctx, connect.NewRequest(&storagev1.ListXattrRequest{Ino: 1, SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话删除扩展属性": func() error {
-			_, err := client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
-			return err
-		},
 		"按会话删除": func() error {
 			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), SessionId: proto.Uint64(1)}))
 			return err
@@ -226,6 +210,35 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 		})
 	}
+}
+
+func TestSessionXattrHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	ctx := context.Background()
+	sid := uint64(41)
+	name := []byte("user.test")
+	value := []byte("值")
+	withSession := mock.MatchedBy(func(ctx context.Context) bool {
+		id, ok := meta.SessionIDFromContext(ctx)
+		return ok && id != nil && *id == sid
+	})
+	mgr.EXPECT().SetXattr(withSession, meta.SetXattrParams{Ino: 1, Name: name, Value: value, Flags: meta.XattrCreate}).Return(nil).Once()
+	mgr.EXPECT().GetXattr(withSession, uint64(1), name).Return(value, nil).Once()
+	mgr.EXPECT().ListXattr(withSession, uint64(1)).Return([][]byte{name}, nil).Once()
+	mgr.EXPECT().RemoveXattr(withSession, uint64(1), name).Return(nil).Once()
+
+	_, err := client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{Ino: 1, Name: name, Value: value, Flags: meta.XattrCreate, SessionId: &sid}))
+	require.NoError(t, err)
+	got, err := client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: 1, Name: name, SessionId: &sid}))
+	require.NoError(t, err)
+	require.Equal(t, value, got.Msg.Value)
+	list, err := client.ListXattr(ctx, connect.NewRequest(&storagev1.ListXattrRequest{Ino: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	require.Equal(t, [][]byte{name}, list.Msg.Names)
+	_, err = client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: name, SessionId: &sid}))
+	require.NoError(t, err)
 }
 
 func TestSessionReadAndReadDirHandlers(t *testing.T) {

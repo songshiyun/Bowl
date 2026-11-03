@@ -7,14 +7,17 @@ import (
 	"net/http/httptest"
 	"syscall"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
+	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -26,6 +29,18 @@ type mockXattrServer struct {
 	getXattrFn    func(context.Context, *connect.Request[storagev1.GetXattrRequest]) (*connect.Response[storagev1.GetXattrResponse], error)
 	listXattrFn   func(context.Context, *connect.Request[storagev1.ListXattrRequest]) (*connect.Response[storagev1.ListXattrResponse], error)
 	removeXattrFn func(context.Context, *connect.Request[storagev1.RemoveXattrRequest]) (*connect.Response[storagev1.RemoveXattrResponse], error)
+	renewed       chan uint64
+}
+
+func (m *mockXattrServer) RenewSession(_ context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+	if m.renewed != nil {
+		m.renewed <- req.Msg.GetSessionId()
+	}
+	return connect.NewResponse(&storagev1.RenewSessionResponse{ExpiresAt: timestamppb.New(time.Now().Add(time.Hour))}), nil
+}
+
+func (*mockXattrServer) CloseSession(context.Context, *connect.Request[storagev1.CloseSessionRequest]) (*connect.Response[storagev1.CloseSessionResponse], error) {
+	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
 }
 
 func (m *mockXattrServer) SetXattr(ctx context.Context, req *connect.Request[storagev1.SetXattrRequest]) (*connect.Response[storagev1.SetXattrResponse], error) {
@@ -125,6 +140,7 @@ func TestRawFS_SetXAttr(t *testing.T) {
 		require.Equal(t, "user.foo", string(capturedReq.GetName()))
 		require.Equal(t, data, capturedReq.GetValue())
 		require.Equal(t, uint32(unix.XATTR_CREATE), capturedReq.GetFlags())
+		require.Nil(t, capturedReq.SessionId)
 	})
 
 	t.Run("XATTR_CREATE conflict maps to EEXIST", func(t *testing.T) {
@@ -373,5 +389,79 @@ func TestRawFS_RemoveXAttr(t *testing.T) {
 		require.NotNil(t, capturedReq)
 		require.Equal(t, uint64(1001), capturedReq.GetIno())
 		require.Equal(t, "user.trash", string(capturedReq.GetName()))
+		require.Nil(t, capturedReq.SessionId)
 	})
+}
+
+func TestRawFS_XattrSessionAndRenewal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call func(*fusefs.RawFS) fuse.Status
+	}{
+		{"设置", func(fs *fusefs.RawFS) fuse.Status {
+			return fs.SetXAttr(nil, &fuse.SetXAttrIn{InHeader: fuse.InHeader{NodeId: 1}}, "user.test", []byte("值"))
+		}},
+		{"读取", func(fs *fusefs.RawFS) fuse.Status {
+			_, status := fs.GetXAttr(nil, &fuse.InHeader{NodeId: 1}, "user.test", nil)
+			return status
+		}},
+		{"列出", func(fs *fusefs.RawFS) fuse.Status {
+			_, status := fs.ListXAttr(nil, &fuse.InHeader{NodeId: 1}, nil)
+			return status
+		}},
+		{"删除", func(fs *fusefs.RawFS) fuse.Status {
+			return fs.RemoveXAttr(nil, &fuse.InHeader{NodeId: 1}, "user.test")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			captured := make(chan *uint64, 1)
+			server := &mockXattrServer{renewed: make(chan uint64, 2)}
+			detail := makeErrorInfo(t, "EBADF")
+			badSession := func(sid *uint64) error {
+				captured <- sid
+				err := connect.NewError(connect.CodeFailedPrecondition, errors.New("会话失效"))
+				err.AddDetail(detail)
+				return err
+			}
+			server.setXattrFn = func(_ context.Context, req *connect.Request[storagev1.SetXattrRequest]) (*connect.Response[storagev1.SetXattrResponse], error) {
+				return nil, badSession(req.Msg.SessionId)
+			}
+			server.getXattrFn = func(_ context.Context, req *connect.Request[storagev1.GetXattrRequest]) (*connect.Response[storagev1.GetXattrResponse], error) {
+				return nil, badSession(req.Msg.SessionId)
+			}
+			server.listXattrFn = func(_ context.Context, req *connect.Request[storagev1.ListXattrRequest]) (*connect.Response[storagev1.ListXattrResponse], error) {
+				return nil, badSession(req.Msg.SessionId)
+			}
+			server.removeXattrFn = func(_ context.Context, req *connect.Request[storagev1.RemoveXattrRequest]) (*connect.Response[storagev1.RemoveXattrResponse], error) {
+				return nil, badSession(req.Msg.SessionId)
+			}
+			client := setupXattrRPCServer(t, server)
+			mgr, err := session.New(context.Background(), client, session.Config{MinInterval: time.Hour, MaxInterval: time.Hour})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, mgr.Close()) })
+			sid := mgr.CurrentSessionID()
+			select {
+			case renewed := <-server.renewed:
+				require.Equal(t, sid, renewed)
+			default:
+				t.Fatal("初始会话未注册")
+			}
+			require.NoError(t, mgr.Start(context.Background()))
+			fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
+			require.Equal(t, fuse.EBADF, tc.call(fs))
+			select {
+			case reqSID := <-captured:
+				require.NotNil(t, reqSID)
+				require.Equal(t, sid, *reqSID)
+			default:
+				t.Fatal("未收到扩展属性请求")
+			}
+			select {
+			case renewed := <-server.renewed:
+				require.Equal(t, sid, renewed)
+			case <-time.After(2 * time.Second):
+				t.Fatal("会话失效后未触发续期")
+			}
+		})
+	}
 }
