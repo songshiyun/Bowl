@@ -1516,7 +1516,7 @@ func TestRead_BlockNotFoundOptimisticRetry(t *testing.T) {
 }
 
 // TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority 真实 PostgreSQL + BlockStore 集成测试：
-// 1. 验证 Read 首次读取通过 GetInodeChunksAndHandleForRead 仅触发 1 条 SQL（无第 2 条 GetFileHandle SQL、无 BEGIN/COMMIT）；
+// 1. 验证旧版 Read 先识别会话，再以一条 SQL 获取节点、数据和句柄；无会话时直接读取；
 // 2. 验证错误优先级严格符合 ENOENT -> EISDIR / EINVAL -> EBADF（含不存在句柄、O_WRONLY、过期会话、陈旧 generation 句柄）；
 // 3. 验证未写入 chunk、空文件、EOF、稀疏空洞（全空洞与局部空洞）及跨 chunk 读取返回精确预期字节。
 func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T) {
@@ -1556,12 +1556,12 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		_, _ = tracedPool.Exec(context.Background(), "DELETE FROM client_sessions WHERE session_id IN ($1, $2, $3)", int64(sessID), int64(otherSessID), int64(expiredSessID))
 	})
 
-	assertSingleReadSQL := func(t *testing.T, queries []string) {
+	assertSingleReadSQL := func(t *testing.T, queries []string, hasSession bool) {
 		t.Helper()
-		require.Len(t, queries, 1, "首次 Read 必须仅触发 1 条 SQL 查询，实际: %v", queries)
-		upper := strings.ToUpper(strings.TrimSpace(queries[0]))
-		assert.False(t, strings.HasPrefix(upper, "BEGIN"), "不应开启显式事务 BEGIN: %s", queries[0])
-		assert.False(t, strings.HasPrefix(upper, "COMMIT"), "不应存在显式事务 COMMIT: %s", queries[0])
+		query := assertLegacyDataQuery(t, queries, hasSession)
+		upper := strings.ToUpper(strings.TrimSpace(query))
+		assert.False(t, strings.HasPrefix(upper, "BEGIN"), "不应开启显式事务 BEGIN: %s", query)
+		assert.False(t, strings.HasPrefix(upper, "COMMIT"), "不应存在显式事务 COMMIT: %s", query)
 		assert.Contains(t, upper, "FILE_HANDLES", "单条查询必须内联校验 file_handles")
 	}
 
@@ -1662,7 +1662,7 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		SessionID: &sessID,
 	}))
 
-	// 3. 验证错误优先级 ENOENT -> EISDIR / EINVAL -> EBADF，且均只执行 1 条 SQL
+	// 3. 验证错误优先级 ENOENT -> EISDIR / EINVAL -> EBADF。
 	for _, tc := range []struct {
 		name      string
 		req       *meta.ReadRequest
@@ -1729,12 +1729,12 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 			resp, rErr := mgr.Read(ctx, tc.req)
 			assert.Nil(t, resp)
 			require.ErrorIs(t, rErr, tc.expectErr)
-			assertSingleReadSQL(t, tracer.Snapshot())
+			assertSingleReadSQL(t, tracer.Snapshot(), tc.req.SessionID != nil)
 		})
 	}
 
-	// 4. 空文件读取 (size == 0)：返回空字节且仅 1 条 SQL
-	t.Run("空文件读取返回空切片且仅执行1条SQL", func(t *testing.T) {
+	// 4. 空文件读取 (size == 0)：返回空字节。
+	t.Run("空文件读取返回空切片", func(t *testing.T) {
 		tracer.Reset()
 		resp, rErr := mgr.Read(ctx, &meta.ReadRequest{
 			Ino:       fileIno,
@@ -1746,7 +1746,7 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		require.NoError(t, rErr)
 		require.NotNil(t, resp)
 		assert.Empty(t, resp.Data)
-		assertSingleReadSQL(t, tracer.Snapshot())
+		assertSingleReadSQL(t, tracer.Snapshot(), true)
 	})
 
 	// 5. 未写入 chunk 的稀疏文件 (SetAttr 扩容但无 chunk 记录)：返回全零且仅 1 条 SQL
@@ -1766,10 +1766,10 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		require.NoError(t, rErr)
 		require.NotNil(t, resp)
 		assert.Equal(t, make([]byte, 64*1024), resp.Data)
-		assertSingleReadSQL(t, tracer.Snapshot())
+		assertSingleReadSQL(t, tracer.Snapshot(), false)
 	})
 
-	t.Run("Offset大于等于文件Size返回EOF空切片且仅执行1条SQL", func(t *testing.T) {
+	t.Run("Offset大于等于文件Size返回EOF空切片", func(t *testing.T) {
 		tracer.Reset()
 		resp, rErr := mgr.Read(ctx, &meta.ReadRequest{
 			Ino:       fileIno,
@@ -1781,10 +1781,10 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		require.NoError(t, rErr)
 		require.NotNil(t, resp)
 		assert.Empty(t, resp.Data)
-		assertSingleReadSQL(t, tracer.Snapshot())
+		assertSingleReadSQL(t, tracer.Snapshot(), true)
 	})
 
-	// 6. 局部空洞 + 跨 Chunk 边界写入与读取：验证数据精确且仅执行 1 条 SQL
+	// 6. 局部空洞 + 跨 Chunk 边界写入与读取：验证数据精确。
 	crossOffset := uint64(meta.ChunkSize - 64*1024)
 	crossPayload := bytes.Repeat([]byte("M"), 128*1024) // [ChunkSize-64KiB, ChunkSize+64KiB)
 	_, err = mgr.Write(ctx, &meta.WriteRequest{
@@ -1796,7 +1796,7 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 	})
 	require.NoError(t, err)
 
-	t.Run("局部空洞与跨Chunk读取精确拼接且仅执行1条SQL", func(t *testing.T) {
+	t.Run("局部空洞与跨Chunk读取精确拼接", func(t *testing.T) {
 		// 读取 [ChunkSize-128KiB, ChunkSize+128KiB) 共 256 KiB：
 		// 前 64 KiB 为空洞 0x00，中间 128 KiB 为 crossPayload，后 64 KiB 为空洞 0x00（总文件大小 ChunkSize+128KiB）
 		tracer.Reset()
@@ -1813,6 +1813,6 @@ func TestRead_PostgresIntegration_MergedSingleQueryAndErrorPriority(t *testing.T
 		expected := make([]byte, 256*1024)
 		copy(expected[64*1024:192*1024], crossPayload)
 		assert.Equal(t, expected, resp.Data)
-		assertSingleReadSQL(t, tracer.Snapshot())
+		assertSingleReadSQL(t, tracer.Snapshot(), true)
 	})
 }

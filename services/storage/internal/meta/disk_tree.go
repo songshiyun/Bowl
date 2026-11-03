@@ -262,6 +262,12 @@ func (m *manager) refreshLegacyQuota(ctx context.Context, quota *TreeQuota, root
 	if !ok || pp.Pool() == nil {
 		return nil
 	}
+	// 查询和替换必须处于同一配额锁内，避免旧快照覆盖已提交的写入。
+	quota.mu.Lock()
+	defer quota.mu.Unlock()
+	if quota.closed {
+		return ErrNotFound
+	}
 	rows, err := pp.Pool().Query(ctx, `SELECT ino, mode, size FROM inodes WHERE root_ino = $1`, rootIno)
 	if err != nil {
 		return err
@@ -286,5 +292,5 @@ func (m *manager) refreshLegacyQuota(ctx context.Context, quota *TreeQuota, root
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return quota.replaceBranch(legacyQuotaBranch, sizes, false)
+	return quota.replaceBranchLocked(legacyQuotaBranch, sizes, false)
 }

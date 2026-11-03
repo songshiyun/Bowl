@@ -33,8 +33,8 @@ func mapWriteBizError(err error) error {
 	}
 }
 
-// Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
-// 遵循 ADR-0019、ADR-0022 与 ADR-0028 两阶段流水线与单语句 CTE + 异步 WAL 架构：
+// Write 向指定文件写入数据块内容。分支会话写入 Pebble，旧版句柄使用以下 PostgreSQL 路径。
+// 旧版路径遵循 ADR-0019、ADR-0022 与 ADR-0028 两阶段流水线与单语句 CTE + 异步 WAL 架构：
 // 1. 静态边界校验：参数非空、(ino, fh, offset) 在正数范围内、len(data) <= 4 MiB、offset + len(data) <= MaxInt64；
 // 2. 零字节写入：在事务内锁定 Inode 校验常规文件类型与写句柄有效性，不分配 slice_id 且不修改任何元数据；
 // 3. 两阶段流水线落盘：
@@ -47,7 +47,7 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	if req.Ino == 0 || req.Ino > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
-	if req.Fh == 0 || req.Fh > math.MaxInt64 {
+	if req.Fh > math.MaxInt64 {
 		return nil, ErrInvalidArgument
 	}
 	if req.Offset > math.MaxInt64 {
@@ -62,6 +62,16 @@ func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse,
 	}
 	if err := validateOptionalSessionID(req.SessionID); err != nil {
 		return nil, err
+	}
+	sid, usePebble, err := m.resolveDataSession(ctx, req.Fh, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if usePebble {
+		return m.pebbleWrite(ctx, sid, req)
+	}
+	if req.Fh == 0 {
+		return nil, ErrInvalidArgument
 	}
 
 	// 零字节写入：校验 Inode 与句柄有效性，直接返回，不触发物理落盘与元数据修改

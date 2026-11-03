@@ -156,42 +156,6 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
-func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
-	mockMgr := metamock.NewMockManager(t)
-	client, cleanup := setupTestServer(t, mockMgr)
-	defer cleanup()
-	ctx := context.Background()
-	calls := map[string]func() error{
-		"本地句柄读取": func() error {
-			_, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{Ino: 1}))
-			return err
-		},
-		"本地句柄写入": func() error {
-			_, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{Ino: 1, Data: []byte("x")}))
-			return err
-		},
-		"本地句柄文件同步": func() error {
-			_, err := client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: 1}))
-			return err
-		},
-		"本地句柄目录同步": func() error {
-			_, err := client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{Ino: 1}))
-			return err
-		},
-		"本地句柄预分配": func() error {
-			_, err := client.Fallocate(ctx, connect.NewRequest(&storagev1.FallocateRequest{Ino: 1, Length: 1}))
-			return err
-		},
-	}
-	for name, call := range calls {
-		t.Run(name, func(t *testing.T) {
-			err := call()
-			require.Error(t, err)
-			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-		})
-	}
-}
-
 func TestSessionTopologyAndReclaimHandlers(t *testing.T) {
 	mgr := metamock.NewMockManager(t)
 	client, cleanup := setupTestServer(t, mgr)
@@ -255,6 +219,33 @@ func TestSessionXattrHandlers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]byte{name}, list.Msg.Names)
 	_, err = client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: name, SessionId: &sid}))
+	require.NoError(t, err)
+}
+
+func TestLocalHandleDataAndSyncHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	ctx := context.Background()
+	sid := uint64(41)
+	inode := sampleTestInode(2, meta.S_IFREG|0o644)
+	mgr.EXPECT().Read(mock.Anything, &meta.ReadRequest{Ino: 2, Offset: 7, Size: 3, SessionID: &sid}).Return(&meta.ReadResponse{Data: []byte("abc")}, nil).Once()
+	mgr.EXPECT().Write(mock.Anything, &meta.WriteRequest{Ino: 2, Offset: 7, Data: []byte("abc"), SessionID: &sid}).Return(&meta.WriteResponse{Size: 3, Inode: inode}, nil).Once()
+	mgr.EXPECT().Fsync(mock.Anything, meta.FsyncParams{Ino: 2, Datasync: true, SessionID: &sid}).Return(nil).Once()
+	mgr.EXPECT().FsyncDir(mock.Anything, meta.FsyncDirParams{Ino: 1, SessionID: &sid}).Return(nil).Once()
+	mgr.EXPECT().Fallocate(mock.Anything, meta.FallocateParams{Ino: 2, Offset: 7, Length: 3, Mode: meta.FallocFlKeepSize, SessionID: &sid}).Return(nil).Once()
+
+	read, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{Ino: 2, Offset: 7, Size: 3, SessionId: &sid}))
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), read.Msg.Data)
+	write, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{Ino: 2, Offset: 7, Data: []byte("abc"), SessionId: &sid}))
+	require.NoError(t, err)
+	require.Equal(t, uint32(3), write.Msg.Size)
+	_, err = client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: 2, Datasync: true, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{Ino: 1, SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Fallocate(ctx, connect.NewRequest(&storagev1.FallocateRequest{Ino: 2, Offset: 7, Length: 3, Mode: meta.FallocFlKeepSize, SessionId: &sid}))
 	require.NoError(t, err)
 }
 

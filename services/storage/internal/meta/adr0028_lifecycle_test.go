@@ -115,13 +115,26 @@ func assertNoExplicitTxOrSetLocalSQL(t *testing.T, step string, sqlText string) 
 		"%s 不得发送独立 SET LOCAL 语句, got: %s", step, sqlText)
 }
 
-// TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack 验证 ADR-0028 小文件 5 步完整生命周期：
+// assertLegacyDataQuery 验证会话分流查询和旧数据路径各自只执行一条 SQL。
+func assertLegacyDataQuery(t *testing.T, queries []string, hasSession bool) string {
+	t.Helper()
+	if hasSession {
+		require.Len(t, queries, 2, "携带会话时必须先识别会话，再执行一条旧数据查询")
+		assert.Contains(t, strings.ToLower(queries[0]), "from client_sessions")
+		assert.Contains(t, strings.ToLower(queries[0]), "lease_managed")
+		return queries[1]
+	}
+	require.Len(t, queries, 1, "无会话时必须直接执行一条旧数据查询")
+	return queries[0]
+}
+
+// TestLegacyFullLifecycle_RoutedReadWriteAndReadBack 验证旧版小文件 5 步完整生命周期：
 //  1. 预热 CreateDisk 与 SliceID 号段后，依次执行 Lookup(ErrNotFound) -> Create -> Write(4 KiB) -> Flush -> Release，
-//     断言 5 个操作各自仅触发 1 条 SQL 查询（总计精确 5 次数据库往返），且全程零 BEGIN、零 COMMIT、零独立 SET LOCAL；
+//     断言各操作的数据查询仍为单条 SQL，Write 另有一次会话识别，且全程零 BEGIN、零 COMMIT、零独立 SET LOCAL；
 //  2. 同一客户端会话执行 Open -> Read，断言 Open 返回 OpenFlags == FOPEN_KEEP_CACHE，Read 读出 4 KiB 载荷逐字节一致，
 //     磁盘配额 UsedBytes == 4096、UsedInodes == 2（根目录 + 新文件）；
 //  3. 另一客户端会话执行覆盖 Write 后，原客户端会话再次 Open -> Read，断言 Open 返回 OpenFlags == 0（作废旧缓存）且 Read 读到新数据。
-func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
+func TestLegacyFullLifecycle_RoutedReadWriteAndReadBack(t *testing.T) {
 	tracer := &adr0028QueryTracer{}
 	pool, ctx := setupMetaTestDBWithTracer(t, tracer)
 	if pool == nil {
@@ -237,7 +250,7 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	assert.Contains(t, createQueries[0], "set_config('synchronous_commit', 'off', true)", "Create CTE 必须内联异步 WAL 提交")
 	allLifecycleQueries = append(allLifecycleQueries, createQueries...)
 
-	// Step 3: Write (4 KiB 载荷) -> 精确 1 条 SQL
+	// Step 3: Write (4 KiB 载荷) -> 先识别会话，再执行一条写入 SQL
 	tracer.reset()
 	writeRes, err := mgr.Write(ctx, &meta.WriteRequest{
 		Ino:       createdIno,
@@ -249,9 +262,9 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(len(payload4K)), writeRes.Size)
 	writeQueries := tracer.snapshot()
-	require.Len(t, writeQueries, 1, "Write 热路径必须精确仅触发 1 条单语句 CTE SQL 查询")
-	assertNoExplicitTxOrSetLocalSQL(t, "Write", writeQueries[0])
-	assert.Contains(t, writeQueries[0], "set_config('synchronous_commit', 'off', true)", "Write CTE 必须内联异步 WAL 提交")
+	writeSQL := assertLegacyDataQuery(t, writeQueries, true)
+	assertNoExplicitTxOrSetLocalSQL(t, "Write", writeSQL)
+	assert.Contains(t, writeSQL, "set_config('synchronous_commit', 'off', true)", "Write CTE 必须内联异步 WAL 提交")
 	allLifecycleQueries = append(allLifecycleQueries, writeQueries...)
 
 	// Step 4: Flush -> 精确 1 条 SQL
@@ -283,13 +296,13 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	assert.Contains(t, releaseQueries[0], "set_config('synchronous_commit', 'off', true)", "Release CTE 必须内联异步 WAL 提交")
 	allLifecycleQueries = append(allLifecycleQueries, releaseQueries...)
 
-	// 汇总断言：5 个步骤总计精确 5 次数据库往返，且全程零 BEGIN、零 COMMIT、零独立 SET LOCAL
-	require.Len(t, allLifecycleQueries, 5, "Lookup -> Create -> Write -> Flush -> Release 全程必须精确总计 5 次数据库往返")
+	// 汇总断言：5 个步骤加会话识别总计 6 次数据库往返。
+	require.Len(t, allLifecycleQueries, 6)
 	for idx, q := range allLifecycleQueries {
 		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("LifecycleStep[%d]", idx+1), q)
 	}
 
-	// 3. 同一客户端会话 (sessA) 执行 Open -> Read -> Release，验证锁无关无重试全链路 3 次数据库往返、智能命中 FOPEN_KEEP_CACHE、数据一致与配额账本精确
+	// 3. 同一客户端会话执行 Open -> Read -> Release，并验证数据和配额。
 	var readLifecycleQueries []string
 	tracer.reset()
 	openResA1, err := mgr.Open(ctx, meta.OpenParams{
@@ -316,11 +329,11 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, payload4K, readResA1.Data, "Read 读出字节必须与写入的 4 KiB 载荷逐字节一致")
 	readQueriesA1 := tracer.snapshot()
-	require.Len(t, readQueriesA1, 1, "Read 必须精确仅触发 1 条只读合并 SQL 查询（GetInodeChunksAndHandleForRead，无独立 GetFileHandle）")
-	assertNoExplicitTxOrSetLocalSQL(t, "Read", readQueriesA1[0])
-	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "from inodes", "Read 合并 SQL 必须查询 inodes")
-	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
-	assert.Contains(t, strings.ToLower(readQueriesA1[0]), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
+	readSQL := assertLegacyDataQuery(t, readQueriesA1, true)
+	assertNoExplicitTxOrSetLocalSQL(t, "Read", readSQL)
+	assert.Contains(t, strings.ToLower(readSQL), "from inodes", "Read 合并 SQL 必须查询 inodes")
+	assert.Contains(t, strings.ToLower(readSQL), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
+	assert.Contains(t, strings.ToLower(readSQL), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
 	readLifecycleQueries = append(readLifecycleQueries, readQueriesA1...)
 
 	tracer.reset()
@@ -335,7 +348,7 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 	assert.Contains(t, releaseQueriesA1[0], "set_config('synchronous_commit', 'off', true)", "Release CTE 必须内联异步 WAL 提交")
 	readLifecycleQueries = append(readLifecycleQueries, releaseQueriesA1...)
 
-	require.Len(t, readLifecycleQueries, 3, "Open -> Read -> Release 全程服务端必须精确总计 3 次数据库往返")
+	require.Len(t, readLifecycleQueries, 4)
 	for idx, q := range readLifecycleQueries {
 		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("ReadLifecycleStep[%d]", idx+1), q)
 	}
@@ -416,7 +429,7 @@ func TestADR0028_FullLifecycle_FiveRoundTripsAndReadBack(t *testing.T) {
 
 // TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim 验证：
 //  1. 小文件读全生命周期（锁无关无重试）：对已写入 4 KiB 数据的文件执行 Open(O_RDONLY) -> Read(4096) -> Release，
-//     服务端精确触发 3 次数据库往返（Open 1 条单语句 CTE、Read 1 条只读合并查询 GetInodeChunksAndHandleForRead、Release 1 条单语句 CTE），
+//     服务端精确触发 4 次数据库往返，包括 Read 的会话识别和单条只读合并查询，
 //     零 BEGIN / COMMIT / SET LOCAL，命中 FOPEN_KEEP_CACHE 且读出字节与写入载荷一致；
 //  2. 目录遍历与 FOPEN_CACHE_DIR 生命周期：执行 Mkdir 创建子目录并写入文件，OpenDir 与常规目录 ReleaseDir 均精确触发 1 条单语句 CTE SQL；
 //     同一会话重复 OpenDir（目录未变）返回 FOPEN_CACHE_DIR，发生子项增删后再次 OpenDir 自动作废 FOPEN_CACHE_DIR；
@@ -463,7 +476,7 @@ func TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim(t *testing.T) {
 	_, err = mgr.RenewSessionWithDisk(ctx, sessA, &disk.DiskID)
 	require.NoError(t, err)
 
-	// 1. 准备 4 KiB 小文件并验证 Open(O_RDONLY) -> Read(4096) -> Release 全链路 3 次数据库往返
+	// 1. 准备 4 KiB 小文件并验证 Open -> Read -> Release 的查询。
 	payload4K := bytes.Repeat([]byte("READ_LIFECYCLE_4K_"), 256)[:4096]
 	createRes, err := mgr.Create(ctx, meta.CreateParams{
 		ParentIno: disk.RootIno,
@@ -508,7 +521,7 @@ func TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim(t *testing.T) {
 	assert.Contains(t, openQueries[0], "set_config('synchronous_commit', 'off', true)", "Open CTE 必须内联异步 WAL 提交")
 	allReadQueries = append(allReadQueries, openQueries...)
 
-	// Read Step 2: Read(4096) -> 精确 1 条只读合并 SQL（GetInodeChunksAndHandleForRead，无独立 GetFileHandle）
+	// Read Step 2: 识别会话后执行一条只读合并 SQL。
 	tracer.reset()
 	readRes, err := mgr.Read(ctx, &meta.ReadRequest{
 		Ino:       readFileIno,
@@ -520,11 +533,11 @@ func TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, payload4K, readRes.Data, "Read 返回字节必须与写入载荷完全一致")
 	readQueries := tracer.snapshot()
-	require.Len(t, readQueries, 1, "Read 必须精确仅触发 1 条只读合并 SQL 查询")
-	assertNoExplicitTxOrSetLocalSQL(t, "Read", readQueries[0])
-	assert.Contains(t, strings.ToLower(readQueries[0]), "from inodes", "Read 合并 SQL 必须查询 inodes")
-	assert.Contains(t, strings.ToLower(readQueries[0]), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
-	assert.Contains(t, strings.ToLower(readQueries[0]), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
+	readSQL := assertLegacyDataQuery(t, readQueries, true)
+	assertNoExplicitTxOrSetLocalSQL(t, "Read", readSQL)
+	assert.Contains(t, strings.ToLower(readSQL), "from inodes", "Read 合并 SQL 必须查询 inodes")
+	assert.Contains(t, strings.ToLower(readSQL), "file_handles", "Read 合并 SQL 必须内联校验 file_handles")
+	assert.Contains(t, strings.ToLower(readSQL), "left join chunks", "Read 合并 SQL 必须合并拉取 chunks")
 	allReadQueries = append(allReadQueries, readQueries...)
 
 	// Read Step 3: Release -> 精确 1 条单语句 CTE SQL
@@ -541,8 +554,8 @@ func TestADR0028_ReadAndDirLifecycle_RoundTripsAndOrphanReclaim(t *testing.T) {
 	assert.Contains(t, releaseQueries[0], "set_config('synchronous_commit', 'off', true)", "Release CTE 必须内联异步 WAL 提交")
 	allReadQueries = append(allReadQueries, releaseQueries...)
 
-	// 汇总断言：Open -> Read -> Release 全程总计精确 3 次数据库往返
-	require.Len(t, allReadQueries, 3, "Open -> Read -> Release 全程必须精确总计 3 次数据库往返")
+	// 汇总断言包含一次会话识别。
+	require.Len(t, allReadQueries, 4)
 	for idx, q := range allReadQueries {
 		assertNoExplicitTxOrSetLocalSQL(t, fmt.Sprintf("ReadLifecycle[%d]", idx+1), q)
 	}
