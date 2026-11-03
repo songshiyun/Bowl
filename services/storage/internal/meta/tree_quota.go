@@ -177,6 +177,10 @@ func (q *TreeQuota) ReplaceBranch(branch string, sizes map[uint64]uint64) error 
 func (q *TreeQuota) replaceBranch(branch string, sizes map[uint64]uint64, enforce bool) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	return q.replaceBranchLocked(branch, sizes, enforce)
+}
+
+func (q *TreeQuota) replaceBranchLocked(branch string, sizes map[uint64]uint64, enforce bool) error {
 	if q.closed {
 		return ErrNotFound
 	}
