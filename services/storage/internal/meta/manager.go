@@ -77,6 +77,7 @@ type Manager interface {
 	RenewSession(ctx context.Context, sessionID uint64) (time.Time, error)
 	RenewSessionWithStatus(ctx context.Context, sessionID uint64) (RenewSessionResult, error)
 	RenewSessionWithDisk(ctx context.Context, sessionID uint64, diskID *string) (RenewSessionResult, error)
+	RenewBranchSession(ctx context.Context, params RenewBranchSessionParams) (RenewSessionResult, error)
 	CloseSession(ctx context.Context, sessionID uint64) error
 	GetParents(ctx context.Context, ino uint64) (map[uint64]uint32, error)
 	CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error)
@@ -215,6 +216,7 @@ type manager struct {
 	writeQuotaMu          sync.Mutex
 	storageRoot           string
 	pebble                *pebblekv.Manager
+	branchLocks           sync.Map // map[branchLockKey]*sync.Mutex
 	treeQuotaMu           sync.Mutex
 	treeQuotas            map[string]*TreeQuota
 	treeQuotaRoots        sync.Map // map[int64]*TreeQuota
@@ -1138,6 +1140,9 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 	if sessionID == 0 || sessionID > math.MaxInt64 {
 		return RenewSessionResult{}, ErrInvalidArgument
 	}
+	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
+		return RenewSessionResult{}, err
+	}
 	var pgDiskID pgtype.UUID
 	if diskID != nil {
 		parsed, err := parseDiskID(*diskID)
@@ -1200,6 +1205,20 @@ func (m *manager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, di
 func (m *manager) CloseSession(ctx context.Context, sessionID uint64) error {
 	if sessionID == 0 || sessionID > math.MaxInt64 {
 		return ErrInvalidArgument
+	}
+	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
+		return err
+	}
+	if m.hasPool() {
+		managed, err := m.closeBranchSession(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if managed {
+			m.invalidateDirCursorsBySession(sessionID)
+			m.notifyAllLockWaiters()
+			return nil
+		}
 	}
 
 	var (

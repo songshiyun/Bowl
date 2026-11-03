@@ -2048,6 +2048,72 @@ func (_c *MockManager_Rename_Call) RunAndReturn(run func(ctx context.Context, pa
 	return _c
 }
 
+// RenewBranchSession provides a mock function for the type MockManager
+func (_mock *MockManager) RenewBranchSession(ctx context.Context, params meta.RenewBranchSessionParams) (meta.RenewSessionResult, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenewBranchSession")
+	}
+
+	var r0 meta.RenewSessionResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenewBranchSessionParams) (meta.RenewSessionResult, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenewBranchSessionParams) meta.RenewSessionResult); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Get(0).(meta.RenewSessionResult)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.RenewBranchSessionParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_RenewBranchSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewBranchSession'
+type MockManager_RenewBranchSession_Call struct {
+	*mock.Call
+}
+
+// RenewBranchSession is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.RenewBranchSessionParams
+func (_e *MockManager_Expecter) RenewBranchSession(ctx any, params any) *MockManager_RenewBranchSession_Call {
+	return &MockManager_RenewBranchSession_Call{Call: _e.mock.On("RenewBranchSession", ctx, params)}
+}
+
+func (_c *MockManager_RenewBranchSession_Call) Run(run func(ctx context.Context, params meta.RenewBranchSessionParams)) *MockManager_RenewBranchSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.RenewBranchSessionParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.RenewBranchSessionParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_RenewBranchSession_Call) Return(renewSessionResult meta.RenewSessionResult, err error) *MockManager_RenewBranchSession_Call {
+	_c.Call.Return(renewSessionResult, err)
+	return _c
+}
+
+func (_c *MockManager_RenewBranchSession_Call) RunAndReturn(run func(ctx context.Context, params meta.RenewBranchSessionParams) (meta.RenewSessionResult, error)) *MockManager_RenewBranchSession_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RenewSession provides a mock function for the type MockManager
 func (_mock *MockManager) RenewSession(ctx context.Context, sessionID uint64) (time.Time, error) {
 	ret := _mock.Called(ctx, sessionID)

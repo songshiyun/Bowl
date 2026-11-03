@@ -83,7 +83,7 @@ DELETE FROM client_sessions
 WHERE session_id IN (
     SELECT session_id
     FROM client_sessions
-    WHERE expires_at <= clock_timestamp()
+    WHERE expires_at <= clock_timestamp() AND (NOT lease_managed OR read_only)
     ORDER BY session_id ASC
     FOR UPDATE
 )

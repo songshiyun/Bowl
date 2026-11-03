@@ -31,6 +31,8 @@ type storedBranch struct {
 }
 
 func (m *manager) createDiskStorage(diskID, commitID string) (err error) {
+	unlock := m.lockBranch(diskID, "main")
+	defer unlock()
 	branch, err := m.pebble.OpenBranch(diskID, "main")
 	if err != nil {
 		return err
@@ -208,6 +210,8 @@ func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control 
 }
 
 func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]uint64, err error) {
+	unlock := m.lockBranch(diskID, branchName)
+	defer unlock()
 	path := filepath.Join(m.storageRoot, "disks", diskID, "branches", branchName)
 	if _, err := os.Stat(path); err != nil {
 		return nil, err

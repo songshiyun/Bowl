@@ -603,6 +603,9 @@ func (m *manager) RenewSession(ctx context.Context, sessionID uint64) (time.Time
 	if sessionID == 0 || sessionID > math.MaxInt64 {
 		return time.Time{}, ErrInvalidArgument
 	}
+	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
+		return time.Time{}, err
+	}
 
 	var expiresAt time.Time
 	err := m.execWriteTxWithRetry(ctx, func(q db.Querier) error {

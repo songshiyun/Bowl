@@ -594,7 +594,7 @@ const deleteClientSessionByID = `-- name: DeleteClientSessionByID :execrows
 WITH locked_target AS MATERIALIZED (
     SELECT s.session_id
     FROM client_sessions s
-    WHERE s.session_id = $1
+    WHERE s.session_id = $1 AND NOT s.lease_managed
     FOR UPDATE OF s
 ),
 purged_locks AS (
@@ -651,7 +651,7 @@ func (q *Queries) DeleteEntry(ctx context.Context, arg DeleteEntryParams) error 
 
 const deleteExpiredClientSessions = `-- name: DeleteExpiredClientSessions :execrows
 DELETE FROM client_sessions
-WHERE expires_at <= clock_timestamp()
+WHERE expires_at <= clock_timestamp() AND (NOT lease_managed OR read_only)
 `
 
 func (q *Queries) DeleteExpiredClientSessions(ctx context.Context) (int64, error) {
