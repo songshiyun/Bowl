@@ -30,6 +30,16 @@ type storedBranch struct {
 	CreatedAt    *time.Time      `json:"created_at,omitempty"`
 }
 
+type storedMergeState struct {
+	BaseCommitID   string          `json:"base_commit_id"`
+	SourceBranch   string          `json:"source_branch"`
+	SourceCommitID string          `json:"source_commit_id"`
+	TargetCommitID string          `json:"target_commit_id"`
+	SidecarPaths   []string        `json:"sidecar_paths,omitempty"`
+	SidecarInodes  []uint64        `json:"sidecar_inodes,omitempty"`
+	Conflicts      []MergeConflict `json:"conflicts"`
+}
+
 func (m *manager) createDiskStorage(diskID, commitID string) (err error) {
 	unlock := m.lockBranch(diskID, "main")
 	defer unlock()

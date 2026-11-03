@@ -39,6 +39,63 @@ func (_m *MockManager) EXPECT() *MockManager_Expecter {
 	return &MockManager_Expecter{mock: &_m.Mock}
 }
 
+// AbortMerge provides a mock function for the type MockManager
+func (_mock *MockManager) AbortMerge(ctx context.Context, params meta.AbortMergeParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AbortMerge")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.AbortMergeParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_AbortMerge_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AbortMerge'
+type MockManager_AbortMerge_Call struct {
+	*mock.Call
+}
+
+// AbortMerge is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.AbortMergeParams
+func (_e *MockManager_Expecter) AbortMerge(ctx any, params any) *MockManager_AbortMerge_Call {
+	return &MockManager_AbortMerge_Call{Call: _e.mock.On("AbortMerge", ctx, params)}
+}
+
+func (_c *MockManager_AbortMerge_Call) Run(run func(ctx context.Context, params meta.AbortMergeParams)) *MockManager_AbortMerge_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.AbortMergeParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.AbortMergeParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_AbortMerge_Call) Return(err error) *MockManager_AbortMerge_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_AbortMerge_Call) RunAndReturn(run func(ctx context.Context, params meta.AbortMergeParams) error) *MockManager_AbortMerge_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CloseSession provides a mock function for the type MockManager
 func (_mock *MockManager) CloseSession(ctx context.Context, sessionID uint64) error {
 	ret := _mock.Called(ctx, sessionID)
@@ -2768,6 +2825,74 @@ func (_c *MockManager_RenewSessionWithStatus_Call) Return(renewSessionResult met
 }
 
 func (_c *MockManager_RenewSessionWithStatus_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64) (meta.RenewSessionResult, error)) *MockManager_RenewSessionWithStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ResolveMerge provides a mock function for the type MockManager
+func (_mock *MockManager) ResolveMerge(ctx context.Context, params meta.ResolveMergeParams) (*meta.CommitInfo, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ResolveMerge")
+	}
+
+	var r0 *meta.CommitInfo
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ResolveMergeParams) (*meta.CommitInfo, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ResolveMergeParams) *meta.CommitInfo); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.CommitInfo)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.ResolveMergeParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_ResolveMerge_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ResolveMerge'
+type MockManager_ResolveMerge_Call struct {
+	*mock.Call
+}
+
+// ResolveMerge is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.ResolveMergeParams
+func (_e *MockManager_Expecter) ResolveMerge(ctx any, params any) *MockManager_ResolveMerge_Call {
+	return &MockManager_ResolveMerge_Call{Call: _e.mock.On("ResolveMerge", ctx, params)}
+}
+
+func (_c *MockManager_ResolveMerge_Call) Run(run func(ctx context.Context, params meta.ResolveMergeParams)) *MockManager_ResolveMerge_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.ResolveMergeParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.ResolveMergeParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_ResolveMerge_Call) Return(commitInfo *meta.CommitInfo, err error) *MockManager_ResolveMerge_Call {
+	_c.Call.Return(commitInfo, err)
+	return _c
+}
+
+func (_c *MockManager_ResolveMerge_Call) RunAndReturn(run func(ctx context.Context, params meta.ResolveMergeParams) (*meta.CommitInfo, error)) *MockManager_ResolveMerge_Call {
 	_c.Call.Return(run)
 	return _c
 }

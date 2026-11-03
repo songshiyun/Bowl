@@ -119,8 +119,37 @@ func (m *manager) versionQuota(ctx context.Context, q db.Querier, diskID pgtype.
 
 // createVersion 要求调用方持有分支锁，并在数据库提交后清理变更标记。
 func (m *manager) createVersion(ctx context.Context, q db.Querier, diskID pgtype.UUID, b *storedBranch, branch *pebblekv.Branch, id uuid.UUID, message string) (*CommitInfo, error) {
+	var mergeParent pgtype.UUID
+	var mergeParentID *string
 	if b.State == "MERGING" {
-		return nil, ErrBusy
+		var state storedMergeState
+		if len(b.MergeState) == 0 || json.Unmarshal(b.MergeState, &state) != nil || b.HeadCommitID == nil || *b.HeadCommitID != state.TargetCommitID {
+			return nil, ErrBusy
+		}
+		var err error
+		mergeParent, err = parseDiskID(state.SourceCommitID)
+		if err != nil {
+			return nil, ErrBusy
+		}
+		for _, ino := range state.SidecarInodes {
+			node, err := getMergeInode(branch.DB(), ino)
+			if err != nil {
+				return nil, err
+			}
+			if node.exists {
+				return nil, ErrBusy
+			}
+		}
+		for _, path := range state.SidecarPaths {
+			exists, err := mergePathExists(branch.DB(), path)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				return nil, ErrBusy
+			}
+		}
+		mergeParentID = &state.SourceCommitID
 	}
 	var parent pgtype.UUID
 	if b.HeadCommitID != nil {
@@ -135,20 +164,35 @@ func (m *manager) createVersion(ctx context.Context, q db.Querier, diskID pgtype
 	}
 	row, err := q.CreateCommit(ctx, db.CreateCommitParams{
 		CommitID: pgtype.UUID{Bytes: id, Valid: true}, DiskID: diskID, BranchName: b.Name,
-		ParentCommitID: parent, Message: message,
+		ParentCommitID: parent, MergeParentCommitID: mergeParent, Message: message,
 		CheckpointDir: filepath.Join(m.storageRoot, "disks", diskID.String(), "commits", id.String()),
 	})
 	if err != nil {
 		return nil, err
 	}
 	idString := id.String()
-	info := &CommitInfo{CommitID: idString, DiskID: diskID.String(), BranchName: b.Name, ParentCommitID: b.HeadCommitID, Message: message, CreatedAt: row.CreatedAt.Time}
+	info := &CommitInfo{CommitID: idString, DiskID: diskID.String(), BranchName: b.Name, ParentCommitID: b.HeadCommitID, MergeParentCommitID: mergeParentID, Message: message, CreatedAt: row.CreatedAt.Time}
 	b.HeadCommitID = &idString
+	b.State, b.MergeState = "NORMAL", nil
 	return info, nil
+}
+
+func mergePathExists(store *pebble.DB, path string) (bool, error) {
+	node, err := mergePathInode(store, path)
+	return node.exists, err
 }
 
 // Commit 将分支当前状态定格为快照。
 func (m *manager) Commit(ctx context.Context, params CommitParams) (info *CommitInfo, err error) {
+	return m.commit(ctx, params, false)
+}
+
+// ResolveMerge 完成已物化且旁路副本已清理的合并。
+func (m *manager) ResolveMerge(ctx context.Context, params ResolveMergeParams) (*CommitInfo, error) {
+	return m.commit(ctx, CommitParams{DiskID: params.DiskID, BranchName: params.BranchName, Message: params.Message}, true)
+}
+
+func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge bool) (info *CommitInfo, err error) {
 	diskID, err := parseDiskID(params.DiskID)
 	if err != nil {
 		return nil, err
@@ -179,8 +223,8 @@ func (m *manager) Commit(ctx context.Context, params CommitParams) (info *Commit
 		if i < 0 {
 			return ErrNotFound
 		}
-		if branches[i].State == "MERGING" {
-			return ErrBusy
+		if requireMerge && (branches[i].State != "MERGING" || len(branches[i].MergeState) == 0) {
+			return ErrInvalidArgument
 		}
 		unlock = m.lockBranch(diskID.String(), params.BranchName)
 		branch, err = m.pebble.OpenBranch(diskID.String(), params.BranchName)
@@ -466,6 +510,15 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 
 // Rollback 将无活跃写端的分支恢复到指定快照。
 func (m *manager) Rollback(ctx context.Context, params RollbackParams) (err error) {
+	return m.rollback(ctx, params, false)
+}
+
+// AbortMerge 在无活跃写端时恢复合并前的快照。
+func (m *manager) AbortMerge(ctx context.Context, params AbortMergeParams) error {
+	return m.rollback(ctx, RollbackParams{DiskID: params.DiskID, BranchName: params.BranchName}, true)
+}
+
+func (m *manager) rollback(ctx context.Context, params RollbackParams, abort bool) (err error) {
 	diskID, err := parseDiskID(params.DiskID)
 	if err != nil {
 		return err
@@ -473,9 +526,12 @@ func (m *manager) Rollback(ctx context.Context, params RollbackParams) (err erro
 	if err := validateBranchName(params.BranchName); err != nil {
 		return err
 	}
-	commitID, err := parseDiskID(params.CommitID)
-	if err != nil {
-		return err
+	var commitID pgtype.UUID
+	if !abort {
+		commitID, err = parseDiskID(params.CommitID)
+		if err != nil {
+			return err
+		}
 	}
 	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
 		return err
@@ -521,6 +577,19 @@ func (m *manager) Rollback(ctx context.Context, params RollbackParams) (err erro
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
+		}
+		if abort {
+			if branches[i].State != "MERGING" || branches[i].HeadCommitID == nil || len(branches[i].MergeState) == 0 {
+				return ErrInvalidArgument
+			}
+			var state storedMergeState
+			if err := json.Unmarshal(branches[i].MergeState, &state); err != nil || state.TargetCommitID != *branches[i].HeadCommitID {
+				return ErrInvalidArgument
+			}
+			commitID, err = parseDiskID(state.TargetCommitID)
+			if err != nil {
+				return err
+			}
 		}
 		row, err := q.GetCommit(ctx, commitID)
 		if errors.Is(err, pgx.ErrNoRows) || err == nil && row.DiskID != diskID {

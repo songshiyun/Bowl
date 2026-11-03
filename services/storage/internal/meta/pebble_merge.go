@@ -2,6 +2,7 @@ package meta
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -182,35 +183,60 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 				return err
 			}
 		}
-		changedSizes, conflicts, mergeErr := m.mergeWorkspace(workspace.DB(), [3]*pebble.DB{snapshots[0].DB(), snapshots[1].DB(), snapshots[2].DB()}, dirty)
+		stores := [3]*pebble.DB{snapshots[0].DB(), snapshots[1].DB(), snapshots[2].DB()}
+		changedSizes, conflicts, mergeErr := m.mergeWorkspace(workspace.DB(), stores, dirty, params.Strategy)
+		var sidecarPaths []string
+		var sidecarInodes []uint64
+		if mergeErr == nil && len(conflicts) != 0 && params.Strategy == ConflictStrategyMaterialize {
+			sidecarPaths, sidecarInodes, mergeErr = m.materializeMergeConflicts(disk, workspace.DB(), stores, conflicts)
+		}
 		for _, snapshot := range snapshots {
 			mergeErr = errors.Join(mergeErr, snapshot.Close())
 		}
 		if mergeErr != nil {
 			return mergeErr
 		}
-		if len(conflicts) != 0 {
-			if params.Strategy != ConflictStrategyUnspecified && params.Strategy != ConflictStrategyAbortOnConflict {
-				return ErrNotSupported
-			}
+		if len(conflicts) != 0 && (params.Strategy == ConflictStrategyUnspecified || params.Strategy == ConflictStrategyAbortOnConflict) {
 			result = &MergeResult{Result: MergeResultConflicts, Conflicts: conflicts}
 			return errMergeConflicts
 		}
-		mergeID := uuid.Must(uuid.NewV7())
-		created = append(created, mergeID.String())
-		if err := workspace.Checkpoint(mergeID.String()); err != nil {
-			return err
+		materialized := len(conflicts) != 0 && params.Strategy == ConflictStrategyMaterialize
+		if materialized {
+			state := storedMergeState{BaseCommitID: baseID.String(), SourceBranch: params.SourceBranch, SourceCommitID: sourceID.String(), TargetCommitID: targetID.String(), SidecarPaths: sidecarPaths, SidecarInodes: sidecarInodes, Conflicts: conflicts}
+			branches[ti].MergeState, err = json.Marshal(state)
+			if err != nil {
+				return err
+			}
+			branches[ti].State = "MERGING"
+			result = &MergeResult{Result: MergeResultMaterialized, Conflicts: conflicts}
+		} else {
+			mergeID := uuid.Must(uuid.NewV7())
+			created = append(created, mergeID.String())
+			if err := workspace.Checkpoint(mergeID.String()); err != nil {
+				return err
+			}
+			_, err = q.CreateCommit(ctx, db.CreateCommitParams{
+				CommitID: pgtype.UUID{Bytes: mergeID, Valid: true}, DiskID: diskID, BranchName: params.TargetBranch,
+				ParentCommitID: targetID, MergeParentCommitID: sourceID,
+				CheckpointDir: filepath.Join(m.storageRoot, "disks", disk, "commits", mergeID.String()),
+			})
+			if err != nil {
+				return err
+			}
+			if err := clearBranchDirty(workspace.DB()); err != nil {
+				return err
+			}
+			id := mergeID.String()
+			branches[ti].HeadCommitID = &id
+			branches[ti].State, branches[ti].MergeState = "NORMAL", nil
+			result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
 		}
-		_, err = q.CreateCommit(ctx, db.CreateCommitParams{
-			CommitID: pgtype.UUID{Bytes: mergeID, Valid: true}, DiskID: diskID, BranchName: params.TargetBranch,
-			ParentCommitID: targetID, MergeParentCommitID: sourceID,
-			CheckpointDir: filepath.Join(m.storageRoot, "disks", disk, "commits", mergeID.String()),
-		})
-		if err != nil {
-			return err
-		}
-		if err := clearBranchDirty(workspace.DB()); err != nil {
-			return err
+		for _, ino := range sidecarInodes {
+			node, err := readCreateInode(workspace.DB(), ino)
+			if err != nil {
+				return err
+			}
+			changedSizes[ino] = node.Size
 		}
 		if err := workspace.Close(); err != nil {
 			return err
@@ -227,9 +253,6 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			return err
 		}
 		installed = true
-		id := mergeID.String()
-		branches[ti].HeadCommitID = &id
-		branches[ti].State, branches[ti].MergeState = "NORMAL", nil
 		if err := saveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
 			return err
 		}
@@ -245,11 +268,10 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		for ino, size := range changedSizes {
 			sizes[ino] = size
 		}
-		if err := quota.replaceBranchLocked(params.TargetBranch, sizes, false); err != nil {
+		if err := quota.replaceBranchLocked(params.TargetBranch, sizes, materialized); err != nil {
 			return err
 		}
 		quotaChanged = true
-		result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
 		return nil
 	})
 	conflicted := errors.Is(err, errMergeConflicts) && workspaceCloseErr == nil
