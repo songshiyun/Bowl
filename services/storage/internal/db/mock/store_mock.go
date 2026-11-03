@@ -352,6 +352,140 @@ func (_c *MockStore_ClearTmpFileFlagByIno_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
+// CompareAndSetDiskBranches provides a mock function for the type MockStore
+func (_mock *MockStore) CompareAndSetDiskBranches(ctx context.Context, arg db.CompareAndSetDiskBranchesParams) ([]byte, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CompareAndSetDiskBranches")
+	}
+
+	var r0 []byte
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CompareAndSetDiskBranchesParams) ([]byte, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CompareAndSetDiskBranchesParams) []byte); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]byte)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.CompareAndSetDiskBranchesParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CompareAndSetDiskBranches_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompareAndSetDiskBranches'
+type MockStore_CompareAndSetDiskBranches_Call struct {
+	*mock.Call
+}
+
+// CompareAndSetDiskBranches is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.CompareAndSetDiskBranchesParams
+func (_e *MockStore_Expecter) CompareAndSetDiskBranches(ctx any, arg any) *MockStore_CompareAndSetDiskBranches_Call {
+	return &MockStore_CompareAndSetDiskBranches_Call{Call: _e.mock.On("CompareAndSetDiskBranches", ctx, arg)}
+}
+
+func (_c *MockStore_CompareAndSetDiskBranches_Call) Run(run func(ctx context.Context, arg db.CompareAndSetDiskBranchesParams)) *MockStore_CompareAndSetDiskBranches_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.CompareAndSetDiskBranchesParams
+		if args[1] != nil {
+			arg1 = args[1].(db.CompareAndSetDiskBranchesParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CompareAndSetDiskBranches_Call) Return(bytes []byte, err error) *MockStore_CompareAndSetDiskBranches_Call {
+	_c.Call.Return(bytes, err)
+	return _c
+}
+
+func (_c *MockStore_CompareAndSetDiskBranches_Call) RunAndReturn(run func(ctx context.Context, arg db.CompareAndSetDiskBranchesParams) ([]byte, error)) *MockStore_CompareAndSetDiskBranches_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// CreateCommit provides a mock function for the type MockStore
+func (_mock *MockStore) CreateCommit(ctx context.Context, arg db.CreateCommitParams) (db.Commit, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for CreateCommit")
+	}
+
+	var r0 db.Commit
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateCommitParams) (db.Commit, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.CreateCommitParams) db.Commit); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.Commit)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.CreateCommitParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_CreateCommit_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateCommit'
+type MockStore_CreateCommit_Call struct {
+	*mock.Call
+}
+
+// CreateCommit is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.CreateCommitParams
+func (_e *MockStore_Expecter) CreateCommit(ctx any, arg any) *MockStore_CreateCommit_Call {
+	return &MockStore_CreateCommit_Call{Call: _e.mock.On("CreateCommit", ctx, arg)}
+}
+
+func (_c *MockStore_CreateCommit_Call) Run(run func(ctx context.Context, arg db.CreateCommitParams)) *MockStore_CreateCommit_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.CreateCommitParams
+		if args[1] != nil {
+			arg1 = args[1].(db.CreateCommitParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_CreateCommit_Call) Return(commit db.Commit, err error) *MockStore_CreateCommit_Call {
+	_c.Call.Return(commit, err)
+	return _c
+}
+
+func (_c *MockStore_CreateCommit_Call) RunAndReturn(run func(ctx context.Context, arg db.CreateCommitParams) (db.Commit, error)) *MockStore_CreateCommit_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CreateDisk provides a mock function for the type MockStore
 func (_mock *MockStore) CreateDisk(ctx context.Context, arg db.CreateDiskParams) (db.CreateDiskRow, error) {
 	ret := _mock.Called(ctx, arg)
@@ -2479,6 +2613,72 @@ func (_c *MockStore_ExecTxWithOptions_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
+// GetActiveBranchWriter provides a mock function for the type MockStore
+func (_mock *MockStore) GetActiveBranchWriter(ctx context.Context, arg db.GetActiveBranchWriterParams) (db.ClientSession, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetActiveBranchWriter")
+	}
+
+	var r0 db.ClientSession
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetActiveBranchWriterParams) (db.ClientSession, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.GetActiveBranchWriterParams) db.ClientSession); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.ClientSession)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.GetActiveBranchWriterParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetActiveBranchWriter_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetActiveBranchWriter'
+type MockStore_GetActiveBranchWriter_Call struct {
+	*mock.Call
+}
+
+// GetActiveBranchWriter is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.GetActiveBranchWriterParams
+func (_e *MockStore_Expecter) GetActiveBranchWriter(ctx any, arg any) *MockStore_GetActiveBranchWriter_Call {
+	return &MockStore_GetActiveBranchWriter_Call{Call: _e.mock.On("GetActiveBranchWriter", ctx, arg)}
+}
+
+func (_c *MockStore_GetActiveBranchWriter_Call) Run(run func(ctx context.Context, arg db.GetActiveBranchWriterParams)) *MockStore_GetActiveBranchWriter_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.GetActiveBranchWriterParams
+		if args[1] != nil {
+			arg1 = args[1].(db.GetActiveBranchWriterParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetActiveBranchWriter_Call) Return(clientSession db.ClientSession, err error) *MockStore_GetActiveBranchWriter_Call {
+	_c.Call.Return(clientSession, err)
+	return _c
+}
+
+func (_c *MockStore_GetActiveBranchWriter_Call) RunAndReturn(run func(ctx context.Context, arg db.GetActiveBranchWriterParams) (db.ClientSession, error)) *MockStore_GetActiveBranchWriter_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetChunk provides a mock function for the type MockStore
 func (_mock *MockStore) GetChunk(ctx context.Context, arg db.GetChunkParams) (db.Chunk, error) {
 	ret := _mock.Called(ctx, arg)
@@ -2679,6 +2879,72 @@ func (_c *MockStore_GetChunksInRange_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// GetCommit provides a mock function for the type MockStore
+func (_mock *MockStore) GetCommit(ctx context.Context, commitID pgtype.UUID) (db.Commit, error) {
+	ret := _mock.Called(ctx, commitID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCommit")
+	}
+
+	var r0 db.Commit
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) (db.Commit, error)); ok {
+		return returnFunc(ctx, commitID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) db.Commit); ok {
+		r0 = returnFunc(ctx, commitID)
+	} else {
+		r0 = ret.Get(0).(db.Commit)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, pgtype.UUID) error); ok {
+		r1 = returnFunc(ctx, commitID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetCommit_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCommit'
+type MockStore_GetCommit_Call struct {
+	*mock.Call
+}
+
+// GetCommit is a helper method to define mock.On call
+//   - ctx context.Context
+//   - commitID pgtype.UUID
+func (_e *MockStore_Expecter) GetCommit(ctx any, commitID any) *MockStore_GetCommit_Call {
+	return &MockStore_GetCommit_Call{Call: _e.mock.On("GetCommit", ctx, commitID)}
+}
+
+func (_c *MockStore_GetCommit_Call) Run(run func(ctx context.Context, commitID pgtype.UUID)) *MockStore_GetCommit_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 pgtype.UUID
+		if args[1] != nil {
+			arg1 = args[1].(pgtype.UUID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetCommit_Call) Return(commit db.Commit, err error) *MockStore_GetCommit_Call {
+	_c.Call.Return(commit, err)
+	return _c
+}
+
+func (_c *MockStore_GetCommit_Call) RunAndReturn(run func(ctx context.Context, commitID pgtype.UUID) (db.Commit, error)) *MockStore_GetCommit_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetDisk provides a mock function for the type MockStore
 func (_mock *MockStore) GetDisk(ctx context.Context, diskID pgtype.UUID) (db.GetDiskRow, error) {
 	ret := _mock.Called(ctx, diskID)
@@ -2873,6 +3139,138 @@ func (_c *MockStore_GetDiskByRootInoForUpdate_Call) Return(getDiskByRootInoForUp
 }
 
 func (_c *MockStore_GetDiskByRootInoForUpdate_Call) RunAndReturn(run func(ctx context.Context, rootIno int64) (db.GetDiskByRootInoForUpdateRow, error)) *MockStore_GetDiskByRootInoForUpdate_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetDiskControlPlane provides a mock function for the type MockStore
+func (_mock *MockStore) GetDiskControlPlane(ctx context.Context, diskID pgtype.UUID) (db.GetDiskControlPlaneRow, error) {
+	ret := _mock.Called(ctx, diskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDiskControlPlane")
+	}
+
+	var r0 db.GetDiskControlPlaneRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) (db.GetDiskControlPlaneRow, error)); ok {
+		return returnFunc(ctx, diskID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) db.GetDiskControlPlaneRow); ok {
+		r0 = returnFunc(ctx, diskID)
+	} else {
+		r0 = ret.Get(0).(db.GetDiskControlPlaneRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, pgtype.UUID) error); ok {
+		r1 = returnFunc(ctx, diskID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetDiskControlPlane_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDiskControlPlane'
+type MockStore_GetDiskControlPlane_Call struct {
+	*mock.Call
+}
+
+// GetDiskControlPlane is a helper method to define mock.On call
+//   - ctx context.Context
+//   - diskID pgtype.UUID
+func (_e *MockStore_Expecter) GetDiskControlPlane(ctx any, diskID any) *MockStore_GetDiskControlPlane_Call {
+	return &MockStore_GetDiskControlPlane_Call{Call: _e.mock.On("GetDiskControlPlane", ctx, diskID)}
+}
+
+func (_c *MockStore_GetDiskControlPlane_Call) Run(run func(ctx context.Context, diskID pgtype.UUID)) *MockStore_GetDiskControlPlane_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 pgtype.UUID
+		if args[1] != nil {
+			arg1 = args[1].(pgtype.UUID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetDiskControlPlane_Call) Return(getDiskControlPlaneRow db.GetDiskControlPlaneRow, err error) *MockStore_GetDiskControlPlane_Call {
+	_c.Call.Return(getDiskControlPlaneRow, err)
+	return _c
+}
+
+func (_c *MockStore_GetDiskControlPlane_Call) RunAndReturn(run func(ctx context.Context, diskID pgtype.UUID) (db.GetDiskControlPlaneRow, error)) *MockStore_GetDiskControlPlane_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetDiskControlPlaneForUpdate provides a mock function for the type MockStore
+func (_mock *MockStore) GetDiskControlPlaneForUpdate(ctx context.Context, diskID pgtype.UUID) (db.GetDiskControlPlaneForUpdateRow, error) {
+	ret := _mock.Called(ctx, diskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetDiskControlPlaneForUpdate")
+	}
+
+	var r0 db.GetDiskControlPlaneForUpdateRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) (db.GetDiskControlPlaneForUpdateRow, error)); ok {
+		return returnFunc(ctx, diskID)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, pgtype.UUID) db.GetDiskControlPlaneForUpdateRow); ok {
+		r0 = returnFunc(ctx, diskID)
+	} else {
+		r0 = ret.Get(0).(db.GetDiskControlPlaneForUpdateRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, pgtype.UUID) error); ok {
+		r1 = returnFunc(ctx, diskID)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_GetDiskControlPlaneForUpdate_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDiskControlPlaneForUpdate'
+type MockStore_GetDiskControlPlaneForUpdate_Call struct {
+	*mock.Call
+}
+
+// GetDiskControlPlaneForUpdate is a helper method to define mock.On call
+//   - ctx context.Context
+//   - diskID pgtype.UUID
+func (_e *MockStore_Expecter) GetDiskControlPlaneForUpdate(ctx any, diskID any) *MockStore_GetDiskControlPlaneForUpdate_Call {
+	return &MockStore_GetDiskControlPlaneForUpdate_Call{Call: _e.mock.On("GetDiskControlPlaneForUpdate", ctx, diskID)}
+}
+
+func (_c *MockStore_GetDiskControlPlaneForUpdate_Call) Run(run func(ctx context.Context, diskID pgtype.UUID)) *MockStore_GetDiskControlPlaneForUpdate_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 pgtype.UUID
+		if args[1] != nil {
+			arg1 = args[1].(pgtype.UUID)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_GetDiskControlPlaneForUpdate_Call) Return(getDiskControlPlaneForUpdateRow db.GetDiskControlPlaneForUpdateRow, err error) *MockStore_GetDiskControlPlaneForUpdate_Call {
+	_c.Call.Return(getDiskControlPlaneForUpdateRow, err)
+	return _c
+}
+
+func (_c *MockStore_GetDiskControlPlaneForUpdate_Call) RunAndReturn(run func(ctx context.Context, diskID pgtype.UUID) (db.GetDiskControlPlaneForUpdateRow, error)) *MockStore_GetDiskControlPlaneForUpdate_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -4381,6 +4779,74 @@ func (_c *MockStore_IsSubdirectory_Call) RunAndReturn(run func(ctx context.Conte
 	return _c
 }
 
+// ListActiveCommitSessions provides a mock function for the type MockStore
+func (_mock *MockStore) ListActiveCommitSessions(ctx context.Context, arg db.ListActiveCommitSessionsParams) ([]db.ClientSession, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListActiveCommitSessions")
+	}
+
+	var r0 []db.ClientSession
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListActiveCommitSessionsParams) ([]db.ClientSession, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListActiveCommitSessionsParams) []db.ClientSession); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]db.ClientSession)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.ListActiveCommitSessionsParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListActiveCommitSessions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListActiveCommitSessions'
+type MockStore_ListActiveCommitSessions_Call struct {
+	*mock.Call
+}
+
+// ListActiveCommitSessions is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.ListActiveCommitSessionsParams
+func (_e *MockStore_Expecter) ListActiveCommitSessions(ctx any, arg any) *MockStore_ListActiveCommitSessions_Call {
+	return &MockStore_ListActiveCommitSessions_Call{Call: _e.mock.On("ListActiveCommitSessions", ctx, arg)}
+}
+
+func (_c *MockStore_ListActiveCommitSessions_Call) Run(run func(ctx context.Context, arg db.ListActiveCommitSessionsParams)) *MockStore_ListActiveCommitSessions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.ListActiveCommitSessionsParams
+		if args[1] != nil {
+			arg1 = args[1].(db.ListActiveCommitSessionsParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListActiveCommitSessions_Call) Return(clientSessions []db.ClientSession, err error) *MockStore_ListActiveCommitSessions_Call {
+	_c.Call.Return(clientSessions, err)
+	return _c
+}
+
+func (_c *MockStore_ListActiveCommitSessions_Call) RunAndReturn(run func(ctx context.Context, arg db.ListActiveCommitSessionsParams) ([]db.ClientSession, error)) *MockStore_ListActiveCommitSessions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListActiveFileLocksByInoAndFlags provides a mock function for the type MockStore
 func (_mock *MockStore) ListActiveFileLocksByInoAndFlags(ctx context.Context, arg db.ListActiveFileLocksByInoAndFlagsParams) ([]db.FileLock, error) {
 	ret := _mock.Called(ctx, arg)
@@ -4513,6 +4979,142 @@ func (_c *MockStore_ListActiveSessionIDsByDisk_Call) Return(int64s []int64, err 
 }
 
 func (_c *MockStore_ListActiveSessionIDsByDisk_Call) RunAndReturn(run func(ctx context.Context, arg db.ListActiveSessionIDsByDiskParams) ([]int64, error)) *MockStore_ListActiveSessionIDsByDisk_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListCommitAncestors provides a mock function for the type MockStore
+func (_mock *MockStore) ListCommitAncestors(ctx context.Context, arg db.ListCommitAncestorsParams) ([]db.Commit, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListCommitAncestors")
+	}
+
+	var r0 []db.Commit
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListCommitAncestorsParams) ([]db.Commit, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListCommitAncestorsParams) []db.Commit); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]db.Commit)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.ListCommitAncestorsParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListCommitAncestors_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCommitAncestors'
+type MockStore_ListCommitAncestors_Call struct {
+	*mock.Call
+}
+
+// ListCommitAncestors is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.ListCommitAncestorsParams
+func (_e *MockStore_Expecter) ListCommitAncestors(ctx any, arg any) *MockStore_ListCommitAncestors_Call {
+	return &MockStore_ListCommitAncestors_Call{Call: _e.mock.On("ListCommitAncestors", ctx, arg)}
+}
+
+func (_c *MockStore_ListCommitAncestors_Call) Run(run func(ctx context.Context, arg db.ListCommitAncestorsParams)) *MockStore_ListCommitAncestors_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.ListCommitAncestorsParams
+		if args[1] != nil {
+			arg1 = args[1].(db.ListCommitAncestorsParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListCommitAncestors_Call) Return(commits []db.Commit, err error) *MockStore_ListCommitAncestors_Call {
+	_c.Call.Return(commits, err)
+	return _c
+}
+
+func (_c *MockStore_ListCommitAncestors_Call) RunAndReturn(run func(ctx context.Context, arg db.ListCommitAncestorsParams) ([]db.Commit, error)) *MockStore_ListCommitAncestors_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListCommitsByBranch provides a mock function for the type MockStore
+func (_mock *MockStore) ListCommitsByBranch(ctx context.Context, arg db.ListCommitsByBranchParams) ([]db.Commit, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListCommitsByBranch")
+	}
+
+	var r0 []db.Commit
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListCommitsByBranchParams) ([]db.Commit, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.ListCommitsByBranchParams) []db.Commit); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]db.Commit)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.ListCommitsByBranchParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_ListCommitsByBranch_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCommitsByBranch'
+type MockStore_ListCommitsByBranch_Call struct {
+	*mock.Call
+}
+
+// ListCommitsByBranch is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.ListCommitsByBranchParams
+func (_e *MockStore_Expecter) ListCommitsByBranch(ctx any, arg any) *MockStore_ListCommitsByBranch_Call {
+	return &MockStore_ListCommitsByBranch_Call{Call: _e.mock.On("ListCommitsByBranch", ctx, arg)}
+}
+
+func (_c *MockStore_ListCommitsByBranch_Call) Run(run func(ctx context.Context, arg db.ListCommitsByBranchParams)) *MockStore_ListCommitsByBranch_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.ListCommitsByBranchParams
+		if args[1] != nil {
+			arg1 = args[1].(db.ListCommitsByBranchParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_ListCommitsByBranch_Call) Return(commits []db.Commit, err error) *MockStore_ListCommitsByBranch_Call {
+	_c.Call.Return(commits, err)
+	return _c
+}
+
+func (_c *MockStore_ListCommitsByBranch_Call) RunAndReturn(run func(ctx context.Context, arg db.ListCommitsByBranchParams) ([]db.Commit, error)) *MockStore_ListCommitsByBranch_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -5447,6 +6049,138 @@ func (_c *MockStore_ReleaseFileFast_Call) Return(releaseFileFastRow db.ReleaseFi
 }
 
 func (_c *MockStore_ReleaseFileFast_Call) RunAndReturn(run func(ctx context.Context, arg db.ReleaseFileFastParams) (db.ReleaseFileFastRow, error)) *MockStore_ReleaseFileFast_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RenewControlPlaneSession provides a mock function for the type MockStore
+func (_mock *MockStore) RenewControlPlaneSession(ctx context.Context, arg db.RenewControlPlaneSessionParams) (db.ClientSession, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RenewControlPlaneSession")
+	}
+
+	var r0 db.ClientSession
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.RenewControlPlaneSessionParams) (db.ClientSession, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.RenewControlPlaneSessionParams) db.ClientSession); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.ClientSession)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.RenewControlPlaneSessionParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_RenewControlPlaneSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewControlPlaneSession'
+type MockStore_RenewControlPlaneSession_Call struct {
+	*mock.Call
+}
+
+// RenewControlPlaneSession is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.RenewControlPlaneSessionParams
+func (_e *MockStore_Expecter) RenewControlPlaneSession(ctx any, arg any) *MockStore_RenewControlPlaneSession_Call {
+	return &MockStore_RenewControlPlaneSession_Call{Call: _e.mock.On("RenewControlPlaneSession", ctx, arg)}
+}
+
+func (_c *MockStore_RenewControlPlaneSession_Call) Run(run func(ctx context.Context, arg db.RenewControlPlaneSessionParams)) *MockStore_RenewControlPlaneSession_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.RenewControlPlaneSessionParams
+		if args[1] != nil {
+			arg1 = args[1].(db.RenewControlPlaneSessionParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_RenewControlPlaneSession_Call) Return(clientSession db.ClientSession, err error) *MockStore_RenewControlPlaneSession_Call {
+	_c.Call.Return(clientSession, err)
+	return _c
+}
+
+func (_c *MockStore_RenewControlPlaneSession_Call) RunAndReturn(run func(ctx context.Context, arg db.RenewControlPlaneSessionParams) (db.ClientSession, error)) *MockStore_RenewControlPlaneSession_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetDiskStorageDir provides a mock function for the type MockStore
+func (_mock *MockStore) SetDiskStorageDir(ctx context.Context, arg db.SetDiskStorageDirParams) (db.SetDiskStorageDirRow, error) {
+	ret := _mock.Called(ctx, arg)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetDiskStorageDir")
+	}
+
+	var r0 db.SetDiskStorageDirRow
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.SetDiskStorageDirParams) (db.SetDiskStorageDirRow, error)); ok {
+		return returnFunc(ctx, arg)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, db.SetDiskStorageDirParams) db.SetDiskStorageDirRow); ok {
+		r0 = returnFunc(ctx, arg)
+	} else {
+		r0 = ret.Get(0).(db.SetDiskStorageDirRow)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, db.SetDiskStorageDirParams) error); ok {
+		r1 = returnFunc(ctx, arg)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStore_SetDiskStorageDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetDiskStorageDir'
+type MockStore_SetDiskStorageDir_Call struct {
+	*mock.Call
+}
+
+// SetDiskStorageDir is a helper method to define mock.On call
+//   - ctx context.Context
+//   - arg db.SetDiskStorageDirParams
+func (_e *MockStore_Expecter) SetDiskStorageDir(ctx any, arg any) *MockStore_SetDiskStorageDir_Call {
+	return &MockStore_SetDiskStorageDir_Call{Call: _e.mock.On("SetDiskStorageDir", ctx, arg)}
+}
+
+func (_c *MockStore_SetDiskStorageDir_Call) Run(run func(ctx context.Context, arg db.SetDiskStorageDirParams)) *MockStore_SetDiskStorageDir_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 db.SetDiskStorageDirParams
+		if args[1] != nil {
+			arg1 = args[1].(db.SetDiskStorageDirParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStore_SetDiskStorageDir_Call) Return(setDiskStorageDirRow db.SetDiskStorageDirRow, err error) *MockStore_SetDiskStorageDir_Call {
+	_c.Call.Return(setDiskStorageDirRow, err)
+	return _c
+}
+
+func (_c *MockStore_SetDiskStorageDir_Call) RunAndReturn(run func(ctx context.Context, arg db.SetDiskStorageDirParams) (db.SetDiskStorageDirRow, error)) *MockStore_SetDiskStorageDir_Call {
 	_c.Call.Return(run)
 	return _c
 }

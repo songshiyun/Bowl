@@ -17,6 +17,8 @@ type Querier interface {
 	ClearInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
 	// 4194304 = 0o20000000 (O_TMPFILE)
 	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
+	CompareAndSetDiskBranches(ctx context.Context, arg CompareAndSetDiskBranchesParams) ([]byte, error)
+	CreateCommit(ctx context.Context, arg CreateCommitParams) (Commit, error)
 	CreateDisk(ctx context.Context, arg CreateDiskParams) (CreateDiskRow, error)
 	CreateEntry(ctx context.Context, arg CreateEntryParams) error
 	CreateFileAtomic(ctx context.Context, arg CreateFileAtomicParams) (CreateFileAtomicRow, error)
@@ -48,12 +50,16 @@ type Querier interface {
 	DeletePosixFileLocksBySessionAndOwner(ctx context.Context, arg DeletePosixFileLocksBySessionAndOwnerParams) (int64, error)
 	DeleteSliceRef(ctx context.Context, sliceID int64) error
 	DeleteUnreferencedOrphanInodes(ctx context.Context) ([]DeleteUnreferencedOrphanInodesRow, error)
+	GetActiveBranchWriter(ctx context.Context, arg GetActiveBranchWriterParams) (ClientSession, error)
 	GetChunk(ctx context.Context, arg GetChunkParams) (Chunk, error)
 	GetChunkForUpdate(ctx context.Context, arg GetChunkForUpdateParams) (Chunk, error)
 	GetChunksInRange(ctx context.Context, arg GetChunksInRangeParams) ([]Chunk, error)
+	GetCommit(ctx context.Context, commitID pgtype.UUID) (Commit, error)
 	GetDisk(ctx context.Context, diskID pgtype.UUID) (GetDiskRow, error)
 	GetDiskByRootIno(ctx context.Context, rootIno int64) (GetDiskByRootInoRow, error)
 	GetDiskByRootInoForUpdate(ctx context.Context, rootIno int64) (GetDiskByRootInoForUpdateRow, error)
+	GetDiskControlPlane(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneRow, error)
+	GetDiskControlPlaneForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneForUpdateRow, error)
 	GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskForUpdateRow, error)
 	GetEntry(ctx context.Context, arg GetEntryParams) (Entry, error)
 	GetFileHandle(ctx context.Context, arg GetFileHandleParams) (FileHandle, error)
@@ -78,8 +84,11 @@ type Querier interface {
 	IncrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
 	InsertSliceRef(ctx context.Context, arg InsertSliceRefParams) error
 	IsSubdirectory(ctx context.Context, arg IsSubdirectoryParams) (bool, error)
+	ListActiveCommitSessions(ctx context.Context, arg ListActiveCommitSessionsParams) ([]ClientSession, error)
 	ListActiveFileLocksByInoAndFlags(ctx context.Context, arg ListActiveFileLocksByInoAndFlagsParams) ([]FileLock, error)
 	ListActiveSessionIDsByDisk(ctx context.Context, arg ListActiveSessionIDsByDiskParams) ([]int64, error)
+	ListCommitAncestors(ctx context.Context, arg ListCommitAncestorsParams) ([]Commit, error)
+	ListCommitsByBranch(ctx context.Context, arg ListCommitsByBranchParams) ([]Commit, error)
 	ListDirEntries(ctx context.Context, arg ListDirEntriesParams) ([]ListDirEntriesRow, error)
 	ListDirEntriesAfterName(ctx context.Context, arg ListDirEntriesAfterNameParams) ([]ListDirEntriesAfterNameRow, error)
 	ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDisksRow, error)
@@ -94,6 +103,10 @@ type Querier interface {
 	OpenFileFast(ctx context.Context, arg OpenFileFastParams) (OpenFileFastRow, error)
 	ReleaseDirFast(ctx context.Context, arg ReleaseDirFastParams) (ReleaseDirFastRow, error)
 	ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error)
+	// 写端冲突返回 23505（uq_client_sessions_managed_writer）；租期单位为微秒。
+	// 活跃会话不能更换绑定，错误绑定或非正租期返回零行。
+	RenewControlPlaneSession(ctx context.Context, arg RenewControlPlaneSessionParams) (ClientSession, error)
+	SetDiskStorageDir(ctx context.Context, arg SetDiskStorageDirParams) (SetDiskStorageDirRow, error)
 	TouchInodeAtime(ctx context.Context, ino int64) error
 	TouchInodeCtime(ctx context.Context, ino int64) error
 	TouchInodeTimestamps(ctx context.Context, ino int64) error

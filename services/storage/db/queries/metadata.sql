@@ -480,7 +480,7 @@ SELECT EXISTS (
 WITH locked_existing AS MATERIALIZED (
     SELECT s.session_id, s.expires_at
     FROM client_sessions s
-    WHERE s.session_id = $1
+    WHERE s.session_id = $1 AND NOT s.lease_managed
     FOR UPDATE OF s
 ),
 ts AS MATERIALIZED (
@@ -520,7 +520,8 @@ SET expires_at = EXCLUDED.expires_at,
         WHEN client_sessions.expires_at <= (SELECT now FROM ts) THEN EXCLUDED.disk_id
         ELSE COALESCE(EXCLUDED.disk_id, client_sessions.disk_id)
     END
-RETURNING session_id, expires_at, updated_at, created_at, disk_id;
+WHERE NOT client_sessions.lease_managed
+RETURNING *;
 
 -- name: DeleteClientSessionByID :execrows
 WITH locked_target AS MATERIALIZED (
