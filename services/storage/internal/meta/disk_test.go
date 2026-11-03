@@ -3138,29 +3138,22 @@ func TestListDisks_PostgresIntegration(t *testing.T) {
 	newestTime := baseTime.Add(20 * time.Second)
 
 	disksToInsert := []struct {
-		id        string
 		name      string
 		createdAt time.Time
 	}{
-		{id: "0192a3b4-c5d6-7e8f-9012-000000000001", name: "disk-oldest", createdAt: baseTime},
-		{id: "0192a3b4-c5d6-7e8f-9012-000000000002", name: "disk-older", createdAt: baseTime.Add(5 * time.Second)},
-		{id: "0192a3b4-c5d6-7e8f-9012-000000000003", name: "disk-same-ts-low-id", createdAt: sameTime},
-		{id: "0192a3b4-c5d6-7e8f-9012-000000000004", name: "disk-same-ts-high-id", createdAt: sameTime},
-		{id: "0192a3b4-c5d6-7e8f-9012-000000000005", name: "disk-newest", createdAt: newestTime},
+		{name: "disk-oldest", createdAt: baseTime},
+		{name: "disk-older", createdAt: baseTime.Add(5 * time.Second)},
+		{name: "disk-same-ts-a", createdAt: sameTime},
+		{name: "disk-same-ts-b", createdAt: sameTime},
+		{name: "disk-newest", createdAt: newestTime},
 	}
 
 	var createdDiskIDs []string
-	var createdRootInos []int64
 	t.Cleanup(func() {
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanCancel()
-		if len(createdDiskIDs) > 0 {
-			_, cleanErr := pool.Exec(cleanCtx, "DELETE FROM disks WHERE disk_id = ANY($1)", createdDiskIDs)
-			require.NoError(t, cleanErr)
-		}
-		if len(createdRootInos) > 0 {
-			_, cleanErr := pool.Exec(cleanCtx, "DELETE FROM inodes WHERE ino = ANY($1)", createdRootInos)
-			require.NoError(t, cleanErr)
+		for _, diskID := range createdDiskIDs {
+			require.NoError(t, mgr.DeleteDisk(cleanCtx, diskID))
 		}
 	})
 
@@ -3170,21 +3163,20 @@ func TestListDisks_PostgresIntegration(t *testing.T) {
 			MaxBytes: 1024 * 1024,
 		})
 		require.NoError(t, err)
-		createdDiskIDs = append(createdDiskIDs, item.id)
-		createdRootInos = append(createdRootInos, int64(d.RootIno))
+		createdDiskIDs = append(createdDiskIDs, d.DiskID)
 
-		_, err = pool.Exec(ctx, "UPDATE disks SET disk_id = $1, created_at = $2, updated_at = $2 WHERE disk_id = $3",
-			item.id, item.createdAt, d.DiskID)
+		_, err = pool.Exec(ctx, "UPDATE disks SET created_at = $1, updated_at = $1 WHERE disk_id = $2",
+			item.createdAt, d.DiskID)
 		require.NoError(t, err)
 	}
 
 	// 期望全局严格排序顺序：created_at DESC, disk_id DESC
 	expectedOrder := []string{
-		"0192a3b4-c5d6-7e8f-9012-000000000005", // newestTime
-		"0192a3b4-c5d6-7e8f-9012-000000000004", // sameTime, high id
-		"0192a3b4-c5d6-7e8f-9012-000000000003", // sameTime, low id
-		"0192a3b4-c5d6-7e8f-9012-000000000002", // baseTime + 5s
-		"0192a3b4-c5d6-7e8f-9012-000000000001", // baseTime
+		createdDiskIDs[4],
+		max(createdDiskIDs[2], createdDiskIDs[3]),
+		min(createdDiskIDs[2], createdDiskIDs[3]),
+		createdDiskIDs[1],
+		createdDiskIDs[0],
 	}
 
 	// 3. 按 PageSize = 2 逐页遍历（同时验证在相同 created_at 的两条记录之间截断翻页不丢不重）

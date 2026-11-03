@@ -45,7 +45,7 @@ func toProtoDisk(d *meta.Disk) *storagev1.Disk {
 	if d == nil {
 		return nil
 	}
-	return &storagev1.Disk{
+	result := &storagev1.Disk{
 		DiskId:     d.DiskID,
 		Name:       d.Name,
 		RootIno:    d.RootIno,
@@ -55,6 +55,21 @@ func toProtoDisk(d *meta.Disk) *storagev1.Disk {
 		CreatedAt:  timestamppb.New(d.CreatedAt),
 		UpdatedAt:  timestamppb.New(d.UpdatedAt),
 	}
+	if d.DefaultBranch != "" {
+		result.DefaultBranch = &d.DefaultBranch
+	}
+	for _, branch := range d.Branches {
+		state := storagev1.BranchState_BRANCH_STATE_NORMAL
+		if branch.State == "MERGING" {
+			state = storagev1.BranchState_BRANCH_STATE_MERGING
+		}
+		result.Branches = append(result.Branches, &storagev1.Branch{
+			BranchId: branch.BranchID, DiskId: branch.DiskID, Name: branch.Name,
+			ParentBranch: branch.ParentBranch, ForkCommitId: branch.ForkCommitID,
+			HeadCommitId: branch.HeadCommitID, State: state, CreatedAt: timestamppb.New(branch.CreatedAt),
+		})
+	}
+	return result
 }
 
 // CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。

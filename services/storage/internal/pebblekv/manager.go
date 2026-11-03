@@ -315,6 +315,69 @@ func (m *Manager) AllocateInode(disk string) (uint64, error) {
 	return next, nil
 }
 
+// InitInodeAllocator 持久化根节点编号，已有分配器不会被重置。
+func (m *Manager) InitInodeAllocator(disk string) error {
+	path, err := m.path(disk, "", "inode-allocator")
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrClosed
+	}
+	if m.allocators[disk] != nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	db, err := pebble.Open(path, &pebble.Options{})
+	if err != nil {
+		return err
+	}
+	value, closer, err := db.Get([]byte("last-inode"))
+	if errors.Is(err, pebble.ErrNotFound) {
+		err = db.Set([]byte("last-inode"), binary.BigEndian.AppendUint64(nil, 1), pebble.Sync)
+	} else if err == nil {
+		if len(value) != 8 || binary.BigEndian.Uint64(value) < 1 {
+			err = ErrInvalidValue
+		}
+		err = errors.Join(err, closer.Close())
+	}
+	return errors.Join(err, db.Close())
+}
+
+// RemoveDisk 关闭编号分配器并删除没有打开句柄的磁盘目录。
+func (m *Manager) RemoveDisk(disk string) error {
+	path, err := m.path(disk, "", "inode-allocator")
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return ErrClosed
+	}
+	for key := range m.branches {
+		if key.disk == disk {
+			return ErrBusy
+		}
+	}
+	for key := range m.commits {
+		if key.disk == disk {
+			return ErrBusy
+		}
+	}
+	if db := m.allocators[disk]; db != nil {
+		if err := db.Close(); err != nil {
+			return err
+		}
+		delete(m.allocators, disk)
+	}
+	return os.RemoveAll(filepath.Dir(path))
+}
+
 // Close 在所有分支及快照句柄关闭后释放管理器。
 func (m *Manager) Close() error {
 	m.mu.Lock()

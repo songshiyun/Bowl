@@ -63,6 +63,10 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 	if input.Flags != nil && *input.Flags > math.MaxInt32 {
 		return nil, ErrInvalidArgument
 	}
+	if input.Size != nil && m.hasPool() {
+		m.writeQuotaMu.Lock()
+		defer m.writeQuotaMu.Unlock()
+	}
 
 	var result *Inode
 	var truncatedBorderIndx int64
@@ -149,15 +153,9 @@ func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (
 		// 容量配额校验与联动更新（仅针对常规文件且关联有效 Disk）
 		if input.Size != nil && fileType == S_IFREG && current.RootIno > 0 {
 			oldSize := uint64(current.Size)
-			if targetSize > oldSize {
-				deltaBytes := int64(targetSize - oldSize)
-				if err := m.reserveQuotaBytes(ctx, q, current.RootIno, deltaBytes); err != nil {
+			if targetSize != oldSize {
+				if err := m.recordLegacySizeChange(ctx, q, current.RootIno, current.Ino, oldSize, targetSize); err != nil {
 					return err
-				}
-			} else if targetSize < oldSize {
-				deltaBytes := int64(targetSize) - int64(oldSize)
-				if err := m.recordQuotaDelta(ctx, q, current.RootIno, deltaBytes, 0); err != nil {
-					return fmt.Errorf("record disk quota delta by root_ino %d: %w", current.RootIno, err)
 				}
 			}
 		}
@@ -268,6 +266,10 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 	if params.Mode != 0 && params.Mode != FallocFlKeepSize && params.Mode != (FallocFlPunchHole|FallocFlKeepSize) {
 		return ErrNotSupported
 	}
+	if m.hasPool() {
+		m.writeQuotaMu.Lock()
+		defer m.writeQuotaMu.Unlock()
+	}
 
 	// 3. 开启读写事务
 	var punchStats []chunkAppendStat
@@ -312,8 +314,7 @@ func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
 			if targetSize > uint64(current.Size) {
 				// 若关联了 Disk 根节点，进行容量配额校验与递增
 				if current.RootIno > 0 {
-					deltaBytes := int64(targetSize - uint64(current.Size))
-					if err := m.reserveQuotaBytes(ctx, q, current.RootIno, deltaBytes); err != nil {
+					if err := m.recordLegacySizeChange(ctx, q, current.RootIno, current.Ino, uint64(current.Size), targetSize); err != nil {
 						return err
 					}
 				}
