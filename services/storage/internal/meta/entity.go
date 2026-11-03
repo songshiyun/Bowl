@@ -566,6 +566,51 @@ type RollbackParams struct {
 	CommitID   string
 }
 
+// ConflictStrategy 指定合并冲突的处理方式。
+type ConflictStrategy int32
+
+const (
+	ConflictStrategyUnspecified ConflictStrategy = iota
+	ConflictStrategyAbortOnConflict
+	ConflictStrategyOurs
+	ConflictStrategyTheirs
+	ConflictStrategyMaterialize
+)
+
+// MergeResultType 表示合并结果。
+type MergeResultType int32
+
+const (
+	MergeResultUnspecified MergeResultType = iota
+	MergeResultMerged
+	MergeResultConflicts
+	MergeResultMaterialized
+)
+
+// MergeConflict 描述三路合并中不兼容的变更。
+type MergeConflict struct {
+	Path       string
+	BaseAttr   *Inode
+	OursAttr   *Inode
+	TheirsAttr *Inode
+	Reason     string
+}
+
+// MergeParams 定义分支合并参数。
+type MergeParams struct {
+	DiskID       string
+	SourceBranch string
+	TargetBranch string
+	Strategy     ConflictStrategy
+}
+
+// MergeResult 描述合并后的快照或冲突。
+type MergeResult struct {
+	Result        MergeResultType
+	MergeCommitID *string
+	Conflicts     []MergeConflict
+}
+
 // CreateDiskParams 描述创建虚拟磁盘入参。
 type CreateDiskParams struct {
 	Name     string

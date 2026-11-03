@@ -90,6 +90,7 @@ type Manager interface {
 	ListBranches(ctx context.Context, diskID string) ([]Branch, error)
 	DeleteBranch(ctx context.Context, params DeleteBranchParams) error
 	Commit(ctx context.Context, params CommitParams) (*CommitInfo, error)
+	Merge(ctx context.Context, params MergeParams) (*MergeResult, error)
 	Rollback(ctx context.Context, params RollbackParams) error
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error)

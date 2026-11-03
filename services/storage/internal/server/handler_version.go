@@ -67,6 +67,32 @@ func (s *Server) Commit(ctx context.Context, req *connect.Request[storagev1.Comm
 	}}), nil
 }
 
+// Merge 将源分支的变更合入目标分支。
+func (s *Server) Merge(ctx context.Context, req *connect.Request[storagev1.MergeRequest]) (*connect.Response[storagev1.MergeResponse], error) {
+	result, err := s.metaManager.Merge(ctx, meta.MergeParams{
+		DiskID: req.Msg.DiskId, SourceBranch: req.Msg.SourceBranch, TargetBranch: req.Msg.TargetBranch,
+		Strategy: meta.ConflictStrategy(req.Msg.Strategy),
+	})
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	response := &storagev1.MergeResponse{Result: storagev1.MergeResult(result.Result), MergeCommitId: result.MergeCommitID}
+	for _, conflict := range result.Conflicts {
+		item := &storagev1.MergeConflict{Path: conflict.Path, Reason: conflict.Reason}
+		if conflict.BaseAttr != nil {
+			item.BaseAttr = toProtoAttribute(conflict.BaseAttr.Attr)
+		}
+		if conflict.OursAttr != nil {
+			item.OursAttr = toProtoAttribute(conflict.OursAttr.Attr)
+		}
+		if conflict.TheirsAttr != nil {
+			item.TheirsAttr = toProtoAttribute(conflict.TheirsAttr.Attr)
+		}
+		response.Conflicts = append(response.Conflicts, item)
+	}
+	return connect.NewResponse(response), nil
+}
+
 // Rollback 在无活跃写端时恢复版本快照。
 func (s *Server) Rollback(ctx context.Context, req *connect.Request[storagev1.RollbackRequest]) (*connect.Response[storagev1.RollbackResponse], error) {
 	if err := s.metaManager.Rollback(ctx, meta.RollbackParams{DiskID: req.Msg.DiskId, BranchName: req.Msg.BranchName, CommitID: req.Msg.CommitId}); err != nil {

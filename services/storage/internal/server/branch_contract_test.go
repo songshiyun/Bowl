@@ -106,10 +106,6 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 	ctx := context.Background()
 	const disk = "11111111-1111-7111-8111-111111111111"
 	calls := map[string]func() error{
-		"Merge": func() error {
-			_, err := client.Merge(ctx, connect.NewRequest(&storagev1.MergeRequest{DiskId: disk, SourceBranch: "dev", TargetBranch: "main"}))
-			return err
-		},
 		"ResolveMerge": func() error {
 			_, err := client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: disk, BranchName: "main"}))
 			return err
@@ -329,4 +325,33 @@ func TestVersionHandlers(t *testing.T) {
 	require.Equal(t, "EBUSY", server.ExtractErrorInfo(err).GetReason())
 	_, err = client.DeleteBranch(ctx, connect.NewRequest(&storagev1.DeleteBranchRequest{DiskId: disk, Name: "dev"}))
 	require.NoError(t, err)
+}
+
+func TestMergeHandler(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	const disk = "11111111-1111-7111-8111-111111111111"
+	const commit = "22222222-2222-7222-8222-222222222222"
+	params := meta.MergeParams{DiskID: disk, SourceBranch: "dev", TargetBranch: "main", Strategy: meta.ConflictStrategyTheirs}
+	mgr.EXPECT().Merge(mock.Anything, params).Return(&meta.MergeResult{Result: meta.MergeResultMerged, MergeCommitID: proto.String(commit)}, nil).Once()
+	response, err := client.Merge(context.Background(), connect.NewRequest(&storagev1.MergeRequest{
+		DiskId: disk, SourceBranch: "dev", TargetBranch: "main", Strategy: storagev1.ConflictStrategy_CONFLICT_STRATEGY_THEIRS,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, storagev1.MergeResult_MERGE_RESULT_MERGED, response.Msg.Result)
+	require.Equal(t, proto.String(commit), response.Msg.MergeCommitId)
+	inode := sampleTestInode(2, meta.S_IFREG|0o644)
+	params.Strategy = meta.ConflictStrategyUnspecified
+	mgr.EXPECT().Merge(mock.Anything, params).Return(&meta.MergeResult{Result: meta.MergeResultConflicts, Conflicts: []meta.MergeConflict{{Path: "/文件", OursAttr: inode, Reason: "冲突"}}}, nil).Once()
+	response, err = client.Merge(context.Background(), connect.NewRequest(&storagev1.MergeRequest{DiskId: disk, SourceBranch: "dev", TargetBranch: "main"}))
+	require.NoError(t, err)
+	require.Equal(t, storagev1.MergeResult_MERGE_RESULT_CONFLICTS, response.Msg.Result)
+	require.Len(t, response.Msg.Conflicts, 1)
+	require.Equal(t, "/文件", response.Msg.Conflicts[0].Path)
+	require.Equal(t, inode.Attr.Mode, response.Msg.Conflicts[0].OursAttr.Mode)
+	require.Nil(t, response.Msg.Conflicts[0].BaseAttr)
+	mgr.EXPECT().Merge(mock.Anything, params).Return(nil, meta.ErrBusy).Once()
+	_, err = client.Merge(context.Background(), connect.NewRequest(&storagev1.MergeRequest{DiskId: disk, SourceBranch: "dev", TargetBranch: "main"}))
+	require.Equal(t, "EBUSY", server.ExtractErrorInfo(err).GetReason())
 }

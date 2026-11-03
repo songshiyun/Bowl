@@ -1531,6 +1531,74 @@ func (_c *MockManager_Lookup_Call) RunAndReturn(run func(ctx context.Context, pa
 	return _c
 }
 
+// Merge provides a mock function for the type MockManager
+func (_mock *MockManager) Merge(ctx context.Context, params meta.MergeParams) (*meta.MergeResult, error) {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Merge")
+	}
+
+	var r0 *meta.MergeResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MergeParams) (*meta.MergeResult, error)); ok {
+		return returnFunc(ctx, params)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MergeParams) *meta.MergeResult); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*meta.MergeResult)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.MergeParams) error); ok {
+		r1 = returnFunc(ctx, params)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockManager_Merge_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Merge'
+type MockManager_Merge_Call struct {
+	*mock.Call
+}
+
+// Merge is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.MergeParams
+func (_e *MockManager_Expecter) Merge(ctx any, params any) *MockManager_Merge_Call {
+	return &MockManager_Merge_Call{Call: _e.mock.On("Merge", ctx, params)}
+}
+
+func (_c *MockManager_Merge_Call) Run(run func(ctx context.Context, params meta.MergeParams)) *MockManager_Merge_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.MergeParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.MergeParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_Merge_Call) Return(mergeResult *meta.MergeResult, err error) *MockManager_Merge_Call {
+	_c.Call.Return(mergeResult, err)
+	return _c
+}
+
+func (_c *MockManager_Merge_Call) RunAndReturn(run func(ctx context.Context, params meta.MergeParams) (*meta.MergeResult, error)) *MockManager_Merge_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Mkdir provides a mock function for the type MockManager
 func (_mock *MockManager) Mkdir(ctx context.Context, params meta.MkdirParams) (*meta.Inode, error) {
 	ret := _mock.Called(ctx, params)
