@@ -57,7 +57,7 @@ func TestRenewSessionBranchContract(t *testing.T) {
 		disk, branch, commit *string
 		readOnly, valid      bool
 	}{
-		{name: "旧会话", valid: true},
+		{name: "会话缺少磁盘", valid: false},
 		{name: "默认分支", disk: ptrString(disk), valid: true},
 		{name: "只读快照", disk: ptrString(disk), branch: ptrString("main"), commit: ptrString(commit), readOnly: true, valid: true},
 		{name: "分支名为空", disk: ptrString(disk), branch: ptrString(""), valid: false},
@@ -135,4 +135,18 @@ func TestVersionManagementRPCContract(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRemovedRuntimeRPCs 防止服务端本地句柄和锁接口重新进入契约。
+func TestRemovedRuntimeRPCs(t *testing.T) {
+	file := storagev1.File_storage_v1_storage_proto
+	service := file.Services().ByName("StorageService")
+	require.NotNil(t, service)
+	for _, name := range []string{"Open", "Flush", "Release", "OpenDir", "ReleaseDir", "GetLk", "SetLk", "SetLkw", "TmpFile"} {
+		require.Nil(t, service.Methods().ByName(protoreflect.Name(name)), name)
+		require.Nil(t, file.Messages().ByName(protoreflect.Name(name+"Request")), name)
+		require.Nil(t, file.Messages().ByName(protoreflect.Name(name+"Response")), name)
+	}
+	require.Nil(t, file.Messages().ByName("FileLock"))
+	require.NotNil(t, service.Methods().ByName("ReclaimOrphan"))
 }

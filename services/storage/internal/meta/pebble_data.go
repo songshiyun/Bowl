@@ -11,31 +11,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
-// resolveDataSession 区分本地句柄和旧版服务端句柄，并保留显式上下文的严格校验。
-func (m *manager) resolveDataSession(ctx context.Context, fh uint64, paramID *uint64) (*uint64, bool, error) {
-	sid, explicit, err := createBranchSession(ctx, paramID)
-	if err != nil {
-		return nil, false, err
-	}
-	if explicit || fh == 0 {
-		if sid == nil {
-			return nil, false, ErrInvalidArgument
-		}
-		return sid, true, nil
-	}
-	if sid == nil || !m.hasPool() {
-		return sid, false, nil
-	}
-	session, err := m.findPebbleSession(ctx, sid)
-	if errors.Is(err, ErrBadFileHandle) {
-		return sid, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return sid, session.managed, nil
-}
-
 func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req *ReadRequest) (result *ReadResponse, err error) {
 	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, req.Ino)

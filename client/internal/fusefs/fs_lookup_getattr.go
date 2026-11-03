@@ -100,6 +100,10 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 	}
 	fs.namespaceMu.RLock()
 	defer fs.namespaceMu.RUnlock()
+	if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
+		fs.FillAttrOut(out, inode, 0)
+		return fuse.OK
+	}
 	cached, status := fs.getInode(cancel, in.NodeId)
 	if status == fuse.OK {
 		fs.FillAttrOut(out, cached.inode, cached.attrTimeout)

@@ -14,13 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/starsrc/bowl/services/storage/internal/db"
-	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
-
-// testSliceGCAdvisoryLockKey 是跨测试包隔离 slice_refs 全表 GC 与并发切片测试的固定 64 位 PostgreSQL 咨询锁键。
-const testSliceGCAdvisoryLockKey int64 = 0x424f574c5f474301
 
 // getStorageTestDSN 解析并返回测试 PostgreSQL DSN，供尚未迁移至 setupMetaTestDB 的包内历史测试文件调用。
 func getStorageTestDSN() string {
@@ -220,32 +214,6 @@ func applyAllStorageMigrations(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 }
 
-// acquireTestSliceGCAdvisoryLock 在专用连接上获取全表 GC 咨询锁，测试退出时自动释放连接与锁。
-func acquireTestSliceGCAdvisoryLock(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	conn, err := pool.Acquire(context.Background())
-	require.NoError(t, err, "获取专用连接以加 GC 咨询锁失败")
-
-	_, err = conn.Exec(context.Background(), "SELECT pg_advisory_lock($1)", testSliceGCAdvisoryLockKey)
-	require.NoError(t, err, "加会话级 GC 咨询锁失败")
-
-	t.Cleanup(func() {
-		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", testSliceGCAdvisoryLockKey)
-		conn.Release()
-	})
-}
-
-// cleanupTestInos 清理测试创建的 Inode 与关联的 Chunks 及 SliceRefs。
-func cleanupTestInos(ctx context.Context, q db.Querier, inos ...int64) {
-	if len(inos) == 0 {
-		return
-	}
-	_ = meta.DeleteAllChunksByInos(ctx, q, inos)
-	for _, ino := range inos {
-		_ = q.DeleteInode(ctx, ino)
-	}
-}
-
 // TestExplicitInvalidDSNFailsFast 验证显式配置错误 DSN 时立即触发 fatalf 硬失败，绝不静默 Skip 或回退尝试其他端口。
 func TestExplicitInvalidDSNFailsFast(t *testing.T) {
 	t.Setenv("STORAGE_TEST_DSN", "")
@@ -271,3 +239,5 @@ func TestExplicitInvalidDSNFailsFast(t *testing.T) {
 	assert.Equal(t, 1, fatalCalls, "显式指定的非法 DSN 必须触发且仅触发 1 次 fatalf")
 	assert.Equal(t, 0, skipCalls, "显式指定的非法 DSN 严禁触发 skipf")
 }
+
+func ptr[T any](v T) *T { return &v }

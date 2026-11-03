@@ -4,7 +4,8 @@
 
 - **根模块（[`go.mod`](../../go.mod)）**：包含 `proto/storage/v1/`（Protobuf 源文件）、`gen/go/`（ConnectRPC 生成代码）、[`pkg/validator`](../../pkg/validator)（请求校验器）、[`tests/contract`](../../tests/contract)（跨模块契约测试）及 [`e2e`](../../e2e)（跨服务黑盒 E2E 测试）。
 - **Storage 子模块（[`services/storage/go.mod`](../../services/storage/go.mod)）**：代码位于 `services/storage/internal/{config,db,meta,server}` 与 `services/storage/db/{migrations,queries}`。
-  - `services/storage/internal/meta/` 文件职责索引：领域实体、常量与哨兵错误在 `entity.go`；状态码与 `ErrorInfo` 映射在 `status.go`；文件锁（Flock/POSIX 锁）在 `lock.go`；元数据与读写业务切分为 `manager.go` 及 `manager_{lookup_getattr,create_open,dir_topology,readdir_xattr,setattr_fallocate,handle_session,disk,read,write}.go`；物理块存储、切片编解码、合并与后台回收位于 `block_store.go`、`slice.go`、`compact.go`、`chunk_cleanup.go`、`gc.go`（PostgreSQL 集成测试统一通过 `testdb_helper_test.go` 中的 `setupMetaTestDB` 连库）。
+  - `services/storage/internal/meta/` 文件职责索引：`entity.go` 与 `status.go` 定义领域实体和错误映射；`manager.go`、`manager_posix.go`、`manager_disk.go` 提供管理器和公开操作；`pebble_*.go`、`disk_tree.go`、`tree_quota.go` 实现分支数据、版本和配额；`branch_session.go` 管理分支会话。PostgreSQL 集成测试通过 `testdb_helper_test.go` 的辅助函数建立隔离数据库。
+
 - **Client 子模块（[`client/go.mod`](../../client/go.mod)）**：Linux FUSE 客户端 CLI，代码位于 `client/{cmd/bowl,internal,e2e}`；macOS 宿主机下须通过 `task test:client` 与 `task test:client:e2e` 在 Linux 容器内完成构建与挂载测试。
 - **ADR 查阅约定**：查阅 [`docs/adr/`](../adr) 时，先列出目录获取准确文件名，切勿盲猜文件名。
 

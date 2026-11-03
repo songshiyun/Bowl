@@ -316,13 +316,8 @@ func TestPebbleTopologyValidationAndReclaimSessions(t *testing.T) {
 	params.DiskID = e.disk.DiskID
 	params.SessionID = 9999
 	require.ErrorIs(t, e.mgr.ReclaimOrphan(e.ctx, params), meta.ErrBadFileHandle)
-	legacy := uint64(103)
-	_, err := e.mgr.RenewSession(e.ctx, legacy)
-	require.NoError(t, err)
-	params.SessionID = legacy
-	require.ErrorIs(t, e.mgr.ReclaimOrphan(e.ctx, params), meta.ErrBadFileHandle)
 	reader := uint64(104)
-	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: reader, DiskID: e.disk.DiskID, ReadOnly: true})
+	_, err := e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: reader, DiskID: e.disk.DiskID, ReadOnly: true})
 	require.NoError(t, err)
 	params.SessionID = reader
 	require.ErrorIs(t, e.mgr.ReclaimOrphan(e.ctx, params), meta.ErrPerm)

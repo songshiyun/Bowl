@@ -2,7 +2,6 @@ package fusefs_test
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -29,21 +28,7 @@ func waitForQueuedWriter(t *testing.T, tryRead, unlock func() fuse.Status) {
 }
 
 func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
-	var calls atomic.Int32
-	server := &lockMockStorageServer{
-		getLkFn: func(context.Context, *connect.Request[storagev1.GetLkRequest]) (*connect.Response[storagev1.GetLkResponse], error) {
-			calls.Add(1)
-			return nil, errors.New("不应调用 GetLk RPC")
-		},
-		setLkFn: func(context.Context, *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
-			calls.Add(1)
-			return nil, errors.New("不应调用 SetLk RPC")
-		},
-		setLkwFn: func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-			calls.Add(1)
-			return nil, errors.New("不应调用 SetLkw RPC")
-		},
-	}
+	server := &lockMockStorageServer{}
 	client := setupLockTestRPCServer(t, server)
 	sessions := setupTestSessionManager(t, client)
 	fs := fusefs.NewRawFS(client, sessions, fusefs.Config{RootIno: 1001})
@@ -66,7 +51,6 @@ func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
 	require.Equal(t, fuse.OK, fs.GetLk(nil, second, &out))
 	require.Equal(t, first.Lk, out.Lk)
 	require.Equal(t, fuse.EAGAIN, fs.SetLk(nil, second))
-	require.Zero(t, calls.Load())
 }
 
 func TestLocalPOSIXLockRangesAndConversions(t *testing.T) {
@@ -233,10 +217,6 @@ func TestLocalFlockNamespaceAndConversion(t *testing.T) {
 func TestPOSIXLockRespectsKnownOpenMode(t *testing.T) {
 	var nextFH uint64 = 100
 	srv := &handleMockStorageServer{
-		openFn: func(_ context.Context, _ *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
-			nextFH++
-			return connect.NewResponse(&storagev1.OpenResponse{Fh: nextFH}), nil
-		},
 		createFn: func(_ context.Context, _ *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 			nextFH++
 			return connect.NewResponse(&storagev1.CreateResponse{Fh: nextFH, Inode: &storagev1.Inode{Ino: 2, Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}}}), nil

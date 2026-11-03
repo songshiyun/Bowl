@@ -68,7 +68,7 @@ func (c RetryConfig) withDefaults() RetryConfig {
 	return c
 }
 
-// idempotentProcedures 记录 16 个只读与幂等 RPC 白名单集合。
+// idempotentProcedures 记录 15 个只读与幂等 RPC 白名单集合。
 var idempotentProcedures = map[string]struct{}{
 	storagev1connect.StorageServiceGetDiskProcedure:      {},
 	storagev1connect.StorageServiceListDisksProcedure:    {},
@@ -82,13 +82,12 @@ var idempotentProcedures = map[string]struct{}{
 	storagev1connect.StorageServiceReadDirPlusProcedure:  {},
 	storagev1connect.StorageServiceGetXattrProcedure:     {},
 	storagev1connect.StorageServiceListXattrProcedure:    {},
-	storagev1connect.StorageServiceGetLkProcedure:        {},
 	storagev1connect.StorageServiceStatFSProcedure:       {},
 	storagev1connect.StorageServiceRenewSessionProcedure: {},
 	storagev1connect.StorageServiceCloseSessionProcedure: {},
 }
 
-// IsIdempotentProcedure 判定指定 procedure 是否属于 16 个只读与幂等 RPC 白名单。
+// IsIdempotentProcedure 判定指定 procedure 是否属于 15 个只读与幂等 RPC 白名单。
 func IsIdempotentProcedure(procedure string) bool {
 	_, ok := idempotentProcedures[procedure]
 	return ok
@@ -203,7 +202,7 @@ func shouldRetry(procedure string, err error) bool {
 		return true
 	}
 
-	// 4. 针对 16 个只读与幂等 RPC 白名单：
+	// 4. 针对 15 个只读与幂等 RPC 白名单：
 	// 在遇到 CodeUnavailable（且未携带 ErrorInfo）或底层传输错误时允许重试
 	if IsIdempotentProcedure(procedure) {
 		if connectErr != nil && connectErr.Code() == connect.CodeUnavailable {
@@ -264,7 +263,7 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 			var lastErr error
 
 			attemptCtx := ctx
-			if config.MaxElapsedTime > 0 && req.Spec().Procedure != storagev1connect.StorageServiceSetLkwProcedure {
+			if config.MaxElapsedTime > 0 {
 				var cancel context.CancelFunc
 				attemptCtx, cancel = context.WithDeadline(ctx, startTime.Add(config.MaxElapsedTime))
 				defer cancel()

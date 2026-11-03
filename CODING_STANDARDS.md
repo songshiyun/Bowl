@@ -6,7 +6,7 @@ This document defines non-mechanical engineering standards enforced during the *
 
 - **No Silent Error Swallowing**: Never guard assertions behind `if err == nil` or broad error whitelists (`ErrIO`, `context.DeadlineExceeded`) that allow broken execution paths to pass silently. Assert exact expected sentinel errors (`require.ErrorIs`) or `require.NoError`.
 - **Independent Reference Model (No Self-Oracle)**: State-machine and integration assertions must compute expected post-state from an independent in-memory model or pre-operation snapshot, never by reading back from the system under test to overwrite the model's expectation.
-- **Direct Table Audits for Deletion/Reclamation**: When verifying cascading deletion (`DeleteDisk`, orphan reclamation, expired session sweep), query child tables (`entries`, `file_handles`, `file_locks`, `file_lock_waiters`) directly by recorded target IDs (`WHERE ino = ANY($1)`), never via `INNER JOIN` against a parent row that was already deleted.
+- **删除与回收的直接检查**：验证磁盘删除、孤儿回收或会话过期时，直接按目标编号检查 PostgreSQL 控制面记录和 Pebble 对应的节点、孤儿标记及数据键；不要通过已删除的父记录做连接查询。
 
 ## 2. Deterministic Replay & Concurrency Control
 
@@ -16,5 +16,5 @@ This document defines non-mechanical engineering standards enforced during the *
 
 ## 3. Cross-Layer Error & Domain Consistency
 
-- **Database Constraint Mapping**: Translate PostgreSQL SQLSTATE errors (`23505` unique violation, `23503` foreign-key violation under concurrent sweep) at the `internal/meta` boundary into canonical POSIX sentinel errors (`ErrExist`, `ErrNotFound`, `ErrNotEmpty`) mapped in `status.go`; never leak raw `pgconn.PgError` to RPC callers.
+- **数据库约束错误映射**：在 `internal/meta` 边界将 PostgreSQL 约束错误转换为 `status.go` 定义的业务错误，例如写端租约冲突映射为 `ErrBusy`；不要向 RPC 调用方泄露原始 `pgconn.PgError`。
 - **Ubiquitous Language**: Align all identifiers, comments, and error messages with [`GLOSSARY.md`](GLOSSARY.md).

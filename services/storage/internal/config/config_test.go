@@ -40,7 +40,7 @@ func cleanConfigEnv(t *testing.T) {
 		"STORAGE_ENTRY_TIMEOUT_SECONDS", "STORAGE_ATTR_TIMEOUT_SECONDS", "STORAGE_DIR_ENTRY_TIMEOUT_SECONDS",
 		"STORAGE_OPEN_KEEP_CACHE", "STORAGE_OPEN_DIR_CACHE",
 		"DATA_DIR", "STORAGE_DATA_DIR",
-		"STORAGE_GC_INTERVAL",
+		"STORAGE_SESSION_SWEEP_INTERVAL",
 	}
 	for _, key := range keys {
 		oldVal, exists := os.LookupEnv(key)
@@ -119,7 +119,7 @@ func TestConfig_Load_Defaults(t *testing.T) {
 	assert.False(t, cfg.Meta.OpenKeepCache())
 	assert.False(t, cfg.Meta.OpenDirCache())
 	assert.Equal(t, "/tmp/bowl-storage-data", cfg.Meta.DataDir())
-	assert.Equal(t, time.Minute, cfg.Meta.GCInterval())
+	assert.Equal(t, time.Minute, cfg.Meta.SessionSweepInterval())
 }
 
 func TestConfig_Load_EnvOverrides(t *testing.T) {
@@ -149,7 +149,7 @@ func TestConfig_Load_EnvOverrides(t *testing.T) {
 
 	t.Setenv("STORAGE_SESSION_LEASE_TTL", "90s")
 	t.Setenv("STORAGE_ATIME_MODE", "strictatime")
-	t.Setenv("STORAGE_GC_INTERVAL", "30s")
+	t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "30s")
 	t.Setenv("DATA_DIR", "/mnt/nvme0n1/data")
 
 	cfg, err := config.Load()
@@ -180,7 +180,7 @@ func TestConfig_Load_EnvOverrides(t *testing.T) {
 
 	assert.Equal(t, 90*time.Second, cfg.Meta.SessionLeaseTTL())
 	assert.Equal(t, "strictatime", cfg.Meta.AtimeMode())
-	assert.Equal(t, 30*time.Second, cfg.Meta.GCInterval())
+	assert.Equal(t, 30*time.Second, cfg.Meta.SessionSweepInterval())
 	assert.Equal(t, "/mnt/nvme0n1/data", cfg.Meta.DataDir())
 
 	// 测试 STORAGE_DATA_DIR 备用环境变量
@@ -426,17 +426,17 @@ func TestConfig_Validate(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid data dir")
 	})
 
-	t.Run("MetaConfig 负数GCInterval校验失败", func(t *testing.T) {
+	t.Run("MetaConfig 负数SessionSweepInterval校验失败", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Meta.GCIntervalVal = -1 * time.Second
+		cfg.Meta.SessionSweepIntervalVal = -1 * time.Second
 		err := cfg.Validate()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "validate meta config:")
-		assert.Contains(t, err.Error(), "invalid gc interval")
+		assert.Contains(t, err.Error(), "invalid session sweep interval")
 	})
 }
 
-func TestConfig_Load_GCInterval(t *testing.T) {
+func TestConfig_Load_SessionSweepInterval(t *testing.T) {
 	cleanConfigEnv(t)
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
@@ -445,39 +445,39 @@ func TestConfig_Load_GCInterval(t *testing.T) {
 	t.Run("未设置环境变量时默认1m", func(t *testing.T) {
 		cfg, err := config.Load()
 		require.NoError(t, err)
-		assert.Equal(t, time.Minute, cfg.Meta.GCInterval())
+		assert.Equal(t, time.Minute, cfg.Meta.SessionSweepInterval())
 	})
 
 	t.Run("自定义合法值40ms", func(t *testing.T) {
-		t.Setenv("STORAGE_GC_INTERVAL", "40ms")
+		t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "40ms")
 		cfg, err := config.Load()
 		require.NoError(t, err)
-		assert.Equal(t, 40*time.Millisecond, cfg.Meta.GCInterval())
+		assert.Equal(t, 40*time.Millisecond, cfg.Meta.SessionSweepInterval())
 	})
 
 	t.Run("自定义合法值30s", func(t *testing.T) {
-		t.Setenv("STORAGE_GC_INTERVAL", "30s")
+		t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "30s")
 		cfg, err := config.Load()
 		require.NoError(t, err)
-		assert.Equal(t, 30*time.Second, cfg.Meta.GCInterval())
+		assert.Equal(t, 30*time.Second, cfg.Meta.SessionSweepInterval())
 	})
 
 	t.Run("设置为0s时采用默认值1m", func(t *testing.T) {
-		t.Setenv("STORAGE_GC_INTERVAL", "0s")
+		t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "0s")
 		cfg, err := config.Load()
 		require.NoError(t, err)
-		assert.Equal(t, time.Minute, cfg.Meta.GCInterval())
+		assert.Equal(t, time.Minute, cfg.Meta.SessionSweepInterval())
 	})
 
 	t.Run("设置负值时拒绝", func(t *testing.T) {
-		t.Setenv("STORAGE_GC_INTERVAL", "-10s")
+		t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "-10s")
 		_, err := config.Load()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid gc interval")
+		assert.Contains(t, err.Error(), "invalid session sweep interval")
 	})
 
 	t.Run("设置非法字符串时拒绝", func(t *testing.T) {
-		t.Setenv("STORAGE_GC_INTERVAL", "invalid-duration")
+		t.Setenv("STORAGE_SESSION_SWEEP_INTERVAL", "invalid-duration")
 		_, err := config.Load()
 		require.Error(t, err)
 	})

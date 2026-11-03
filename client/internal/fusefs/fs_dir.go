@@ -139,6 +139,10 @@ func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Stat
 	if status != fuse.OK {
 		return status
 	}
+	if _, removed := fs.handles.RemovedDir(input.NodeId); removed {
+		// Rmdir 已同步持久化，已删除目录没有待同步的服务端状态。
+		return fuse.OK
+	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status

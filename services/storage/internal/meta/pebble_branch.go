@@ -208,7 +208,7 @@ func (m *manager) sweepExpiredBranchSessions(ctx context.Context) error {
 		return nil
 	}
 	rows, err := pp.Pool().Query(ctx, `SELECT session_id FROM client_sessions
-		WHERE lease_managed AND NOT read_only AND expires_at <= clock_timestamp() ORDER BY session_id`)
+		WHERE lease_managed AND expires_at <= clock_timestamp() ORDER BY session_id`)
 	if err != nil {
 		return err
 	}
@@ -235,28 +235,36 @@ func (m *manager) sweepExpiredBranchSessions(ctx context.Context) error {
 }
 
 func (m *manager) sweepExpiredBranchSession(ctx context.Context, sessionID uint64) error {
-	return m.store.ExecTx(ctx, func(q db.Querier) error {
+	deleted := false
+	err := m.store.ExecTx(ctx, func(q db.Querier) error {
 		raw := q.(interface{ RawDBTX() db.DBTX }).RawDBTX()
 		if err := lockSession(ctx, raw, sessionID); err != nil {
 			return err
 		}
 		var diskID pgtype.UUID
 		var branch string
-		err := raw.QueryRow(ctx, `SELECT disk_id, branch_name FROM client_sessions
-			WHERE session_id = $1 AND lease_managed AND NOT read_only AND expires_at <= clock_timestamp()`, int64(sessionID)).Scan(&diskID, &branch)
+		var readOnly bool
+		err := raw.QueryRow(ctx, `SELECT disk_id, branch_name, read_only FROM client_sessions
+			WHERE session_id = $1 AND lease_managed AND expires_at <= clock_timestamp()`, int64(sessionID)).Scan(&diskID, &branch, &readOnly)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		if err := lockBranchWriter(ctx, raw, diskID, branch); err != nil {
-			return err
+		if !readOnly {
+			if err := lockBranchWriter(ctx, raw, diskID, branch); err != nil {
+				return err
+			}
 		}
 		tag, err := raw.Exec(ctx, `DELETE FROM client_sessions WHERE session_id = $1
-			AND lease_managed AND NOT read_only AND expires_at <= clock_timestamp()`, int64(sessionID))
+			AND lease_managed AND expires_at <= clock_timestamp()`, int64(sessionID))
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
+		}
+		deleted = true
+		if readOnly {
+			return nil
 		}
 		_, err = q.GetActiveBranchWriter(ctx, db.GetActiveBranchWriterParams{DiskID: diskID, BranchName: branch})
 		if err == nil {
@@ -267,4 +275,8 @@ func (m *manager) sweepExpiredBranchSession(ctx context.Context, sessionID uint6
 		}
 		return m.sweepBranchOrphans(ctx, q, diskID, branch)
 	})
+	if err == nil && deleted {
+		m.clearSessionCursors(sessionID)
+	}
+	return err
 }

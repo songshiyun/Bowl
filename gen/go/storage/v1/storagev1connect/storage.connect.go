@@ -57,27 +57,14 @@ const (
 	StorageServiceRenameProcedure = "/storage.v1.StorageService/Rename"
 	// StorageServiceCreateProcedure is the fully-qualified name of the StorageService's Create RPC.
 	StorageServiceCreateProcedure = "/storage.v1.StorageService/Create"
-	// StorageServiceTmpFileProcedure is the fully-qualified name of the StorageService's TmpFile RPC.
-	StorageServiceTmpFileProcedure = "/storage.v1.StorageService/TmpFile"
-	// StorageServiceOpenProcedure is the fully-qualified name of the StorageService's Open RPC.
-	StorageServiceOpenProcedure = "/storage.v1.StorageService/Open"
 	// StorageServiceReadProcedure is the fully-qualified name of the StorageService's Read RPC.
 	StorageServiceReadProcedure = "/storage.v1.StorageService/Read"
 	// StorageServiceWriteProcedure is the fully-qualified name of the StorageService's Write RPC.
 	StorageServiceWriteProcedure = "/storage.v1.StorageService/Write"
-	// StorageServiceFlushProcedure is the fully-qualified name of the StorageService's Flush RPC.
-	StorageServiceFlushProcedure = "/storage.v1.StorageService/Flush"
 	// StorageServiceFsyncProcedure is the fully-qualified name of the StorageService's Fsync RPC.
 	StorageServiceFsyncProcedure = "/storage.v1.StorageService/Fsync"
-	// StorageServiceReleaseProcedure is the fully-qualified name of the StorageService's Release RPC.
-	StorageServiceReleaseProcedure = "/storage.v1.StorageService/Release"
-	// StorageServiceOpenDirProcedure is the fully-qualified name of the StorageService's OpenDir RPC.
-	StorageServiceOpenDirProcedure = "/storage.v1.StorageService/OpenDir"
 	// StorageServiceFsyncDirProcedure is the fully-qualified name of the StorageService's FsyncDir RPC.
 	StorageServiceFsyncDirProcedure = "/storage.v1.StorageService/FsyncDir"
-	// StorageServiceReleaseDirProcedure is the fully-qualified name of the StorageService's ReleaseDir
-	// RPC.
-	StorageServiceReleaseDirProcedure = "/storage.v1.StorageService/ReleaseDir"
 	// StorageServiceReadDirProcedure is the fully-qualified name of the StorageService's ReadDir RPC.
 	StorageServiceReadDirProcedure = "/storage.v1.StorageService/ReadDir"
 	// StorageServiceReadDirPlusProcedure is the fully-qualified name of the StorageService's
@@ -96,12 +83,6 @@ const (
 	// StorageServiceRemoveXattrProcedure is the fully-qualified name of the StorageService's
 	// RemoveXattr RPC.
 	StorageServiceRemoveXattrProcedure = "/storage.v1.StorageService/RemoveXattr"
-	// StorageServiceGetLkProcedure is the fully-qualified name of the StorageService's GetLk RPC.
-	StorageServiceGetLkProcedure = "/storage.v1.StorageService/GetLk"
-	// StorageServiceSetLkProcedure is the fully-qualified name of the StorageService's SetLk RPC.
-	StorageServiceSetLkProcedure = "/storage.v1.StorageService/SetLk"
-	// StorageServiceSetLkwProcedure is the fully-qualified name of the StorageService's SetLkw RPC.
-	StorageServiceSetLkwProcedure = "/storage.v1.StorageService/SetLkw"
 	// StorageServiceRenewSessionProcedure is the fully-qualified name of the StorageService's
 	// RenewSession RPC.
 	StorageServiceRenewSessionProcedure = "/storage.v1.StorageService/RenewSession"
@@ -216,82 +197,39 @@ type StorageServiceClient interface {
 	// 若尝试将目录移动或交换为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	Rename(context.Context, *connect.Request[v1.RenameRequest]) (*connect.Response[v1.RenameResponse], error)
-	// Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
+	// Create 在指定父目录下创建常规文件，文件句柄由客户端管理。
 	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)。
 	Create(context.Context, *connect.Request[v1.CreateRequest]) (*connect.Response[v1.CreateResponse], error)
-	// TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄 (FileHandle)（对接 Linux FUSE FUSE_TMPFILE = 51 协议）。
-	// 若父节点不存在或已解链 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)，且打开标志位必须为 O_WRONLY 或 O_RDWR，否则返回 InvalidArgument (映射至 POSIX EINVAL)。
-	TmpFile(context.Context, *connect.Request[v1.TmpFileRequest]) (*connect.Response[v1.TmpFileResponse], error)
-	// Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
-	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若目标为符号链接，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若节点不存在或为已无活跃句柄的孤儿节点 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若携带 O_TRUNC 但以只读模式打开，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	Open(context.Context, *connect.Request[v1.OpenRequest]) (*connect.Response[v1.OpenResponse], error)
 	// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 	// 遵循 POSIX pread(2) 语义，支持最大 4 MiB 单次读取。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.ReadResponse], error)
 	// Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 	// 遵循 POSIX pwrite(2) 语义，支持最大 4 MiB 单次写入。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Write(context.Context, *connect.Request[v1.WriteRequest]) (*connect.Response[v1.WriteResponse], error)
-	// Flush 在单次文件关闭时触发，冲刷并校验文件句柄的合法性（不销毁文件句柄）。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	Flush(context.Context, *connect.Request[v1.FlushRequest]) (*connect.Response[v1.FlushResponse], error)
 	// Fsync 同步并持久化文件节点与句柄关联的状态。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Fsync(context.Context, *connect.Request[v1.FsyncRequest]) (*connect.Response[v1.FsyncResponse], error)
-	// Release 关闭并销毁文件句柄 (FileHandle)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
-	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.ReleaseResponse], error)
-	// OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
-	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	OpenDir(context.Context, *connect.Request[v1.OpenDirRequest]) (*connect.Response[v1.OpenDirResponse], error)
 	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	FsyncDir(context.Context, *connect.Request[v1.FsyncDirRequest]) (*connect.Response[v1.FsyncDirResponse], error)
-	// ReleaseDir 关闭并销毁目录 FileHandle。
-	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
-	ReleaseDir(context.Context, *connect.Request[v1.ReleaseDirRequest]) (*connect.Response[v1.ReleaseDirResponse], error)
 	// ReadDir 读取指定目录的子项流（基本条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDir(context.Context, *connect.Request[v1.ReadDirRequest]) (*connect.Response[v1.ReadDirResponse], error)
 	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDirPlus(context.Context, *connect.Request[v1.ReadDirPlusRequest]) (*connect.Response[v1.ReadDirPlusResponse], error)
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
@@ -321,27 +259,12 @@ type StorageServiceClient interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(context.Context, *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error)
-	// GetLk 探测目标 Inode 在指定锁命名空间（POSIX 记录锁或 BSD flock）下是否存在冲突锁（对接 Linux FUSE FUSE_GETLK = 31 协议）。
-	// 若存在冲突锁，返回首个冲突锁详情（含 start、end、type 与 pid）；若无冲突，返回 type = F_UNLCK (2) 的 FileLock。
-	// 若传入 lk.type == F_UNLCK，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	GetLk(context.Context, *connect.Request[v1.GetLkRequest]) (*connect.Response[v1.GetLkResponse], error)
-	// SetLk 非阻塞地申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLK = 32 协议）。
-	// 若遇到外部冲突锁或排队等待冲突，立即返回 gRPC 标准状态码 ResourceExhausted (映射至 POSIX EAGAIN)。
-	// 若 POSIX 记录锁请求模式与文件句柄读写权限不匹配，返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	SetLk(context.Context, *connect.Request[v1.SetLkRequest]) (*connect.Response[v1.SetLkResponse], error)
-	// SetLkw 阻塞式申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLKW = 33 协议）。
-	// 若存在冲突锁则阻塞等待，直至锁释放唤醒、检测到同节点死锁返回 Aborted (映射至 POSIX EDEADLK)、或收到取消信号返回 Canceled (映射至 POSIX EINTR)。
-	SetLkw(context.Context, *connect.Request[v1.SetLkwRequest]) (*connect.Response[v1.SetLkwResponse], error)
 	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
 	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若提供可选的 disk_id，将其绑定到该客户端会话；若关联磁盘不存在返回 NotFound (ENOENT)。
+	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
 	// 续期成功返回刷新后的租约截止时间 expires_at。
 	RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error)
-	// CloseSession 在客户端优雅卸载时即时注销指定会话租约，级联释放关联的文件句柄、文件锁并回收孤儿节点。
+	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
 	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 若目标会话已不存在或已过期，按幂等成功返回。
 	CloseSession(context.Context, *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error)
@@ -362,7 +285,7 @@ type StorageServiceClient interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(context.Context, *connect.Request[v1.UpdateDiskRequest]) (*connect.Response[v1.UpdateDiskResponse], error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在单次读写事务内排他锁定目标磁盘并删除 Disk 记录，同时按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联的 entries、inode_xattrs、file_handles、file_locks）。
+	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
@@ -476,18 +399,6 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("Create")),
 			connect.WithClientOptions(opts...),
 		),
-		tmpFile: connect.NewClient[v1.TmpFileRequest, v1.TmpFileResponse](
-			httpClient,
-			baseURL+StorageServiceTmpFileProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("TmpFile")),
-			connect.WithClientOptions(opts...),
-		),
-		open: connect.NewClient[v1.OpenRequest, v1.OpenResponse](
-			httpClient,
-			baseURL+StorageServiceOpenProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Open")),
-			connect.WithClientOptions(opts...),
-		),
 		read: connect.NewClient[v1.ReadRequest, v1.ReadResponse](
 			httpClient,
 			baseURL+StorageServiceReadProcedure,
@@ -500,40 +411,16 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("Write")),
 			connect.WithClientOptions(opts...),
 		),
-		flush: connect.NewClient[v1.FlushRequest, v1.FlushResponse](
-			httpClient,
-			baseURL+StorageServiceFlushProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Flush")),
-			connect.WithClientOptions(opts...),
-		),
 		fsync: connect.NewClient[v1.FsyncRequest, v1.FsyncResponse](
 			httpClient,
 			baseURL+StorageServiceFsyncProcedure,
 			connect.WithSchema(storageServiceMethods.ByName("Fsync")),
 			connect.WithClientOptions(opts...),
 		),
-		release: connect.NewClient[v1.ReleaseRequest, v1.ReleaseResponse](
-			httpClient,
-			baseURL+StorageServiceReleaseProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Release")),
-			connect.WithClientOptions(opts...),
-		),
-		openDir: connect.NewClient[v1.OpenDirRequest, v1.OpenDirResponse](
-			httpClient,
-			baseURL+StorageServiceOpenDirProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("OpenDir")),
-			connect.WithClientOptions(opts...),
-		),
 		fsyncDir: connect.NewClient[v1.FsyncDirRequest, v1.FsyncDirResponse](
 			httpClient,
 			baseURL+StorageServiceFsyncDirProcedure,
 			connect.WithSchema(storageServiceMethods.ByName("FsyncDir")),
-			connect.WithClientOptions(opts...),
-		),
-		releaseDir: connect.NewClient[v1.ReleaseDirRequest, v1.ReleaseDirResponse](
-			httpClient,
-			baseURL+StorageServiceReleaseDirProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("ReleaseDir")),
 			connect.WithClientOptions(opts...),
 		),
 		readDir: connect.NewClient[v1.ReadDirRequest, v1.ReadDirResponse](
@@ -576,24 +463,6 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+StorageServiceRemoveXattrProcedure,
 			connect.WithSchema(storageServiceMethods.ByName("RemoveXattr")),
-			connect.WithClientOptions(opts...),
-		),
-		getLk: connect.NewClient[v1.GetLkRequest, v1.GetLkResponse](
-			httpClient,
-			baseURL+StorageServiceGetLkProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("GetLk")),
-			connect.WithClientOptions(opts...),
-		),
-		setLk: connect.NewClient[v1.SetLkRequest, v1.SetLkResponse](
-			httpClient,
-			baseURL+StorageServiceSetLkProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("SetLk")),
-			connect.WithClientOptions(opts...),
-		),
-		setLkw: connect.NewClient[v1.SetLkwRequest, v1.SetLkwResponse](
-			httpClient,
-			baseURL+StorageServiceSetLkwProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("SetLkw")),
 			connect.WithClientOptions(opts...),
 		),
 		renewSession: connect.NewClient[v1.RenewSessionRequest, v1.RenewSessionResponse](
@@ -721,16 +590,10 @@ type storageServiceClient struct {
 	rmdir         *connect.Client[v1.RmdirRequest, v1.RmdirResponse]
 	rename        *connect.Client[v1.RenameRequest, v1.RenameResponse]
 	create        *connect.Client[v1.CreateRequest, v1.CreateResponse]
-	tmpFile       *connect.Client[v1.TmpFileRequest, v1.TmpFileResponse]
-	open          *connect.Client[v1.OpenRequest, v1.OpenResponse]
 	read          *connect.Client[v1.ReadRequest, v1.ReadResponse]
 	write         *connect.Client[v1.WriteRequest, v1.WriteResponse]
-	flush         *connect.Client[v1.FlushRequest, v1.FlushResponse]
 	fsync         *connect.Client[v1.FsyncRequest, v1.FsyncResponse]
-	release       *connect.Client[v1.ReleaseRequest, v1.ReleaseResponse]
-	openDir       *connect.Client[v1.OpenDirRequest, v1.OpenDirResponse]
 	fsyncDir      *connect.Client[v1.FsyncDirRequest, v1.FsyncDirResponse]
-	releaseDir    *connect.Client[v1.ReleaseDirRequest, v1.ReleaseDirResponse]
 	readDir       *connect.Client[v1.ReadDirRequest, v1.ReadDirResponse]
 	readDirPlus   *connect.Client[v1.ReadDirPlusRequest, v1.ReadDirPlusResponse]
 	fallocate     *connect.Client[v1.FallocateRequest, v1.FallocateResponse]
@@ -738,9 +601,6 @@ type storageServiceClient struct {
 	getXattr      *connect.Client[v1.GetXattrRequest, v1.GetXattrResponse]
 	listXattr     *connect.Client[v1.ListXattrRequest, v1.ListXattrResponse]
 	removeXattr   *connect.Client[v1.RemoveXattrRequest, v1.RemoveXattrResponse]
-	getLk         *connect.Client[v1.GetLkRequest, v1.GetLkResponse]
-	setLk         *connect.Client[v1.SetLkRequest, v1.SetLkResponse]
-	setLkw        *connect.Client[v1.SetLkwRequest, v1.SetLkwResponse]
 	renewSession  *connect.Client[v1.RenewSessionRequest, v1.RenewSessionResponse]
 	closeSession  *connect.Client[v1.CloseSessionRequest, v1.CloseSessionResponse]
 	createDisk    *connect.Client[v1.CreateDiskRequest, v1.CreateDiskResponse]
@@ -821,16 +681,6 @@ func (c *storageServiceClient) Create(ctx context.Context, req *connect.Request[
 	return c.create.CallUnary(ctx, req)
 }
 
-// TmpFile calls storage.v1.StorageService.TmpFile.
-func (c *storageServiceClient) TmpFile(ctx context.Context, req *connect.Request[v1.TmpFileRequest]) (*connect.Response[v1.TmpFileResponse], error) {
-	return c.tmpFile.CallUnary(ctx, req)
-}
-
-// Open calls storage.v1.StorageService.Open.
-func (c *storageServiceClient) Open(ctx context.Context, req *connect.Request[v1.OpenRequest]) (*connect.Response[v1.OpenResponse], error) {
-	return c.open.CallUnary(ctx, req)
-}
-
 // Read calls storage.v1.StorageService.Read.
 func (c *storageServiceClient) Read(ctx context.Context, req *connect.Request[v1.ReadRequest]) (*connect.Response[v1.ReadResponse], error) {
 	return c.read.CallUnary(ctx, req)
@@ -841,34 +691,14 @@ func (c *storageServiceClient) Write(ctx context.Context, req *connect.Request[v
 	return c.write.CallUnary(ctx, req)
 }
 
-// Flush calls storage.v1.StorageService.Flush.
-func (c *storageServiceClient) Flush(ctx context.Context, req *connect.Request[v1.FlushRequest]) (*connect.Response[v1.FlushResponse], error) {
-	return c.flush.CallUnary(ctx, req)
-}
-
 // Fsync calls storage.v1.StorageService.Fsync.
 func (c *storageServiceClient) Fsync(ctx context.Context, req *connect.Request[v1.FsyncRequest]) (*connect.Response[v1.FsyncResponse], error) {
 	return c.fsync.CallUnary(ctx, req)
 }
 
-// Release calls storage.v1.StorageService.Release.
-func (c *storageServiceClient) Release(ctx context.Context, req *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.ReleaseResponse], error) {
-	return c.release.CallUnary(ctx, req)
-}
-
-// OpenDir calls storage.v1.StorageService.OpenDir.
-func (c *storageServiceClient) OpenDir(ctx context.Context, req *connect.Request[v1.OpenDirRequest]) (*connect.Response[v1.OpenDirResponse], error) {
-	return c.openDir.CallUnary(ctx, req)
-}
-
 // FsyncDir calls storage.v1.StorageService.FsyncDir.
 func (c *storageServiceClient) FsyncDir(ctx context.Context, req *connect.Request[v1.FsyncDirRequest]) (*connect.Response[v1.FsyncDirResponse], error) {
 	return c.fsyncDir.CallUnary(ctx, req)
-}
-
-// ReleaseDir calls storage.v1.StorageService.ReleaseDir.
-func (c *storageServiceClient) ReleaseDir(ctx context.Context, req *connect.Request[v1.ReleaseDirRequest]) (*connect.Response[v1.ReleaseDirResponse], error) {
-	return c.releaseDir.CallUnary(ctx, req)
 }
 
 // ReadDir calls storage.v1.StorageService.ReadDir.
@@ -904,21 +734,6 @@ func (c *storageServiceClient) ListXattr(ctx context.Context, req *connect.Reque
 // RemoveXattr calls storage.v1.StorageService.RemoveXattr.
 func (c *storageServiceClient) RemoveXattr(ctx context.Context, req *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error) {
 	return c.removeXattr.CallUnary(ctx, req)
-}
-
-// GetLk calls storage.v1.StorageService.GetLk.
-func (c *storageServiceClient) GetLk(ctx context.Context, req *connect.Request[v1.GetLkRequest]) (*connect.Response[v1.GetLkResponse], error) {
-	return c.getLk.CallUnary(ctx, req)
-}
-
-// SetLk calls storage.v1.StorageService.SetLk.
-func (c *storageServiceClient) SetLk(ctx context.Context, req *connect.Request[v1.SetLkRequest]) (*connect.Response[v1.SetLkResponse], error) {
-	return c.setLk.CallUnary(ctx, req)
-}
-
-// SetLkw calls storage.v1.StorageService.SetLkw.
-func (c *storageServiceClient) SetLkw(ctx context.Context, req *connect.Request[v1.SetLkwRequest]) (*connect.Response[v1.SetLkwResponse], error) {
-	return c.setLkw.CallUnary(ctx, req)
 }
 
 // RenewSession calls storage.v1.StorageService.RenewSession.
@@ -1075,82 +890,39 @@ type StorageServiceHandler interface {
 	// 若尝试将目录移动或交换为其自身或子孙目录，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 对 "." 或 ".." 的重命名，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	Rename(context.Context, *connect.Request[v1.RenameRequest]) (*connect.Response[v1.RenameResponse], error)
-	// Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
+	// Create 在指定父目录下创建常规文件，文件句柄由客户端管理。
 	// 若同名文件或目录项已存在，必须返回 gRPC 标准状态码 AlreadyExists (映射至 POSIX EEXIST)。
 	// 若父节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)。
 	Create(context.Context, *connect.Request[v1.CreateRequest]) (*connect.Response[v1.CreateResponse], error)
-	// TmpFile 在指定父目录下原子创建未绑定 Entry (nlink = 0) 的匿名临时常规文件并分配初始文件句柄 (FileHandle)（对接 Linux FUSE FUSE_TMPFILE = 51 协议）。
-	// 若父节点不存在或已解链 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若父节点存在但非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 仅允许创建常规文件 (mode & S_IFMT 必须为 0 或 S_IFREG)，且打开标志位必须为 O_WRONLY 或 O_RDWR，否则返回 InvalidArgument (映射至 POSIX EINVAL)。
-	TmpFile(context.Context, *connect.Request[v1.TmpFileRequest]) (*connect.Response[v1.TmpFileResponse], error)
-	// Open 打开指定 Inode 节点并分配文件句柄 (FileHandle)。
-	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若目标为符号链接，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若节点不存在或为已无活跃句柄的孤儿节点 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若携带 O_TRUNC 但以只读模式打开，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	Open(context.Context, *connect.Request[v1.OpenRequest]) (*connect.Response[v1.OpenResponse], error)
 	// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 	// 遵循 POSIX pread(2) 语义，支持最大 4 MiB 单次读取。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.ReadResponse], error)
 	// Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 	// 遵循 POSIX pwrite(2) 语义，支持最大 4 MiB 单次写入。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Write(context.Context, *connect.Request[v1.WriteRequest]) (*connect.Response[v1.WriteResponse], error)
-	// Flush 在单次文件关闭时触发，冲刷并校验文件句柄的合法性（不销毁文件句柄）。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	Flush(context.Context, *connect.Request[v1.FlushRequest]) (*connect.Response[v1.FlushResponse], error)
 	// Fsync 同步并持久化文件节点与句柄关联的状态。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	Fsync(context.Context, *connect.Request[v1.FsyncRequest]) (*connect.Response[v1.FsyncResponse], error)
-	// Release 关闭并销毁文件句柄 (FileHandle)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 当目标 Inode 的硬链接数已为 0 (孤儿节点) 且所有活跃句柄均已销毁时，将触发底层物理回收。
-	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.ReleaseResponse], error)
-	// OpenDir 打开指定目录 Inode 节点并分配目录 FileHandle。
-	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若节点不存在或为已无活跃句柄的孤儿目录 (nlink == 0)，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若打开标志位非只读 (flags & O_ACCMODE != O_RDONLY) 或携带 O_TRUNC，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	OpenDir(context.Context, *connect.Request[v1.OpenDirRequest]) (*connect.Response[v1.OpenDirResponse], error)
 	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	FsyncDir(context.Context, *connect.Request[v1.FsyncDirRequest]) (*connect.Response[v1.FsyncDirResponse], error)
-	// ReleaseDir 关闭并销毁目录 FileHandle。
-	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 当目标目录的硬链接数已为 0 (孤儿目录) 且所有活跃句柄均已销毁时，将触发底层物理回收。
-	ReleaseDir(context.Context, *connect.Request[v1.ReleaseDirRequest]) (*connect.Response[v1.ReleaseDirResponse], error)
 	// ReadDir 读取指定目录的子项流（基本条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDir(context.Context, *connect.Request[v1.ReadDirRequest]) (*connect.Response[v1.ReadDirResponse], error)
 	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
-	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDirPlus(context.Context, *connect.Request[v1.ReadDirPlusRequest]) (*connect.Response[v1.ReadDirPlusResponse], error)
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
@@ -1180,27 +952,12 @@ type StorageServiceHandler interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(context.Context, *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error)
-	// GetLk 探测目标 Inode 在指定锁命名空间（POSIX 记录锁或 BSD flock）下是否存在冲突锁（对接 Linux FUSE FUSE_GETLK = 31 协议）。
-	// 若存在冲突锁，返回首个冲突锁详情（含 start、end、type 与 pid）；若无冲突，返回 type = F_UNLCK (2) 的 FileLock。
-	// 若传入 lk.type == F_UNLCK，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	GetLk(context.Context, *connect.Request[v1.GetLkRequest]) (*connect.Response[v1.GetLkResponse], error)
-	// SetLk 非阻塞地申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLK = 32 协议）。
-	// 若遇到外部冲突锁或排队等待冲突，立即返回 gRPC 标准状态码 ResourceExhausted (映射至 POSIX EAGAIN)。
-	// 若 POSIX 记录锁请求模式与文件句柄读写权限不匹配，返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
-	// 若目标节点为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
-	SetLk(context.Context, *connect.Request[v1.SetLkRequest]) (*connect.Response[v1.SetLkResponse], error)
-	// SetLkw 阻塞式申请、转换、裂解合并或释放文件锁（对接 Linux FUSE FUSE_SETLKW = 33 协议）。
-	// 若存在冲突锁则阻塞等待，直至锁释放唤醒、检测到同节点死锁返回 Aborted (映射至 POSIX EDEADLK)、或收到取消信号返回 Canceled (映射至 POSIX EINTR)。
-	SetLkw(context.Context, *connect.Request[v1.SetLkwRequest]) (*connect.Response[v1.SetLkwResponse], error)
 	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
 	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若提供可选的 disk_id，将其绑定到该客户端会话；若关联磁盘不存在返回 NotFound (ENOENT)。
+	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
 	// 续期成功返回刷新后的租约截止时间 expires_at。
 	RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error)
-	// CloseSession 在客户端优雅卸载时即时注销指定会话租约，级联释放关联的文件句柄、文件锁并回收孤儿节点。
+	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
 	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	// 若目标会话已不存在或已过期，按幂等成功返回。
 	CloseSession(context.Context, *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error)
@@ -1221,7 +978,7 @@ type StorageServiceHandler interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(context.Context, *connect.Request[v1.UpdateDiskRequest]) (*connect.Response[v1.UpdateDiskResponse], error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在单次读写事务内排他锁定目标磁盘并删除 Disk 记录，同时按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联的 entries、inode_xattrs、file_handles、file_locks）。
+	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
@@ -1331,18 +1088,6 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("Create")),
 		connect.WithHandlerOptions(opts...),
 	)
-	storageServiceTmpFileHandler := connect.NewUnaryHandler(
-		StorageServiceTmpFileProcedure,
-		svc.TmpFile,
-		connect.WithSchema(storageServiceMethods.ByName("TmpFile")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceOpenHandler := connect.NewUnaryHandler(
-		StorageServiceOpenProcedure,
-		svc.Open,
-		connect.WithSchema(storageServiceMethods.ByName("Open")),
-		connect.WithHandlerOptions(opts...),
-	)
 	storageServiceReadHandler := connect.NewUnaryHandler(
 		StorageServiceReadProcedure,
 		svc.Read,
@@ -1355,40 +1100,16 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("Write")),
 		connect.WithHandlerOptions(opts...),
 	)
-	storageServiceFlushHandler := connect.NewUnaryHandler(
-		StorageServiceFlushProcedure,
-		svc.Flush,
-		connect.WithSchema(storageServiceMethods.ByName("Flush")),
-		connect.WithHandlerOptions(opts...),
-	)
 	storageServiceFsyncHandler := connect.NewUnaryHandler(
 		StorageServiceFsyncProcedure,
 		svc.Fsync,
 		connect.WithSchema(storageServiceMethods.ByName("Fsync")),
 		connect.WithHandlerOptions(opts...),
 	)
-	storageServiceReleaseHandler := connect.NewUnaryHandler(
-		StorageServiceReleaseProcedure,
-		svc.Release,
-		connect.WithSchema(storageServiceMethods.ByName("Release")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceOpenDirHandler := connect.NewUnaryHandler(
-		StorageServiceOpenDirProcedure,
-		svc.OpenDir,
-		connect.WithSchema(storageServiceMethods.ByName("OpenDir")),
-		connect.WithHandlerOptions(opts...),
-	)
 	storageServiceFsyncDirHandler := connect.NewUnaryHandler(
 		StorageServiceFsyncDirProcedure,
 		svc.FsyncDir,
 		connect.WithSchema(storageServiceMethods.ByName("FsyncDir")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceReleaseDirHandler := connect.NewUnaryHandler(
-		StorageServiceReleaseDirProcedure,
-		svc.ReleaseDir,
-		connect.WithSchema(storageServiceMethods.ByName("ReleaseDir")),
 		connect.WithHandlerOptions(opts...),
 	)
 	storageServiceReadDirHandler := connect.NewUnaryHandler(
@@ -1431,24 +1152,6 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		StorageServiceRemoveXattrProcedure,
 		svc.RemoveXattr,
 		connect.WithSchema(storageServiceMethods.ByName("RemoveXattr")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceGetLkHandler := connect.NewUnaryHandler(
-		StorageServiceGetLkProcedure,
-		svc.GetLk,
-		connect.WithSchema(storageServiceMethods.ByName("GetLk")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceSetLkHandler := connect.NewUnaryHandler(
-		StorageServiceSetLkProcedure,
-		svc.SetLk,
-		connect.WithSchema(storageServiceMethods.ByName("SetLk")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceSetLkwHandler := connect.NewUnaryHandler(
-		StorageServiceSetLkwProcedure,
-		svc.SetLkw,
-		connect.WithSchema(storageServiceMethods.ByName("SetLkw")),
 		connect.WithHandlerOptions(opts...),
 	)
 	storageServiceRenewSessionHandler := connect.NewUnaryHandler(
@@ -1585,26 +1288,14 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceRenameHandler.ServeHTTP(w, r)
 		case StorageServiceCreateProcedure:
 			storageServiceCreateHandler.ServeHTTP(w, r)
-		case StorageServiceTmpFileProcedure:
-			storageServiceTmpFileHandler.ServeHTTP(w, r)
-		case StorageServiceOpenProcedure:
-			storageServiceOpenHandler.ServeHTTP(w, r)
 		case StorageServiceReadProcedure:
 			storageServiceReadHandler.ServeHTTP(w, r)
 		case StorageServiceWriteProcedure:
 			storageServiceWriteHandler.ServeHTTP(w, r)
-		case StorageServiceFlushProcedure:
-			storageServiceFlushHandler.ServeHTTP(w, r)
 		case StorageServiceFsyncProcedure:
 			storageServiceFsyncHandler.ServeHTTP(w, r)
-		case StorageServiceReleaseProcedure:
-			storageServiceReleaseHandler.ServeHTTP(w, r)
-		case StorageServiceOpenDirProcedure:
-			storageServiceOpenDirHandler.ServeHTTP(w, r)
 		case StorageServiceFsyncDirProcedure:
 			storageServiceFsyncDirHandler.ServeHTTP(w, r)
-		case StorageServiceReleaseDirProcedure:
-			storageServiceReleaseDirHandler.ServeHTTP(w, r)
 		case StorageServiceReadDirProcedure:
 			storageServiceReadDirHandler.ServeHTTP(w, r)
 		case StorageServiceReadDirPlusProcedure:
@@ -1619,12 +1310,6 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceListXattrHandler.ServeHTTP(w, r)
 		case StorageServiceRemoveXattrProcedure:
 			storageServiceRemoveXattrHandler.ServeHTTP(w, r)
-		case StorageServiceGetLkProcedure:
-			storageServiceGetLkHandler.ServeHTTP(w, r)
-		case StorageServiceSetLkProcedure:
-			storageServiceSetLkHandler.ServeHTTP(w, r)
-		case StorageServiceSetLkwProcedure:
-			storageServiceSetLkwHandler.ServeHTTP(w, r)
 		case StorageServiceRenewSessionProcedure:
 			storageServiceRenewSessionHandler.ServeHTTP(w, r)
 		case StorageServiceCloseSessionProcedure:
@@ -1718,14 +1403,6 @@ func (UnimplementedStorageServiceHandler) Create(context.Context, *connect.Reque
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Create is not implemented"))
 }
 
-func (UnimplementedStorageServiceHandler) TmpFile(context.Context, *connect.Request[v1.TmpFileRequest]) (*connect.Response[v1.TmpFileResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.TmpFile is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) Open(context.Context, *connect.Request[v1.OpenRequest]) (*connect.Response[v1.OpenResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Open is not implemented"))
-}
-
 func (UnimplementedStorageServiceHandler) Read(context.Context, *connect.Request[v1.ReadRequest]) (*connect.Response[v1.ReadResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Read is not implemented"))
 }
@@ -1734,28 +1411,12 @@ func (UnimplementedStorageServiceHandler) Write(context.Context, *connect.Reques
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Write is not implemented"))
 }
 
-func (UnimplementedStorageServiceHandler) Flush(context.Context, *connect.Request[v1.FlushRequest]) (*connect.Response[v1.FlushResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Flush is not implemented"))
-}
-
 func (UnimplementedStorageServiceHandler) Fsync(context.Context, *connect.Request[v1.FsyncRequest]) (*connect.Response[v1.FsyncResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Fsync is not implemented"))
 }
 
-func (UnimplementedStorageServiceHandler) Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.ReleaseResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Release is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) OpenDir(context.Context, *connect.Request[v1.OpenDirRequest]) (*connect.Response[v1.OpenDirResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.OpenDir is not implemented"))
-}
-
 func (UnimplementedStorageServiceHandler) FsyncDir(context.Context, *connect.Request[v1.FsyncDirRequest]) (*connect.Response[v1.FsyncDirResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.FsyncDir is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) ReleaseDir(context.Context, *connect.Request[v1.ReleaseDirRequest]) (*connect.Response[v1.ReleaseDirResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.ReleaseDir is not implemented"))
 }
 
 func (UnimplementedStorageServiceHandler) ReadDir(context.Context, *connect.Request[v1.ReadDirRequest]) (*connect.Response[v1.ReadDirResponse], error) {
@@ -1784,18 +1445,6 @@ func (UnimplementedStorageServiceHandler) ListXattr(context.Context, *connect.Re
 
 func (UnimplementedStorageServiceHandler) RemoveXattr(context.Context, *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.RemoveXattr is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) GetLk(context.Context, *connect.Request[v1.GetLkRequest]) (*connect.Response[v1.GetLkResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.GetLk is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) SetLk(context.Context, *connect.Request[v1.SetLkRequest]) (*connect.Response[v1.SetLkResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.SetLk is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) SetLkw(context.Context, *connect.Request[v1.SetLkwRequest]) (*connect.Response[v1.SetLkwResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.SetLkw is not implemented"))
 }
 
 func (UnimplementedStorageServiceHandler) RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error) {

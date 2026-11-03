@@ -11,117 +11,26 @@ import (
 )
 
 type Querier interface {
-	AddSliceRefCount(ctx context.Context, arg AddSliceRefCountParams) error
-	AppendChunkSlice(ctx context.Context, arg AppendChunkSliceParams) (int64, error)
-	AppendExistingChunkSlice(ctx context.Context, arg AppendExistingChunkSliceParams) (int64, error)
-	ClearInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
-	// 4194304 = 0o20000000 (O_TMPFILE)
-	ClearTmpFileFlagByIno(ctx context.Context, ino int64) error
 	CompareAndSetDiskBranches(ctx context.Context, arg CompareAndSetDiskBranchesParams) ([]byte, error)
 	CreateCommit(ctx context.Context, arg CreateCommitParams) (Commit, error)
 	CreateDisk(ctx context.Context, arg CreateDiskParams) (CreateDiskRow, error)
-	CreateEntry(ctx context.Context, arg CreateEntryParams) error
-	CreateFileAtomic(ctx context.Context, arg CreateFileAtomicParams) (CreateFileAtomicRow, error)
-	CreateFileHandle(ctx context.Context, arg CreateFileHandleParams) (FileHandle, error)
-	CreateFileLock(ctx context.Context, arg CreateFileLockParams) (FileLock, error)
-	CreateInode(ctx context.Context, arg CreateInodeParams) (Inode, error)
-	CreateRootInode(ctx context.Context, arg CreateRootInodeParams) (Inode, error)
-	CreateSymlinkInode(ctx context.Context, arg CreateSymlinkInodeParams) (Inode, error)
-	DecrementInodeNlinkAndTouch(ctx context.Context, ino int64) error
-	DecrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
-	DeleteChunk(ctx context.Context, arg DeleteChunkParams) ([][]byte, error)
-	DeleteChunksAfterIndx(ctx context.Context, arg DeleteChunksAfterIndxParams) ([][]byte, error)
-	DeleteChunksByIno(ctx context.Context, ino int64) ([][]byte, error)
-	DeleteChunksByInos(ctx context.Context, inos []int64) ([][]byte, error)
-	DeleteChunksFromIndx(ctx context.Context, arg DeleteChunksFromIndxParams) ([][]byte, error)
-	DeleteClientSessionByID(ctx context.Context, sessionID int64) (int64, error)
 	DeleteDisk(ctx context.Context, diskID pgtype.UUID) (int64, error)
-	DeleteEntry(ctx context.Context, arg DeleteEntryParams) error
-	DeleteExpiredClientSessions(ctx context.Context) (int64, error)
-	DeleteFileHandle(ctx context.Context, arg DeleteFileHandleParams) (int64, error)
-	DeleteFileLockWaiter(ctx context.Context, arg DeleteFileLockWaiterParams) (int64, error)
-	DeleteFileLocksByIDs(ctx context.Context, ids []int64) error
-	DeleteFlockFileLocksByFh(ctx context.Context, arg DeleteFlockFileLocksByFhParams) (int64, error)
-	DeleteFlockFileLocksBySessionAndFh(ctx context.Context, arg DeleteFlockFileLocksBySessionAndFhParams) (int64, error)
-	DeleteInode(ctx context.Context, ino int64) error
-	DeleteInodeXattr(ctx context.Context, arg DeleteInodeXattrParams) (int64, error)
-	DeleteInodesByRootIno(ctx context.Context, rootIno int64) ([]int64, error)
-	DeletePosixFileLocksByOwner(ctx context.Context, arg DeletePosixFileLocksByOwnerParams) (int64, error)
-	DeletePosixFileLocksBySessionAndOwner(ctx context.Context, arg DeletePosixFileLocksBySessionAndOwnerParams) (int64, error)
-	DeleteSliceRef(ctx context.Context, sliceID int64) error
-	DeleteUnreferencedOrphanInodes(ctx context.Context) ([]DeleteUnreferencedOrphanInodesRow, error)
 	GetActiveBranchWriter(ctx context.Context, arg GetActiveBranchWriterParams) (ClientSession, error)
-	GetChunk(ctx context.Context, arg GetChunkParams) (Chunk, error)
-	GetChunkForUpdate(ctx context.Context, arg GetChunkForUpdateParams) (Chunk, error)
-	GetChunksInRange(ctx context.Context, arg GetChunksInRangeParams) ([]Chunk, error)
 	GetCommit(ctx context.Context, commitID pgtype.UUID) (Commit, error)
 	GetDisk(ctx context.Context, diskID pgtype.UUID) (GetDiskRow, error)
-	GetDiskByRootIno(ctx context.Context, rootIno int64) (GetDiskByRootInoRow, error)
-	GetDiskByRootInoForUpdate(ctx context.Context, rootIno int64) (GetDiskByRootInoForUpdateRow, error)
 	GetDiskControlPlane(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneRow, error)
 	GetDiskControlPlaneForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneForUpdateRow, error)
 	GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskForUpdateRow, error)
-	GetEntry(ctx context.Context, arg GetEntryParams) (Entry, error)
-	GetFileHandle(ctx context.Context, arg GetFileHandleParams) (FileHandle, error)
-	GetFileLockWaiter(ctx context.Context, arg GetFileLockWaiterParams) (FileLockWaiter, error)
-	GetFirstConflictingFileLock(ctx context.Context, arg GetFirstConflictingFileLockParams) (FileLock, error)
-	GetInode(ctx context.Context, ino int64) (Inode, error)
-	GetInodeByEntry(ctx context.Context, arg GetInodeByEntryParams) (Inode, error)
-	GetInodeChunksAndHandleForRead(ctx context.Context, arg GetInodeChunksAndHandleForReadParams) ([]GetInodeChunksAndHandleForReadRow, error)
-	GetInodeForUpdate(ctx context.Context, ino int64) (Inode, error)
-	GetInodeSizeAndChunksInRange(ctx context.Context, arg GetInodeSizeAndChunksInRangeParams) ([]GetInodeSizeAndChunksInRangeRow, error)
-	GetInodeXattr(ctx context.Context, arg GetInodeXattrParams) (InodeXattr, error)
-	GetInodeXattrNamesTotalBytes(ctx context.Context, ino int64) (int64, error)
-	GetParentInode(ctx context.Context, ino int64) (Inode, error)
-	GetSliceRef(ctx context.Context, sliceID int64) (SliceRef, error)
-	GetSymlinkTarget(ctx context.Context, ino int64) (GetSymlinkTargetRow, error)
-	HasActiveClientSession(ctx context.Context, arg HasActiveClientSessionParams) (bool, error)
-	HasChildEntries(ctx context.Context, parentIno int64) (bool, error)
-	HasFileHandlesByIno(ctx context.Context, ino int64) (bool, error)
-	// 4194304 = 0o20000000 (O_TMPFILE), 128 = 0o200 (O_EXCL)
-	HasLinkableTmpFileHandleByIno(ctx context.Context, ino int64) (bool, error)
-	IncrementInodeNlinkAndTouch(ctx context.Context, ino int64) error
-	IncrementInodeNlinkAndTouchCtime(ctx context.Context, ino int64) (Inode, error)
-	InsertSliceRef(ctx context.Context, arg InsertSliceRefParams) error
-	IsSubdirectory(ctx context.Context, arg IsSubdirectoryParams) (bool, error)
 	ListActiveCommitSessions(ctx context.Context, arg ListActiveCommitSessionsParams) ([]ClientSession, error)
-	ListActiveFileLocksByInoAndFlags(ctx context.Context, arg ListActiveFileLocksByInoAndFlagsParams) ([]FileLock, error)
-	ListActiveSessionIDsByDisk(ctx context.Context, arg ListActiveSessionIDsByDiskParams) ([]int64, error)
+	ListActiveSessionIDsByDisk(ctx context.Context, diskID pgtype.UUID) ([]int64, error)
 	ListCommitAncestors(ctx context.Context, arg ListCommitAncestorsParams) ([]Commit, error)
 	ListCommitsByBranch(ctx context.Context, arg ListCommitsByBranchParams) ([]Commit, error)
-	ListDirEntries(ctx context.Context, arg ListDirEntriesParams) ([]ListDirEntriesRow, error)
-	ListDirEntriesAfterName(ctx context.Context, arg ListDirEntriesAfterNameParams) ([]ListDirEntriesAfterNameRow, error)
 	ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDisksRow, error)
-	ListGarbageSliceRefs(ctx context.Context, limitCount int32) ([]SliceRef, error)
-	ListInodeXattrNames(ctx context.Context, ino int64) ([][]byte, error)
-	ListParentEntryCountsByIno(ctx context.Context, ino int64) ([]ListParentEntryCountsByInoRow, error)
-	ListPendingFileLockWaitersByInoAndFlags(ctx context.Context, arg ListPendingFileLockWaitersByInoAndFlagsParams) ([]FileLockWaiter, error)
-	LockValidSliceRefsKeyShare(ctx context.Context, sliceIds []int64) ([]int64, error)
-	LookupEntryWithParent(ctx context.Context, arg LookupEntryWithParentParams) (LookupEntryWithParentRow, error)
-	NextSliceID(ctx context.Context) (int64, error)
-	OpenDirFast(ctx context.Context, arg OpenDirFastParams) (OpenDirFastRow, error)
-	OpenFileFast(ctx context.Context, arg OpenFileFastParams) (OpenFileFastRow, error)
-	ReleaseDirFast(ctx context.Context, arg ReleaseDirFastParams) (ReleaseDirFastRow, error)
-	ReleaseFileFast(ctx context.Context, arg ReleaseFileFastParams) (ReleaseFileFastRow, error)
 	// 写端冲突返回 23505（uq_client_sessions_managed_writer）；租期单位为微秒。
 	// 活跃会话不能更换绑定，错误绑定或非正租期返回零行。
 	RenewControlPlaneSession(ctx context.Context, arg RenewControlPlaneSessionParams) (ClientSession, error)
 	SetDiskStorageDir(ctx context.Context, arg SetDiskStorageDirParams) (SetDiskStorageDirRow, error)
-	TouchInodeAtime(ctx context.Context, ino int64) error
-	TouchInodeCtime(ctx context.Context, ino int64) error
-	TouchInodeTimestamps(ctx context.Context, ino int64) error
-	UpdateChunkSlices(ctx context.Context, arg UpdateChunkSlicesParams) error
 	UpdateDisk(ctx context.Context, arg UpdateDiskParams) (UpdateDiskRow, error)
-	UpdateEntry(ctx context.Context, arg UpdateEntryParams) error
-	UpdateEntryIno(ctx context.Context, arg UpdateEntryInoParams) error
-	UpdateInodeAttr(ctx context.Context, arg UpdateInodeAttrParams) (Inode, error)
-	UpdateInodeParentIno(ctx context.Context, arg UpdateInodeParentInoParams) error
-	UpdateInodeParentInoAndTouchCtime(ctx context.Context, arg UpdateInodeParentInoAndTouchCtimeParams) error
-	UpdateInodeSizeAndTouchForWrite(ctx context.Context, arg UpdateInodeSizeAndTouchForWriteParams) (Inode, error)
-	UpsertClientSession(ctx context.Context, arg UpsertClientSessionParams) (ClientSession, error)
-	UpsertFileLockWaiter(ctx context.Context, arg UpsertFileLockWaiterParams) (FileLockWaiter, error)
-	UpsertInodeXattr(ctx context.Context, arg UpsertInodeXattrParams) error
-	WriteFileAtomic(ctx context.Context, arg WriteFileAtomicParams) (WriteFileAtomicRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -700,7 +700,6 @@ type fullChainMockServer struct {
 	lookupFn       func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
 	writeFn        func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
 	readFn         func(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error)
-	setLkwFn       func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 }
 
 func (m *fullChainMockServer) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
@@ -717,10 +716,6 @@ func (m *fullChainMockServer) Write(ctx context.Context, req *connect.Request[st
 
 func (m *fullChainMockServer) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 	return m.readFn(ctx, req)
-}
-
-func (m *fullChainMockServer) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-	return m.setLkwFn(ctx, req)
 }
 
 func newChainStorageError(code connect.Code, reason, msg string) error {

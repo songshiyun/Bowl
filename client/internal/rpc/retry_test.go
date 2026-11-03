@@ -32,12 +32,10 @@ type mockStorageHandler struct {
 	getDiskCallCount    int32
 	createCallCount     int32
 	createDiskCallCount int32
-	setLkwCallCount     int32
 	onLookup            func(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
 	onGetDisk           func(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error)
 	onCreate            func(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error)
 	onCreateDisk        func(ctx context.Context, req *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error)
-	onSetLkw            func(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 }
 
 func (m *mockStorageHandler) Lookup(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
@@ -102,17 +100,6 @@ func (m *mockStorageHandler) CreateDisk(ctx context.Context, req *connect.Reques
 	}), nil
 }
 
-func (m *mockStorageHandler) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-	atomic.AddInt32(&m.setLkwCallCount, 1)
-	m.mu.Lock()
-	fn := m.onSetLkw
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
-}
-
 func startMockServer(t *testing.T, handler storagev1connect.StorageServiceHandler) (*httptest.Server, string) {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -137,14 +124,13 @@ func TestIdempotentProceduresWhitelist(t *testing.T) {
 		storagev1connect.StorageServiceReadDirPlusProcedure,
 		storagev1connect.StorageServiceGetXattrProcedure,
 		storagev1connect.StorageServiceListXattrProcedure,
-		storagev1connect.StorageServiceGetLkProcedure,
 		storagev1connect.StorageServiceStatFSProcedure,
 		storagev1connect.StorageServiceRenewSessionProcedure,
 		storagev1connect.StorageServiceCloseSessionProcedure,
 	}
 
-	require.Len(t, idempotentProcedures, 16, "生产白名单映射必须恰好包含 16 个只读与幂等 RPC")
-	require.Len(t, expectedProcedures, 16, "白名单必须恰好包含 16 个只读与幂等 RPC")
+	require.Len(t, idempotentProcedures, 15, "生产白名单映射必须恰好包含 15 个只读与幂等 RPC")
+	require.Len(t, expectedProcedures, 15, "白名单必须恰好包含 15 个只读与幂等 RPC")
 	for _, proc := range expectedProcedures {
 		require.True(t, IsIdempotentProcedure(proc), "Procedure %s 必须被判定为幂等", proc)
 	}
@@ -160,18 +146,10 @@ func TestIdempotentProceduresWhitelist(t *testing.T) {
 		storagev1connect.StorageServiceRmdirProcedure,
 		storagev1connect.StorageServiceRenameProcedure,
 		storagev1connect.StorageServiceCreateProcedure,
-		storagev1connect.StorageServiceTmpFileProcedure,
-		storagev1connect.StorageServiceOpenProcedure,
 		storagev1connect.StorageServiceWriteProcedure,
-		storagev1connect.StorageServiceFlushProcedure,
-		storagev1connect.StorageServiceReleaseProcedure,
-		storagev1connect.StorageServiceOpenDirProcedure,
-		storagev1connect.StorageServiceReleaseDirProcedure,
 		storagev1connect.StorageServiceFallocateProcedure,
 		storagev1connect.StorageServiceSetXattrProcedure,
 		storagev1connect.StorageServiceRemoveXattrProcedure,
-		storagev1connect.StorageServiceSetLkProcedure,
-		storagev1connect.StorageServiceSetLkwProcedure,
 		storagev1connect.StorageServiceCreateDiskProcedure,
 		storagev1connect.StorageServiceUpdateDiskProcedure,
 		storagev1connect.StorageServiceDeleteDiskProcedure,
@@ -857,43 +835,6 @@ func TestRetry_HangingServer_BoundedByMaxElapsedTime(t *testing.T) {
 		require.Equal(t, syscall.EIO, MapErrorWithCancel(err, cancelChan), "预算耗尽必须映射为 EIO 而非 EINTR")
 	})
 
-	t.Run("blocking SetLkw exempt from MaxElapsedTime truncation", func(t *testing.T) {
-		handler := &mockStorageHandler{}
-		var attempts int32
-		handler.onSetLkw = func(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-			atomic.AddInt32(&attempts, 1)
-			select {
-			case <-time.After(150 * time.Millisecond):
-				return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-
-		_, serverURL := startMockServer(t, handler)
-		client, err := NewClientFromConfig(ClientConfig{
-			Endpoint:    serverURL,
-			RetryConfig: retryCfg,
-		})
-		require.NoError(t, err)
-
-		cancelChan := make(chan struct{})
-		ctx, cancel := ContextWithCancelChan(context.Background(), cancelChan)
-		defer cancel()
-		guardTimer := time.AfterFunc(2*time.Second, cancel)
-		defer guardTimer.Stop()
-
-		start := time.Now()
-		_, err = client.SetLkw(ctx, connect.NewRequest(&storagev1.SetLkwRequest{
-			Ino: 1001,
-			Fh:  1,
-		}))
-		elapsed := time.Since(start)
-
-		require.NoError(t, err, "阻塞文件锁 SetLkw 豁免 MaxElapsedTime 截断，等待 150ms 后应成功返回")
-		require.GreaterOrEqual(t, elapsed, 150*time.Millisecond)
-		require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
-	})
 }
 
 // Slice 5: 默认配置与禁用配置

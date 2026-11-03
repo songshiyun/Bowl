@@ -500,9 +500,9 @@ type SetAttrRequest struct {
 	AtimeNow bool `protobuf:"varint,8,opt,name=atime_now,json=atimeNow,proto3" json:"atime_now,omitempty"`
 	// 是否将最后修改时间设置为当前服务端时间。与 mtime 互斥。
 	MtimeNow bool `protobuf:"varint,9,opt,name=mtime_now,json=mtimeNow,proto3" json:"mtime_now,omitempty"`
-	// 可选的文件句柄。
+	// 保留的兼容字段；句柄由客户端在本地管理。
 	Fh *uint64 `protobuf:"varint,10,opt,name=fh,proto3,oneof" json:"fh,omitempty"`
-	// 可选的客户端会话租约标识。
+	// 客户端会话租约标识。
 	SessionId *uint64 `protobuf:"varint,11,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	// 是否将状态变更时间设置为当前服务端时间。
 	CtimeNow bool `protobuf:"varint,12,opt,name=ctime_now,json=ctimeNow,proto3" json:"ctime_now,omitempty"`
@@ -1415,7 +1415,7 @@ type UnlinkRequest struct {
 	Name []byte `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// 客户端会话标识，用于确定目标分支或快照。
 	SessionId *uint64 `protobuf:"varint,3,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	// 是否仍有本地打开句柄；省略时使用旧版句柄语义。
+	// 是否仍有本地打开句柄；省略时按未打开处理。
 	OpenInClient  *bool `protobuf:"varint,4,opt,name=open_in_client,json=openInClient,proto3,oneof" json:"open_in_client,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1635,7 +1635,7 @@ type RenameRequest struct {
 	Flags uint32 `protobuf:"varint,5,opt,name=flags,proto3" json:"flags,omitempty"`
 	// 客户端会话标识，用于确定目标分支或快照。
 	SessionId *uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	// 被覆盖的目标是否仍有本地打开句柄；省略时使用旧版句柄语义。
+	// 被覆盖的目标是否仍有本地打开句柄；省略时按未打开处理。
 	TargetOpenInClient *bool `protobuf:"varint,7,opt,name=target_open_in_client,json=targetOpenInClient,proto3,oneof" json:"target_open_in_client,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
@@ -1773,7 +1773,7 @@ type CreateRequest struct {
 	Gid uint32 `protobuf:"varint,5,opt,name=gid,proto3" json:"gid,omitempty"`
 	// 打开标志位 (open flags, 如 O_CREAT, O_RDWR, O_WRONLY 等，严禁携带 O_TMPFILE = 0o20000000)。
 	Flags uint32 `protobuf:"varint,6,opt,name=flags,proto3" json:"flags,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,7,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1858,12 +1858,12 @@ func (x *CreateRequest) GetSessionId() uint64 {
 	return 0
 }
 
-// CreateResponse 包含新创建常规文件的元数据、分配的文件句柄以及 FUSE 内核缓存有效时间。
+// CreateResponse 包含新创建常规文件的元数据和 FUSE 内核缓存有效时间。
 type CreateResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 新创建的 Inode 实体元数据。
 	Inode *Inode `protobuf:"bytes,1,opt,name=inode,proto3" json:"inode,omitempty"`
-	// 分配的文件句柄 (FileHandle)。必须大于 0。
+	// 保留的兼容字段；客户端自行分配文件句柄。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 打开响应标志位 (open flags)。
 	OpenFlags uint32 `protobuf:"varint,3,opt,name=open_flags,json=openFlags,proto3" json:"open_flags,omitempty"`
@@ -1940,310 +1940,18 @@ func (x *CreateResponse) GetAttrTimeoutSeconds() float64 {
 	return 0
 }
 
-// TmpFileRequest 定义 TmpFile 接口输入参数（对接 Linux FUSE FUSE_TMPFILE = 51 协议）。
-type TmpFileRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 父目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	ParentIno uint64 `protobuf:"varint,1,opt,name=parent_ino,json=parentIno,proto3" json:"parent_ino,omitempty"`
-	// 节点模式位（包含可选的文件类型位及权限位）。
-	Mode uint32 `protobuf:"varint,2,opt,name=mode,proto3" json:"mode,omitempty"`
-	// 所属用户 ID。
-	Uid uint32 `protobuf:"varint,3,opt,name=uid,proto3" json:"uid,omitempty"`
-	// 所属组 ID。
-	Gid uint32 `protobuf:"varint,4,opt,name=gid,proto3" json:"gid,omitempty"`
-	// 打开标志位（必须为 O_WRONLY (1) 或 O_RDWR (2)，可携带 O_EXCL 等标志）。
-	Flags uint32 `protobuf:"varint,5,opt,name=flags,proto3" json:"flags,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *TmpFileRequest) Reset() {
-	*x = TmpFileRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[24]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TmpFileRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TmpFileRequest) ProtoMessage() {}
-
-func (x *TmpFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[24]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TmpFileRequest.ProtoReflect.Descriptor instead.
-func (*TmpFileRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{24}
-}
-
-func (x *TmpFileRequest) GetParentIno() uint64 {
-	if x != nil {
-		return x.ParentIno
-	}
-	return 0
-}
-
-func (x *TmpFileRequest) GetMode() uint32 {
-	if x != nil {
-		return x.Mode
-	}
-	return 0
-}
-
-func (x *TmpFileRequest) GetUid() uint32 {
-	if x != nil {
-		return x.Uid
-	}
-	return 0
-}
-
-func (x *TmpFileRequest) GetGid() uint32 {
-	if x != nil {
-		return x.Gid
-	}
-	return 0
-}
-
-func (x *TmpFileRequest) GetFlags() uint32 {
-	if x != nil {
-		return x.Flags
-	}
-	return 0
-}
-
-func (x *TmpFileRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// TmpFileResponse 包含新创建匿名临时文件的元数据、分配的文件句柄以及 FUSE 内核缓存有效时间。
-type TmpFileResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 新创建的匿名 Inode 实体元数据 (nlink = 0)。
-	Inode *Inode `protobuf:"bytes,1,opt,name=inode,proto3" json:"inode,omitempty"`
-	// 分配的文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 打开响应标志位 (open flags)。
-	OpenFlags uint32 `protobuf:"varint,3,opt,name=open_flags,json=openFlags,proto3" json:"open_flags,omitempty"`
-	// 目录项 (Entry) 在 FUSE 内核中的有效缓存时长（秒）。
-	EntryTimeoutSeconds float64 `protobuf:"fixed64,4,opt,name=entry_timeout_seconds,json=entryTimeoutSeconds,proto3" json:"entry_timeout_seconds,omitempty"`
-	// 属性 (attr) 在 FUSE 内核中的有效缓存时长（秒）。
-	AttrTimeoutSeconds float64 `protobuf:"fixed64,5,opt,name=attr_timeout_seconds,json=attrTimeoutSeconds,proto3" json:"attr_timeout_seconds,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *TmpFileResponse) Reset() {
-	*x = TmpFileResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[25]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *TmpFileResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*TmpFileResponse) ProtoMessage() {}
-
-func (x *TmpFileResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[25]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use TmpFileResponse.ProtoReflect.Descriptor instead.
-func (*TmpFileResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{25}
-}
-
-func (x *TmpFileResponse) GetInode() *Inode {
-	if x != nil {
-		return x.Inode
-	}
-	return nil
-}
-
-func (x *TmpFileResponse) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *TmpFileResponse) GetOpenFlags() uint32 {
-	if x != nil {
-		return x.OpenFlags
-	}
-	return 0
-}
-
-func (x *TmpFileResponse) GetEntryTimeoutSeconds() float64 {
-	if x != nil {
-		return x.EntryTimeoutSeconds
-	}
-	return 0
-}
-
-func (x *TmpFileResponse) GetAttrTimeoutSeconds() float64 {
-	if x != nil {
-		return x.AttrTimeoutSeconds
-	}
-	return 0
-}
-
-// OpenRequest 定义 Open 接口输入参数。
-type OpenRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 待打开节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 打开标志位 (open flags, 如 O_RDONLY, O_WRONLY, O_RDWR, O_TRUNC 等，严禁携带 O_TMPFILE = 0o20000000)。
-	Flags uint32 `protobuf:"varint,2,opt,name=flags,proto3" json:"flags,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,3,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OpenRequest) Reset() {
-	*x = OpenRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[26]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OpenRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OpenRequest) ProtoMessage() {}
-
-func (x *OpenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[26]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OpenRequest.ProtoReflect.Descriptor instead.
-func (*OpenRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{26}
-}
-
-func (x *OpenRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *OpenRequest) GetFlags() uint32 {
-	if x != nil {
-		return x.Flags
-	}
-	return 0
-}
-
-func (x *OpenRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// OpenResponse 包含打开文件所分配的文件句柄及打开响应标志位。
-type OpenResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 分配的文件句柄 (FileHandle)。必须大于 0。
-	Fh uint64 `protobuf:"varint,1,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 打开响应标志位 (open flags)。
-	OpenFlags     uint32 `protobuf:"varint,2,opt,name=open_flags,json=openFlags,proto3" json:"open_flags,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OpenResponse) Reset() {
-	*x = OpenResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[27]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OpenResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OpenResponse) ProtoMessage() {}
-
-func (x *OpenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[27]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OpenResponse.ProtoReflect.Descriptor instead.
-func (*OpenResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{27}
-}
-
-func (x *OpenResponse) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *OpenResponse) GetOpenFlags() uint32 {
-	if x != nil {
-		return x.OpenFlags
-	}
-	return 0
-}
-
 // ReadRequest 定义 Read 接口输入参数。
 type ReadRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标常规文件的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+	// 保留的兼容字段；文件句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 读取起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
 	Offset uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	// 读取字节数（最大 4194304，即 4 MiB）。
 	Size uint32 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,5,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2251,7 +1959,7 @@ type ReadRequest struct {
 
 func (x *ReadRequest) Reset() {
 	*x = ReadRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[28]
+	mi := &file_storage_v1_storage_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2263,7 +1971,7 @@ func (x *ReadRequest) String() string {
 func (*ReadRequest) ProtoMessage() {}
 
 func (x *ReadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[28]
+	mi := &file_storage_v1_storage_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2276,7 +1984,7 @@ func (x *ReadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadRequest.ProtoReflect.Descriptor instead.
 func (*ReadRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{28}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReadRequest) GetIno() uint64 {
@@ -2325,7 +2033,7 @@ type ReadResponse struct {
 
 func (x *ReadResponse) Reset() {
 	*x = ReadResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[29]
+	mi := &file_storage_v1_storage_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2337,7 +2045,7 @@ func (x *ReadResponse) String() string {
 func (*ReadResponse) ProtoMessage() {}
 
 func (x *ReadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[29]
+	mi := &file_storage_v1_storage_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2350,7 +2058,7 @@ func (x *ReadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadResponse.ProtoReflect.Descriptor instead.
 func (*ReadResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{29}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ReadResponse) GetData() []byte {
@@ -2365,13 +2073,13 @@ type WriteRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标常规文件的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+	// 保留的兼容字段；文件句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 写入起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
 	Offset uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	// 写入的数据载荷（最大 4194304 字节，即 4 MiB）。
 	Data []byte `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,5,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2379,7 +2087,7 @@ type WriteRequest struct {
 
 func (x *WriteRequest) Reset() {
 	*x = WriteRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[30]
+	mi := &file_storage_v1_storage_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2391,7 +2099,7 @@ func (x *WriteRequest) String() string {
 func (*WriteRequest) ProtoMessage() {}
 
 func (x *WriteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[30]
+	mi := &file_storage_v1_storage_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2404,7 +2112,7 @@ func (x *WriteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteRequest.ProtoReflect.Descriptor instead.
 func (*WriteRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{30}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *WriteRequest) GetIno() uint64 {
@@ -2455,7 +2163,7 @@ type WriteResponse struct {
 
 func (x *WriteResponse) Reset() {
 	*x = WriteResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[31]
+	mi := &file_storage_v1_storage_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2467,7 +2175,7 @@ func (x *WriteResponse) String() string {
 func (*WriteResponse) ProtoMessage() {}
 
 func (x *WriteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[31]
+	mi := &file_storage_v1_storage_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2480,7 +2188,7 @@ func (x *WriteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteResponse.ProtoReflect.Descriptor instead.
 func (*WriteResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{31}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *WriteResponse) GetSize() uint32 {
@@ -2497,126 +2205,16 @@ func (x *WriteResponse) GetInode() *Inode {
 	return nil
 }
 
-// FlushRequest 定义 Flush 接口输入参数。
-type FlushRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标文件节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 待冲刷的文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 可选的文件锁拥有者标识 (lock owner)。允许全范围 uint64。
-	LockOwner *uint64 `protobuf:"varint,3,opt,name=lock_owner,json=lockOwner,proto3,oneof" json:"lock_owner,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,4,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FlushRequest) Reset() {
-	*x = FlushRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[32]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FlushRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FlushRequest) ProtoMessage() {}
-
-func (x *FlushRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[32]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FlushRequest.ProtoReflect.Descriptor instead.
-func (*FlushRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{32}
-}
-
-func (x *FlushRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *FlushRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *FlushRequest) GetLockOwner() uint64 {
-	if x != nil && x.LockOwner != nil {
-		return *x.LockOwner
-	}
-	return 0
-}
-
-func (x *FlushRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// FlushResponse 定义 Flush 接口响应结果。
-type FlushResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FlushResponse) Reset() {
-	*x = FlushResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[33]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FlushResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FlushResponse) ProtoMessage() {}
-
-func (x *FlushResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[33]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FlushResponse.ProtoReflect.Descriptor instead.
-func (*FlushResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{33}
-}
-
 // FsyncRequest 定义 Fsync 接口输入参数。
 type FsyncRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标文件节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 待同步的文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 保留的兼容字段；句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 是否仅同步数据内容 (fdatasync 语义)。若为 true，仅同步文件数据而不强制刷写非必要元数据。
 	Datasync bool `protobuf:"varint,3,opt,name=datasync,proto3" json:"datasync,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,4,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2624,7 +2222,7 @@ type FsyncRequest struct {
 
 func (x *FsyncRequest) Reset() {
 	*x = FsyncRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[34]
+	mi := &file_storage_v1_storage_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2636,7 +2234,7 @@ func (x *FsyncRequest) String() string {
 func (*FsyncRequest) ProtoMessage() {}
 
 func (x *FsyncRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[34]
+	mi := &file_storage_v1_storage_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2649,7 +2247,7 @@ func (x *FsyncRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FsyncRequest.ProtoReflect.Descriptor instead.
 func (*FsyncRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{34}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *FsyncRequest) GetIno() uint64 {
@@ -2689,7 +2287,7 @@ type FsyncResponse struct {
 
 func (x *FsyncResponse) Reset() {
 	*x = FsyncResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[35]
+	mi := &file_storage_v1_storage_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2701,7 +2299,7 @@ func (x *FsyncResponse) String() string {
 func (*FsyncResponse) ProtoMessage() {}
 
 func (x *FsyncResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[35]
+	mi := &file_storage_v1_storage_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2714,245 +2312,7 @@ func (x *FsyncResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FsyncResponse.ProtoReflect.Descriptor instead.
 func (*FsyncResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{35}
-}
-
-// ReleaseRequest 定义 Release 接口输入参数。
-type ReleaseRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标文件节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 待关闭并销毁的文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 可选的文件锁拥有者标识 (lock owner)。允许全范围 uint64。
-	LockOwner *uint64 `protobuf:"varint,3,opt,name=lock_owner,json=lockOwner,proto3,oneof" json:"lock_owner,omitempty"`
-	// 释放标志位掩码（允许 0 到 3，支持 FUSE_RELEASE_FLUSH 与 FUSE_RELEASE_FLOCK_UNLOCK）。
-	ReleaseFlags uint32 `protobuf:"varint,4,opt,name=release_flags,json=releaseFlags,proto3" json:"release_flags,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,5,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseRequest) Reset() {
-	*x = ReleaseRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[36]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseRequest) ProtoMessage() {}
-
-func (x *ReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[36]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseRequest.ProtoReflect.Descriptor instead.
-func (*ReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{36}
-}
-
-func (x *ReleaseRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *ReleaseRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *ReleaseRequest) GetLockOwner() uint64 {
-	if x != nil && x.LockOwner != nil {
-		return *x.LockOwner
-	}
-	return 0
-}
-
-func (x *ReleaseRequest) GetReleaseFlags() uint32 {
-	if x != nil {
-		return x.ReleaseFlags
-	}
-	return 0
-}
-
-func (x *ReleaseRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// ReleaseResponse 定义 Release 接口响应结果。
-type ReleaseResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseResponse) Reset() {
-	*x = ReleaseResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[37]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseResponse) ProtoMessage() {}
-
-func (x *ReleaseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[37]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseResponse.ProtoReflect.Descriptor instead.
-func (*ReleaseResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{37}
-}
-
-// OpenDirRequest 定义 OpenDir 接口输入参数。
-type OpenDirRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 待打开目录节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 打开标志位 (open flags, 如 O_RDONLY)。
-	Flags uint32 `protobuf:"varint,2,opt,name=flags,proto3" json:"flags,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,3,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OpenDirRequest) Reset() {
-	*x = OpenDirRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[38]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OpenDirRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OpenDirRequest) ProtoMessage() {}
-
-func (x *OpenDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[38]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OpenDirRequest.ProtoReflect.Descriptor instead.
-func (*OpenDirRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{38}
-}
-
-func (x *OpenDirRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *OpenDirRequest) GetFlags() uint32 {
-	if x != nil {
-		return x.Flags
-	}
-	return 0
-}
-
-func (x *OpenDirRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// OpenDirResponse 包含打开目录所分配的目录句柄及打开响应标志位。
-type OpenDirResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 分配的目录 FileHandle。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,1,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 打开响应标志位 (open flags)。
-	OpenFlags     uint32 `protobuf:"varint,2,opt,name=open_flags,json=openFlags,proto3" json:"open_flags,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *OpenDirResponse) Reset() {
-	*x = OpenDirResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[39]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *OpenDirResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*OpenDirResponse) ProtoMessage() {}
-
-func (x *OpenDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[39]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use OpenDirResponse.ProtoReflect.Descriptor instead.
-func (*OpenDirResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{39}
-}
-
-func (x *OpenDirResponse) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *OpenDirResponse) GetOpenFlags() uint32 {
-	if x != nil {
-		return x.OpenFlags
-	}
-	return 0
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{29}
 }
 
 // FsyncDirRequest 定义 FsyncDir 接口输入参数。
@@ -2964,7 +2324,7 @@ type FsyncDirRequest struct {
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 是否仅同步数据内容 (fdatasync 语义)。若为 true，仅同步目录数据而不强制刷写非必要元数据。
 	Datasync bool `protobuf:"varint,3,opt,name=datasync,proto3" json:"datasync,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,4,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2972,7 +2332,7 @@ type FsyncDirRequest struct {
 
 func (x *FsyncDirRequest) Reset() {
 	*x = FsyncDirRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[40]
+	mi := &file_storage_v1_storage_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2984,7 +2344,7 @@ func (x *FsyncDirRequest) String() string {
 func (*FsyncDirRequest) ProtoMessage() {}
 
 func (x *FsyncDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[40]
+	mi := &file_storage_v1_storage_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2997,7 +2357,7 @@ func (x *FsyncDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FsyncDirRequest.ProtoReflect.Descriptor instead.
 func (*FsyncDirRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{40}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *FsyncDirRequest) GetIno() uint64 {
@@ -3037,7 +2397,7 @@ type FsyncDirResponse struct {
 
 func (x *FsyncDirResponse) Reset() {
 	*x = FsyncDirResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[41]
+	mi := &file_storage_v1_storage_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3049,7 +2409,7 @@ func (x *FsyncDirResponse) String() string {
 func (*FsyncDirResponse) ProtoMessage() {}
 
 func (x *FsyncDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[41]
+	mi := &file_storage_v1_storage_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3062,108 +2422,7 @@ func (x *FsyncDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FsyncDirResponse.ProtoReflect.Descriptor instead.
 func (*FsyncDirResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{41}
-}
-
-// ReleaseDirRequest 定义 ReleaseDir 接口输入参数。
-type ReleaseDirRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标目录节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 待关闭并销毁的目录 FileHandle。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     *uint64 `protobuf:"varint,3,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseDirRequest) Reset() {
-	*x = ReleaseDirRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[42]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseDirRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseDirRequest) ProtoMessage() {}
-
-func (x *ReleaseDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[42]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseDirRequest.ProtoReflect.Descriptor instead.
-func (*ReleaseDirRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{42}
-}
-
-func (x *ReleaseDirRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *ReleaseDirRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *ReleaseDirRequest) GetSessionId() uint64 {
-	if x != nil && x.SessionId != nil {
-		return *x.SessionId
-	}
-	return 0
-}
-
-// ReleaseDirResponse 定义 ReleaseDir 接口响应结果。
-type ReleaseDirResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ReleaseDirResponse) Reset() {
-	*x = ReleaseDirResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[43]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ReleaseDirResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ReleaseDirResponse) ProtoMessage() {}
-
-func (x *ReleaseDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[43]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ReleaseDirResponse.ProtoReflect.Descriptor instead.
-func (*ReleaseDirResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{43}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{31}
 }
 
 // DirEntry 定义 ReadDir 返回的基本目录项。
@@ -3184,7 +2443,7 @@ type DirEntry struct {
 
 func (x *DirEntry) Reset() {
 	*x = DirEntry{}
-	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	mi := &file_storage_v1_storage_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3196,7 +2455,7 @@ func (x *DirEntry) String() string {
 func (*DirEntry) ProtoMessage() {}
 
 func (x *DirEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[44]
+	mi := &file_storage_v1_storage_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3209,7 +2468,7 @@ func (x *DirEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DirEntry.ProtoReflect.Descriptor instead.
 func (*DirEntry) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{44}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *DirEntry) GetIno() uint64 {
@@ -3245,13 +2504,13 @@ type ReadDirRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 兼容旧客户端的目录句柄；0 表示由客户端在本地管理句柄。
+	// 保留的兼容字段；目录句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
 	Offset uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	// 单次最大读取条目数配额（最大 4096）。
 	Limit uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,5,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3259,7 +2518,7 @@ type ReadDirRequest struct {
 
 func (x *ReadDirRequest) Reset() {
 	*x = ReadDirRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	mi := &file_storage_v1_storage_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3271,7 +2530,7 @@ func (x *ReadDirRequest) String() string {
 func (*ReadDirRequest) ProtoMessage() {}
 
 func (x *ReadDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[45]
+	mi := &file_storage_v1_storage_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3284,7 +2543,7 @@ func (x *ReadDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDirRequest.ProtoReflect.Descriptor instead.
 func (*ReadDirRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{45}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ReadDirRequest) GetIno() uint64 {
@@ -3333,7 +2592,7 @@ type ReadDirResponse struct {
 
 func (x *ReadDirResponse) Reset() {
 	*x = ReadDirResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[46]
+	mi := &file_storage_v1_storage_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3345,7 +2604,7 @@ func (x *ReadDirResponse) String() string {
 func (*ReadDirResponse) ProtoMessage() {}
 
 func (x *ReadDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[46]
+	mi := &file_storage_v1_storage_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3358,7 +2617,7 @@ func (x *ReadDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDirResponse.ProtoReflect.Descriptor instead.
 func (*ReadDirResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{46}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ReadDirResponse) GetEntries() []*DirEntry {
@@ -3390,7 +2649,7 @@ type DirEntryPlus struct {
 
 func (x *DirEntryPlus) Reset() {
 	*x = DirEntryPlus{}
-	mi := &file_storage_v1_storage_proto_msgTypes[47]
+	mi := &file_storage_v1_storage_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3402,7 +2661,7 @@ func (x *DirEntryPlus) String() string {
 func (*DirEntryPlus) ProtoMessage() {}
 
 func (x *DirEntryPlus) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[47]
+	mi := &file_storage_v1_storage_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3415,7 +2674,7 @@ func (x *DirEntryPlus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DirEntryPlus.ProtoReflect.Descriptor instead.
 func (*DirEntryPlus) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{47}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DirEntryPlus) GetIno() uint64 {
@@ -3465,13 +2724,13 @@ type ReadDirPlusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标目录的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 兼容旧客户端的目录句柄；0 表示由客户端在本地管理句柄。
+	// 保留的兼容字段；目录句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
 	Offset uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	// 单次最大读取条目数配额（最大 4096）。
 	Limit uint32 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,5,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3479,7 +2738,7 @@ type ReadDirPlusRequest struct {
 
 func (x *ReadDirPlusRequest) Reset() {
 	*x = ReadDirPlusRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[48]
+	mi := &file_storage_v1_storage_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3491,7 +2750,7 @@ func (x *ReadDirPlusRequest) String() string {
 func (*ReadDirPlusRequest) ProtoMessage() {}
 
 func (x *ReadDirPlusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[48]
+	mi := &file_storage_v1_storage_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3504,7 +2763,7 @@ func (x *ReadDirPlusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDirPlusRequest.ProtoReflect.Descriptor instead.
 func (*ReadDirPlusRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{48}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ReadDirPlusRequest) GetIno() uint64 {
@@ -3553,7 +2812,7 @@ type ReadDirPlusResponse struct {
 
 func (x *ReadDirPlusResponse) Reset() {
 	*x = ReadDirPlusResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[49]
+	mi := &file_storage_v1_storage_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3565,7 +2824,7 @@ func (x *ReadDirPlusResponse) String() string {
 func (*ReadDirPlusResponse) ProtoMessage() {}
 
 func (x *ReadDirPlusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[49]
+	mi := &file_storage_v1_storage_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3578,7 +2837,7 @@ func (x *ReadDirPlusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadDirPlusResponse.ProtoReflect.Descriptor instead.
 func (*ReadDirPlusResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{49}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ReadDirPlusResponse) GetEntries() []*DirEntryPlus {
@@ -3593,7 +2852,7 @@ type FallocateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 目标常规文件的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+	// 保留的兼容字段；文件句柄由客户端在本地管理。
 	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
 	// 操作起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
 	Offset uint64 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
@@ -3601,7 +2860,7 @@ type FallocateRequest struct {
 	Length uint64 `protobuf:"varint,4,opt,name=length,proto3" json:"length,omitempty"`
 	// fallocate 模式位标志（支持 0、FALLOC_FL_KEEP_SIZE、FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE）。
 	Mode uint32 `protobuf:"varint,5,opt,name=mode,proto3" json:"mode,omitempty"`
-	// 可选的客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
+	// 客户端会话租约标识 (session_id)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId     *uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3609,7 +2868,7 @@ type FallocateRequest struct {
 
 func (x *FallocateRequest) Reset() {
 	*x = FallocateRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	mi := &file_storage_v1_storage_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3621,7 +2880,7 @@ func (x *FallocateRequest) String() string {
 func (*FallocateRequest) ProtoMessage() {}
 
 func (x *FallocateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	mi := &file_storage_v1_storage_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3634,7 +2893,7 @@ func (x *FallocateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FallocateRequest.ProtoReflect.Descriptor instead.
 func (*FallocateRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{50}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *FallocateRequest) GetIno() uint64 {
@@ -3688,7 +2947,7 @@ type FallocateResponse struct {
 
 func (x *FallocateResponse) Reset() {
 	*x = FallocateResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	mi := &file_storage_v1_storage_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3700,7 +2959,7 @@ func (x *FallocateResponse) String() string {
 func (*FallocateResponse) ProtoMessage() {}
 
 func (x *FallocateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	mi := &file_storage_v1_storage_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3713,7 +2972,7 @@ func (x *FallocateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FallocateResponse.ProtoReflect.Descriptor instead.
 func (*FallocateResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{51}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{39}
 }
 
 // SetXattrRequest 定义 SetXattr 接口输入参数。
@@ -3739,7 +2998,7 @@ type SetXattrRequest struct {
 
 func (x *SetXattrRequest) Reset() {
 	*x = SetXattrRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	mi := &file_storage_v1_storage_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3751,7 +3010,7 @@ func (x *SetXattrRequest) String() string {
 func (*SetXattrRequest) ProtoMessage() {}
 
 func (x *SetXattrRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	mi := &file_storage_v1_storage_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3764,7 +3023,7 @@ func (x *SetXattrRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetXattrRequest.ProtoReflect.Descriptor instead.
 func (*SetXattrRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{52}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *SetXattrRequest) GetIno() uint64 {
@@ -3811,7 +3070,7 @@ type SetXattrResponse struct {
 
 func (x *SetXattrResponse) Reset() {
 	*x = SetXattrResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	mi := &file_storage_v1_storage_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3823,7 +3082,7 @@ func (x *SetXattrResponse) String() string {
 func (*SetXattrResponse) ProtoMessage() {}
 
 func (x *SetXattrResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	mi := &file_storage_v1_storage_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3836,7 +3095,7 @@ func (x *SetXattrResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetXattrResponse.ProtoReflect.Descriptor instead.
 func (*SetXattrResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{53}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{41}
 }
 
 // GetXattrRequest 定义 GetXattr 接口输入参数。
@@ -3856,7 +3115,7 @@ type GetXattrRequest struct {
 
 func (x *GetXattrRequest) Reset() {
 	*x = GetXattrRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[54]
+	mi := &file_storage_v1_storage_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3868,7 +3127,7 @@ func (x *GetXattrRequest) String() string {
 func (*GetXattrRequest) ProtoMessage() {}
 
 func (x *GetXattrRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[54]
+	mi := &file_storage_v1_storage_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3881,7 +3140,7 @@ func (x *GetXattrRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetXattrRequest.ProtoReflect.Descriptor instead.
 func (*GetXattrRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{54}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *GetXattrRequest) GetIno() uint64 {
@@ -3917,7 +3176,7 @@ type GetXattrResponse struct {
 
 func (x *GetXattrResponse) Reset() {
 	*x = GetXattrResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[55]
+	mi := &file_storage_v1_storage_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3929,7 +3188,7 @@ func (x *GetXattrResponse) String() string {
 func (*GetXattrResponse) ProtoMessage() {}
 
 func (x *GetXattrResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[55]
+	mi := &file_storage_v1_storage_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3942,7 +3201,7 @@ func (x *GetXattrResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetXattrResponse.ProtoReflect.Descriptor instead.
 func (*GetXattrResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{55}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetXattrResponse) GetValue() []byte {
@@ -3965,7 +3224,7 @@ type ListXattrRequest struct {
 
 func (x *ListXattrRequest) Reset() {
 	*x = ListXattrRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[56]
+	mi := &file_storage_v1_storage_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3977,7 +3236,7 @@ func (x *ListXattrRequest) String() string {
 func (*ListXattrRequest) ProtoMessage() {}
 
 func (x *ListXattrRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[56]
+	mi := &file_storage_v1_storage_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3990,7 +3249,7 @@ func (x *ListXattrRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListXattrRequest.ProtoReflect.Descriptor instead.
 func (*ListXattrRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{56}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ListXattrRequest) GetIno() uint64 {
@@ -4019,7 +3278,7 @@ type ListXattrResponse struct {
 
 func (x *ListXattrResponse) Reset() {
 	*x = ListXattrResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[57]
+	mi := &file_storage_v1_storage_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4031,7 +3290,7 @@ func (x *ListXattrResponse) String() string {
 func (*ListXattrResponse) ProtoMessage() {}
 
 func (x *ListXattrResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[57]
+	mi := &file_storage_v1_storage_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4044,7 +3303,7 @@ func (x *ListXattrResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListXattrResponse.ProtoReflect.Descriptor instead.
 func (*ListXattrResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{57}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListXattrResponse) GetNames() [][]byte {
@@ -4071,7 +3330,7 @@ type RemoveXattrRequest struct {
 
 func (x *RemoveXattrRequest) Reset() {
 	*x = RemoveXattrRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[58]
+	mi := &file_storage_v1_storage_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4083,7 +3342,7 @@ func (x *RemoveXattrRequest) String() string {
 func (*RemoveXattrRequest) ProtoMessage() {}
 
 func (x *RemoveXattrRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[58]
+	mi := &file_storage_v1_storage_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4096,7 +3355,7 @@ func (x *RemoveXattrRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveXattrRequest.ProtoReflect.Descriptor instead.
 func (*RemoveXattrRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{58}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RemoveXattrRequest) GetIno() uint64 {
@@ -4129,7 +3388,7 @@ type RemoveXattrResponse struct {
 
 func (x *RemoveXattrResponse) Reset() {
 	*x = RemoveXattrResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[59]
+	mi := &file_storage_v1_storage_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4141,7 +3400,7 @@ func (x *RemoveXattrResponse) String() string {
 func (*RemoveXattrResponse) ProtoMessage() {}
 
 func (x *RemoveXattrResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[59]
+	mi := &file_storage_v1_storage_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4154,482 +3413,7 @@ func (x *RemoveXattrResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveXattrResponse.ProtoReflect.Descriptor instead.
 func (*RemoveXattrResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{59}
-}
-
-// FileLock 定义 FUSE 文件锁描述符（涵盖 POSIX 记录锁与 BSD flock 整文件锁）。
-type FileLock struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 锁定起始字节偏移量（闭区间起点，<= 9223372036854775807）。
-	Start uint64 `protobuf:"varint,1,opt,name=start,proto3" json:"start,omitempty"`
-	// 锁定结束字节偏移量（闭区间终点，<= 9223372036854775807；9223372036854775807 代表延伸至无穷远）。
-	End uint64 `protobuf:"varint,2,opt,name=end,proto3" json:"end,omitempty"`
-	// 锁类型（0: F_RDLCK 共享读锁, 1: F_WRLCK 排他写锁, 2: F_UNLCK 解锁）。
-	Type uint32 `protobuf:"varint,3,opt,name=type,proto3" json:"type,omitempty"`
-	// 持锁或请求锁的进程标识符 (PID)。
-	Pid           uint32 `protobuf:"varint,4,opt,name=pid,proto3" json:"pid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FileLock) Reset() {
-	*x = FileLock{}
-	mi := &file_storage_v1_storage_proto_msgTypes[60]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FileLock) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FileLock) ProtoMessage() {}
-
-func (x *FileLock) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[60]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FileLock.ProtoReflect.Descriptor instead.
-func (*FileLock) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{60}
-}
-
-func (x *FileLock) GetStart() uint64 {
-	if x != nil {
-		return x.Start
-	}
-	return 0
-}
-
-func (x *FileLock) GetEnd() uint64 {
-	if x != nil {
-		return x.End
-	}
-	return 0
-}
-
-func (x *FileLock) GetType() uint32 {
-	if x != nil {
-		return x.Type
-	}
-	return 0
-}
-
-func (x *FileLock) GetPid() uint32 {
-	if x != nil {
-		return x.Pid
-	}
-	return 0
-}
-
-// GetLkRequest 定义 GetLk (FUSE_GETLK = 31) 接口输入参数。
-type GetLkRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 活跃文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 锁拥有者 64 位不透明令牌（允许全范围 uint64，包括最高位为 1 的哈希值）。
-	LockOwner uint64 `protobuf:"varint,3,opt,name=lock_owner,json=lockOwner,proto3" json:"lock_owner,omitempty"`
-	// 待探测冲突的目标文件锁描述符。
-	Lk *FileLock `protobuf:"bytes,4,opt,name=lk,proto3" json:"lk,omitempty"`
-	// 锁命名空间标志位（0: POSIX 记录锁, 1: FUSE_LK_FLOCK / BSD flock）。
-	LkFlags uint32 `protobuf:"varint,5,opt,name=lk_flags,json=lkFlags,proto3" json:"lk_flags,omitempty"`
-	// 客户端会话租约标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetLkRequest) Reset() {
-	*x = GetLkRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[61]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetLkRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetLkRequest) ProtoMessage() {}
-
-func (x *GetLkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[61]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetLkRequest.ProtoReflect.Descriptor instead.
-func (*GetLkRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{61}
-}
-
-func (x *GetLkRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *GetLkRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *GetLkRequest) GetLockOwner() uint64 {
-	if x != nil {
-		return x.LockOwner
-	}
-	return 0
-}
-
-func (x *GetLkRequest) GetLk() *FileLock {
-	if x != nil {
-		return x.Lk
-	}
-	return nil
-}
-
-func (x *GetLkRequest) GetLkFlags() uint32 {
-	if x != nil {
-		return x.LkFlags
-	}
-	return 0
-}
-
-func (x *GetLkRequest) GetSessionId() uint64 {
-	if x != nil {
-		return x.SessionId
-	}
-	return 0
-}
-
-// GetLkResponse 定义 GetLk 接口响应结果。
-type GetLkResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 探测结果文件锁描述符（若无冲突则 type 为 F_UNLCK = 2；若有冲突则为首个冲突锁详情）。
-	Lk            *FileLock `protobuf:"bytes,1,opt,name=lk,proto3" json:"lk,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetLkResponse) Reset() {
-	*x = GetLkResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[62]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetLkResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetLkResponse) ProtoMessage() {}
-
-func (x *GetLkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[62]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetLkResponse.ProtoReflect.Descriptor instead.
-func (*GetLkResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{62}
-}
-
-func (x *GetLkResponse) GetLk() *FileLock {
-	if x != nil {
-		return x.Lk
-	}
-	return nil
-}
-
-// SetLkRequest 定义 SetLk (FUSE_SETLK = 32) 接口输入参数。
-type SetLkRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 活跃文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 锁拥有者 64 位不透明令牌（允许全范围 uint64，包括最高位为 1 的哈希值）。
-	LockOwner uint64 `protobuf:"varint,3,opt,name=lock_owner,json=lockOwner,proto3" json:"lock_owner,omitempty"`
-	// 待设置或释放的目标文件锁描述符。
-	Lk *FileLock `protobuf:"bytes,4,opt,name=lk,proto3" json:"lk,omitempty"`
-	// 锁命名空间标志位（0: POSIX 记录锁, 1: FUSE_LK_FLOCK / BSD flock）。
-	LkFlags uint32 `protobuf:"varint,5,opt,name=lk_flags,json=lkFlags,proto3" json:"lk_flags,omitempty"`
-	// 客户端会话租约标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId     uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetLkRequest) Reset() {
-	*x = SetLkRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[63]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetLkRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetLkRequest) ProtoMessage() {}
-
-func (x *SetLkRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[63]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetLkRequest.ProtoReflect.Descriptor instead.
-func (*SetLkRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{63}
-}
-
-func (x *SetLkRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *SetLkRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *SetLkRequest) GetLockOwner() uint64 {
-	if x != nil {
-		return x.LockOwner
-	}
-	return 0
-}
-
-func (x *SetLkRequest) GetLk() *FileLock {
-	if x != nil {
-		return x.Lk
-	}
-	return nil
-}
-
-func (x *SetLkRequest) GetLkFlags() uint32 {
-	if x != nil {
-		return x.LkFlags
-	}
-	return 0
-}
-
-func (x *SetLkRequest) GetSessionId() uint64 {
-	if x != nil {
-		return x.SessionId
-	}
-	return 0
-}
-
-// SetLkResponse 定义 SetLk 接口响应结果。
-type SetLkResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetLkResponse) Reset() {
-	*x = SetLkResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[64]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetLkResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetLkResponse) ProtoMessage() {}
-
-func (x *SetLkResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[64]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetLkResponse.ProtoReflect.Descriptor instead.
-func (*SetLkResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{64}
-}
-
-// SetLkwRequest 定义 SetLkw (FUSE_SETLKW = 33) 接口输入参数。
-type SetLkwRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Ino uint64 `protobuf:"varint,1,opt,name=ino,proto3" json:"ino,omitempty"`
-	// 活跃文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	Fh uint64 `protobuf:"varint,2,opt,name=fh,proto3" json:"fh,omitempty"`
-	// 锁拥有者 64 位不透明令牌（允许全范围 uint64，包括最高位为 1 的哈希值）。
-	LockOwner uint64 `protobuf:"varint,3,opt,name=lock_owner,json=lockOwner,proto3" json:"lock_owner,omitempty"`
-	// 待阻塞设置或释放的目标文件锁描述符。
-	Lk *FileLock `protobuf:"bytes,4,opt,name=lk,proto3" json:"lk,omitempty"`
-	// 锁命名空间标志位（0: POSIX 记录锁, 1: FUSE_LK_FLOCK / BSD flock）。
-	LkFlags uint32 `protobuf:"varint,5,opt,name=lk_flags,json=lkFlags,proto3" json:"lk_flags,omitempty"`
-	// 客户端会话租约标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	SessionId uint64 `protobuf:"varint,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// 阻塞请求唯一标识（与 session_id 联合驱动 PENDING / GRANTED / CANCELLED 状态机）。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-	RequestId     uint64 `protobuf:"varint,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetLkwRequest) Reset() {
-	*x = SetLkwRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[65]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetLkwRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetLkwRequest) ProtoMessage() {}
-
-func (x *SetLkwRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[65]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetLkwRequest.ProtoReflect.Descriptor instead.
-func (*SetLkwRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{65}
-}
-
-func (x *SetLkwRequest) GetIno() uint64 {
-	if x != nil {
-		return x.Ino
-	}
-	return 0
-}
-
-func (x *SetLkwRequest) GetFh() uint64 {
-	if x != nil {
-		return x.Fh
-	}
-	return 0
-}
-
-func (x *SetLkwRequest) GetLockOwner() uint64 {
-	if x != nil {
-		return x.LockOwner
-	}
-	return 0
-}
-
-func (x *SetLkwRequest) GetLk() *FileLock {
-	if x != nil {
-		return x.Lk
-	}
-	return nil
-}
-
-func (x *SetLkwRequest) GetLkFlags() uint32 {
-	if x != nil {
-		return x.LkFlags
-	}
-	return 0
-}
-
-func (x *SetLkwRequest) GetSessionId() uint64 {
-	if x != nil {
-		return x.SessionId
-	}
-	return 0
-}
-
-func (x *SetLkwRequest) GetRequestId() uint64 {
-	if x != nil {
-		return x.RequestId
-	}
-	return 0
-}
-
-// SetLkwResponse 定义 SetLkw 接口响应结果。
-type SetLkwResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SetLkwResponse) Reset() {
-	*x = SetLkwResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[66]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SetLkwResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SetLkwResponse) ProtoMessage() {}
-
-func (x *SetLkwResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[66]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SetLkwResponse.ProtoReflect.Descriptor instead.
-func (*SetLkwResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{66}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{47}
 }
 
 // RenewSessionRequest 定义 RenewSession 接口输入参数。
@@ -4638,7 +3422,7 @@ type RenewSessionRequest struct {
 	// 待续期的客户端会话租约标识 (session_id)。
 	// 必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
 	SessionId uint64 `protobuf:"varint,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	// 可选的关联虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+	// 关联虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
 	DiskId *string `protobuf:"bytes,2,opt,name=disk_id,json=diskId,proto3,oneof" json:"disk_id,omitempty"`
 	// 未指定时挂载默认分支 main。
 	BranchName *string `protobuf:"bytes,3,opt,name=branch_name,json=branchName,proto3,oneof" json:"branch_name,omitempty"`
@@ -4652,7 +3436,7 @@ type RenewSessionRequest struct {
 
 func (x *RenewSessionRequest) Reset() {
 	*x = RenewSessionRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[67]
+	mi := &file_storage_v1_storage_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4664,7 +3448,7 @@ func (x *RenewSessionRequest) String() string {
 func (*RenewSessionRequest) ProtoMessage() {}
 
 func (x *RenewSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[67]
+	mi := &file_storage_v1_storage_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4677,7 +3461,7 @@ func (x *RenewSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewSessionRequest.ProtoReflect.Descriptor instead.
 func (*RenewSessionRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{67}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *RenewSessionRequest) GetSessionId() uint64 {
@@ -4728,7 +3512,7 @@ type RenewSessionResponse struct {
 
 func (x *RenewSessionResponse) Reset() {
 	*x = RenewSessionResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[68]
+	mi := &file_storage_v1_storage_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4740,7 +3524,7 @@ func (x *RenewSessionResponse) String() string {
 func (*RenewSessionResponse) ProtoMessage() {}
 
 func (x *RenewSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[68]
+	mi := &file_storage_v1_storage_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4753,7 +3537,7 @@ func (x *RenewSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenewSessionResponse.ProtoReflect.Descriptor instead.
 func (*RenewSessionResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{68}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *RenewSessionResponse) GetExpiresAt() *timestamppb.Timestamp {
@@ -4782,7 +3566,7 @@ type CloseSessionRequest struct {
 
 func (x *CloseSessionRequest) Reset() {
 	*x = CloseSessionRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[69]
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4794,7 +3578,7 @@ func (x *CloseSessionRequest) String() string {
 func (*CloseSessionRequest) ProtoMessage() {}
 
 func (x *CloseSessionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[69]
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4807,7 +3591,7 @@ func (x *CloseSessionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseSessionRequest.ProtoReflect.Descriptor instead.
 func (*CloseSessionRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{69}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *CloseSessionRequest) GetSessionId() uint64 {
@@ -4826,7 +3610,7 @@ type CloseSessionResponse struct {
 
 func (x *CloseSessionResponse) Reset() {
 	*x = CloseSessionResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[70]
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4838,7 +3622,7 @@ func (x *CloseSessionResponse) String() string {
 func (*CloseSessionResponse) ProtoMessage() {}
 
 func (x *CloseSessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[70]
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4851,7 +3635,7 @@ func (x *CloseSessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloseSessionResponse.ProtoReflect.Descriptor instead.
 func (*CloseSessionResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{70}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{51}
 }
 
 type Inode struct {
@@ -4868,7 +3652,7 @@ type Inode struct {
 
 func (x *Inode) Reset() {
 	*x = Inode{}
-	mi := &file_storage_v1_storage_proto_msgTypes[71]
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4880,7 +3664,7 @@ func (x *Inode) String() string {
 func (*Inode) ProtoMessage() {}
 
 func (x *Inode) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[71]
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4893,7 +3677,7 @@ func (x *Inode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inode.ProtoReflect.Descriptor instead.
 func (*Inode) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{71}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *Inode) GetIno() uint64 {
@@ -4950,7 +3734,7 @@ type InodeAttribute struct {
 
 func (x *InodeAttribute) Reset() {
 	*x = InodeAttribute{}
-	mi := &file_storage_v1_storage_proto_msgTypes[72]
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4962,7 +3746,7 @@ func (x *InodeAttribute) String() string {
 func (*InodeAttribute) ProtoMessage() {}
 
 func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[72]
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4975,7 +3759,7 @@ func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InodeAttribute.ProtoReflect.Descriptor instead.
 func (*InodeAttribute) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{72}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *InodeAttribute) GetMode() uint32 {
@@ -5081,9 +3865,9 @@ type Disk struct {
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// 磁盘最后更新时间戳（必填）。
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// 分支树摘要。旧版服务可省略。
+	// 分支树摘要。
 	Branches []*Branch `protobuf:"bytes,9,rep,name=branches,proto3" json:"branches,omitempty"`
-	// 默认分支名。旧版服务可省略；新建磁盘默认为 main。
+	// 默认分支名，新建磁盘默认为 main。
 	DefaultBranch *string `protobuf:"bytes,10,opt,name=default_branch,json=defaultBranch,proto3,oneof" json:"default_branch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5091,7 +3875,7 @@ type Disk struct {
 
 func (x *Disk) Reset() {
 	*x = Disk{}
-	mi := &file_storage_v1_storage_proto_msgTypes[73]
+	mi := &file_storage_v1_storage_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5103,7 +3887,7 @@ func (x *Disk) String() string {
 func (*Disk) ProtoMessage() {}
 
 func (x *Disk) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[73]
+	mi := &file_storage_v1_storage_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5116,7 +3900,7 @@ func (x *Disk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Disk.ProtoReflect.Descriptor instead.
 func (*Disk) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{73}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *Disk) GetDiskId() string {
@@ -5202,7 +3986,7 @@ type CreateDiskRequest struct {
 
 func (x *CreateDiskRequest) Reset() {
 	*x = CreateDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[74]
+	mi := &file_storage_v1_storage_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5214,7 +3998,7 @@ func (x *CreateDiskRequest) String() string {
 func (*CreateDiskRequest) ProtoMessage() {}
 
 func (x *CreateDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[74]
+	mi := &file_storage_v1_storage_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5227,7 +4011,7 @@ func (x *CreateDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDiskRequest.ProtoReflect.Descriptor instead.
 func (*CreateDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{74}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CreateDiskRequest) GetName() string {
@@ -5255,7 +4039,7 @@ type CreateDiskResponse struct {
 
 func (x *CreateDiskResponse) Reset() {
 	*x = CreateDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[75]
+	mi := &file_storage_v1_storage_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5267,7 +4051,7 @@ func (x *CreateDiskResponse) String() string {
 func (*CreateDiskResponse) ProtoMessage() {}
 
 func (x *CreateDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[75]
+	mi := &file_storage_v1_storage_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5280,7 +4064,7 @@ func (x *CreateDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDiskResponse.ProtoReflect.Descriptor instead.
 func (*CreateDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{75}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *CreateDiskResponse) GetDisk() *Disk {
@@ -5301,7 +4085,7 @@ type GetDiskRequest struct {
 
 func (x *GetDiskRequest) Reset() {
 	*x = GetDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[76]
+	mi := &file_storage_v1_storage_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5313,7 +4097,7 @@ func (x *GetDiskRequest) String() string {
 func (*GetDiskRequest) ProtoMessage() {}
 
 func (x *GetDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[76]
+	mi := &file_storage_v1_storage_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5326,7 +4110,7 @@ func (x *GetDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskRequest.ProtoReflect.Descriptor instead.
 func (*GetDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{76}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *GetDiskRequest) GetDiskId() string {
@@ -5347,7 +4131,7 @@ type GetDiskResponse struct {
 
 func (x *GetDiskResponse) Reset() {
 	*x = GetDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[77]
+	mi := &file_storage_v1_storage_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5359,7 +4143,7 @@ func (x *GetDiskResponse) String() string {
 func (*GetDiskResponse) ProtoMessage() {}
 
 func (x *GetDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[77]
+	mi := &file_storage_v1_storage_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5372,7 +4156,7 @@ func (x *GetDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskResponse.ProtoReflect.Descriptor instead.
 func (*GetDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{77}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *GetDiskResponse) GetDisk() *Disk {
@@ -5395,7 +4179,7 @@ type ListDisksRequest struct {
 
 func (x *ListDisksRequest) Reset() {
 	*x = ListDisksRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[78]
+	mi := &file_storage_v1_storage_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5407,7 +4191,7 @@ func (x *ListDisksRequest) String() string {
 func (*ListDisksRequest) ProtoMessage() {}
 
 func (x *ListDisksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[78]
+	mi := &file_storage_v1_storage_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5420,7 +4204,7 @@ func (x *ListDisksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDisksRequest.ProtoReflect.Descriptor instead.
 func (*ListDisksRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{78}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListDisksRequest) GetPageSize() uint32 {
@@ -5450,7 +4234,7 @@ type ListDisksResponse struct {
 
 func (x *ListDisksResponse) Reset() {
 	*x = ListDisksResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[79]
+	mi := &file_storage_v1_storage_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5462,7 +4246,7 @@ func (x *ListDisksResponse) String() string {
 func (*ListDisksResponse) ProtoMessage() {}
 
 func (x *ListDisksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[79]
+	mi := &file_storage_v1_storage_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5475,7 +4259,7 @@ func (x *ListDisksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDisksResponse.ProtoReflect.Descriptor instead.
 func (*ListDisksResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{79}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ListDisksResponse) GetDisks() []*Disk {
@@ -5507,7 +4291,7 @@ type UpdateDiskRequest struct {
 
 func (x *UpdateDiskRequest) Reset() {
 	*x = UpdateDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[80]
+	mi := &file_storage_v1_storage_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5519,7 +4303,7 @@ func (x *UpdateDiskRequest) String() string {
 func (*UpdateDiskRequest) ProtoMessage() {}
 
 func (x *UpdateDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[80]
+	mi := &file_storage_v1_storage_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5532,7 +4316,7 @@ func (x *UpdateDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDiskRequest.ProtoReflect.Descriptor instead.
 func (*UpdateDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{80}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *UpdateDiskRequest) GetDiskId() string {
@@ -5567,7 +4351,7 @@ type UpdateDiskResponse struct {
 
 func (x *UpdateDiskResponse) Reset() {
 	*x = UpdateDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[81]
+	mi := &file_storage_v1_storage_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5579,7 +4363,7 @@ func (x *UpdateDiskResponse) String() string {
 func (*UpdateDiskResponse) ProtoMessage() {}
 
 func (x *UpdateDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[81]
+	mi := &file_storage_v1_storage_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5592,7 +4376,7 @@ func (x *UpdateDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDiskResponse.ProtoReflect.Descriptor instead.
 func (*UpdateDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{81}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *UpdateDiskResponse) GetDisk() *Disk {
@@ -5613,7 +4397,7 @@ type DeleteDiskRequest struct {
 
 func (x *DeleteDiskRequest) Reset() {
 	*x = DeleteDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[82]
+	mi := &file_storage_v1_storage_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5625,7 +4409,7 @@ func (x *DeleteDiskRequest) String() string {
 func (*DeleteDiskRequest) ProtoMessage() {}
 
 func (x *DeleteDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[82]
+	mi := &file_storage_v1_storage_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5638,7 +4422,7 @@ func (x *DeleteDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDiskRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{82}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *DeleteDiskRequest) GetDiskId() string {
@@ -5657,7 +4441,7 @@ type DeleteDiskResponse struct {
 
 func (x *DeleteDiskResponse) Reset() {
 	*x = DeleteDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[83]
+	mi := &file_storage_v1_storage_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5669,7 +4453,7 @@ func (x *DeleteDiskResponse) String() string {
 func (*DeleteDiskResponse) ProtoMessage() {}
 
 func (x *DeleteDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[83]
+	mi := &file_storage_v1_storage_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5682,7 +4466,7 @@ func (x *DeleteDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDiskResponse.ProtoReflect.Descriptor instead.
 func (*DeleteDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{83}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{64}
 }
 
 // StatFSRequest 定义 StatFS 接口输入参数。
@@ -5698,7 +4482,7 @@ type StatFSRequest struct {
 
 func (x *StatFSRequest) Reset() {
 	*x = StatFSRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[84]
+	mi := &file_storage_v1_storage_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5710,7 +4494,7 @@ func (x *StatFSRequest) String() string {
 func (*StatFSRequest) ProtoMessage() {}
 
 func (x *StatFSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[84]
+	mi := &file_storage_v1_storage_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5723,7 +4507,7 @@ func (x *StatFSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatFSRequest.ProtoReflect.Descriptor instead.
 func (*StatFSRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{84}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *StatFSRequest) GetIno() uint64 {
@@ -5771,7 +4555,7 @@ type StatFSResponse struct {
 
 func (x *StatFSResponse) Reset() {
 	*x = StatFSResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[85]
+	mi := &file_storage_v1_storage_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5783,7 +4567,7 @@ func (x *StatFSResponse) String() string {
 func (*StatFSResponse) ProtoMessage() {}
 
 func (x *StatFSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[85]
+	mi := &file_storage_v1_storage_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5796,7 +4580,7 @@ func (x *StatFSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatFSResponse.ProtoReflect.Descriptor instead.
 func (*StatFSResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{85}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *StatFSResponse) GetTotalBytes() uint64 {
@@ -5893,7 +4677,7 @@ type Branch struct {
 
 func (x *Branch) Reset() {
 	*x = Branch{}
-	mi := &file_storage_v1_storage_proto_msgTypes[86]
+	mi := &file_storage_v1_storage_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5905,7 +4689,7 @@ func (x *Branch) String() string {
 func (*Branch) ProtoMessage() {}
 
 func (x *Branch) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[86]
+	mi := &file_storage_v1_storage_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5918,7 +4702,7 @@ func (x *Branch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Branch.ProtoReflect.Descriptor instead.
 func (*Branch) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{86}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *Branch) GetBranchId() string {
@@ -5990,7 +4774,7 @@ type CreateBranchRequest struct {
 
 func (x *CreateBranchRequest) Reset() {
 	*x = CreateBranchRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[87]
+	mi := &file_storage_v1_storage_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6002,7 +4786,7 @@ func (x *CreateBranchRequest) String() string {
 func (*CreateBranchRequest) ProtoMessage() {}
 
 func (x *CreateBranchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[87]
+	mi := &file_storage_v1_storage_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6015,7 +4799,7 @@ func (x *CreateBranchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBranchRequest.ProtoReflect.Descriptor instead.
 func (*CreateBranchRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{87}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *CreateBranchRequest) GetDiskId() string {
@@ -6055,7 +4839,7 @@ type CreateBranchResponse struct {
 
 func (x *CreateBranchResponse) Reset() {
 	*x = CreateBranchResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[88]
+	mi := &file_storage_v1_storage_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6067,7 +4851,7 @@ func (x *CreateBranchResponse) String() string {
 func (*CreateBranchResponse) ProtoMessage() {}
 
 func (x *CreateBranchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[88]
+	mi := &file_storage_v1_storage_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6080,7 +4864,7 @@ func (x *CreateBranchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBranchResponse.ProtoReflect.Descriptor instead.
 func (*CreateBranchResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{88}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *CreateBranchResponse) GetBranch() *Branch {
@@ -6105,7 +4889,7 @@ type CommitInfo struct {
 
 func (x *CommitInfo) Reset() {
 	*x = CommitInfo{}
-	mi := &file_storage_v1_storage_proto_msgTypes[89]
+	mi := &file_storage_v1_storage_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6117,7 +4901,7 @@ func (x *CommitInfo) String() string {
 func (*CommitInfo) ProtoMessage() {}
 
 func (x *CommitInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[89]
+	mi := &file_storage_v1_storage_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6130,7 +4914,7 @@ func (x *CommitInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitInfo.ProtoReflect.Descriptor instead.
 func (*CommitInfo) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{89}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *CommitInfo) GetCommitId() string {
@@ -6195,7 +4979,7 @@ type MergeConflict struct {
 
 func (x *MergeConflict) Reset() {
 	*x = MergeConflict{}
-	mi := &file_storage_v1_storage_proto_msgTypes[90]
+	mi := &file_storage_v1_storage_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6207,7 +4991,7 @@ func (x *MergeConflict) String() string {
 func (*MergeConflict) ProtoMessage() {}
 
 func (x *MergeConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[90]
+	mi := &file_storage_v1_storage_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6220,7 +5004,7 @@ func (x *MergeConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeConflict.ProtoReflect.Descriptor instead.
 func (*MergeConflict) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{90}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *MergeConflict) GetPath() string {
@@ -6272,7 +5056,7 @@ type DiffEntry struct {
 
 func (x *DiffEntry) Reset() {
 	*x = DiffEntry{}
-	mi := &file_storage_v1_storage_proto_msgTypes[91]
+	mi := &file_storage_v1_storage_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6284,7 +5068,7 @@ func (x *DiffEntry) String() string {
 func (*DiffEntry) ProtoMessage() {}
 
 func (x *DiffEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[91]
+	mi := &file_storage_v1_storage_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6297,7 +5081,7 @@ func (x *DiffEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffEntry.ProtoReflect.Descriptor instead.
 func (*DiffEntry) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{91}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *DiffEntry) GetChangeType() DiffChangeType {
@@ -6354,7 +5138,7 @@ type ReclaimOrphanRequest struct {
 
 func (x *ReclaimOrphanRequest) Reset() {
 	*x = ReclaimOrphanRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[92]
+	mi := &file_storage_v1_storage_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6366,7 +5150,7 @@ func (x *ReclaimOrphanRequest) String() string {
 func (*ReclaimOrphanRequest) ProtoMessage() {}
 
 func (x *ReclaimOrphanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[92]
+	mi := &file_storage_v1_storage_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6379,7 +5163,7 @@ func (x *ReclaimOrphanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReclaimOrphanRequest.ProtoReflect.Descriptor instead.
 func (*ReclaimOrphanRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{92}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ReclaimOrphanRequest) GetSessionId() uint64 {
@@ -6418,7 +5202,7 @@ type ReclaimOrphanResponse struct {
 
 func (x *ReclaimOrphanResponse) Reset() {
 	*x = ReclaimOrphanResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[93]
+	mi := &file_storage_v1_storage_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6430,7 +5214,7 @@ func (x *ReclaimOrphanResponse) String() string {
 func (*ReclaimOrphanResponse) ProtoMessage() {}
 
 func (x *ReclaimOrphanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[93]
+	mi := &file_storage_v1_storage_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6443,7 +5227,7 @@ func (x *ReclaimOrphanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReclaimOrphanResponse.ProtoReflect.Descriptor instead.
 func (*ReclaimOrphanResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{93}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{74}
 }
 
 type ListBranchesRequest struct {
@@ -6455,7 +5239,7 @@ type ListBranchesRequest struct {
 
 func (x *ListBranchesRequest) Reset() {
 	*x = ListBranchesRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[94]
+	mi := &file_storage_v1_storage_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6467,7 +5251,7 @@ func (x *ListBranchesRequest) String() string {
 func (*ListBranchesRequest) ProtoMessage() {}
 
 func (x *ListBranchesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[94]
+	mi := &file_storage_v1_storage_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6480,7 +5264,7 @@ func (x *ListBranchesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBranchesRequest.ProtoReflect.Descriptor instead.
 func (*ListBranchesRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{94}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *ListBranchesRequest) GetDiskId() string {
@@ -6499,7 +5283,7 @@ type ListBranchesResponse struct {
 
 func (x *ListBranchesResponse) Reset() {
 	*x = ListBranchesResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[95]
+	mi := &file_storage_v1_storage_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6511,7 +5295,7 @@ func (x *ListBranchesResponse) String() string {
 func (*ListBranchesResponse) ProtoMessage() {}
 
 func (x *ListBranchesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[95]
+	mi := &file_storage_v1_storage_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6524,7 +5308,7 @@ func (x *ListBranchesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBranchesResponse.ProtoReflect.Descriptor instead.
 func (*ListBranchesResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{95}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *ListBranchesResponse) GetBranches() []*Branch {
@@ -6544,7 +5328,7 @@ type DeleteBranchRequest struct {
 
 func (x *DeleteBranchRequest) Reset() {
 	*x = DeleteBranchRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[96]
+	mi := &file_storage_v1_storage_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6556,7 +5340,7 @@ func (x *DeleteBranchRequest) String() string {
 func (*DeleteBranchRequest) ProtoMessage() {}
 
 func (x *DeleteBranchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[96]
+	mi := &file_storage_v1_storage_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6569,7 +5353,7 @@ func (x *DeleteBranchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBranchRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBranchRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{96}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DeleteBranchRequest) GetDiskId() string {
@@ -6594,7 +5378,7 @@ type DeleteBranchResponse struct {
 
 func (x *DeleteBranchResponse) Reset() {
 	*x = DeleteBranchResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[97]
+	mi := &file_storage_v1_storage_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6606,7 +5390,7 @@ func (x *DeleteBranchResponse) String() string {
 func (*DeleteBranchResponse) ProtoMessage() {}
 
 func (x *DeleteBranchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[97]
+	mi := &file_storage_v1_storage_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6619,7 +5403,7 @@ func (x *DeleteBranchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBranchResponse.ProtoReflect.Descriptor instead.
 func (*DeleteBranchResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{97}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{78}
 }
 
 type CommitRequest struct {
@@ -6633,7 +5417,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[98]
+	mi := &file_storage_v1_storage_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6645,7 +5429,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[98]
+	mi := &file_storage_v1_storage_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6658,7 +5442,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{98}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *CommitRequest) GetDiskId() string {
@@ -6691,7 +5475,7 @@ type CommitResponse struct {
 
 func (x *CommitResponse) Reset() {
 	*x = CommitResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[99]
+	mi := &file_storage_v1_storage_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6703,7 +5487,7 @@ func (x *CommitResponse) String() string {
 func (*CommitResponse) ProtoMessage() {}
 
 func (x *CommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[99]
+	mi := &file_storage_v1_storage_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6716,7 +5500,7 @@ func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
 func (*CommitResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{99}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *CommitResponse) GetCommit() *CommitInfo {
@@ -6737,7 +5521,7 @@ type RollbackRequest struct {
 
 func (x *RollbackRequest) Reset() {
 	*x = RollbackRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[100]
+	mi := &file_storage_v1_storage_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6749,7 +5533,7 @@ func (x *RollbackRequest) String() string {
 func (*RollbackRequest) ProtoMessage() {}
 
 func (x *RollbackRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[100]
+	mi := &file_storage_v1_storage_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6762,7 +5546,7 @@ func (x *RollbackRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackRequest.ProtoReflect.Descriptor instead.
 func (*RollbackRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{100}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *RollbackRequest) GetDiskId() string {
@@ -6794,7 +5578,7 @@ type RollbackResponse struct {
 
 func (x *RollbackResponse) Reset() {
 	*x = RollbackResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[101]
+	mi := &file_storage_v1_storage_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6806,7 +5590,7 @@ func (x *RollbackResponse) String() string {
 func (*RollbackResponse) ProtoMessage() {}
 
 func (x *RollbackResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[101]
+	mi := &file_storage_v1_storage_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6819,7 +5603,7 @@ func (x *RollbackResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackResponse.ProtoReflect.Descriptor instead.
 func (*RollbackResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{101}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{82}
 }
 
 type MergeRequest struct {
@@ -6834,7 +5618,7 @@ type MergeRequest struct {
 
 func (x *MergeRequest) Reset() {
 	*x = MergeRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[102]
+	mi := &file_storage_v1_storage_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6846,7 +5630,7 @@ func (x *MergeRequest) String() string {
 func (*MergeRequest) ProtoMessage() {}
 
 func (x *MergeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[102]
+	mi := &file_storage_v1_storage_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6859,7 +5643,7 @@ func (x *MergeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeRequest.ProtoReflect.Descriptor instead.
 func (*MergeRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{102}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *MergeRequest) GetDiskId() string {
@@ -6901,7 +5685,7 @@ type MergeResponse struct {
 
 func (x *MergeResponse) Reset() {
 	*x = MergeResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[103]
+	mi := &file_storage_v1_storage_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6913,7 +5697,7 @@ func (x *MergeResponse) String() string {
 func (*MergeResponse) ProtoMessage() {}
 
 func (x *MergeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[103]
+	mi := &file_storage_v1_storage_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6926,7 +5710,7 @@ func (x *MergeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeResponse.ProtoReflect.Descriptor instead.
 func (*MergeResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{103}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *MergeResponse) GetResult() MergeResult {
@@ -6961,7 +5745,7 @@ type ResolveMergeRequest struct {
 
 func (x *ResolveMergeRequest) Reset() {
 	*x = ResolveMergeRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[104]
+	mi := &file_storage_v1_storage_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6973,7 +5757,7 @@ func (x *ResolveMergeRequest) String() string {
 func (*ResolveMergeRequest) ProtoMessage() {}
 
 func (x *ResolveMergeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[104]
+	mi := &file_storage_v1_storage_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6986,7 +5770,7 @@ func (x *ResolveMergeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveMergeRequest.ProtoReflect.Descriptor instead.
 func (*ResolveMergeRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{104}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *ResolveMergeRequest) GetDiskId() string {
@@ -7019,7 +5803,7 @@ type ResolveMergeResponse struct {
 
 func (x *ResolveMergeResponse) Reset() {
 	*x = ResolveMergeResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[105]
+	mi := &file_storage_v1_storage_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7031,7 +5815,7 @@ func (x *ResolveMergeResponse) String() string {
 func (*ResolveMergeResponse) ProtoMessage() {}
 
 func (x *ResolveMergeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[105]
+	mi := &file_storage_v1_storage_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7044,7 +5828,7 @@ func (x *ResolveMergeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveMergeResponse.ProtoReflect.Descriptor instead.
 func (*ResolveMergeResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{105}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ResolveMergeResponse) GetCommit() *CommitInfo {
@@ -7064,7 +5848,7 @@ type AbortMergeRequest struct {
 
 func (x *AbortMergeRequest) Reset() {
 	*x = AbortMergeRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[106]
+	mi := &file_storage_v1_storage_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7076,7 +5860,7 @@ func (x *AbortMergeRequest) String() string {
 func (*AbortMergeRequest) ProtoMessage() {}
 
 func (x *AbortMergeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[106]
+	mi := &file_storage_v1_storage_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7089,7 +5873,7 @@ func (x *AbortMergeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortMergeRequest.ProtoReflect.Descriptor instead.
 func (*AbortMergeRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{106}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *AbortMergeRequest) GetDiskId() string {
@@ -7114,7 +5898,7 @@ type AbortMergeResponse struct {
 
 func (x *AbortMergeResponse) Reset() {
 	*x = AbortMergeResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[107]
+	mi := &file_storage_v1_storage_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7126,7 +5910,7 @@ func (x *AbortMergeResponse) String() string {
 func (*AbortMergeResponse) ProtoMessage() {}
 
 func (x *AbortMergeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[107]
+	mi := &file_storage_v1_storage_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7139,7 +5923,7 @@ func (x *AbortMergeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortMergeResponse.ProtoReflect.Descriptor instead.
 func (*AbortMergeResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{107}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{88}
 }
 
 type DiffRequest struct {
@@ -7153,7 +5937,7 @@ type DiffRequest struct {
 
 func (x *DiffRequest) Reset() {
 	*x = DiffRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[108]
+	mi := &file_storage_v1_storage_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7165,7 +5949,7 @@ func (x *DiffRequest) String() string {
 func (*DiffRequest) ProtoMessage() {}
 
 func (x *DiffRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[108]
+	mi := &file_storage_v1_storage_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7178,7 +5962,7 @@ func (x *DiffRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffRequest.ProtoReflect.Descriptor instead.
 func (*DiffRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{108}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *DiffRequest) GetDiskId() string {
@@ -7211,7 +5995,7 @@ type DiffResponse struct {
 
 func (x *DiffResponse) Reset() {
 	*x = DiffResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[109]
+	mi := &file_storage_v1_storage_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7223,7 +6007,7 @@ func (x *DiffResponse) String() string {
 func (*DiffResponse) ProtoMessage() {}
 
 func (x *DiffResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[109]
+	mi := &file_storage_v1_storage_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7236,7 +6020,7 @@ func (x *DiffResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffResponse.ProtoReflect.Descriptor instead.
 func (*DiffResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{109}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *DiffResponse) GetEntries() []*DiffEntry {
@@ -7423,35 +6207,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"open_flags\x18\x03 \x01(\rR\topenFlags\x12B\n" +
 	"\x15entry_timeout_seconds\x18\x04 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12@\n" +
-	"\x14attr_timeout_seconds\x18\x05 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xef\x02\n" +
-	"\x0eTmpFileRequest\x120\n" +
-	"\n" +
-	"parent_ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tparentIno\x12\x12\n" +
-	"\x04mode\x18\x02 \x01(\rR\x04mode\x12\x1d\n" +
-	"\x03uid\x18\x03 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\xff\xff\aR\x03uid\x12\x1d\n" +
-	"\x03gid\x18\x04 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\xff\xff\aR\x03gid\x12\x92\x01\n" +
-	"\x05flags\x18\x05 \x01(\rB|\xbaHy\xba\x01v\n" +
-	"\x16tmpfile_flags_writable\x124flags access mode must be O_WRONLY (1) or O_RDWR (2)\x1a&(this % 4u) == 1u || (this % 4u) == 2uR\x05flags\x125\n" +
-	"\n" +
-	"session_id\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_session_id\"\x8e\x02\n" +
-	"\x0fTmpFileResponse\x12/\n" +
-	"\x05inode\x18\x01 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"open_flags\x18\x03 \x01(\rR\topenFlags\x12D\n" +
-	"\x15entry_timeout_seconds\x18\x04 \x01(\x01B\x10\xbaH\r\x12\v@\x01)\x00\x00\x00\x00\x00\x00\x00\x00R\x13entryTimeoutSeconds\x12B\n" +
-	"\x14attr_timeout_seconds\x18\x05 \x01(\x01B\x10\xbaH\r\x12\v@\x01)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\x8e\x01\n" +
-	"\vOpenRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12\x14\n" +
-	"\x05flags\x18\x02 \x01(\rR\x05flags\x125\n" +
-	"\n" +
-	"session_id\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_session_id\"F\n" +
-	"\fOpenResponse\x12\x17\n" +
-	"\x02fh\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"open_flags\x18\x02 \x01(\rR\topenFlags\"\xe2\x01\n" +
+	"\x14attr_timeout_seconds\x18\x05 \x01(\x01B\x0e\xbaH\v\x12\t)\x00\x00\x00\x00\x00\x00\x00\x00R\x12attrTimeoutSeconds\"\xe2\x01\n" +
 	"\vReadRequest\x12#\n" +
 	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12\x1f\n" +
 	"\x02fh\x18\x02 \x01(\x04B\x0f\xbaH\f2\n" +
@@ -7480,17 +6236,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\rWriteResponse\x12\x1e\n" +
 	"\x04size\x18\x01 \x01(\rB\n" +
 	"\xbaH\a*\x05\x18\x80\x80\x80\x02R\x04size\x12/\n" +
-	"\x05inode\x18\x02 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\"\xcf\x01\n" +
-	"\fFlushRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\"\n" +
-	"\n" +
-	"lock_owner\x18\x03 \x01(\x04H\x00R\tlockOwner\x88\x01\x01\x125\n" +
-	"\n" +
-	"session_id\x18\x04 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x01R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_lock_ownerB\r\n" +
-	"\v_session_id\"\x0f\n" +
-	"\rFlushResponse\"\xb6\x01\n" +
+	"\x05inode\x18\x02 \x01(\v2\x11.storage.v1.InodeB\x06\xbaH\x03\xc8\x01\x01R\x05inode\"\xb6\x01\n" +
 	"\fFsyncRequest\x12#\n" +
 	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12\x1f\n" +
 	"\x02fh\x18\x02 \x01(\x04B\x0f\xbaH\f2\n" +
@@ -7499,28 +6245,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x04 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
 	"\v_session_id\"\x0f\n" +
-	"\rFsyncResponse\"\xff\x01\n" +
-	"\x0eReleaseRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\"\n" +
-	"\n" +
-	"lock_owner\x18\x03 \x01(\x04H\x00R\tlockOwner\x88\x01\x01\x12,\n" +
-	"\rrelease_flags\x18\x04 \x01(\rB\a\xbaH\x04*\x02\x18\x03R\freleaseFlags\x125\n" +
-	"\n" +
-	"session_id\x18\x05 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x01R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_lock_ownerB\r\n" +
-	"\v_session_id\"\x11\n" +
-	"\x0fReleaseResponse\"\x91\x01\n" +
-	"\x0eOpenDirRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12\x14\n" +
-	"\x05flags\x18\x02 \x01(\rR\x05flags\x125\n" +
-	"\n" +
-	"session_id\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_session_id\"S\n" +
-	"\x0fOpenDirResponse\x12!\n" +
-	"\x02fh\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"open_flags\x18\x02 \x01(\rR\topenFlags\"\xb9\x01\n" +
+	"\rFsyncResponse\"\xb9\x01\n" +
 	"\x0fFsyncDirRequest\x12#\n" +
 	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12\x1f\n" +
 	"\x02fh\x18\x02 \x01(\x04B\x0f\xbaH\f2\n" +
@@ -7529,14 +6254,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x04 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
 	"\v_session_id\"\x12\n" +
-	"\x10FsyncDirResponse\"\xa1\x01\n" +
-	"\x11ReleaseDirRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x125\n" +
-	"\n" +
-	"session_id\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
-	"\v_session_id\"\x14\n" +
-	"\x12ReleaseDirResponse\"\x82\x02\n" +
+	"\x10FsyncDirResponse\"\x82\x02\n" +
 	"\bDirEntry\x12\x19\n" +
 	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x93\x01\n" +
 	"\x04name\x18\x02 \x01(\fB\x7f\xbaH|\xba\x01r\n" +
@@ -7625,51 +6343,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\n" +
 	"session_id\x18\x03 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\tsessionId\x88\x01\x01B\r\n" +
 	"\v_session_id\"\x15\n" +
-	"\x13RemoveXattrResponse\"\x87\x02\n" +
-	"\bFileLock\x12%\n" +
-	"\x05start\x18\x01 \x01(\x04B\x0f\xbaH\f2\n" +
-	"\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7fR\x05start\x12!\n" +
-	"\x03end\x18\x02 \x01(\x04B\x0f\xbaH\f2\n" +
-	"\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7fR\x03end\x12\x1b\n" +
-	"\x04type\x18\x03 \x01(\rB\a\xbaH\x04*\x02\x18\x02R\x04type\x12\x1d\n" +
-	"\x03pid\x18\x04 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\xff\xff\aR\x03pid:u\xbaHr\x1ap\n" +
-	"\x15file_lock_range_valid\x12?file lock start offset must be less than or equal to end offset\x1a\x16this.start <= this.end\"\xb8\x03\n" +
-	"\fGetLkRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"lock_owner\x18\x03 \x01(\x04R\tlockOwner\x12,\n" +
-	"\x02lk\x18\x04 \x01(\v2\x14.storage.v1.FileLockB\x06\xbaH\x03\xc8\x01\x01R\x02lk\x12\"\n" +
-	"\blk_flags\x18\x05 \x01(\rB\a\xbaH\x04*\x02\x18\x01R\alkFlags\x120\n" +
-	"\n" +
-	"session_id\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tsessionId:\xbc\x01\xbaH\xb8\x01\x1a\xb5\x01\n" +
-	"\x1cgetlk_flock_whole_file_range\x12@FUSE_LK_FLOCK requires whole-file range [0, 9223372036854775807]\x1aSthis.lk_flags != 1u || (this.lk.start == 0u && this.lk.end == 9223372036854775807u)\"=\n" +
-	"\rGetLkResponse\x12,\n" +
-	"\x02lk\x18\x01 \x01(\v2\x14.storage.v1.FileLockB\x06\xbaH\x03\xc8\x01\x01R\x02lk\"\xb8\x03\n" +
-	"\fSetLkRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"lock_owner\x18\x03 \x01(\x04R\tlockOwner\x12,\n" +
-	"\x02lk\x18\x04 \x01(\v2\x14.storage.v1.FileLockB\x06\xbaH\x03\xc8\x01\x01R\x02lk\x12\"\n" +
-	"\blk_flags\x18\x05 \x01(\rB\a\xbaH\x04*\x02\x18\x01R\alkFlags\x120\n" +
-	"\n" +
-	"session_id\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tsessionId:\xbc\x01\xbaH\xb8\x01\x1a\xb5\x01\n" +
-	"\x1csetlk_flock_whole_file_range\x12@FUSE_LK_FLOCK requires whole-file range [0, 9223372036854775807]\x1aSthis.lk_flags != 1u || (this.lk.start == 0u && this.lk.end == 9223372036854775807u)\"\x0f\n" +
-	"\rSetLkResponse\"\xec\x03\n" +
-	"\rSetLkwRequest\x12#\n" +
-	"\x03ino\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x03ino\x12!\n" +
-	"\x02fh\x18\x02 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\x02fh\x12\x1d\n" +
-	"\n" +
-	"lock_owner\x18\x03 \x01(\x04R\tlockOwner\x12,\n" +
-	"\x02lk\x18\x04 \x01(\v2\x14.storage.v1.FileLockB\x06\xbaH\x03\xc8\x01\x01R\x02lk\x12\"\n" +
-	"\blk_flags\x18\x05 \x01(\rB\a\xbaH\x04*\x02\x18\x01R\alkFlags\x120\n" +
-	"\n" +
-	"session_id\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tsessionId\x120\n" +
-	"\n" +
-	"request_id\x18\a \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\trequestId:\xbd\x01\xbaH\xb9\x01\x1a\xb6\x01\n" +
-	"\x1dsetlkw_flock_whole_file_range\x12@FUSE_LK_FLOCK requires whole-file range [0, 9223372036854775807]\x1aSthis.lk_flags != 1u || (this.lk.start == 0u && this.lk.end == 9223372036854775807u)\"\x10\n" +
-	"\x0eSetLkwResponse\"\x8e\a\n" +
+	"\x13RemoveXattrResponse\"\xa7\x06\n" +
 	"\x13RenewSessionRequest\x120\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00R\tsessionId\x12\x96\x01\n" +
@@ -7680,9 +6354,9 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"branchName\x88\x01\x01\x12\x1b\n" +
 	"\tread_only\x18\x04 \x01(\bR\breadOnly\x12\x98\x01\n" +
 	"\tcommit_id\x18\x05 \x01(\tBv\xbaHs\xba\x01k\n" +
-	"\x19session_commit_id_not_nil\x12\x1ecommit_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01H\x02R\bcommitId\x88\x01\x01:\xa9\x02\xbaH\xa5\x02\x1ah\n" +
-	" renew_session_snapshot_read_only\x12\x1ccommit_id requires read_only\x1a&!has(this.commit_id) || this.read_only\x1a\xb8\x01\n" +
-	"#renew_session_context_requires_disk\x127branch, read-only and snapshot sessions require disk_id\x1aX(!has(this.branch_name) && !this.read_only && !has(this.commit_id)) || has(this.disk_id)B\n" +
+	"\x19session_commit_id_not_nil\x12\x1ecommit_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01H\x02R\bcommitId\x88\x01\x01:\xc2\x01\xbaH\xbe\x01\x1ah\n" +
+	" renew_session_snapshot_read_only\x12\x1ccommit_id requires read_only\x1a&!has(this.commit_id) || this.read_only\x1aR\n" +
+	"#renew_session_context_requires_disk\x12\x18session requires disk_id\x1a\x11has(this.disk_id)B\n" +
 	"\n" +
 	"\b_disk_idB\x0e\n" +
 	"\f_branch_nameB\f\n" +
@@ -7960,7 +6634,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x16DIFF_CHANGE_TYPE_ADDED\x10\x01\x12\x1d\n" +
 	"\x19DIFF_CHANGE_TYPE_MODIFIED\x10\x02\x12\x1c\n" +
 	"\x18DIFF_CHANGE_TYPE_DELETED\x10\x03\x12\x1c\n" +
-	"\x18DIFF_CHANGE_TYPE_RENAMED\x10\x042\xbb\x1b\n" +
+	"\x18DIFF_CHANGE_TYPE_RENAMED\x10\x042\xec\x16\n" +
 	"\x0eStorageService\x12?\n" +
 	"\x06Lookup\x12\x19.storage.v1.LookupRequest\x1a\x1a.storage.v1.LookupResponse\x12B\n" +
 	"\aGetAttr\x12\x1a.storage.v1.GetAttrRequest\x1a\x1b.storage.v1.GetAttrResponse\x12B\n" +
@@ -7973,28 +6647,18 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x06Unlink\x12\x19.storage.v1.UnlinkRequest\x1a\x1a.storage.v1.UnlinkResponse\x12<\n" +
 	"\x05Rmdir\x12\x18.storage.v1.RmdirRequest\x1a\x19.storage.v1.RmdirResponse\x12?\n" +
 	"\x06Rename\x12\x19.storage.v1.RenameRequest\x1a\x1a.storage.v1.RenameResponse\x12?\n" +
-	"\x06Create\x12\x19.storage.v1.CreateRequest\x1a\x1a.storage.v1.CreateResponse\x12B\n" +
-	"\aTmpFile\x12\x1a.storage.v1.TmpFileRequest\x1a\x1b.storage.v1.TmpFileResponse\x129\n" +
-	"\x04Open\x12\x17.storage.v1.OpenRequest\x1a\x18.storage.v1.OpenResponse\x129\n" +
+	"\x06Create\x12\x19.storage.v1.CreateRequest\x1a\x1a.storage.v1.CreateResponse\x129\n" +
 	"\x04Read\x12\x17.storage.v1.ReadRequest\x1a\x18.storage.v1.ReadResponse\x12<\n" +
 	"\x05Write\x12\x18.storage.v1.WriteRequest\x1a\x19.storage.v1.WriteResponse\x12<\n" +
-	"\x05Flush\x12\x18.storage.v1.FlushRequest\x1a\x19.storage.v1.FlushResponse\x12<\n" +
-	"\x05Fsync\x12\x18.storage.v1.FsyncRequest\x1a\x19.storage.v1.FsyncResponse\x12B\n" +
-	"\aRelease\x12\x1a.storage.v1.ReleaseRequest\x1a\x1b.storage.v1.ReleaseResponse\x12B\n" +
-	"\aOpenDir\x12\x1a.storage.v1.OpenDirRequest\x1a\x1b.storage.v1.OpenDirResponse\x12E\n" +
-	"\bFsyncDir\x12\x1b.storage.v1.FsyncDirRequest\x1a\x1c.storage.v1.FsyncDirResponse\x12K\n" +
-	"\n" +
-	"ReleaseDir\x12\x1d.storage.v1.ReleaseDirRequest\x1a\x1e.storage.v1.ReleaseDirResponse\x12B\n" +
+	"\x05Fsync\x12\x18.storage.v1.FsyncRequest\x1a\x19.storage.v1.FsyncResponse\x12E\n" +
+	"\bFsyncDir\x12\x1b.storage.v1.FsyncDirRequest\x1a\x1c.storage.v1.FsyncDirResponse\x12B\n" +
 	"\aReadDir\x12\x1a.storage.v1.ReadDirRequest\x1a\x1b.storage.v1.ReadDirResponse\x12N\n" +
 	"\vReadDirPlus\x12\x1e.storage.v1.ReadDirPlusRequest\x1a\x1f.storage.v1.ReadDirPlusResponse\x12H\n" +
 	"\tFallocate\x12\x1c.storage.v1.FallocateRequest\x1a\x1d.storage.v1.FallocateResponse\x12E\n" +
 	"\bSetXattr\x12\x1b.storage.v1.SetXattrRequest\x1a\x1c.storage.v1.SetXattrResponse\x12E\n" +
 	"\bGetXattr\x12\x1b.storage.v1.GetXattrRequest\x1a\x1c.storage.v1.GetXattrResponse\x12H\n" +
 	"\tListXattr\x12\x1c.storage.v1.ListXattrRequest\x1a\x1d.storage.v1.ListXattrResponse\x12N\n" +
-	"\vRemoveXattr\x12\x1e.storage.v1.RemoveXattrRequest\x1a\x1f.storage.v1.RemoveXattrResponse\x12<\n" +
-	"\x05GetLk\x12\x18.storage.v1.GetLkRequest\x1a\x19.storage.v1.GetLkResponse\x12<\n" +
-	"\x05SetLk\x12\x18.storage.v1.SetLkRequest\x1a\x19.storage.v1.SetLkResponse\x12?\n" +
-	"\x06SetLkw\x12\x19.storage.v1.SetLkwRequest\x1a\x1a.storage.v1.SetLkwResponse\x12Q\n" +
+	"\vRemoveXattr\x12\x1e.storage.v1.RemoveXattrRequest\x1a\x1f.storage.v1.RemoveXattrResponse\x12Q\n" +
 	"\fRenewSession\x12\x1f.storage.v1.RenewSessionRequest\x1a .storage.v1.RenewSessionResponse\x12Q\n" +
 	"\fCloseSession\x12\x1f.storage.v1.CloseSessionRequest\x1a .storage.v1.CloseSessionResponse\x12K\n" +
 	"\n" +
@@ -8031,7 +6695,7 @@ func file_storage_v1_storage_proto_rawDescGZIP() []byte {
 }
 
 var file_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 110)
+var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 91)
 var file_storage_v1_storage_proto_goTypes = []any{
 	(BranchState)(0),              // 0: storage.v1.BranchState
 	(ConflictStrategy)(0),         // 1: storage.v1.ConflictStrategy
@@ -8061,248 +6725,206 @@ var file_storage_v1_storage_proto_goTypes = []any{
 	(*RenameResponse)(nil),        // 25: storage.v1.RenameResponse
 	(*CreateRequest)(nil),         // 26: storage.v1.CreateRequest
 	(*CreateResponse)(nil),        // 27: storage.v1.CreateResponse
-	(*TmpFileRequest)(nil),        // 28: storage.v1.TmpFileRequest
-	(*TmpFileResponse)(nil),       // 29: storage.v1.TmpFileResponse
-	(*OpenRequest)(nil),           // 30: storage.v1.OpenRequest
-	(*OpenResponse)(nil),          // 31: storage.v1.OpenResponse
-	(*ReadRequest)(nil),           // 32: storage.v1.ReadRequest
-	(*ReadResponse)(nil),          // 33: storage.v1.ReadResponse
-	(*WriteRequest)(nil),          // 34: storage.v1.WriteRequest
-	(*WriteResponse)(nil),         // 35: storage.v1.WriteResponse
-	(*FlushRequest)(nil),          // 36: storage.v1.FlushRequest
-	(*FlushResponse)(nil),         // 37: storage.v1.FlushResponse
-	(*FsyncRequest)(nil),          // 38: storage.v1.FsyncRequest
-	(*FsyncResponse)(nil),         // 39: storage.v1.FsyncResponse
-	(*ReleaseRequest)(nil),        // 40: storage.v1.ReleaseRequest
-	(*ReleaseResponse)(nil),       // 41: storage.v1.ReleaseResponse
-	(*OpenDirRequest)(nil),        // 42: storage.v1.OpenDirRequest
-	(*OpenDirResponse)(nil),       // 43: storage.v1.OpenDirResponse
-	(*FsyncDirRequest)(nil),       // 44: storage.v1.FsyncDirRequest
-	(*FsyncDirResponse)(nil),      // 45: storage.v1.FsyncDirResponse
-	(*ReleaseDirRequest)(nil),     // 46: storage.v1.ReleaseDirRequest
-	(*ReleaseDirResponse)(nil),    // 47: storage.v1.ReleaseDirResponse
-	(*DirEntry)(nil),              // 48: storage.v1.DirEntry
-	(*ReadDirRequest)(nil),        // 49: storage.v1.ReadDirRequest
-	(*ReadDirResponse)(nil),       // 50: storage.v1.ReadDirResponse
-	(*DirEntryPlus)(nil),          // 51: storage.v1.DirEntryPlus
-	(*ReadDirPlusRequest)(nil),    // 52: storage.v1.ReadDirPlusRequest
-	(*ReadDirPlusResponse)(nil),   // 53: storage.v1.ReadDirPlusResponse
-	(*FallocateRequest)(nil),      // 54: storage.v1.FallocateRequest
-	(*FallocateResponse)(nil),     // 55: storage.v1.FallocateResponse
-	(*SetXattrRequest)(nil),       // 56: storage.v1.SetXattrRequest
-	(*SetXattrResponse)(nil),      // 57: storage.v1.SetXattrResponse
-	(*GetXattrRequest)(nil),       // 58: storage.v1.GetXattrRequest
-	(*GetXattrResponse)(nil),      // 59: storage.v1.GetXattrResponse
-	(*ListXattrRequest)(nil),      // 60: storage.v1.ListXattrRequest
-	(*ListXattrResponse)(nil),     // 61: storage.v1.ListXattrResponse
-	(*RemoveXattrRequest)(nil),    // 62: storage.v1.RemoveXattrRequest
-	(*RemoveXattrResponse)(nil),   // 63: storage.v1.RemoveXattrResponse
-	(*FileLock)(nil),              // 64: storage.v1.FileLock
-	(*GetLkRequest)(nil),          // 65: storage.v1.GetLkRequest
-	(*GetLkResponse)(nil),         // 66: storage.v1.GetLkResponse
-	(*SetLkRequest)(nil),          // 67: storage.v1.SetLkRequest
-	(*SetLkResponse)(nil),         // 68: storage.v1.SetLkResponse
-	(*SetLkwRequest)(nil),         // 69: storage.v1.SetLkwRequest
-	(*SetLkwResponse)(nil),        // 70: storage.v1.SetLkwResponse
-	(*RenewSessionRequest)(nil),   // 71: storage.v1.RenewSessionRequest
-	(*RenewSessionResponse)(nil),  // 72: storage.v1.RenewSessionResponse
-	(*CloseSessionRequest)(nil),   // 73: storage.v1.CloseSessionRequest
-	(*CloseSessionResponse)(nil),  // 74: storage.v1.CloseSessionResponse
-	(*Inode)(nil),                 // 75: storage.v1.Inode
-	(*InodeAttribute)(nil),        // 76: storage.v1.InodeAttribute
-	(*Disk)(nil),                  // 77: storage.v1.Disk
-	(*CreateDiskRequest)(nil),     // 78: storage.v1.CreateDiskRequest
-	(*CreateDiskResponse)(nil),    // 79: storage.v1.CreateDiskResponse
-	(*GetDiskRequest)(nil),        // 80: storage.v1.GetDiskRequest
-	(*GetDiskResponse)(nil),       // 81: storage.v1.GetDiskResponse
-	(*ListDisksRequest)(nil),      // 82: storage.v1.ListDisksRequest
-	(*ListDisksResponse)(nil),     // 83: storage.v1.ListDisksResponse
-	(*UpdateDiskRequest)(nil),     // 84: storage.v1.UpdateDiskRequest
-	(*UpdateDiskResponse)(nil),    // 85: storage.v1.UpdateDiskResponse
-	(*DeleteDiskRequest)(nil),     // 86: storage.v1.DeleteDiskRequest
-	(*DeleteDiskResponse)(nil),    // 87: storage.v1.DeleteDiskResponse
-	(*StatFSRequest)(nil),         // 88: storage.v1.StatFSRequest
-	(*StatFSResponse)(nil),        // 89: storage.v1.StatFSResponse
-	(*Branch)(nil),                // 90: storage.v1.Branch
-	(*CreateBranchRequest)(nil),   // 91: storage.v1.CreateBranchRequest
-	(*CreateBranchResponse)(nil),  // 92: storage.v1.CreateBranchResponse
-	(*CommitInfo)(nil),            // 93: storage.v1.CommitInfo
-	(*MergeConflict)(nil),         // 94: storage.v1.MergeConflict
-	(*DiffEntry)(nil),             // 95: storage.v1.DiffEntry
-	(*ReclaimOrphanRequest)(nil),  // 96: storage.v1.ReclaimOrphanRequest
-	(*ReclaimOrphanResponse)(nil), // 97: storage.v1.ReclaimOrphanResponse
-	(*ListBranchesRequest)(nil),   // 98: storage.v1.ListBranchesRequest
-	(*ListBranchesResponse)(nil),  // 99: storage.v1.ListBranchesResponse
-	(*DeleteBranchRequest)(nil),   // 100: storage.v1.DeleteBranchRequest
-	(*DeleteBranchResponse)(nil),  // 101: storage.v1.DeleteBranchResponse
-	(*CommitRequest)(nil),         // 102: storage.v1.CommitRequest
-	(*CommitResponse)(nil),        // 103: storage.v1.CommitResponse
-	(*RollbackRequest)(nil),       // 104: storage.v1.RollbackRequest
-	(*RollbackResponse)(nil),      // 105: storage.v1.RollbackResponse
-	(*MergeRequest)(nil),          // 106: storage.v1.MergeRequest
-	(*MergeResponse)(nil),         // 107: storage.v1.MergeResponse
-	(*ResolveMergeRequest)(nil),   // 108: storage.v1.ResolveMergeRequest
-	(*ResolveMergeResponse)(nil),  // 109: storage.v1.ResolveMergeResponse
-	(*AbortMergeRequest)(nil),     // 110: storage.v1.AbortMergeRequest
-	(*AbortMergeResponse)(nil),    // 111: storage.v1.AbortMergeResponse
-	(*DiffRequest)(nil),           // 112: storage.v1.DiffRequest
-	(*DiffResponse)(nil),          // 113: storage.v1.DiffResponse
-	(*timestamppb.Timestamp)(nil), // 114: google.protobuf.Timestamp
+	(*ReadRequest)(nil),           // 28: storage.v1.ReadRequest
+	(*ReadResponse)(nil),          // 29: storage.v1.ReadResponse
+	(*WriteRequest)(nil),          // 30: storage.v1.WriteRequest
+	(*WriteResponse)(nil),         // 31: storage.v1.WriteResponse
+	(*FsyncRequest)(nil),          // 32: storage.v1.FsyncRequest
+	(*FsyncResponse)(nil),         // 33: storage.v1.FsyncResponse
+	(*FsyncDirRequest)(nil),       // 34: storage.v1.FsyncDirRequest
+	(*FsyncDirResponse)(nil),      // 35: storage.v1.FsyncDirResponse
+	(*DirEntry)(nil),              // 36: storage.v1.DirEntry
+	(*ReadDirRequest)(nil),        // 37: storage.v1.ReadDirRequest
+	(*ReadDirResponse)(nil),       // 38: storage.v1.ReadDirResponse
+	(*DirEntryPlus)(nil),          // 39: storage.v1.DirEntryPlus
+	(*ReadDirPlusRequest)(nil),    // 40: storage.v1.ReadDirPlusRequest
+	(*ReadDirPlusResponse)(nil),   // 41: storage.v1.ReadDirPlusResponse
+	(*FallocateRequest)(nil),      // 42: storage.v1.FallocateRequest
+	(*FallocateResponse)(nil),     // 43: storage.v1.FallocateResponse
+	(*SetXattrRequest)(nil),       // 44: storage.v1.SetXattrRequest
+	(*SetXattrResponse)(nil),      // 45: storage.v1.SetXattrResponse
+	(*GetXattrRequest)(nil),       // 46: storage.v1.GetXattrRequest
+	(*GetXattrResponse)(nil),      // 47: storage.v1.GetXattrResponse
+	(*ListXattrRequest)(nil),      // 48: storage.v1.ListXattrRequest
+	(*ListXattrResponse)(nil),     // 49: storage.v1.ListXattrResponse
+	(*RemoveXattrRequest)(nil),    // 50: storage.v1.RemoveXattrRequest
+	(*RemoveXattrResponse)(nil),   // 51: storage.v1.RemoveXattrResponse
+	(*RenewSessionRequest)(nil),   // 52: storage.v1.RenewSessionRequest
+	(*RenewSessionResponse)(nil),  // 53: storage.v1.RenewSessionResponse
+	(*CloseSessionRequest)(nil),   // 54: storage.v1.CloseSessionRequest
+	(*CloseSessionResponse)(nil),  // 55: storage.v1.CloseSessionResponse
+	(*Inode)(nil),                 // 56: storage.v1.Inode
+	(*InodeAttribute)(nil),        // 57: storage.v1.InodeAttribute
+	(*Disk)(nil),                  // 58: storage.v1.Disk
+	(*CreateDiskRequest)(nil),     // 59: storage.v1.CreateDiskRequest
+	(*CreateDiskResponse)(nil),    // 60: storage.v1.CreateDiskResponse
+	(*GetDiskRequest)(nil),        // 61: storage.v1.GetDiskRequest
+	(*GetDiskResponse)(nil),       // 62: storage.v1.GetDiskResponse
+	(*ListDisksRequest)(nil),      // 63: storage.v1.ListDisksRequest
+	(*ListDisksResponse)(nil),     // 64: storage.v1.ListDisksResponse
+	(*UpdateDiskRequest)(nil),     // 65: storage.v1.UpdateDiskRequest
+	(*UpdateDiskResponse)(nil),    // 66: storage.v1.UpdateDiskResponse
+	(*DeleteDiskRequest)(nil),     // 67: storage.v1.DeleteDiskRequest
+	(*DeleteDiskResponse)(nil),    // 68: storage.v1.DeleteDiskResponse
+	(*StatFSRequest)(nil),         // 69: storage.v1.StatFSRequest
+	(*StatFSResponse)(nil),        // 70: storage.v1.StatFSResponse
+	(*Branch)(nil),                // 71: storage.v1.Branch
+	(*CreateBranchRequest)(nil),   // 72: storage.v1.CreateBranchRequest
+	(*CreateBranchResponse)(nil),  // 73: storage.v1.CreateBranchResponse
+	(*CommitInfo)(nil),            // 74: storage.v1.CommitInfo
+	(*MergeConflict)(nil),         // 75: storage.v1.MergeConflict
+	(*DiffEntry)(nil),             // 76: storage.v1.DiffEntry
+	(*ReclaimOrphanRequest)(nil),  // 77: storage.v1.ReclaimOrphanRequest
+	(*ReclaimOrphanResponse)(nil), // 78: storage.v1.ReclaimOrphanResponse
+	(*ListBranchesRequest)(nil),   // 79: storage.v1.ListBranchesRequest
+	(*ListBranchesResponse)(nil),  // 80: storage.v1.ListBranchesResponse
+	(*DeleteBranchRequest)(nil),   // 81: storage.v1.DeleteBranchRequest
+	(*DeleteBranchResponse)(nil),  // 82: storage.v1.DeleteBranchResponse
+	(*CommitRequest)(nil),         // 83: storage.v1.CommitRequest
+	(*CommitResponse)(nil),        // 84: storage.v1.CommitResponse
+	(*RollbackRequest)(nil),       // 85: storage.v1.RollbackRequest
+	(*RollbackResponse)(nil),      // 86: storage.v1.RollbackResponse
+	(*MergeRequest)(nil),          // 87: storage.v1.MergeRequest
+	(*MergeResponse)(nil),         // 88: storage.v1.MergeResponse
+	(*ResolveMergeRequest)(nil),   // 89: storage.v1.ResolveMergeRequest
+	(*ResolveMergeResponse)(nil),  // 90: storage.v1.ResolveMergeResponse
+	(*AbortMergeRequest)(nil),     // 91: storage.v1.AbortMergeRequest
+	(*AbortMergeResponse)(nil),    // 92: storage.v1.AbortMergeResponse
+	(*DiffRequest)(nil),           // 93: storage.v1.DiffRequest
+	(*DiffResponse)(nil),          // 94: storage.v1.DiffResponse
+	(*timestamppb.Timestamp)(nil), // 95: google.protobuf.Timestamp
 }
 var file_storage_v1_storage_proto_depIdxs = []int32{
-	75,  // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
-	75,  // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
-	114, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
-	114, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
-	75,  // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
-	75,  // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
-	75,  // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
-	75,  // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
-	75,  // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
-	75,  // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
-	75,  // 10: storage.v1.TmpFileResponse.inode:type_name -> storage.v1.Inode
-	75,  // 11: storage.v1.WriteResponse.inode:type_name -> storage.v1.Inode
-	48,  // 12: storage.v1.ReadDirResponse.entries:type_name -> storage.v1.DirEntry
-	75,  // 13: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
-	51,  // 14: storage.v1.ReadDirPlusResponse.entries:type_name -> storage.v1.DirEntryPlus
-	64,  // 15: storage.v1.GetLkRequest.lk:type_name -> storage.v1.FileLock
-	64,  // 16: storage.v1.GetLkResponse.lk:type_name -> storage.v1.FileLock
-	64,  // 17: storage.v1.SetLkRequest.lk:type_name -> storage.v1.FileLock
-	64,  // 18: storage.v1.SetLkwRequest.lk:type_name -> storage.v1.FileLock
-	114, // 19: storage.v1.RenewSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	76,  // 20: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
-	114, // 21: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
-	114, // 22: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
-	114, // 23: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
-	114, // 24: storage.v1.Disk.created_at:type_name -> google.protobuf.Timestamp
-	114, // 25: storage.v1.Disk.updated_at:type_name -> google.protobuf.Timestamp
-	90,  // 26: storage.v1.Disk.branches:type_name -> storage.v1.Branch
-	77,  // 27: storage.v1.CreateDiskResponse.disk:type_name -> storage.v1.Disk
-	77,  // 28: storage.v1.GetDiskResponse.disk:type_name -> storage.v1.Disk
-	77,  // 29: storage.v1.ListDisksResponse.disks:type_name -> storage.v1.Disk
-	77,  // 30: storage.v1.UpdateDiskResponse.disk:type_name -> storage.v1.Disk
-	0,   // 31: storage.v1.Branch.state:type_name -> storage.v1.BranchState
-	114, // 32: storage.v1.Branch.created_at:type_name -> google.protobuf.Timestamp
-	90,  // 33: storage.v1.CreateBranchResponse.branch:type_name -> storage.v1.Branch
-	114, // 34: storage.v1.CommitInfo.created_at:type_name -> google.protobuf.Timestamp
-	76,  // 35: storage.v1.MergeConflict.base_attr:type_name -> storage.v1.InodeAttribute
-	76,  // 36: storage.v1.MergeConflict.ours_attr:type_name -> storage.v1.InodeAttribute
-	76,  // 37: storage.v1.MergeConflict.theirs_attr:type_name -> storage.v1.InodeAttribute
-	3,   // 38: storage.v1.DiffEntry.change_type:type_name -> storage.v1.DiffChangeType
-	76,  // 39: storage.v1.DiffEntry.old_attr:type_name -> storage.v1.InodeAttribute
-	76,  // 40: storage.v1.DiffEntry.new_attr:type_name -> storage.v1.InodeAttribute
-	90,  // 41: storage.v1.ListBranchesResponse.branches:type_name -> storage.v1.Branch
-	93,  // 42: storage.v1.CommitResponse.commit:type_name -> storage.v1.CommitInfo
-	1,   // 43: storage.v1.MergeRequest.strategy:type_name -> storage.v1.ConflictStrategy
-	2,   // 44: storage.v1.MergeResponse.result:type_name -> storage.v1.MergeResult
-	94,  // 45: storage.v1.MergeResponse.conflicts:type_name -> storage.v1.MergeConflict
-	93,  // 46: storage.v1.ResolveMergeResponse.commit:type_name -> storage.v1.CommitInfo
-	95,  // 47: storage.v1.DiffResponse.entries:type_name -> storage.v1.DiffEntry
-	4,   // 48: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
-	6,   // 49: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
-	8,   // 50: storage.v1.StorageService.SetAttr:input_type -> storage.v1.SetAttrRequest
-	10,  // 51: storage.v1.StorageService.Mknod:input_type -> storage.v1.MknodRequest
-	12,  // 52: storage.v1.StorageService.Mkdir:input_type -> storage.v1.MkdirRequest
-	14,  // 53: storage.v1.StorageService.Symlink:input_type -> storage.v1.SymlinkRequest
-	16,  // 54: storage.v1.StorageService.Readlink:input_type -> storage.v1.ReadlinkRequest
-	18,  // 55: storage.v1.StorageService.Link:input_type -> storage.v1.LinkRequest
-	20,  // 56: storage.v1.StorageService.Unlink:input_type -> storage.v1.UnlinkRequest
-	22,  // 57: storage.v1.StorageService.Rmdir:input_type -> storage.v1.RmdirRequest
-	24,  // 58: storage.v1.StorageService.Rename:input_type -> storage.v1.RenameRequest
-	26,  // 59: storage.v1.StorageService.Create:input_type -> storage.v1.CreateRequest
-	28,  // 60: storage.v1.StorageService.TmpFile:input_type -> storage.v1.TmpFileRequest
-	30,  // 61: storage.v1.StorageService.Open:input_type -> storage.v1.OpenRequest
-	32,  // 62: storage.v1.StorageService.Read:input_type -> storage.v1.ReadRequest
-	34,  // 63: storage.v1.StorageService.Write:input_type -> storage.v1.WriteRequest
-	36,  // 64: storage.v1.StorageService.Flush:input_type -> storage.v1.FlushRequest
-	38,  // 65: storage.v1.StorageService.Fsync:input_type -> storage.v1.FsyncRequest
-	40,  // 66: storage.v1.StorageService.Release:input_type -> storage.v1.ReleaseRequest
-	42,  // 67: storage.v1.StorageService.OpenDir:input_type -> storage.v1.OpenDirRequest
-	44,  // 68: storage.v1.StorageService.FsyncDir:input_type -> storage.v1.FsyncDirRequest
-	46,  // 69: storage.v1.StorageService.ReleaseDir:input_type -> storage.v1.ReleaseDirRequest
-	49,  // 70: storage.v1.StorageService.ReadDir:input_type -> storage.v1.ReadDirRequest
-	52,  // 71: storage.v1.StorageService.ReadDirPlus:input_type -> storage.v1.ReadDirPlusRequest
-	54,  // 72: storage.v1.StorageService.Fallocate:input_type -> storage.v1.FallocateRequest
-	56,  // 73: storage.v1.StorageService.SetXattr:input_type -> storage.v1.SetXattrRequest
-	58,  // 74: storage.v1.StorageService.GetXattr:input_type -> storage.v1.GetXattrRequest
-	60,  // 75: storage.v1.StorageService.ListXattr:input_type -> storage.v1.ListXattrRequest
-	62,  // 76: storage.v1.StorageService.RemoveXattr:input_type -> storage.v1.RemoveXattrRequest
-	65,  // 77: storage.v1.StorageService.GetLk:input_type -> storage.v1.GetLkRequest
-	67,  // 78: storage.v1.StorageService.SetLk:input_type -> storage.v1.SetLkRequest
-	69,  // 79: storage.v1.StorageService.SetLkw:input_type -> storage.v1.SetLkwRequest
-	71,  // 80: storage.v1.StorageService.RenewSession:input_type -> storage.v1.RenewSessionRequest
-	73,  // 81: storage.v1.StorageService.CloseSession:input_type -> storage.v1.CloseSessionRequest
-	78,  // 82: storage.v1.StorageService.CreateDisk:input_type -> storage.v1.CreateDiskRequest
-	80,  // 83: storage.v1.StorageService.GetDisk:input_type -> storage.v1.GetDiskRequest
-	82,  // 84: storage.v1.StorageService.ListDisks:input_type -> storage.v1.ListDisksRequest
-	84,  // 85: storage.v1.StorageService.UpdateDisk:input_type -> storage.v1.UpdateDiskRequest
-	86,  // 86: storage.v1.StorageService.DeleteDisk:input_type -> storage.v1.DeleteDiskRequest
-	88,  // 87: storage.v1.StorageService.StatFS:input_type -> storage.v1.StatFSRequest
-	91,  // 88: storage.v1.StorageService.CreateBranch:input_type -> storage.v1.CreateBranchRequest
-	96,  // 89: storage.v1.StorageService.ReclaimOrphan:input_type -> storage.v1.ReclaimOrphanRequest
-	98,  // 90: storage.v1.StorageService.ListBranches:input_type -> storage.v1.ListBranchesRequest
-	100, // 91: storage.v1.StorageService.DeleteBranch:input_type -> storage.v1.DeleteBranchRequest
-	102, // 92: storage.v1.StorageService.Commit:input_type -> storage.v1.CommitRequest
-	104, // 93: storage.v1.StorageService.Rollback:input_type -> storage.v1.RollbackRequest
-	106, // 94: storage.v1.StorageService.Merge:input_type -> storage.v1.MergeRequest
-	108, // 95: storage.v1.StorageService.ResolveMerge:input_type -> storage.v1.ResolveMergeRequest
-	110, // 96: storage.v1.StorageService.AbortMerge:input_type -> storage.v1.AbortMergeRequest
-	112, // 97: storage.v1.StorageService.Diff:input_type -> storage.v1.DiffRequest
-	5,   // 98: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
-	7,   // 99: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
-	9,   // 100: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
-	11,  // 101: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
-	13,  // 102: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
-	15,  // 103: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
-	17,  // 104: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
-	19,  // 105: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
-	21,  // 106: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
-	23,  // 107: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
-	25,  // 108: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
-	27,  // 109: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
-	29,  // 110: storage.v1.StorageService.TmpFile:output_type -> storage.v1.TmpFileResponse
-	31,  // 111: storage.v1.StorageService.Open:output_type -> storage.v1.OpenResponse
-	33,  // 112: storage.v1.StorageService.Read:output_type -> storage.v1.ReadResponse
-	35,  // 113: storage.v1.StorageService.Write:output_type -> storage.v1.WriteResponse
-	37,  // 114: storage.v1.StorageService.Flush:output_type -> storage.v1.FlushResponse
-	39,  // 115: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
-	41,  // 116: storage.v1.StorageService.Release:output_type -> storage.v1.ReleaseResponse
-	43,  // 117: storage.v1.StorageService.OpenDir:output_type -> storage.v1.OpenDirResponse
-	45,  // 118: storage.v1.StorageService.FsyncDir:output_type -> storage.v1.FsyncDirResponse
-	47,  // 119: storage.v1.StorageService.ReleaseDir:output_type -> storage.v1.ReleaseDirResponse
-	50,  // 120: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
-	53,  // 121: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
-	55,  // 122: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
-	57,  // 123: storage.v1.StorageService.SetXattr:output_type -> storage.v1.SetXattrResponse
-	59,  // 124: storage.v1.StorageService.GetXattr:output_type -> storage.v1.GetXattrResponse
-	61,  // 125: storage.v1.StorageService.ListXattr:output_type -> storage.v1.ListXattrResponse
-	63,  // 126: storage.v1.StorageService.RemoveXattr:output_type -> storage.v1.RemoveXattrResponse
-	66,  // 127: storage.v1.StorageService.GetLk:output_type -> storage.v1.GetLkResponse
-	68,  // 128: storage.v1.StorageService.SetLk:output_type -> storage.v1.SetLkResponse
-	70,  // 129: storage.v1.StorageService.SetLkw:output_type -> storage.v1.SetLkwResponse
-	72,  // 130: storage.v1.StorageService.RenewSession:output_type -> storage.v1.RenewSessionResponse
-	74,  // 131: storage.v1.StorageService.CloseSession:output_type -> storage.v1.CloseSessionResponse
-	79,  // 132: storage.v1.StorageService.CreateDisk:output_type -> storage.v1.CreateDiskResponse
-	81,  // 133: storage.v1.StorageService.GetDisk:output_type -> storage.v1.GetDiskResponse
-	83,  // 134: storage.v1.StorageService.ListDisks:output_type -> storage.v1.ListDisksResponse
-	85,  // 135: storage.v1.StorageService.UpdateDisk:output_type -> storage.v1.UpdateDiskResponse
-	87,  // 136: storage.v1.StorageService.DeleteDisk:output_type -> storage.v1.DeleteDiskResponse
-	89,  // 137: storage.v1.StorageService.StatFS:output_type -> storage.v1.StatFSResponse
-	92,  // 138: storage.v1.StorageService.CreateBranch:output_type -> storage.v1.CreateBranchResponse
-	97,  // 139: storage.v1.StorageService.ReclaimOrphan:output_type -> storage.v1.ReclaimOrphanResponse
-	99,  // 140: storage.v1.StorageService.ListBranches:output_type -> storage.v1.ListBranchesResponse
-	101, // 141: storage.v1.StorageService.DeleteBranch:output_type -> storage.v1.DeleteBranchResponse
-	103, // 142: storage.v1.StorageService.Commit:output_type -> storage.v1.CommitResponse
-	105, // 143: storage.v1.StorageService.Rollback:output_type -> storage.v1.RollbackResponse
-	107, // 144: storage.v1.StorageService.Merge:output_type -> storage.v1.MergeResponse
-	109, // 145: storage.v1.StorageService.ResolveMerge:output_type -> storage.v1.ResolveMergeResponse
-	111, // 146: storage.v1.StorageService.AbortMerge:output_type -> storage.v1.AbortMergeResponse
-	113, // 147: storage.v1.StorageService.Diff:output_type -> storage.v1.DiffResponse
-	98,  // [98:148] is the sub-list for method output_type
-	48,  // [48:98] is the sub-list for method input_type
-	48,  // [48:48] is the sub-list for extension type_name
-	48,  // [48:48] is the sub-list for extension extendee
-	0,   // [0:48] is the sub-list for field type_name
+	56, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
+	56, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
+	95, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
+	95, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
+	56, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
+	56, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
+	56, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
+	56, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
+	56, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
+	56, // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
+	56, // 10: storage.v1.WriteResponse.inode:type_name -> storage.v1.Inode
+	36, // 11: storage.v1.ReadDirResponse.entries:type_name -> storage.v1.DirEntry
+	56, // 12: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
+	39, // 13: storage.v1.ReadDirPlusResponse.entries:type_name -> storage.v1.DirEntryPlus
+	95, // 14: storage.v1.RenewSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	57, // 15: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
+	95, // 16: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
+	95, // 17: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
+	95, // 18: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
+	95, // 19: storage.v1.Disk.created_at:type_name -> google.protobuf.Timestamp
+	95, // 20: storage.v1.Disk.updated_at:type_name -> google.protobuf.Timestamp
+	71, // 21: storage.v1.Disk.branches:type_name -> storage.v1.Branch
+	58, // 22: storage.v1.CreateDiskResponse.disk:type_name -> storage.v1.Disk
+	58, // 23: storage.v1.GetDiskResponse.disk:type_name -> storage.v1.Disk
+	58, // 24: storage.v1.ListDisksResponse.disks:type_name -> storage.v1.Disk
+	58, // 25: storage.v1.UpdateDiskResponse.disk:type_name -> storage.v1.Disk
+	0,  // 26: storage.v1.Branch.state:type_name -> storage.v1.BranchState
+	95, // 27: storage.v1.Branch.created_at:type_name -> google.protobuf.Timestamp
+	71, // 28: storage.v1.CreateBranchResponse.branch:type_name -> storage.v1.Branch
+	95, // 29: storage.v1.CommitInfo.created_at:type_name -> google.protobuf.Timestamp
+	57, // 30: storage.v1.MergeConflict.base_attr:type_name -> storage.v1.InodeAttribute
+	57, // 31: storage.v1.MergeConflict.ours_attr:type_name -> storage.v1.InodeAttribute
+	57, // 32: storage.v1.MergeConflict.theirs_attr:type_name -> storage.v1.InodeAttribute
+	3,  // 33: storage.v1.DiffEntry.change_type:type_name -> storage.v1.DiffChangeType
+	57, // 34: storage.v1.DiffEntry.old_attr:type_name -> storage.v1.InodeAttribute
+	57, // 35: storage.v1.DiffEntry.new_attr:type_name -> storage.v1.InodeAttribute
+	71, // 36: storage.v1.ListBranchesResponse.branches:type_name -> storage.v1.Branch
+	74, // 37: storage.v1.CommitResponse.commit:type_name -> storage.v1.CommitInfo
+	1,  // 38: storage.v1.MergeRequest.strategy:type_name -> storage.v1.ConflictStrategy
+	2,  // 39: storage.v1.MergeResponse.result:type_name -> storage.v1.MergeResult
+	75, // 40: storage.v1.MergeResponse.conflicts:type_name -> storage.v1.MergeConflict
+	74, // 41: storage.v1.ResolveMergeResponse.commit:type_name -> storage.v1.CommitInfo
+	76, // 42: storage.v1.DiffResponse.entries:type_name -> storage.v1.DiffEntry
+	4,  // 43: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
+	6,  // 44: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
+	8,  // 45: storage.v1.StorageService.SetAttr:input_type -> storage.v1.SetAttrRequest
+	10, // 46: storage.v1.StorageService.Mknod:input_type -> storage.v1.MknodRequest
+	12, // 47: storage.v1.StorageService.Mkdir:input_type -> storage.v1.MkdirRequest
+	14, // 48: storage.v1.StorageService.Symlink:input_type -> storage.v1.SymlinkRequest
+	16, // 49: storage.v1.StorageService.Readlink:input_type -> storage.v1.ReadlinkRequest
+	18, // 50: storage.v1.StorageService.Link:input_type -> storage.v1.LinkRequest
+	20, // 51: storage.v1.StorageService.Unlink:input_type -> storage.v1.UnlinkRequest
+	22, // 52: storage.v1.StorageService.Rmdir:input_type -> storage.v1.RmdirRequest
+	24, // 53: storage.v1.StorageService.Rename:input_type -> storage.v1.RenameRequest
+	26, // 54: storage.v1.StorageService.Create:input_type -> storage.v1.CreateRequest
+	28, // 55: storage.v1.StorageService.Read:input_type -> storage.v1.ReadRequest
+	30, // 56: storage.v1.StorageService.Write:input_type -> storage.v1.WriteRequest
+	32, // 57: storage.v1.StorageService.Fsync:input_type -> storage.v1.FsyncRequest
+	34, // 58: storage.v1.StorageService.FsyncDir:input_type -> storage.v1.FsyncDirRequest
+	37, // 59: storage.v1.StorageService.ReadDir:input_type -> storage.v1.ReadDirRequest
+	40, // 60: storage.v1.StorageService.ReadDirPlus:input_type -> storage.v1.ReadDirPlusRequest
+	42, // 61: storage.v1.StorageService.Fallocate:input_type -> storage.v1.FallocateRequest
+	44, // 62: storage.v1.StorageService.SetXattr:input_type -> storage.v1.SetXattrRequest
+	46, // 63: storage.v1.StorageService.GetXattr:input_type -> storage.v1.GetXattrRequest
+	48, // 64: storage.v1.StorageService.ListXattr:input_type -> storage.v1.ListXattrRequest
+	50, // 65: storage.v1.StorageService.RemoveXattr:input_type -> storage.v1.RemoveXattrRequest
+	52, // 66: storage.v1.StorageService.RenewSession:input_type -> storage.v1.RenewSessionRequest
+	54, // 67: storage.v1.StorageService.CloseSession:input_type -> storage.v1.CloseSessionRequest
+	59, // 68: storage.v1.StorageService.CreateDisk:input_type -> storage.v1.CreateDiskRequest
+	61, // 69: storage.v1.StorageService.GetDisk:input_type -> storage.v1.GetDiskRequest
+	63, // 70: storage.v1.StorageService.ListDisks:input_type -> storage.v1.ListDisksRequest
+	65, // 71: storage.v1.StorageService.UpdateDisk:input_type -> storage.v1.UpdateDiskRequest
+	67, // 72: storage.v1.StorageService.DeleteDisk:input_type -> storage.v1.DeleteDiskRequest
+	69, // 73: storage.v1.StorageService.StatFS:input_type -> storage.v1.StatFSRequest
+	72, // 74: storage.v1.StorageService.CreateBranch:input_type -> storage.v1.CreateBranchRequest
+	77, // 75: storage.v1.StorageService.ReclaimOrphan:input_type -> storage.v1.ReclaimOrphanRequest
+	79, // 76: storage.v1.StorageService.ListBranches:input_type -> storage.v1.ListBranchesRequest
+	81, // 77: storage.v1.StorageService.DeleteBranch:input_type -> storage.v1.DeleteBranchRequest
+	83, // 78: storage.v1.StorageService.Commit:input_type -> storage.v1.CommitRequest
+	85, // 79: storage.v1.StorageService.Rollback:input_type -> storage.v1.RollbackRequest
+	87, // 80: storage.v1.StorageService.Merge:input_type -> storage.v1.MergeRequest
+	89, // 81: storage.v1.StorageService.ResolveMerge:input_type -> storage.v1.ResolveMergeRequest
+	91, // 82: storage.v1.StorageService.AbortMerge:input_type -> storage.v1.AbortMergeRequest
+	93, // 83: storage.v1.StorageService.Diff:input_type -> storage.v1.DiffRequest
+	5,  // 84: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
+	7,  // 85: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
+	9,  // 86: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
+	11, // 87: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
+	13, // 88: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
+	15, // 89: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
+	17, // 90: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
+	19, // 91: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
+	21, // 92: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
+	23, // 93: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
+	25, // 94: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
+	27, // 95: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
+	29, // 96: storage.v1.StorageService.Read:output_type -> storage.v1.ReadResponse
+	31, // 97: storage.v1.StorageService.Write:output_type -> storage.v1.WriteResponse
+	33, // 98: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
+	35, // 99: storage.v1.StorageService.FsyncDir:output_type -> storage.v1.FsyncDirResponse
+	38, // 100: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
+	41, // 101: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
+	43, // 102: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
+	45, // 103: storage.v1.StorageService.SetXattr:output_type -> storage.v1.SetXattrResponse
+	47, // 104: storage.v1.StorageService.GetXattr:output_type -> storage.v1.GetXattrResponse
+	49, // 105: storage.v1.StorageService.ListXattr:output_type -> storage.v1.ListXattrResponse
+	51, // 106: storage.v1.StorageService.RemoveXattr:output_type -> storage.v1.RemoveXattrResponse
+	53, // 107: storage.v1.StorageService.RenewSession:output_type -> storage.v1.RenewSessionResponse
+	55, // 108: storage.v1.StorageService.CloseSession:output_type -> storage.v1.CloseSessionResponse
+	60, // 109: storage.v1.StorageService.CreateDisk:output_type -> storage.v1.CreateDiskResponse
+	62, // 110: storage.v1.StorageService.GetDisk:output_type -> storage.v1.GetDiskResponse
+	64, // 111: storage.v1.StorageService.ListDisks:output_type -> storage.v1.ListDisksResponse
+	66, // 112: storage.v1.StorageService.UpdateDisk:output_type -> storage.v1.UpdateDiskResponse
+	68, // 113: storage.v1.StorageService.DeleteDisk:output_type -> storage.v1.DeleteDiskResponse
+	70, // 114: storage.v1.StorageService.StatFS:output_type -> storage.v1.StatFSResponse
+	73, // 115: storage.v1.StorageService.CreateBranch:output_type -> storage.v1.CreateBranchResponse
+	78, // 116: storage.v1.StorageService.ReclaimOrphan:output_type -> storage.v1.ReclaimOrphanResponse
+	80, // 117: storage.v1.StorageService.ListBranches:output_type -> storage.v1.ListBranchesResponse
+	82, // 118: storage.v1.StorageService.DeleteBranch:output_type -> storage.v1.DeleteBranchResponse
+	84, // 119: storage.v1.StorageService.Commit:output_type -> storage.v1.CommitResponse
+	86, // 120: storage.v1.StorageService.Rollback:output_type -> storage.v1.RollbackResponse
+	88, // 121: storage.v1.StorageService.Merge:output_type -> storage.v1.MergeResponse
+	90, // 122: storage.v1.StorageService.ResolveMerge:output_type -> storage.v1.ResolveMergeResponse
+	92, // 123: storage.v1.StorageService.AbortMerge:output_type -> storage.v1.AbortMergeResponse
+	94, // 124: storage.v1.StorageService.Diff:output_type -> storage.v1.DiffResponse
+	84, // [84:125] is the sub-list for method output_type
+	43, // [43:84] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_storage_v1_storage_proto_init() }
@@ -8326,35 +6948,29 @@ func file_storage_v1_storage_proto_init() {
 	file_storage_v1_storage_proto_msgTypes[26].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[28].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[30].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[32].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[34].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[33].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[36].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[38].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[40].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[42].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[45].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[44].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[46].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[48].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[50].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[52].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[54].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[56].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[58].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[61].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[65].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[67].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[68].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[70].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[73].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[80].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[84].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[86].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[87].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[89].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[92].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[103].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   110,
+			NumMessages:   91,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

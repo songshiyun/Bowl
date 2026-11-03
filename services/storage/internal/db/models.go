@@ -8,12 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type Chunk struct {
-	Ino    int64  `json:"ino"`
-	Indx   int64  `json:"indx"`
-	Slices []byte `json:"slices"`
-}
-
 type ClientSession struct {
 	SessionID    int64              `json:"session_id"`
 	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
@@ -46,78 +40,4 @@ type Disk struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 	StorageDir string             `json:"storage_dir"`
 	Branches   []byte             `json:"branches"`
-}
-
-type Entry struct {
-	ParentIno int64  `json:"parent_ino"`
-	Name      []byte `json:"name"`
-	Ino       int64  `json:"ino"`
-}
-
-type FileHandle struct {
-	Fh        int64              `json:"fh"`
-	Ino       int64              `json:"ino"`
-	Flags     int32              `json:"flags"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	SessionID pgtype.Int8        `json:"session_id"`
-}
-
-type FileLock struct {
-	ID          int64              `json:"id"`
-	SessionID   int64              `json:"session_id"`
-	Ino         int64              `json:"ino"`
-	Fh          int64              `json:"fh"`
-	LockOwner   int64              `json:"lock_owner"`
-	LkFlags     int32              `json:"lk_flags"`
-	StartOffset int64              `json:"start_offset"`
-	EndOffset   int64              `json:"end_offset"`
-	LockType    int16              `json:"lock_type"`
-	Pid         int32              `json:"pid"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type FileLockWaiter struct {
-	SessionID   int64              `json:"session_id"`
-	RequestID   int64              `json:"request_id"`
-	Ino         int64              `json:"ino"`
-	Fh          int64              `json:"fh"`
-	LockOwner   int64              `json:"lock_owner"`
-	LkFlags     int32              `json:"lk_flags"`
-	StartOffset int64              `json:"start_offset"`
-	EndOffset   int64              `json:"end_offset"`
-	LockType    int16              `json:"lock_type"`
-	Pid         int32              `json:"pid"`
-	Status      int16              `json:"status"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-}
-
-type Inode struct {
-	Ino           int64              `json:"ino"`
-	Generation    int64              `json:"generation"`
-	Mode          int32              `json:"mode"`
-	Size          int64              `json:"size"`
-	Nlink         int32              `json:"nlink"`
-	Uid           int32              `json:"uid"`
-	Gid           int32              `json:"gid"`
-	Rdev          int64              `json:"rdev"`
-	Atime         pgtype.Timestamptz `json:"atime"`
-	Mtime         pgtype.Timestamptz `json:"mtime"`
-	Ctime         pgtype.Timestamptz `json:"ctime"`
-	SymlinkTarget []byte             `json:"symlink_target"`
-	Flags         int32              `json:"flags"`
-	ParentIno     int64              `json:"parent_ino"`
-	RootIno       int64              `json:"root_ino"`
-}
-
-type InodeXattr struct {
-	Ino   int64  `json:"ino"`
-	Name  []byte `json:"name"`
-	Value []byte `json:"value"`
-}
-
-type SliceRef struct {
-	SliceID   int64              `json:"slice_id"`
-	Size      int32              `json:"size"`
-	Refs      int32              `json:"refs"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }

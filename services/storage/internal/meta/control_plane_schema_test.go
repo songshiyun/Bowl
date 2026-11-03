@@ -330,13 +330,6 @@ func TestControlPlaneSessionLeases(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(201), renewed.SessionID)
-	legacyArgs := db.UpsertClientSessionParams{
-		SessionID: 201, DiskID: diskID, ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
-	}
-	_, err = q.UpsertClientSession(ctx, legacyArgs)
-	require.ErrorIs(t, err, pgx.ErrNoRows)
-	_, err = db.NewStore(pool).UpsertClientSession(ctx, legacyArgs)
-	require.ErrorIs(t, err, pgx.ErrNoRows)
 
 	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 300, DiskID: diskID, BranchName: "reader", ReadOnly: true, CommitID: commitID,

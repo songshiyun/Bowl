@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// TestE2E_ReadDir 完整验证目录句柄生命周期、空与嵌套目录、rmdir-whilst-open 以及 1500+ 个子项的分页遍历。
+// TestE2E_ReadDir 完整验证目录句柄生命周期、空与嵌套目录以及 1500+ 个子项的分页遍历。
 func TestE2E_ReadDir(t *testing.T) {
 	storageClient := newTestStorageClient(t)
 	disk := createTestDisk(t, storageClient)
@@ -30,7 +30,7 @@ func TestE2E_ReadDir(t *testing.T) {
 	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
 
 	// 通过分支挂载准备目录树和分页数据。
-	for _, dir := range []string{"empty_dir", "level1/level2", "open_then_rmdir", "bulk_1500"} {
+	for _, dir := range []string{"empty_dir", "level1/level2", "bulk_1500"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(mountpoint, dir), 0o755))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "level1", "level2", "child.txt"), nil, 0o644))
@@ -55,7 +55,6 @@ func TestE2E_ReadDir(t *testing.T) {
 		}
 		require.True(t, rootNameSet["empty_dir"])
 		require.True(t, rootNameSet["level1"])
-		require.True(t, rootNameSet["open_then_rmdir"])
 		require.True(t, rootNameSet["bulk_1500"])
 
 		// 空目录读取必须为空切片
@@ -87,39 +86,6 @@ func TestE2E_ReadDir(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------
-	// 4. 验证场景 2：rmdir-whilst-open 语义
-	// -------------------------------------------------------------
-	t.Run("rmdir-whilst-open语义与句柄生命周期", func(t *testing.T) {
-		openPath := filepath.Join(mountpoint, "open_then_rmdir")
-
-		// 打开空子目录
-		fd, err := syscall.Open(openPath, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
-		require.NoError(t, err, "打开 open_then_rmdir 目录失败")
-		defer func() {
-			if fd >= 0 {
-				_ = syscall.Close(fd)
-			}
-		}()
-
-		// 通过同一挂载点移除目录。
-		require.NoError(t, os.Remove(openPath))
-
-		// 通过已打开 fd 同步与读取，验证 FsyncDir / ReadDir 在孤儿打开句柄上仍正常工作
-		require.NoError(t, syscall.Fsync(fd), "已删空目录 fd 执行 syscall.Fsync 必须成功")
-		require.NoError(t, unix.Fdatasync(fd), "已删空目录 fd 执行 unix.Fdatasync 必须成功")
-
-		// 关闭目录句柄，触发内核异步发送 ReleaseDir 清理服务端孤儿目录
-		require.NoError(t, syscall.Close(fd), "关闭目录句柄必须成功")
-		fd = -1
-
-		// 等待内核 dentry 缓存过期（entry_timeout = 1.0s），确认挂载点上该目录返回 ENOENT
-		require.Eventually(t, func() bool {
-			_, statErr := os.Stat(openPath)
-			return os.IsNotExist(statErr)
-		}, 5*time.Second, 50*time.Millisecond, "dentry 缓存过期后访问已删除目录必须返回 ENOENT")
-	})
-
-	// -------------------------------------------------------------
 	// 5. 验证场景 3：1500+ 个子文件的单目录 os.ReadDir 完整分页遍历
 	// -------------------------------------------------------------
 	t.Run("1500+子文件单目录分页遍历完整性与确定性", func(t *testing.T) {
@@ -148,4 +114,51 @@ func TestE2E_ReadDir(t *testing.T) {
 		require.Equal(t, totalFiles, len(seenMap), "必须 100% 覆盖预期 1500 个文件名且零遗漏零重复")
 	})
 
+}
+
+// TestE2E_OpenDirectoryAfterRemoval 验证目录在本地打开期间被删除后的同步。
+func TestE2E_OpenDirectoryAfterRemoval(t *testing.T) {
+	client := newTestStorageClient(t)
+	disk := createTestDisk(t, client)
+	mountpoint := t.TempDir()
+	cmd, stdout, stderr := startBowlMount(t, getStorageEndpoint(), disk.GetDiskId(), mountpoint)
+	if err := waitForMount(mountpoint, 10*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("等待挂载就绪失败: %v: %s %s", err, stdout.String(), stderr.String())
+	}
+	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	path := filepath.Join(mountpoint, "open_then_rmdir")
+	require.NoError(t, os.Mkdir(path, 0o755))
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	require.NoError(t, err)
+	defer func() {
+		if fd >= 0 {
+			_ = syscall.Close(fd)
+		}
+	}()
+	second, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
+	require.NoError(t, err)
+	defer func() {
+		if second >= 0 {
+			_ = syscall.Close(second)
+		}
+	}()
+	require.NoError(t, os.Remove(path))
+	var attr unix.Stat_t
+	require.NoError(t, unix.Fstat(fd, &attr), "已删除的打开目录应保留属性")
+	require.Zero(t, attr.Nlink)
+	require.NoError(t, syscall.Fsync(fd), "已删除的打开目录应能同步")
+	require.NoError(t, unix.Fdatasync(fd), "已删除的打开目录应能同步数据")
+	_, err = unix.Getdents(fd, make([]byte, 4096))
+	require.ErrorIs(t, err, syscall.ENOENT)
+	require.NoError(t, syscall.Close(fd))
+	fd = -1
+	require.NoError(t, unix.Fstat(second, &attr))
+	require.Zero(t, attr.Nlink)
+	require.NoError(t, syscall.Fsync(second))
+	require.NoError(t, syscall.Close(second))
+	second = -1
+	require.Eventually(t, func() bool { _, err := os.Stat(path); return os.IsNotExist(err) },
+		5*time.Second, 50*time.Millisecond)
 }

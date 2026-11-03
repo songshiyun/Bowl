@@ -3,6 +3,10 @@ package fusefs
 import (
 	"sync"
 	"syscall"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // FileHandle 记录一个本地句柄的目标节点、打开标志和类型。
@@ -24,21 +28,23 @@ func (h FileHandle) CanWrite() bool {
 
 // HandleTable 管理当前客户端的打开句柄与节点引用数。
 type HandleTable struct {
-	mu       sync.RWMutex
-	next     uint64
-	handles  map[uint64]FileHandle
-	counts   map[uint64]int
-	orphans  map[uint64]struct{}
-	onOrphan func(uint64)
+	mu          sync.RWMutex
+	next        uint64
+	handles     map[uint64]FileHandle
+	counts      map[uint64]int
+	orphans     map[uint64]struct{}
+	removedDirs map[uint64]*storagev1.Inode
+	onOrphan    func(uint64)
 }
 
 // NewHandleTable 创建本地句柄表。
 func NewHandleTable(onOrphan func(uint64)) *HandleTable {
 	return &HandleTable{
-		handles:  make(map[uint64]FileHandle),
-		counts:   make(map[uint64]int),
-		orphans:  make(map[uint64]struct{}),
-		onOrphan: onOrphan,
+		handles:     make(map[uint64]FileHandle),
+		counts:      make(map[uint64]int),
+		orphans:     make(map[uint64]struct{}),
+		removedDirs: make(map[uint64]*storagev1.Inode),
+		onOrphan:    onOrphan,
 	}
 }
 
@@ -88,6 +94,7 @@ func (t *HandleTable) Release(fh uint64) (FileHandle, bool) {
 	reclaim := false
 	if t.counts[handle.Ino] == 0 {
 		delete(t.counts, handle.Ino)
+		delete(t.removedDirs, handle.Ino)
 		_, reclaim = t.orphans[handle.Ino]
 		delete(t.orphans, handle.Ino)
 	}
@@ -138,6 +145,7 @@ func (t *HandleTable) clear() {
 	clear(t.handles)
 	clear(t.counts)
 	clear(t.orphans)
+	clear(t.removedDirs)
 }
 
 // ClearOrphan 在孤儿重新具名化后取消回收标记。
@@ -153,4 +161,28 @@ func (t *HandleTable) IsOrphan(ino uint64) bool {
 	defer t.mu.RUnlock()
 	_, ok := t.orphans[ino]
 	return ok
+}
+
+// MarkRemovedDir 保留已删除但仍打开的目录属性，直到最后一个句柄关闭。
+func (t *HandleTable) MarkRemovedDir(ino uint64, inode *storagev1.Inode) {
+	if inode == nil || inode.Attr == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[ino] == 0 {
+		return
+	}
+	removed := proto.Clone(inode).(*storagev1.Inode)
+	removed.Attr.Nlink = 0
+	removed.Attr.Ctime = timestamppb.Now()
+	t.removedDirs[ino] = removed
+}
+
+// RemovedDir 返回已删除的打开目录的本地属性。
+func (t *HandleTable) RemovedDir(ino uint64) (*storagev1.Inode, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	inode, ok := t.removedDirs[ino]
+	return inode, ok
 }

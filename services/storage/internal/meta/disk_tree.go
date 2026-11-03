@@ -137,11 +137,7 @@ func setDiskBranches(disk *Disk, raw []byte) error {
 }
 
 func (m *manager) diskWithBranches(ctx context.Context, row db.GetDiskRow) (*Disk, error) {
-	m.syncDiskRowWithQuotaState(&row)
 	disk := toDomainDisk(row)
-	if !m.hasPool() {
-		return disk, nil
-	}
 	control, err := m.store.GetDiskControlPlane(ctx, row.DiskID)
 	if err != nil {
 		return nil, fmt.Errorf("读取磁盘分支树: %w", err)
@@ -154,12 +150,10 @@ func (m *manager) diskWithBranches(ctx context.Context, row db.GetDiskRow) (*Dis
 		return nil, err
 	}
 	usage := quota.Usage()
-	disk.UsedBytes = max(disk.UsedBytes, usage.Bytes)
-	disk.UsedInodes = max(disk.UsedInodes, usage.Inodes)
+	disk.UsedBytes = usage.Bytes
+	disk.UsedInodes = usage.Inodes
 	return disk, nil
 }
-
-const legacyQuotaBranch = "\x00legacy"
 
 // TreeQuota 返回磁盘共享的配额协调器，并在首次访问时从存活分支恢复。
 func (m *manager) TreeQuota(ctx context.Context, diskID string) (*TreeQuota, error) {
@@ -212,10 +206,6 @@ func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control 
 		quota.maxBytes = uint64(row.MaxBytes)
 		m.treeQuotas[id] = quota
 	}
-	if err := m.refreshLegacyQuota(ctx, quota, row.RootIno); err != nil {
-		return nil, err
-	}
-	m.treeQuotaRoots.Store(row.RootIno, quota)
 	return quota, nil
 }
 
@@ -269,42 +259,4 @@ func readBranchSizesFromDB(store *pebble.DB) (sizes map[uint64]uint64, err error
 		sizes[ino] = inode.Size
 	}
 	return sizes, iter.Error()
-}
-
-func (m *manager) refreshLegacyQuota(ctx context.Context, quota *TreeQuota, rootIno int64) error {
-	pp, ok := m.store.(poolProvider)
-	if !ok || pp.Pool() == nil {
-		return nil
-	}
-	// 查询和替换必须处于同一配额锁内，避免旧快照覆盖已提交的写入。
-	quota.mu.Lock()
-	defer quota.mu.Unlock()
-	if quota.closed {
-		return ErrNotFound
-	}
-	rows, err := pp.Pool().Query(ctx, `SELECT ino, mode, size FROM inodes WHERE root_ino = $1`, rootIno)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	sizes := make(map[uint64]uint64)
-	for rows.Next() {
-		var ino, size int64
-		var mode int32
-		if err := rows.Scan(&ino, &mode, &size); err != nil {
-			return err
-		}
-		if ino == rootIno {
-			ino = 1
-		}
-		var logicalSize uint64
-		if uint32(mode)&S_IFMT == S_IFREG && size > 0 {
-			logicalSize = uint64(size)
-		}
-		sizes[uint64(ino)] = logicalSize
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return quota.replaceBranchLocked(legacyQuotaBranch, sizes, false)
 }

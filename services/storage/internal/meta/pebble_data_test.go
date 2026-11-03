@@ -2,7 +2,6 @@ package meta_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -550,34 +549,4 @@ func TestPebbleDataValidationFlagsOrphansAndSync(t *testing.T) {
 	})
 	_, err = e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, SessionID: &e.sid})
 	require.ErrorIs(t, err, meta.ErrNotFound)
-}
-
-func TestPebbleDataLegacySessionRouting(t *testing.T) {
-	e := setupPebbleCreate(t, 1000)
-	legacy := uint64(202)
-	_, err := e.mgr.RenewSession(e.ctx, legacy)
-	require.NoError(t, err)
-	file, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: e.disk.RootIno, Name: []byte("legacy"), Mode: 0o644, Flags: meta.O_RDWR, SessionID: &legacy})
-	require.NoError(t, err)
-	ino, fh := file.Inode.Ino, file.Fh
-	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Fh: fh, Data: []byte("legacy"), SessionID: &legacy})
-	require.NoError(t, err)
-	got, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Fh: fh, Size: 10, SessionID: &legacy})
-	require.NoError(t, err)
-	require.Equal(t, []byte("legacy"), got.Data)
-	size := uint64(3)
-	_, err = e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{Size: &size, SessionID: &legacy})
-	require.NoError(t, err)
-	require.NoError(t, e.mgr.Fallocate(e.ctx, meta.FallocateParams{Ino: ino, Fh: fh, Length: 3, Mode: meta.FallocFlKeepSize, SessionID: &legacy}))
-	require.NoError(t, e.mgr.Fsync(e.ctx, meta.FsyncParams{Ino: ino, Fh: fh, SessionID: &legacy}))
-	dir, err := e.mgr.OpenDir(e.ctx, meta.OpenDirParams{Ino: e.disk.RootIno, SessionID: &legacy})
-	require.NoError(t, err)
-	require.NoError(t, e.mgr.FsyncDir(e.ctx, meta.FsyncDirParams{Ino: e.disk.RootIno, Fh: dir.Fh, SessionID: &legacy}))
-	_, err = e.mgr.SetAttr(meta.WithSessionID(e.ctx, &legacy), ino, meta.SetAttrInput{Size: &size, SessionID: &legacy})
-	require.ErrorIs(t, err, meta.ErrBadFileHandle)
-	other := uint64(303)
-	_, err = e.mgr.Write(meta.WithSessionID(e.ctx, &other), &meta.WriteRequest{Ino: ino, Fh: fh, Data: []byte("x"), SessionID: &legacy})
-	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	_, err = e.mgr.Read(context.Background(), &meta.ReadRequest{Ino: ino, Fh: 0, SessionID: &legacy})
-	require.ErrorIs(t, err, meta.ErrBadFileHandle)
 }

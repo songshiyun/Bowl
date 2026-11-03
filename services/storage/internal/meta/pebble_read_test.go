@@ -535,20 +535,3 @@ func TestPebbleReadAtime(t *testing.T) {
 		})
 	}
 }
-
-func TestPebbleReadStatFSLegacyOnRestart(t *testing.T) {
-	f := newPebbleReadFixture(t)
-	legacy := meta.New(db.NewStore(f.pool), meta.WithStorageRoot(f.root))
-	file, err := legacy.Mknod(f.ctx, meta.MknodParams{ParentIno: f.disk.RootIno, Name: []byte("旧文件"), Mode: meta.S_IFREG | 0o644})
-	require.NoError(t, err)
-	size := uint64(1000)
-	_, err = legacy.SetAttr(f.ctx, file.Ino, meta.SetAttrInput{Size: &size})
-	require.NoError(t, err)
-	want, err := legacy.GetDisk(f.ctx, f.disk.DiskID)
-	require.NoError(t, err)
-	restarted := meta.New(db.NewStore(f.observed), meta.WithStorageRoot(f.root))
-	got, err := restarted.StatFS(meta.WithSessionID(f.ctx, &f.snap), 3)
-	require.NoError(t, err)
-	require.Equal(t, want.UsedBytes, got.UsedBytes)
-	require.Equal(t, want.UsedInodes, got.Files)
-}

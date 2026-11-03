@@ -86,22 +86,6 @@ func TestNewStorageValidator(t *testing.T) {
 			t.Errorf("expected valid MkdirRequest, got error: %v", err)
 		}
 
-		validGetLkUnlock := &storagev1.GetLkRequest{
-			Ino:       1,
-			Fh:        1,
-			LockOwner: 1,
-			Lk: &storagev1.FileLock{
-				Start: 0,
-				End:   100,
-				Type:  2, // F_UNLCK 允许通过
-			},
-			LkFlags:   0,
-			SessionId: 1,
-		}
-		if err := v.Validate(validGetLkUnlock); err != nil {
-			t.Errorf("expected valid GetLkRequest with F_UNLCK, got error: %v", err)
-		}
-
 		validSetXattrFlags3 := &storagev1.SetXattrRequest{
 			Ino:   1,
 			Name:  []byte("user.k"),
@@ -316,95 +300,4 @@ func TestNewStorageValidator(t *testing.T) {
 		assert.Equal(t, validator.ReasonRange, info.GetReason())
 	})
 
-	t.Run("文件锁请求与 Flush/Release 静态校验违规统一映射为 EINVAL", func(t *testing.T) {
-		testCases := []struct {
-			name string
-			msg  proto.Message
-		}{
-			{
-				name: "FileLock start > end 映射为 EINVAL",
-				msg: &storagev1.FileLock{
-					Start: 200,
-					End:   100,
-					Type:  0,
-				},
-			},
-			{
-				name: "GetLkRequest 传入非法锁类型 (3) 映射为 EINVAL",
-				msg: &storagev1.GetLkRequest{
-					Ino:       1,
-					Fh:        1,
-					LockOwner: 1,
-					Lk: &storagev1.FileLock{
-						Start: 0,
-						End:   100,
-						Type:  3,
-					},
-					LkFlags:   0,
-					SessionId: 1,
-				},
-			},
-			{
-				name: "GetLkRequest FUSE_LK_FLOCK 非整文件区间映射为 EINVAL",
-				msg: &storagev1.GetLkRequest{
-					Ino:       1,
-					Fh:        1,
-					LockOwner: 1,
-					Lk: &storagev1.FileLock{
-						Start: 0,
-						End:   100,
-						Type:  0,
-					},
-					LkFlags:   1,
-					SessionId: 1,
-				},
-			},
-			{
-				name: "SetLkRequest 非法 lk_flags 映射为 EINVAL",
-				msg: &storagev1.SetLkRequest{
-					Ino:       1,
-					Fh:        1,
-					LockOwner: 1,
-					Lk: &storagev1.FileLock{
-						Start: 0,
-						End:   100,
-						Type:  1,
-					},
-					LkFlags:   2,
-					SessionId: 1,
-				},
-			},
-			{
-				name: "SetLkwRequest request_id 为 0 映射为 EINVAL",
-				msg: &storagev1.SetLkwRequest{
-					Ino:       1,
-					Fh:        1,
-					LockOwner: 1,
-					Lk: &storagev1.FileLock{
-						Start: 0,
-						End:   100,
-						Type:  1,
-					},
-					LkFlags:   0,
-					SessionId: 1,
-					RequestId: 0,
-				},
-			},
-			{
-				name: "ReleaseRequest 非法 release_flags 映射为 EINVAL",
-				msg: &storagev1.ReleaseRequest{
-					Ino:          1,
-					Fh:           1,
-					ReleaseFlags: 0x4,
-				},
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				err := v.Validate(tc.msg)
-				assertErrorInfoReason(t, err, validator.ReasonInvalidArgument)
-			})
-		}
-	})
 }
