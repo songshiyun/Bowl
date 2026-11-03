@@ -19,46 +19,56 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	StorageService_Lookup_FullMethodName       = "/storage.v1.StorageService/Lookup"
-	StorageService_GetAttr_FullMethodName      = "/storage.v1.StorageService/GetAttr"
-	StorageService_SetAttr_FullMethodName      = "/storage.v1.StorageService/SetAttr"
-	StorageService_Mknod_FullMethodName        = "/storage.v1.StorageService/Mknod"
-	StorageService_Mkdir_FullMethodName        = "/storage.v1.StorageService/Mkdir"
-	StorageService_Symlink_FullMethodName      = "/storage.v1.StorageService/Symlink"
-	StorageService_Readlink_FullMethodName     = "/storage.v1.StorageService/Readlink"
-	StorageService_Link_FullMethodName         = "/storage.v1.StorageService/Link"
-	StorageService_Unlink_FullMethodName       = "/storage.v1.StorageService/Unlink"
-	StorageService_Rmdir_FullMethodName        = "/storage.v1.StorageService/Rmdir"
-	StorageService_Rename_FullMethodName       = "/storage.v1.StorageService/Rename"
-	StorageService_Create_FullMethodName       = "/storage.v1.StorageService/Create"
-	StorageService_TmpFile_FullMethodName      = "/storage.v1.StorageService/TmpFile"
-	StorageService_Open_FullMethodName         = "/storage.v1.StorageService/Open"
-	StorageService_Read_FullMethodName         = "/storage.v1.StorageService/Read"
-	StorageService_Write_FullMethodName        = "/storage.v1.StorageService/Write"
-	StorageService_Flush_FullMethodName        = "/storage.v1.StorageService/Flush"
-	StorageService_Fsync_FullMethodName        = "/storage.v1.StorageService/Fsync"
-	StorageService_Release_FullMethodName      = "/storage.v1.StorageService/Release"
-	StorageService_OpenDir_FullMethodName      = "/storage.v1.StorageService/OpenDir"
-	StorageService_FsyncDir_FullMethodName     = "/storage.v1.StorageService/FsyncDir"
-	StorageService_ReleaseDir_FullMethodName   = "/storage.v1.StorageService/ReleaseDir"
-	StorageService_ReadDir_FullMethodName      = "/storage.v1.StorageService/ReadDir"
-	StorageService_ReadDirPlus_FullMethodName  = "/storage.v1.StorageService/ReadDirPlus"
-	StorageService_Fallocate_FullMethodName    = "/storage.v1.StorageService/Fallocate"
-	StorageService_SetXattr_FullMethodName     = "/storage.v1.StorageService/SetXattr"
-	StorageService_GetXattr_FullMethodName     = "/storage.v1.StorageService/GetXattr"
-	StorageService_ListXattr_FullMethodName    = "/storage.v1.StorageService/ListXattr"
-	StorageService_RemoveXattr_FullMethodName  = "/storage.v1.StorageService/RemoveXattr"
-	StorageService_GetLk_FullMethodName        = "/storage.v1.StorageService/GetLk"
-	StorageService_SetLk_FullMethodName        = "/storage.v1.StorageService/SetLk"
-	StorageService_SetLkw_FullMethodName       = "/storage.v1.StorageService/SetLkw"
-	StorageService_RenewSession_FullMethodName = "/storage.v1.StorageService/RenewSession"
-	StorageService_CloseSession_FullMethodName = "/storage.v1.StorageService/CloseSession"
-	StorageService_CreateDisk_FullMethodName   = "/storage.v1.StorageService/CreateDisk"
-	StorageService_GetDisk_FullMethodName      = "/storage.v1.StorageService/GetDisk"
-	StorageService_ListDisks_FullMethodName    = "/storage.v1.StorageService/ListDisks"
-	StorageService_UpdateDisk_FullMethodName   = "/storage.v1.StorageService/UpdateDisk"
-	StorageService_DeleteDisk_FullMethodName   = "/storage.v1.StorageService/DeleteDisk"
-	StorageService_StatFS_FullMethodName       = "/storage.v1.StorageService/StatFS"
+	StorageService_Lookup_FullMethodName        = "/storage.v1.StorageService/Lookup"
+	StorageService_GetAttr_FullMethodName       = "/storage.v1.StorageService/GetAttr"
+	StorageService_SetAttr_FullMethodName       = "/storage.v1.StorageService/SetAttr"
+	StorageService_Mknod_FullMethodName         = "/storage.v1.StorageService/Mknod"
+	StorageService_Mkdir_FullMethodName         = "/storage.v1.StorageService/Mkdir"
+	StorageService_Symlink_FullMethodName       = "/storage.v1.StorageService/Symlink"
+	StorageService_Readlink_FullMethodName      = "/storage.v1.StorageService/Readlink"
+	StorageService_Link_FullMethodName          = "/storage.v1.StorageService/Link"
+	StorageService_Unlink_FullMethodName        = "/storage.v1.StorageService/Unlink"
+	StorageService_Rmdir_FullMethodName         = "/storage.v1.StorageService/Rmdir"
+	StorageService_Rename_FullMethodName        = "/storage.v1.StorageService/Rename"
+	StorageService_Create_FullMethodName        = "/storage.v1.StorageService/Create"
+	StorageService_TmpFile_FullMethodName       = "/storage.v1.StorageService/TmpFile"
+	StorageService_Open_FullMethodName          = "/storage.v1.StorageService/Open"
+	StorageService_Read_FullMethodName          = "/storage.v1.StorageService/Read"
+	StorageService_Write_FullMethodName         = "/storage.v1.StorageService/Write"
+	StorageService_Flush_FullMethodName         = "/storage.v1.StorageService/Flush"
+	StorageService_Fsync_FullMethodName         = "/storage.v1.StorageService/Fsync"
+	StorageService_Release_FullMethodName       = "/storage.v1.StorageService/Release"
+	StorageService_OpenDir_FullMethodName       = "/storage.v1.StorageService/OpenDir"
+	StorageService_FsyncDir_FullMethodName      = "/storage.v1.StorageService/FsyncDir"
+	StorageService_ReleaseDir_FullMethodName    = "/storage.v1.StorageService/ReleaseDir"
+	StorageService_ReadDir_FullMethodName       = "/storage.v1.StorageService/ReadDir"
+	StorageService_ReadDirPlus_FullMethodName   = "/storage.v1.StorageService/ReadDirPlus"
+	StorageService_Fallocate_FullMethodName     = "/storage.v1.StorageService/Fallocate"
+	StorageService_SetXattr_FullMethodName      = "/storage.v1.StorageService/SetXattr"
+	StorageService_GetXattr_FullMethodName      = "/storage.v1.StorageService/GetXattr"
+	StorageService_ListXattr_FullMethodName     = "/storage.v1.StorageService/ListXattr"
+	StorageService_RemoveXattr_FullMethodName   = "/storage.v1.StorageService/RemoveXattr"
+	StorageService_GetLk_FullMethodName         = "/storage.v1.StorageService/GetLk"
+	StorageService_SetLk_FullMethodName         = "/storage.v1.StorageService/SetLk"
+	StorageService_SetLkw_FullMethodName        = "/storage.v1.StorageService/SetLkw"
+	StorageService_RenewSession_FullMethodName  = "/storage.v1.StorageService/RenewSession"
+	StorageService_CloseSession_FullMethodName  = "/storage.v1.StorageService/CloseSession"
+	StorageService_CreateDisk_FullMethodName    = "/storage.v1.StorageService/CreateDisk"
+	StorageService_GetDisk_FullMethodName       = "/storage.v1.StorageService/GetDisk"
+	StorageService_ListDisks_FullMethodName     = "/storage.v1.StorageService/ListDisks"
+	StorageService_UpdateDisk_FullMethodName    = "/storage.v1.StorageService/UpdateDisk"
+	StorageService_DeleteDisk_FullMethodName    = "/storage.v1.StorageService/DeleteDisk"
+	StorageService_StatFS_FullMethodName        = "/storage.v1.StorageService/StatFS"
+	StorageService_CreateBranch_FullMethodName  = "/storage.v1.StorageService/CreateBranch"
+	StorageService_ReclaimOrphan_FullMethodName = "/storage.v1.StorageService/ReclaimOrphan"
+	StorageService_ListBranches_FullMethodName  = "/storage.v1.StorageService/ListBranches"
+	StorageService_DeleteBranch_FullMethodName  = "/storage.v1.StorageService/DeleteBranch"
+	StorageService_Commit_FullMethodName        = "/storage.v1.StorageService/Commit"
+	StorageService_Rollback_FullMethodName      = "/storage.v1.StorageService/Rollback"
+	StorageService_Merge_FullMethodName         = "/storage.v1.StorageService/Merge"
+	StorageService_ResolveMerge_FullMethodName  = "/storage.v1.StorageService/ResolveMerge"
+	StorageService_AbortMerge_FullMethodName    = "/storage.v1.StorageService/AbortMerge"
+	StorageService_Diff_FullMethodName          = "/storage.v1.StorageService/Diff"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -149,14 +159,16 @@ type StorageServiceClient interface {
 	// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 	// 遵循 POSIX pread(2) 语义，支持最大 4 MiB 单次读取。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	// Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 	// 遵循 POSIX pwrite(2) 语义，支持最大 4 MiB 单次写入。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
 	// Flush 在单次文件关闭时触发，冲刷并校验文件句柄的合法性（不销毁文件句柄）。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -164,7 +176,8 @@ type StorageServiceClient interface {
 	Flush(ctx context.Context, in *FlushRequest, opts ...grpc.CallOption) (*FlushResponse, error)
 	// Fsync 同步并持久化文件节点与句柄关联的状态。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Fsync(ctx context.Context, in *FsyncRequest, opts ...grpc.CallOption) (*FsyncResponse, error)
 	// Release 关闭并销毁文件句柄 (FileHandle)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -179,8 +192,9 @@ type StorageServiceClient interface {
 	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	FsyncDir(ctx context.Context, in *FsyncDirRequest, opts ...grpc.CallOption) (*FsyncDirResponse, error)
 	// ReleaseDir 关闭并销毁目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
@@ -191,14 +205,16 @@ type StorageServiceClient interface {
 	// ReadDir 读取指定目录的子项流（基本条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
 	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDirPlus(ctx context.Context, in *ReadDirPlusRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
@@ -278,6 +294,26 @@ type StorageServiceClient interface {
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(ctx context.Context, in *StatFSRequest, opts ...grpc.CallOption) (*StatFSResponse, error)
+	// CreateBranch 从已有分支或快照派生逻辑分支。
+	CreateBranch(ctx context.Context, in *CreateBranchRequest, opts ...grpc.CallOption) (*CreateBranchResponse, error)
+	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
+	ReclaimOrphan(ctx context.Context, in *ReclaimOrphanRequest, opts ...grpc.CallOption) (*ReclaimOrphanResponse, error)
+	// ListBranches 列出磁盘中的逻辑分支。
+	ListBranches(ctx context.Context, in *ListBranchesRequest, opts ...grpc.CallOption) (*ListBranchesResponse, error)
+	// DeleteBranch 删除指定逻辑分支。
+	DeleteBranch(ctx context.Context, in *DeleteBranchRequest, opts ...grpc.CallOption) (*DeleteBranchResponse, error)
+	// Commit 将分支工作区定格为快照。
+	Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error)
+	// Rollback 在目标分支无活跃写端时回档。
+	Rollback(ctx context.Context, in *RollbackRequest, opts ...grpc.CallOption) (*RollbackResponse, error)
+	// Merge 在目标分支无活跃写端时执行三路合并。
+	Merge(ctx context.Context, in *MergeRequest, opts ...grpc.CallOption) (*MergeResponse, error)
+	// ResolveMerge 完成冲突物化后的合并。
+	ResolveMerge(ctx context.Context, in *ResolveMergeRequest, opts ...grpc.CallOption) (*ResolveMergeResponse, error)
+	// AbortMerge 放弃合并并恢复目标分支。
+	AbortMerge(ctx context.Context, in *AbortMergeRequest, opts ...grpc.CallOption) (*AbortMergeResponse, error)
+	// Diff 比较两个分支或快照的文件与数据块变化。
+	Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffResponse, error)
 }
 
 type storageServiceClient struct {
@@ -688,6 +724,106 @@ func (c *storageServiceClient) StatFS(ctx context.Context, in *StatFSRequest, op
 	return out, nil
 }
 
+func (c *storageServiceClient) CreateBranch(ctx context.Context, in *CreateBranchRequest, opts ...grpc.CallOption) (*CreateBranchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateBranchResponse)
+	err := c.cc.Invoke(ctx, StorageService_CreateBranch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ReclaimOrphan(ctx context.Context, in *ReclaimOrphanRequest, opts ...grpc.CallOption) (*ReclaimOrphanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReclaimOrphanResponse)
+	err := c.cc.Invoke(ctx, StorageService_ReclaimOrphan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ListBranches(ctx context.Context, in *ListBranchesRequest, opts ...grpc.CallOption) (*ListBranchesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBranchesResponse)
+	err := c.cc.Invoke(ctx, StorageService_ListBranches_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) DeleteBranch(ctx context.Context, in *DeleteBranchRequest, opts ...grpc.CallOption) (*DeleteBranchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteBranchResponse)
+	err := c.cc.Invoke(ctx, StorageService_DeleteBranch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitResponse)
+	err := c.cc.Invoke(ctx, StorageService_Commit_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Rollback(ctx context.Context, in *RollbackRequest, opts ...grpc.CallOption) (*RollbackResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RollbackResponse)
+	err := c.cc.Invoke(ctx, StorageService_Rollback_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Merge(ctx context.Context, in *MergeRequest, opts ...grpc.CallOption) (*MergeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MergeResponse)
+	err := c.cc.Invoke(ctx, StorageService_Merge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) ResolveMerge(ctx context.Context, in *ResolveMergeRequest, opts ...grpc.CallOption) (*ResolveMergeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveMergeResponse)
+	err := c.cc.Invoke(ctx, StorageService_ResolveMerge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) AbortMerge(ctx context.Context, in *AbortMergeRequest, opts ...grpc.CallOption) (*AbortMergeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AbortMergeResponse)
+	err := c.cc.Invoke(ctx, StorageService_AbortMerge_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiffResponse)
+	err := c.cc.Invoke(ctx, StorageService_Diff_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // StorageServiceServer is the server API for StorageService service.
 // All implementations must embed UnimplementedStorageServiceServer
 // for forward compatibility.
@@ -776,14 +912,16 @@ type StorageServiceServer interface {
 	// Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 	// 遵循 POSIX pread(2) 语义，支持最大 4 MiB 单次读取。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	// Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 	// 遵循 POSIX pwrite(2) 语义，支持最大 4 MiB 单次写入。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
 	// Flush 在单次文件关闭时触发，冲刷并校验文件句柄的合法性（不销毁文件句柄）。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -791,7 +929,8 @@ type StorageServiceServer interface {
 	Flush(context.Context, *FlushRequest) (*FlushResponse, error)
 	// Fsync 同步并持久化文件节点与句柄关联的状态。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	Fsync(context.Context, *FsyncRequest) (*FsyncResponse, error)
 	// Release 关闭并销毁文件句柄 (FileHandle)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -806,8 +945,9 @@ type StorageServiceServer interface {
 	// FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	FsyncDir(context.Context, *FsyncDirRequest) (*FsyncDirResponse, error)
 	// ReleaseDir 关闭并销毁目录 FileHandle。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
@@ -818,14 +958,16 @@ type StorageServiceServer interface {
 	// ReadDir 读取指定目录的子项流（基本条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
 	// ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 	// 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
 	// 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-	// 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+	// 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
 	// 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+	// fh 为 0 时，句柄由客户端在本地管理。
 	ReadDirPlus(context.Context, *ReadDirPlusRequest) (*ReadDirPlusResponse, error)
 	// Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
 	// 遵循 Linux fallocate(2) 语义，支持空间预分配、保留大小分配及打洞释放空间。
@@ -905,6 +1047,26 @@ type StorageServiceServer interface {
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(context.Context, *StatFSRequest) (*StatFSResponse, error)
+	// CreateBranch 从已有分支或快照派生逻辑分支。
+	CreateBranch(context.Context, *CreateBranchRequest) (*CreateBranchResponse, error)
+	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
+	ReclaimOrphan(context.Context, *ReclaimOrphanRequest) (*ReclaimOrphanResponse, error)
+	// ListBranches 列出磁盘中的逻辑分支。
+	ListBranches(context.Context, *ListBranchesRequest) (*ListBranchesResponse, error)
+	// DeleteBranch 删除指定逻辑分支。
+	DeleteBranch(context.Context, *DeleteBranchRequest) (*DeleteBranchResponse, error)
+	// Commit 将分支工作区定格为快照。
+	Commit(context.Context, *CommitRequest) (*CommitResponse, error)
+	// Rollback 在目标分支无活跃写端时回档。
+	Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error)
+	// Merge 在目标分支无活跃写端时执行三路合并。
+	Merge(context.Context, *MergeRequest) (*MergeResponse, error)
+	// ResolveMerge 完成冲突物化后的合并。
+	ResolveMerge(context.Context, *ResolveMergeRequest) (*ResolveMergeResponse, error)
+	// AbortMerge 放弃合并并恢复目标分支。
+	AbortMerge(context.Context, *AbortMergeRequest) (*AbortMergeResponse, error)
+	// Diff 比较两个分支或快照的文件与数据块变化。
+	Diff(context.Context, *DiffRequest) (*DiffResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -1034,6 +1196,36 @@ func (UnimplementedStorageServiceServer) DeleteDisk(context.Context, *DeleteDisk
 }
 func (UnimplementedStorageServiceServer) StatFS(context.Context, *StatFSRequest) (*StatFSResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StatFS not implemented")
+}
+func (UnimplementedStorageServiceServer) CreateBranch(context.Context, *CreateBranchRequest) (*CreateBranchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateBranch not implemented")
+}
+func (UnimplementedStorageServiceServer) ReclaimOrphan(context.Context, *ReclaimOrphanRequest) (*ReclaimOrphanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReclaimOrphan not implemented")
+}
+func (UnimplementedStorageServiceServer) ListBranches(context.Context, *ListBranchesRequest) (*ListBranchesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBranches not implemented")
+}
+func (UnimplementedStorageServiceServer) DeleteBranch(context.Context, *DeleteBranchRequest) (*DeleteBranchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteBranch not implemented")
+}
+func (UnimplementedStorageServiceServer) Commit(context.Context, *CommitRequest) (*CommitResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
+}
+func (UnimplementedStorageServiceServer) Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Rollback not implemented")
+}
+func (UnimplementedStorageServiceServer) Merge(context.Context, *MergeRequest) (*MergeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Merge not implemented")
+}
+func (UnimplementedStorageServiceServer) ResolveMerge(context.Context, *ResolveMergeRequest) (*ResolveMergeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResolveMerge not implemented")
+}
+func (UnimplementedStorageServiceServer) AbortMerge(context.Context, *AbortMergeRequest) (*AbortMergeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AbortMerge not implemented")
+}
+func (UnimplementedStorageServiceServer) Diff(context.Context, *DiffRequest) (*DiffResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Diff not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -1776,6 +1968,186 @@ func _StorageService_StatFS_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_CreateBranch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBranchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).CreateBranch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_CreateBranch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).CreateBranch(ctx, req.(*CreateBranchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ReclaimOrphan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReclaimOrphanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ReclaimOrphan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ReclaimOrphan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ReclaimOrphan(ctx, req.(*ReclaimOrphanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ListBranches_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBranchesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ListBranches(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ListBranches_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ListBranches(ctx, req.(*ListBranchesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_DeleteBranch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteBranchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).DeleteBranch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_DeleteBranch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).DeleteBranch(ctx, req.(*DeleteBranchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Commit(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Commit_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Commit(ctx, req.(*CommitRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Rollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RollbackRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Rollback(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Rollback_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Rollback(ctx, req.(*RollbackRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Merge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MergeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Merge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Merge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Merge(ctx, req.(*MergeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_ResolveMerge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveMergeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ResolveMerge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ResolveMerge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ResolveMerge(ctx, req.(*ResolveMergeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_AbortMerge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AbortMergeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).AbortMerge(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_AbortMerge_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).AbortMerge(ctx, req.(*AbortMergeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_Diff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiffRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).Diff(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_Diff_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).Diff(ctx, req.(*DiffRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // StorageService_ServiceDesc is the grpc.ServiceDesc for StorageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1942,6 +2314,46 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StatFS",
 			Handler:    _StorageService_StatFS_Handler,
+		},
+		{
+			MethodName: "CreateBranch",
+			Handler:    _StorageService_CreateBranch_Handler,
+		},
+		{
+			MethodName: "ReclaimOrphan",
+			Handler:    _StorageService_ReclaimOrphan_Handler,
+		},
+		{
+			MethodName: "ListBranches",
+			Handler:    _StorageService_ListBranches_Handler,
+		},
+		{
+			MethodName: "DeleteBranch",
+			Handler:    _StorageService_DeleteBranch_Handler,
+		},
+		{
+			MethodName: "Commit",
+			Handler:    _StorageService_Commit_Handler,
+		},
+		{
+			MethodName: "Rollback",
+			Handler:    _StorageService_Rollback_Handler,
+		},
+		{
+			MethodName: "Merge",
+			Handler:    _StorageService_Merge_Handler,
+		},
+		{
+			MethodName: "ResolveMerge",
+			Handler:    _StorageService_ResolveMerge_Handler,
+		},
+		{
+			MethodName: "AbortMerge",
+			Handler:    _StorageService_AbortMerge_Handler,
+		},
+		{
+			MethodName: "Diff",
+			Handler:    _StorageService_Diff_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

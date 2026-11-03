@@ -82,6 +82,15 @@ func TestReadRequest_Validation(t *testing.T) {
 					SessionId: proto.Uint64(math.MaxInt64),
 				},
 			},
+			{
+				name: "客户端本地管理句柄",
+				req: &storagev1.ReadRequest{
+					Ino:    1,
+					Fh:     0,
+					Offset: 0,
+					Size:   1024,
+				},
+			},
 		}
 
 		for _, tc := range validCases {
@@ -110,15 +119,6 @@ func TestReadRequest_Validation(t *testing.T) {
 				req: &storagev1.ReadRequest{
 					Ino:    math.MaxInt64 + 1,
 					Fh:     1,
-					Offset: 0,
-					Size:   1024,
-				},
-			},
-			{
-				name: "fh 为 0",
-				req: &storagev1.ReadRequest{
-					Ino:    1,
-					Fh:     0,
 					Offset: 0,
 					Size:   1024,
 				},
@@ -254,6 +254,15 @@ func TestWriteRequest_Validation(t *testing.T) {
 					SessionId: proto.Uint64(math.MaxInt64),
 				},
 			},
+			{
+				name: "客户端本地管理句柄",
+				req: &storagev1.WriteRequest{
+					Ino:    1,
+					Fh:     0,
+					Offset: 0,
+					Data:   []byte("test"),
+				},
+			},
 		}
 
 		for _, tc := range validCases {
@@ -282,15 +291,6 @@ func TestWriteRequest_Validation(t *testing.T) {
 				req: &storagev1.WriteRequest{
 					Ino:    math.MaxInt64 + 1,
 					Fh:     1,
-					Offset: 0,
-					Data:   []byte("test"),
-				},
-			},
-			{
-				name: "fh 为 0",
-				req: &storagev1.WriteRequest{
-					Ino:    1,
-					Fh:     0,
 					Offset: 0,
 					Data:   []byte("test"),
 				},

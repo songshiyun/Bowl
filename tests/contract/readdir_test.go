@@ -84,12 +84,12 @@ func TestReadDirRequestValidation(t *testing.T) {
 			valid:  false,
 		},
 		{
-			name:   "非法: fh 为 0",
+			name:   "合法: 客户端本地管理句柄",
 			ino:    1,
 			fh:     0,
 			offset: 0,
 			limit:  10,
-			valid:  false,
+			valid:  true,
 		},
 		{
 			name:   "非法: fh 超过 math.MaxInt64",

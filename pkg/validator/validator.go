@@ -27,6 +27,16 @@ const (
 // storageMessages 汇总 StorageService 全部现有的请求与响应消息，用于启动期预编译校验规则。
 var storageMessages = []proto.Message{
 	// 请求消息 (Requests)
+	&storagev1.ReclaimOrphanRequest{},
+	&storagev1.ListBranchesRequest{},
+	&storagev1.DeleteBranchRequest{},
+	&storagev1.CommitRequest{},
+	&storagev1.RollbackRequest{},
+	&storagev1.MergeRequest{},
+	&storagev1.ResolveMergeRequest{},
+	&storagev1.AbortMergeRequest{},
+	&storagev1.DiffRequest{},
+	&storagev1.CreateBranchRequest{},
 	&storagev1.LookupRequest{},
 	&storagev1.GetAttrRequest{},
 	&storagev1.SetAttrRequest{},
@@ -69,6 +79,16 @@ var storageMessages = []proto.Message{
 	&storagev1.StatFSRequest{},
 
 	// 响应消息 (Responses)
+	&storagev1.ReclaimOrphanResponse{},
+	&storagev1.ListBranchesResponse{},
+	&storagev1.DeleteBranchResponse{},
+	&storagev1.CommitResponse{},
+	&storagev1.RollbackResponse{},
+	&storagev1.MergeResponse{},
+	&storagev1.ResolveMergeResponse{},
+	&storagev1.AbortMergeResponse{},
+	&storagev1.DiffResponse{},
+	&storagev1.CreateBranchResponse{},
 	&storagev1.LookupResponse{},
 	&storagev1.GetAttrResponse{},
 	&storagev1.SetAttrResponse{},
@@ -111,6 +131,10 @@ var storageMessages = []proto.Message{
 	&storagev1.StatFSResponse{},
 
 	// 嵌套与共享消息
+	&storagev1.Branch{},
+	&storagev1.CommitInfo{},
+	&storagev1.MergeConflict{},
+	&storagev1.DiffEntry{},
 	&storagev1.DirEntry{},
 	&storagev1.DirEntryPlus{},
 	&storagev1.FileLock{},
@@ -321,7 +345,24 @@ func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
 
 	switch fullName {
 	// 第 1 优先级：基础整型/标识符与模式/标志字段校验 -> EINVAL
-	case "storage.v1.LookupRequest.parent_ino",
+	case "storage.v1.LookupRequest.session_id",
+		"storage.v1.GetAttrRequest.session_id",
+		"storage.v1.MknodRequest.session_id",
+		"storage.v1.MkdirRequest.session_id",
+		"storage.v1.SymlinkRequest.session_id",
+		"storage.v1.ReadlinkRequest.session_id",
+		"storage.v1.LinkRequest.session_id",
+		"storage.v1.UnlinkRequest.session_id",
+		"storage.v1.RmdirRequest.session_id",
+		"storage.v1.RenameRequest.session_id",
+		"storage.v1.SetXattrRequest.session_id",
+		"storage.v1.GetXattrRequest.session_id",
+		"storage.v1.ListXattrRequest.session_id",
+		"storage.v1.RemoveXattrRequest.session_id",
+		"storage.v1.StatFSRequest.session_id",
+		"storage.v1.ReclaimOrphanRequest.session_id",
+		"storage.v1.ReclaimOrphanRequest.ino",
+		"storage.v1.LookupRequest.parent_ino",
 		"storage.v1.GetAttrRequest.ino",
 		"storage.v1.SetAttrRequest.ino",
 		"storage.v1.SetAttrRequest.mode",
