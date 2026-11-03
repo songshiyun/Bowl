@@ -2,7 +2,9 @@ package server_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/mock"
@@ -10,8 +12,76 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/services/storage/internal/meta"
 	metamock "github.com/starsrc/bowl/services/storage/internal/meta/mock"
+	"github.com/starsrc/bowl/services/storage/internal/server"
 )
+
+func TestRenewSessionWithBranch(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	deadline := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	branch := "dev"
+	disk := "11111111-1111-7111-8111-111111111111"
+	mgr.EXPECT().RenewBranchSession(mock.Anything, meta.RenewBranchSessionParams{
+		SessionID: 1, DiskID: disk, BranchName: &branch,
+	}).Return(meta.RenewSessionResult{
+		ExpiresAt: deadline, SessionRecreated: true,
+	}, nil).Once()
+	resp, err := client.RenewSession(context.Background(), connect.NewRequest(&storagev1.RenewSessionRequest{
+		SessionId: 1, DiskId: &disk, BranchName: &branch,
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.SessionRecreated)
+	require.Equal(t, deadline, resp.Msg.ExpiresAt.AsTime())
+}
+
+func TestRenewSessionSnapshotAndBusy(t *testing.T) {
+	disk := "11111111-1111-7111-8111-111111111111"
+	commit := "22222222-2222-7222-8222-222222222222"
+	deadline := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	for _, explicitCommit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("指定快照=%t", explicitCommit), func(t *testing.T) {
+			mgr := metamock.NewMockManager(t)
+			client, cleanup := setupTestServer(t, mgr)
+			defer cleanup()
+			var commitID *string
+			if explicitCommit {
+				commitID = &commit
+			}
+			mgr.EXPECT().RenewBranchSession(mock.Anything, meta.RenewBranchSessionParams{
+				SessionID: 2, DiskID: disk, ReadOnly: true, CommitID: commitID,
+			}).Return(meta.RenewSessionResult{ExpiresAt: deadline}, nil).Once()
+			response, err := client.RenewSession(context.Background(), connect.NewRequest(&storagev1.RenewSessionRequest{
+				SessionId: 2, DiskId: &disk, ReadOnly: true, CommitId: commitID,
+			}))
+			require.NoError(t, err)
+			require.Equal(t, deadline, response.Msg.ExpiresAt.AsTime())
+		})
+	}
+	t.Run("写端冲突", func(t *testing.T) {
+		mgr := metamock.NewMockManager(t)
+		client, cleanup := setupTestServer(t, mgr)
+		defer cleanup()
+		branch := "main"
+		mgr.EXPECT().RenewBranchSession(mock.Anything, meta.RenewBranchSessionParams{
+			SessionID: 4, DiskID: disk, BranchName: &branch,
+		}).Return(meta.RenewSessionResult{}, meta.ErrBusy).Once()
+		_, err := client.RenewSession(context.Background(), connect.NewRequest(&storagev1.RenewSessionRequest{
+			SessionId: 4, DiskId: &disk, BranchName: &branch,
+		}))
+		require.Error(t, err)
+		require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+		info := server.ExtractErrorInfo(err)
+		require.NotNil(t, info)
+		require.Equal(t, "EBUSY", info.GetReason())
+	})
+	_, client, cleanup := setupTopologyXattrTestServer(t)
+	defer cleanup()
+	_, err := client.RenewSession(context.Background(), connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: 3, ReadOnly: true}))
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
 
 func TestLocalOpenStateIsNotIgnored(t *testing.T) {
 	mockMgr, client, cleanup := setupTopologyXattrTestServer(t)
@@ -91,8 +161,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 	client, cleanup := setupTestServer(t, mockMgr)
 	defer cleanup()
 	ctx := context.Background()
-	const disk = "11111111-1111-7111-8111-111111111111"
-	const commit = "22222222-2222-7222-8222-222222222222"
 	calls := map[string]func() error{
 		"按会话查找": func() error {
 			_, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
@@ -144,14 +212,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 		},
 		"按会话查询配额": func() error {
 			_, err := client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{Ino: 1, SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"指定分支": func() error {
-			_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: proto.String(disk), BranchName: proto.String("dev")}))
-			return err
-		},
-		"只读快照": func() error {
-			_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: proto.String(disk), ReadOnly: true, CommitId: proto.String(commit)}))
 			return err
 		},
 		"按会话读取属性": func() error {

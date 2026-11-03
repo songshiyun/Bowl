@@ -484,6 +484,15 @@ type RenewSessionResult struct {
 	SessionRecreated bool
 }
 
+// RenewBranchSessionParams 定义分支会话的绑定信息。
+type RenewBranchSessionParams struct {
+	SessionID  uint64
+	DiskID     string
+	BranchName *string
+	ReadOnly   bool
+	CommitID   *string
+}
+
 // Disk 描述虚拟磁盘领域实体。
 type Disk struct {
 	DiskID        string

@@ -95,14 +95,19 @@ func (s *Server) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetL
 
 // RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
 func (s *Server) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
-	if req.Msg.BranchName != nil || req.Msg.ReadOnly || req.Msg.CommitId != nil {
-		return nil, branchContextUnimplemented()
-	}
 	var (
 		res meta.RenewSessionResult
 		err error
 	)
-	if req.Msg.DiskId == nil {
+	if req.Msg.BranchName != nil || req.Msg.ReadOnly || req.Msg.CommitId != nil {
+		if req.Msg.DiskId == nil {
+			return nil, toConnectError(meta.ErrInvalidArgument)
+		}
+		res, err = s.metaManager.RenewBranchSession(ctx, meta.RenewBranchSessionParams{
+			SessionID: req.Msg.SessionId, DiskID: *req.Msg.DiskId,
+			BranchName: req.Msg.BranchName, ReadOnly: req.Msg.ReadOnly, CommitID: req.Msg.CommitId,
+		})
+	} else if req.Msg.DiskId == nil {
 		res, err = s.metaManager.RenewSessionWithStatus(ctx, req.Msg.GetSessionId())
 	} else {
 		res, err = s.metaManager.RenewSessionWithDisk(ctx, req.Msg.GetSessionId(), req.Msg.DiskId)

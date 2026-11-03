@@ -180,6 +180,18 @@ func setupIsolatedMetaTestDB(t *testing.T, prefix string) (*pgxpool.Pool, contex
 	return isoPool, ctx
 }
 
+func setupIsolatedMetaTestDBWithTracer(t *testing.T, prefix string, tracer pgx.QueryTracer) (*pgxpool.Pool, *pgxpool.Pool, context.Context) {
+	t.Helper()
+	pool, ctx := setupIsolatedMetaTestDB(t, prefix)
+	cfg := pool.Config().Copy()
+	cfg.ConnConfig.Tracer = tracer
+	observed, err := pgxpool.NewWithConfig(ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(observed.Close)
+	require.NoError(t, observed.Ping(ctx))
+	return pool, observed, ctx
+}
+
 // applyAllStorageMigrations 读取并按文件名升序在目标连接池上执行 services/storage/db/migrations 下的全部 Up 迁移。
 func applyAllStorageMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()

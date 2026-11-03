@@ -129,6 +129,9 @@ func (m *manager) reclaimAllObsoleteSliceRefs(ctx context.Context, batchLimit in
 // 若 limit <= 0，默认采用 DefaultGCBatchLimit (100)。
 // 若某切片的物理块删除发生错误，跳过清除该切片的 slice_refs 记录以保留至下次 GC 重试，并不使事务整体回滚已成功回收的其他切片。
 func (m *manager) CollectGarbage(ctx context.Context, limit int32) (int, error) {
+	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
+		return 0, err
+	}
 	if limit <= 0 {
 		limit = DefaultGCBatchLimit
 	}

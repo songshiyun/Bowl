@@ -461,7 +461,7 @@ WHERE ino = $1 AND name = $2;
 
 -- name: DeleteExpiredClientSessions :execrows
 DELETE FROM client_sessions
-WHERE expires_at <= clock_timestamp();
+WHERE expires_at <= clock_timestamp() AND (NOT lease_managed OR read_only);
 
 -- name: HasActiveClientSession :one
 SELECT EXISTS (
@@ -527,7 +527,7 @@ RETURNING *;
 WITH locked_target AS MATERIALIZED (
     SELECT s.session_id
     FROM client_sessions s
-    WHERE s.session_id = $1
+    WHERE s.session_id = $1 AND NOT s.lease_managed
     FOR UPDATE OF s
 ),
 purged_locks AS (
