@@ -1,8 +1,8 @@
 # Bowl 分布式存储系统
 
-Bowl 负责管理分布式文件系统的 POSIX 元数据目录树、文件分块数据读写、商业化磁盘实例生命周期与容量配额核算。
+Bowl 负责管理面向沙箱（Sandbox）的分布式文件系统，涵盖客户端自治的 POSIX 目录树与句柄/文件锁语义、服务端基于嵌入式键值与固定块的数据存储、单盘逻辑分支树（Branch Tree）与一写多读（SWMR）生命周期、Git 风格版本演进（Commit / Fork / Merge / Rollback / Diff）及整棵树共享的用户视角逻辑配额核算。
 
-## Storage 元数据引擎
+## Storage 元数据与存储引擎
 
 **Inode (索引节点)**:
 文件系统中标识文件或目录实体的唯一持久化数字标识符与元数据载体。
@@ -21,7 +21,7 @@ _Avoid_: Find, Search, GetFile, Query
 _Avoid_: Stat, GetFileInfo, FetchAttr, DescribeNode
 
 **SetAttr (属性设置)**:
-根据目标 Inode 编号（及可选关联 FileHandle），按需修改该 Inode 的可变 Attribute（如权限模式、文件大小、所属用户与组、访问与修改时间戳、文件系统标志位）并刷新状态变更时间的元数据变更操作。
+根据目标 Inode 编号，按需修改该 Inode 的可变 Attribute（如权限模式、文件大小、所属用户与组、访问与修改时间戳、文件系统标志位）并刷新状态变更时间的元数据变更操作。
 _Avoid_: Chmod, Chown, Truncate, UpdateAttr, ModifyNode, PatchInode
 
 **Mknod (节点创建)**:
@@ -33,7 +33,7 @@ _Avoid_: CreateNode, MakeNode, Touch, CreateFile
 _Avoid_: CreateDir, MakeDirectory, NewFolder
 
 **Unlink (目录项解链)**:
-从指定父目录移除非目录 Entry 并递减目标 Inode 硬链接计数的元数据变更操作。
+从指定父目录移除非目录 Entry 并递减目标 Inode 硬链接计数的元数据变更操作；若目标文件在写端本地无打开句柄则立即连同数据块物理删除，若仍有打开句柄则转为孤儿节点并在最后一个句柄关闭时触发物理删除。
 _Avoid_: DeleteFile, RemoveFile, Erase, DestroyNode
 
 **Rmdir (空目录移除)**:
@@ -57,67 +57,35 @@ _Avoid_: SoftLink, CreateShortcut, MakeAlias
 _Avoid_: GetSymlink, ResolveLink, ReadTarget
 
 **Orphan Inode (孤儿节点)**:
-所有 Entry 均已解链或自创建起未绑定 Entry（硬链接计数为零）但尚未被物理回收的 Inode 实体。
+在写端独占的分支实时工作区中，所有 Entry 均已解链（硬链接计数为零）但因写端本地仍持有打开句柄而暂未物理删除的 Inode 实体；正常关闭最后一个句柄时当场物理删除，仅在分支无活跃写端时由后台回收。
 _Avoid_: ZombieNode, DanglingInode, DeletedFile
 
 **Attribute (文件属性)**:
-描述 Inode 的物理状态与内核控制参数的集合（如大小、权限模式、硬链接数、时间戳等）。
+描述 Inode 的物理状态与控制参数的集合（如大小、权限模式、硬链接数、时间戳、修改序列号等）。
 _Avoid_: Stat, Meta, Properties, Info
 
 **Generation (代数)**:
-用于标识 Inode 复用周期的递增版本号，防止客户端缓存引用已释放后重新分配的 Inode。
+用于标识 Inode 复用周期的递增版本号，防止缓存引用已释放后重新分配的 Inode。
 _Avoid_: Version, Revision, Epoch
 
-**FileHandle (文件句柄)**:
-文件系统为单次文件或目录打开会话分配的、受客户端会话租约管辖的唯一持久化数字标识符，用于在打开生命周期内关联后续的遍历、冲刷、同步与释放操作。
-_Avoid_: Fd, FileDescriptor, SessionID, HandleID, StreamID
-
-**Create (文件创建并打开)**:
-在指定父目录下原子性地创建常规文件 Inode、绑定同名 Entry 并分配初始 FileHandle 的元数据变更与会话建立操作。
-_Avoid_: CreateAndOpen, TouchAndOpen, NewFile
-
-**TmpFile (匿名临时文件创建)**:
-在指定父目录下直接创建未绑定 Entry（硬链接计数为零）的匿名常规文件 Inode 并分配初始 FileHandle 的元数据变更与会话建立操作。
-_Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
-
-**Open (文件打开)**:
-针对已存在的非目录 Inode 建立打开会话并分配 FileHandle（可按需伴随文件截断）的生命周期操作。
-_Avoid_: OpenFile, AcquireHandle, ConnectFile
-
-**Flush (句柄冲刷)**:
-在单个文件描述符关闭时触发、校验目标 Inode 与活跃 FileHandle 归属有效性并释放对应 LockOwner 所持 POSIX 记录锁的会话同步操作（不销毁 FileHandle）。
-_Avoid_: Close, SyncHandle, Drain
-
-**Fsync (文件同步)**:
-校验目标常规文件 Inode 与活跃 FileHandle 归属有效性，并确认已提交的文件元数据已持久化落盘的同步屏障操作。
-_Avoid_: Sync, CommitFile, FlushDisk
-
-**Release (句柄释放)**:
-销毁指定 FileHandle 并在目标 Inode 无剩余活跃 FileHandle 且处于 Orphan Inode 状态时触发物理回收的会话终止操作。
-_Avoid_: CloseFile, DestroyHandle, FreeHandle
-
-**OpenDir (目录打开)**:
-针对已存在的目录 Inode 建立只读打开会话并分配 FileHandle 的生命周期操作。
-_Avoid_: OpenDirectory, AcquireDirHandle, StartDirStream
-
 **ReadDir (目录读取)**:
-根据目录 Inode、活跃 FileHandle 与游标偏移量，合成 `.` / `..` 并分页拉取子项 Entry 列表的元数据检索操作。
+根据目录 Inode 与游标偏移量，合成 `.` / `..` 并分页拉取子项 Entry 列表的元数据检索操作。
 _Avoid_: ListDir, ReadEntries, FetchDir, ScanDir
 
 **ReadDirPlus (增强目录读取)**:
 在 ReadDir 基础之上，内联预取并返回子项完整 Inode 属性与内核缓存时效的批量元数据检索操作。
 _Avoid_: ReadDirWithAttr, BatchLookup, ScanDirPlus
 
+**Fsync (文件同步)**:
+将目标文件未同步的脏数据立即刷入服务端存储引擎并确认持久化落盘的显式屏障操作。
+_Avoid_: Sync, CommitFile, FlushDisk
+
 **FsyncDir (目录同步)**:
-校验目标目录 Inode 与活跃目录 FileHandle 归属有效性，并确认已提交的目录项与状态元数据已持久化落盘的同步屏障操作。
+确认目标目录的已提交目录项与状态元数据已在服务端存储引擎持久化落盘的同步屏障操作。
 _Avoid_: SyncDir, CommitDir, FlushDir
 
-**ReleaseDir (目录句柄释放)**:
-销毁指定目录 FileHandle 并在目标目录 Inode 无剩余活跃 FileHandle 且处于 Orphan Inode 状态时触发物理回收的会话终止操作。
-_Avoid_: CloseDir, DestroyDirHandle, FreeDirHandle
-
 **Fallocate (空间预分配与打洞)**:
-针对已打开常规文件 Inode 的活跃写句柄，执行空间预留扩展或指定区间零字节打洞并联动权限与时间戳的元数据操作。
+针对常规文件 Inode 执行空间预留扩展或指定区间零字节打洞并联动权限与时间戳的变更操作。
 _Avoid_: AllocSpace, PunchHole, Preallocate, ReserveBlocks
 
 **Xattr (扩展属性)**:
@@ -140,103 +108,134 @@ _Avoid_: GetXattrs, ScanXattr, EnumXattr
 根据目标 Inode 编号与属性名称，删除指定 Xattr 并刷新目标 Inode 状态变更时间的元数据变更操作。
 _Avoid_: DeleteXattr, DelXattr, UnsetXattr, DropXattr
 
-**FileLock (文件锁)**:
-受会话租约管辖、关联于目标 Inode 的运行期同步契约，涵盖 POSIX 字节区间记录锁与 BSD `flock` 整文件锁，描述锁定字节区间 `[start, end]`、锁类型（读锁/写锁/解锁）及持锁进程标识符（`pid`）。
-_Avoid_: RecordLock, RangeLock, Flock, LockEntry
+## Storage 数据与分支版本引擎
 
-**LockOwner (锁拥有者)**:
-FUSE 内核为锁持有主体（POSIX 进程文件表或 BSD `flock` 打开文件表项）分配的、在会话生命周期内有效的 64 位不透明令牌。
-_Avoid_: OwnerID, LockHolder, ClientID, HolderID
+**Disk (虚拟磁盘)**:
+对外交付的顶层文件系统实例与版本树容器，由全局唯一 UUID 标识，内部承载一棵由根分支（`main`）及若干派生逻辑分支（Branch）组成的 Git 风格版本树，整棵树的所有分支与历史快照共享唯一的用户视角逻辑配额上限。
+_Avoid_: Volume, Drive, MountPoint, Partition, Bucket, Repo
 
-**GetLk (文件锁冲突探测)**:
-根据目标 Inode、活跃 FileHandle、LockOwner 与期望的 FileLock 描述符，在对应锁命名空间内检索是否存在冲突锁并返回首个冲突锁详情（无冲突时返回解锁状态）的同步状态检索操作。
-_Avoid_: QueryLock, CheckLock, TestLock, InspectLock
+**Branch (逻辑分支)**:
+隶属于单个 Disk 内部的可独立演进与挂载的逻辑工作区节点（默认包含根分支 `main`），每个 Branch 遵循「最多 1 个可写会话独占实时工作区、多个只读会话挂载不可变快照」的一写多读（SWMR）边界，底层对应独立的嵌入式存储实例并通过硬链接共享未修改物理数据。
+_Avoid_: ChildDisk, SubVolume, Workspace, ForkDisk
 
-**SetLk (非阻塞文件锁设置)**:
-根据目标 Inode、活跃 FileHandle、LockOwner 与目标 FileLock 描述符，在对应锁命名空间内非阻塞地申请、转换、裂解合并或释放文件锁，遇冲突立即拒绝的同步操作。
-_Avoid_: TryLock, AcquireLock, LockNonBlock, UpdateLock
+**Fork (分支派生)**:
+在同一个 Disk 内部，基于指定父 Branch 的 Commit 快照通过底层硬链接检查点零拷贝派生出新逻辑 Branch 的操作。
+_Avoid_: CloneDisk, CopyVolume, Duplicate, Split
 
-**SetLkw (阻塞文件锁设置)**:
-在 SetLk 语义基础上，遇冲突锁时阻塞等待直至锁可用、检测到同节点死锁或收到中断信号的同步操作。
-_Avoid_: WaitLock, LockBlock, AcquireLockWait
+**Commit (版本快照)**:
+在排空目标 Branch 写端未同步改动后，对该 Branch 当前存储状态生成硬链接检查点（Checkpoint）并记录父版本指针而定格成的不可变、可回档、可派生分支、可合并与可对比的时间点版本快照。
+_Avoid_: Backup, Archive, Tag, Savepoint
 
-**RenewSession (会话续期)**:
-客户端显式注册或延长其 ClientSession 租约有效期的唯一保活操作，同步触发已超期会话清理与无剩余活跃 FileHandle 的 Orphan Inode 物理回收。
-_Avoid_: Heartbeat, PingSession, KeepAlive, TouchSession
+**Rollback (版本回档)**:
+在确认目标 Branch 无活跃可写会话的前提下，将该 Branch 的实时工作区原子重置回指定历史 Commit 快照的生命周期操作。
+_Avoid_: Revert, Reset, Restore, Undo
 
-**CloseSession (会话关闭)**:
-客户端在正常卸载退出时显式注销其 ClientSession 租约，并同步释放关联活跃 FileHandle、FileLock 与 Orphan Inode 的生命周期终止操作。
-_Avoid_: EndSession, DestroySession, LogoutSession, DisconnectSession
+**Merge (分支合并)**:
+在确认目标 Branch 无活跃可写会话的前提下，由控制面基于源 Branch 与目标 Branch 的最近共同祖先（LCA）Commit 执行文件级三路合并（3-Way Merge），自动合入无冲突变更并支持冲突清单返回、策略裁决或工作区冲突物化解决后生成双亲 Commit 的版本汇聚操作。
+_Avoid_: Combine, Join, SyncBranch, Rebase
 
-**Disk (磁盘)**:
-对外交付的商业化独立文件系统实例，由全局唯一 UUID 标识，一对一绑定一个独立的根目录 Inode，并承载容量配额上限与已用空间及节点数核算。
-_Avoid_: Volume, Drive, MountPoint, Partition, Bucket
+**Conflict (合并冲突)**:
+在三路 Merge 过程中，源 Branch 与目标 Branch 自共同祖先以来对同一文件或目录项作出了不兼容修改而需由控制面策略或工作区人工裁决的待决状态。
+_Avoid_: Collision, Clash, DiffError
 
-**CreateDisk (磁盘创建)**:
-创建商业化独立 Disk 实例、分配全局唯一标识符与初始容量配额上限，并原子创建一对一绑定的根目录 Inode 的生命周期建立操作。
-_Avoid_: NewDisk, InitVolume, ProvisionDisk, MakeDisk
+**Diff (版本差异对比)**:
+服务端就近对比同一 Disk 内两个 Commit（或 Branch 工作区）之间的变更文件与变更数据块索引并返回结构化摘要，配合客户端按需拉取并渲染文本行级增删对比或二进制摘要的检索操作。
+_Avoid_: Compare, DeltaView, ChangeLog, PatchView
 
-**GetDisk (磁盘查询)**:
-根据目标 Disk 唯一标识符，检索并获取其名称、根目录 Inode、容量配额上限、已用空间与节点数及时间戳详情的状态检索操作。
-_Avoid_: DescribeDisk, FetchDisk, StatDisk, InspectDisk
-
-**ListDisks (磁盘列表查询)**:
-按创建时间倒序与游标分页规则，批量检索 Disk 实例及其配额状态列表的状态检索操作。
-_Avoid_: ScanDisks, GetAllDisks, EnumDisks, QueryDisks
-
-**UpdateDisk (磁盘更新)**:
-根据目标 Disk 唯一标识符，按需修改其名称或调整容量配额上限（支持在线扩容与不低于当前已用空间的缩容）的生命周期变更操作。
-_Avoid_: ResizeDisk, ExpandDisk, ShrinkDisk, ModifyDisk, PatchDisk
-
-**DeleteDisk (磁盘删除)**:
-在确认目标 Disk 无未超期 ClientSession 挂载会话的前提下，级联销毁该 Disk 实例及其下属全部 Inode、FileHandle、FileLock 与 Slice 引用的生命周期释放操作。
-_Avoid_: RemoveDisk, DestroyDisk, DropVolume, PurgeDisk
-
-**StatFS (文件系统状态查询)**:
-检索目标文件系统实例的总容量、已用空间、可用空间、Inode 节点统计及派生 POSIX 文件系统块指标的状态检索操作。
-_Avoid_: GetDiskStat, StatVFS, DiskInfo, GetCapacity
-
-## Storage 数据层
-
-**Chunk (逻辑分块)**:
-将常规文件连续字节空间按 4 MiB 固定跨度切分的逻辑寻址单元，用于隔离并索引文件局部区间内的写入切片序列。
-_Avoid_: Segment, Stripe, Partition, Part, Slot
-
-**Slice (写入切片)**:
-针对单个 4 MiB Chunk 发起单次连续数据写入或空洞标记所生成的不可变逻辑区间描述符（最大不超过 4 MiB），按追加顺序叠加并在读取时裁剪合并为有效数据视图。
-_Avoid_: Extent, Patch, Fragment, Delta, Diff
-
-**Block (物理数据块)**:
-承载 Slice 实际字节载荷（最大 4 MiB）并持久化至底层存储介质的不可变物理存储单元。
-_Avoid_: Blob, Page, Cell, Sector, ObjectFile
+**Blob (文件数据块)**:
+常规文件按固定边界编号切分的数据分片载体，支持整片覆盖写入、局部字节补丁追加、区间删除与局部置零打洞，并由存储引擎后台自动合并整理。
+_Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 
 **Read (文件数据读取)**:
-根据目标常规文件 Inode、活跃可读 FileHandle、字节偏移量与期望长度，合并目标区间内的 Slice 视图并组装返回对应字节流的读取操作。
+根据目标常规文件 Inode、字节偏移量与期望长度，从目标 Branch 存储引擎检索并返回对应区间字节流的读取操作。
 _Avoid_: FetchData, GetBytes, ReadFile, PullStream
 
 **Write (文件数据写入)**:
-根据目标常规文件 Inode、活跃可写 FileHandle、字节偏移量与待写字节序列，将载荷发布为底层 Block、追加 Slice 元数据映射并同步更新文件大小与配额的写入操作。
+可写客户端将写入改动提交至目标 Branch 存储引擎、按整棵 Disk 树跨分支同 Inode 最大逻辑体积去重核算配额，并由存储引擎持久化与后台折叠整理的写入操作。
 _Avoid_: PutData, WriteBytes, AppendFile, PushStream
 
-**Compaction (切片合并)**:
-当单个 4 MiB Chunk 内累积的 Slice 达到阈值时，由后台单线程将其读取重整为紧致新 Slice 并替换旧映射序列的碎片整理操作。
-_Avoid_: Defrag, MergeSlices, Squash, Pack
+**CreateDisk (磁盘创建)**:
+在逻辑层注册 Disk 身份、初始配额上限与默认根分支 `main`，并初始化其底层存储目录与根目录 Inode 的生命周期建立操作。
+_Avoid_: NewDisk, InitVolume, ProvisionDisk, MakeDisk
 
-**CollectGarbage (物理垃圾回收)**:
-由后台单线程回收引用计数归零的废弃 Block、未登记孤儿 Block、已超期 ClientSession 及无活跃句柄引用的 Orphan Inode 的清理操作。
-_Avoid_: PurgeBlocks, PruneStorage, Sweep
+**GetDisk (磁盘查询)**:
+根据目标 Disk 唯一标识符，获取其身份、逻辑分支树状态、配额上限及整棵树去重后的用户视角实时逻辑已用空间与节点数的状态检索操作。
+_Avoid_: DescribeDisk, FetchDisk, StatDisk, InspectDisk
 
-## Client 客户端挂载层
+**ListDisks (磁盘列表查询)**:
+按创建时间倒序与游标分页规则，批量检索 Disk 实例并返回其分支树摘要与用户视角实时逻辑用量的检索操作。
+_Avoid_: ScanDisks, GetAllDisks, EnumDisks, QueryDisks
+
+**UpdateDisk (磁盘更新)**:
+根据目标 Disk 唯一标识符，按需修改其名称或调整总配额上限（校验不低于当前用户视角实时逻辑已用空间）的生命周期变更操作。
+_Avoid_: ResizeDisk, ExpandDisk, ShrinkDisk, ModifyDisk, PatchDisk
+
+**DeleteDisk (磁盘删除)**:
+在确认目标 Disk 下所有 Branch 均无未超期 ClientSession 挂载会话的前提下，从逻辑层注销该 Disk 并移除其底层全部分支工作区与历史快照目录以释放物理空间的生命周期释放操作。
+_Avoid_: RemoveDisk, DestroyDisk, DropVolume, PurgeDisk
+
+**StatFS (文件系统状态查询)**:
+从目标 Disk 及当前挂载 Branch 检索总配额上限、整棵树用户视角已用逻辑空间、可用空间、Inode 节点统计及派生 POSIX 文件系统块指标的状态检索操作。
+_Avoid_: GetDiskStat, StatVFS, DiskInfo, GetCapacity
+
+## Client 客户端挂载与本地 POSIX 运行时
 
 **ClientSession (客户端会话)**:
-单次客户端挂载实例向服务端注册并按租约周期保活的运行期身份上下文，用于统一归属该挂载实例持有的全部活跃 FileHandle 与 FileLock。
+单次客户端挂载实例针对目标 Disk 的指定 Branch（或不可变 Commit）向服务端注册并按租约周期保活的运行期身份上下文，显式区分「单 Branch 独占可写会话」与「不可变快照共享只读会话」。
 _Avoid_: MountSession, Connection, ClientLease, PeerSession
 
+**RenewSession (会话续期)**:
+客户端显式注册或延长其 ClientSession 租约有效期的保活操作，由服务端强控单个 Branch 唯一写端租约独占性。
+_Avoid_: Heartbeat, PingSession, KeepAlive, TouchSession
+
+**CloseSession (会话关闭)**:
+客户端在正常卸载退出时显式注销其 ClientSession 租约（若为可写会话则同步清理该 Branch 实时工作区残留的无主孤儿节点）的生命周期终止操作。
+_Avoid_: EndSession, DestroySession, LogoutSession, DisconnectSession
+
+**FileHandle (本地文件句柄)**:
+客户端在本地内存为单次文件或目录打开会话分配的不透明数字标识符，用于在客户端本地闭环维护打开引用计数及在写端驱动打开期间被解链孤儿节点的延迟回收（服务端无句柄概念）。
+_Avoid_: Fd, FileDescriptor, SessionID, HandleID, StreamID
+
+**Create (文件创建并打开)**:
+客户端在指定父目录下创建常规文件、分配本地 FileHandle 并在本地权威目录树登记，同步写入服务端存储后端的操作。
+_Avoid_: CreateAndOpen, TouchAndOpen, NewFile
+
+**TmpFile (匿名临时文件创建)**:
+客户端在本地创建未绑定 Entry（硬链接计数为零）的匿名常规文件并分配本地 FileHandle 的操作（若关闭前未通过 Link 转正且未触发数据上云，则全程在客户端本地销毁）。
+_Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
+
+**Open (文件打开)**:
+客户端针对已存在的非目录 Inode 在本地建立打开会话、分配本地 FileHandle 并递增本地打开引用计数的纯客户端操作。
+_Avoid_: OpenFile, AcquireHandle, ConnectFile
+
+**Flush (句柄冲刷)**:
+在单个文件描述符关闭时触发、在客户端本地将目标文件未同步脏数据刷入服务端并释放对应 LockOwner 所持本地 POSIX 记录锁的会话操作。
+_Avoid_: Close, SyncHandle, Drain
+
+**Release (句柄释放)**:
+客户端在本地销毁指定 FileHandle、递减目标 Inode 本地打开引用计数，并在写端引用计数归零且该节点处于已上云 Orphan Inode 状态时通知服务端物理删除的会话终止操作。
+_Avoid_: CloseFile, DestroyHandle, FreeHandle
+
+**OpenDir (目录打开)**:
+客户端针对已存在的目录 Inode 在本地建立目录读取会话并缓存完整目录项流的纯客户端操作。
+_Avoid_: OpenDirectory, AcquireDirHandle, StartDirStream
+
+**ReleaseDir (目录句柄释放)**:
+客户端在本地销毁指定目录 FileHandle 并释放对应内存目录流缓存的纯客户端操作。
+_Avoid_: CloseDir, DestroyDirHandle, FreeDirHandle
+
+**FileLock (本地文件锁)**:
+客户端在本地内存关联于目标 Inode 的运行期同步契约（涵盖 POSIX 字节区间记录锁与 BSD `flock` 整文件锁），在客户端本地实现零网络往返的加锁、冲突探测（GetLk）、非阻塞设置（SetLk）与阻塞等待（SetLkw）。
+_Avoid_: RecordLock, RangeLock, Flock, LockEntry
+
+**LockOwner (锁拥有者)**:
+FUSE 内核为锁持有主体（POSIX 进程文件表或 BSD `flock` 打开文件表项）分配的 64 位本地不透明令牌。
+_Avoid_: OwnerID, LockHolder, ClientID, HolderID
+
 **Mount (磁盘挂载)**:
-根据目标 Disk 唯一标识符建立 ClientSession、将磁盘根目录重写映射为本地 FUSE 根节点并挂载至宿主机目标目录的生命周期建立操作。
+根据目标 Disk 唯一标识符与指定逻辑 Branch（默认 `main`）建立独占可写 ClientSession（绑定该 Branch 实时工作区并在重连时清扫旧会话残留孤儿节点）或共享只读 ClientSession（绑定不可变 Commit 快照）、初始化根目录与按需懒加载的本地权威目录树缓存并挂载至宿主机目标目录的生命周期建立操作。
 _Avoid_: Attach, BindDisk, ConnectVolume
 
 **Umount (磁盘卸载)**:
-解除宿主机目标目录上的 FUSE 文件系统挂载绑定并终止对应客户端守护进程的生命周期释放操作（CLI 兼容 `unmount` 别名）。
+排空客户端本地未同步脏数据、注销 ClientSession 租约并解除宿主机目标目录上 FUSE 挂载绑定的生命周期释放操作（CLI 兼容 `unmount` 别名）。
 _Avoid_: Detach, UnbindDisk, DisconnectVolume
-
