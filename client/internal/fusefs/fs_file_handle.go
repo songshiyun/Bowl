@@ -77,6 +77,7 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	}
 
 	fh := resp.Msg.GetFh()
+	fs.locks.RegisterHandle(fh, input.Flags)
 	if fs.sessions != nil && sessionID != nil {
 		fs.sessions.BindHandle(fh, *sessionID)
 	}
@@ -131,6 +132,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	}
 
 	fh := resp.Msg.GetFh()
+	fs.locks.RegisterHandle(fh, input.Flags)
 	if fs.sessions != nil && sessionID != nil {
 		fs.sessions.BindHandle(fh, *sessionID)
 	}
@@ -144,38 +146,15 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	return fuse.OK
 }
 
-// Flush 实现文件描述符关闭时的冲刷操作，对应 Linux FUSE FUSE_FLUSH 协议。
-// 若目标服务端 Inode 在当前会话下未发生过任何 POSIX 记录锁活动，本地校验通过后直接短路返回 fuse.OK；
-// 若已发生过 POSIX 记录锁活动，携带 lock_owner 与 session_id 触发服务端清理对应进程所持有的全部 POSIX 记录锁与等待队列。
-func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
+// Flush 释放 LockOwner 持有的全部本地 POSIX 记录锁。
+func (fs *RawFS) Flush(_ <-chan struct{}, input *fuse.FlushIn) fuse.Status {
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
+	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
+	if _, status := fs.ResolveHandle(input.Fh); status != fuse.OK {
 		return status
 	}
-
-	if !fs.hasPosixLockActivity(sid, ino) {
-		return fuse.OK
-	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	lockOwner := input.LockOwner
-	_, err := fs.client.Flush(ctx, connect.NewRequest(&storagev1.FlushRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		LockOwner: &lockOwner,
-		SessionId: &sid,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
 	return fuse.OK
 }
 
@@ -211,8 +190,10 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 
 // Release 实现文件句柄关闭与销毁，对应 Linux FUSE FUSE_RELEASE 协议。
 // 无论服务端调用成功与否，必定在退出时解绑客户端内存中的句柄会话映射；
-// 携带 lock_owner 与 release_flags 触发服务端清理 BSD flock 锁并在孤儿节点无句柄引用时执行最终物理回收。
+// 在本地清理 flock 锁，并在孤儿节点无句柄引用时通知服务端回收。
 func (fs *RawFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
+	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)
+	fs.locks.ForgetHandle(input.Fh)
 	defer fs.removeReadAheadByFh(input.Fh)
 	if fs.sessions != nil {
 		defer fs.sessions.UnbindHandle(input.Fh)
