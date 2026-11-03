@@ -69,7 +69,6 @@ func TestReadRequestContract(t *testing.T) {
 		}{
 			{name: "ino 为 0", req: &storagev1.ReadRequest{Ino: 0, Fh: 1, Offset: 0, Size: 1024}},
 			{name: "ino > MaxInt64", req: &storagev1.ReadRequest{Ino: math.MaxInt64 + 1, Fh: 1, Offset: 0, Size: 1024}},
-			{name: "fh 为 0", req: &storagev1.ReadRequest{Ino: 1, Fh: 0, Offset: 0, Size: 1024}},
 			{name: "fh > MaxInt64", req: &storagev1.ReadRequest{Ino: 1, Fh: math.MaxInt64 + 1, Offset: 0, Size: 1024}},
 			{name: "offset > MaxInt64", req: &storagev1.ReadRequest{Ino: 1, Fh: 1, Offset: math.MaxInt64 + 1, Size: 1024}},
 			{name: "size > 4 MiB", req: &storagev1.ReadRequest{Ino: 1, Fh: 1, Offset: 0, Size: 4194305}},
@@ -174,7 +173,6 @@ func TestWriteRequestContract(t *testing.T) {
 		}{
 			{name: "ino 为 0", req: &storagev1.WriteRequest{Ino: 0, Fh: 1, Offset: 0, Data: []byte("a")}},
 			{name: "ino > MaxInt64", req: &storagev1.WriteRequest{Ino: math.MaxInt64 + 1, Fh: 1, Offset: 0, Data: []byte("a")}},
-			{name: "fh 为 0", req: &storagev1.WriteRequest{Ino: 1, Fh: 0, Offset: 0, Data: []byte("a")}},
 			{name: "fh > MaxInt64", req: &storagev1.WriteRequest{Ino: 1, Fh: math.MaxInt64 + 1, Offset: 0, Data: []byte("a")}},
 			{name: "offset > MaxInt64", req: &storagev1.WriteRequest{Ino: 1, Fh: 1, Offset: math.MaxInt64 + 1, Data: []byte("a")}},
 			{name: "data > 4 MiB", req: &storagev1.WriteRequest{Ino: 1, Fh: 1, Offset: 0, Data: make([]byte, 4194305)}},

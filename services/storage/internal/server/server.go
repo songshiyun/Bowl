@@ -21,6 +21,7 @@ var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
 
 // Server 封装并管理底层 HTTP 服务与 ConnectRPC 路由处理器。
 type Server struct {
+	storagev1connect.UnimplementedStorageServiceHandler
 	metaManager meta.Manager
 	config      config.ServerConfig
 	logger      *slog.Logger

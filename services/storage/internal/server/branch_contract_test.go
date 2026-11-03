@@ -1,0 +1,209 @@
+package server_test
+
+import (
+	"context"
+	"testing"
+
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	metamock "github.com/starsrc/bowl/services/storage/internal/meta/mock"
+)
+
+func TestLocalOpenStateIsNotIgnored(t *testing.T) {
+	mockMgr, client, cleanup := setupTopologyXattrTestServer(t)
+	defer cleanup()
+	mockMgr.EXPECT().Unlink(mock.Anything, uint64(1), []byte("file")).Return(nil).Maybe()
+	_, err := client.Unlink(context.Background(), connect.NewRequest(&storagev1.UnlinkRequest{
+		ParentIno: 1, Name: []byte("file"), OpenInClient: proto.Bool(true),
+	}))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+	mockMgr.AssertNotCalled(t, "Unlink", mock.Anything, uint64(1), []byte("file"))
+}
+
+func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
+	mockMgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mockMgr)
+	defer cleanup()
+	ctx := context.Background()
+	const disk = "11111111-1111-7111-8111-111111111111"
+	const commit = "22222222-2222-7222-8222-222222222222"
+	calls := map[string]func() error{
+		"CreateBranch": func() error {
+			_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: disk, Name: "dev"}))
+			return err
+		},
+		"ListBranches": func() error {
+			_, err := client.ListBranches(ctx, connect.NewRequest(&storagev1.ListBranchesRequest{DiskId: disk}))
+			return err
+		},
+		"DeleteBranch": func() error {
+			_, err := client.DeleteBranch(ctx, connect.NewRequest(&storagev1.DeleteBranchRequest{DiskId: disk, Name: "dev"}))
+			return err
+		},
+		"Commit": func() error {
+			_, err := client.Commit(ctx, connect.NewRequest(&storagev1.CommitRequest{DiskId: disk, BranchName: "main"}))
+			return err
+		},
+		"Rollback": func() error {
+			_, err := client.Rollback(ctx, connect.NewRequest(&storagev1.RollbackRequest{DiskId: disk, BranchName: "main", CommitId: commit}))
+			return err
+		},
+		"Merge": func() error {
+			_, err := client.Merge(ctx, connect.NewRequest(&storagev1.MergeRequest{DiskId: disk, SourceBranch: "dev", TargetBranch: "main"}))
+			return err
+		},
+		"ResolveMerge": func() error {
+			_, err := client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: disk, BranchName: "main"}))
+			return err
+		},
+		"AbortMerge": func() error {
+			_, err := client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: "main"}))
+			return err
+		},
+		"Diff": func() error {
+			_, err := client.Diff(ctx, connect.NewRequest(&storagev1.DiffRequest{DiskId: disk, FromRef: "main", ToRef: "dev"}))
+			return err
+		},
+		"ReclaimOrphan": func() error {
+			_, err := client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: disk, Ino: 1}))
+			return err
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			require.Error(t, err)
+			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+		})
+	}
+	_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: "bad", Name: "dev"}))
+	require.Error(t, err)
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
+	mockMgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mockMgr)
+	defer cleanup()
+	ctx := context.Background()
+	const disk = "11111111-1111-7111-8111-111111111111"
+	const commit = "22222222-2222-7222-8222-222222222222"
+	calls := map[string]func() error{
+		"按会话查找": func() error {
+			_, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话创建节点": func() error {
+			_, err := client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话创建目录": func() error {
+			_, err := client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话创建软链接": func() error {
+			_, err := client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{ParentIno: 1, Name: []byte("x"), Target: []byte("y"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话读取软链接": func() error {
+			_, err := client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{Ino: 1, SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话创建硬链接": func() error {
+			_, err := client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: 1, NewParentIno: 1, NewName: []byte("x"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话删除目录": func() error {
+			_, err := client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话重命名": func() error {
+			_, err := client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话设置扩展属性": func() error {
+			_, err := client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话读取扩展属性": func() error {
+			_, err := client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话列出扩展属性": func() error {
+			_, err := client.ListXattr(ctx, connect.NewRequest(&storagev1.ListXattrRequest{Ino: 1, SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话删除扩展属性": func() error {
+			_, err := client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话查询配额": func() error {
+			_, err := client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{Ino: 1, SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"指定分支": func() error {
+			_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: proto.String(disk), BranchName: proto.String("dev")}))
+			return err
+		},
+		"只读快照": func() error {
+			_, err := client.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: proto.String(disk), ReadOnly: true, CommitId: proto.String(commit)}))
+			return err
+		},
+		"按会话读取属性": func() error {
+			_, err := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: 1, SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"按会话删除": func() error {
+			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), SessionId: proto.Uint64(1)}))
+			return err
+		},
+		"本地文件未打开": func() error {
+			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), OpenInClient: proto.Bool(false)}))
+			return err
+		},
+		"目标文件已打开": func() error {
+			_, err := client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), TargetOpenInClient: proto.Bool(true)}))
+			return err
+		},
+		"本地句柄读取": func() error {
+			_, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{Ino: 1}))
+			return err
+		},
+		"本地句柄写入": func() error {
+			_, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{Ino: 1, Data: []byte("x")}))
+			return err
+		},
+		"本地句柄文件同步": func() error {
+			_, err := client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: 1}))
+			return err
+		},
+		"本地句柄目录同步": func() error {
+			_, err := client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{Ino: 1}))
+			return err
+		},
+		"本地句柄读目录": func() error {
+			_, err := client.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: 1, Limit: 1}))
+			return err
+		},
+		"本地句柄读目录属性": func() error {
+			_, err := client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{Ino: 1, Limit: 1}))
+			return err
+		},
+		"本地句柄预分配": func() error {
+			_, err := client.Fallocate(ctx, connect.NewRequest(&storagev1.FallocateRequest{Ino: 1, Length: 1}))
+			return err
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			require.Error(t, err)
+			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+		})
+	}
+}

@@ -105,15 +105,17 @@ service StorageService {
   // Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
   // 遵循 POSIX pread(2) 语义，支持最大 4 MiB 单次读取。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧文件句柄不存在、与 Inode 不匹配或无读权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc Read(ReadRequest) returns (ReadResponse);
 
   // Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
   // 遵循 POSIX pwrite(2) 语义，支持最大 4 MiB 单次写入。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧文件句柄不存在、与 Inode 不匹配或无写权限，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 若目标为目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EISDIR)。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc Write(WriteRequest) returns (WriteResponse);
 
   // Flush 在单次文件关闭时触发，冲刷并校验文件句柄的合法性（不销毁文件句柄）。
@@ -123,7 +125,8 @@ service StorageService {
 
   // Fsync 同步并持久化文件节点与句柄关联的状态。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧文件句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc Fsync(FsyncRequest) returns (FsyncResponse);
 
   // Release 关闭并销毁文件句柄 (FileHandle)。
@@ -141,8 +144,9 @@ service StorageService {
   // FsyncDir 同步并持久化目录节点与目录句柄关联的状态（对接 Linux FUSE FUSE_FSYNCDIR = 30 协议）。
   // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧目录句柄不存在、与 Inode 不匹配或所属会话已过期，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 支持对处于 rmdir-whilst-open 状态的孤儿目录 (nlink == 0) 幂等同步成功。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc FsyncDir(FsyncDirRequest) returns (FsyncDirResponse);
 
   // ReleaseDir 关闭并销毁目录 FileHandle。
@@ -155,15 +159,17 @@ service StorageService {
   // ReadDir 读取指定目录的子项流（基本条目）。
   // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc ReadDir(ReadDirRequest) returns (ReadDirResponse);
 
   // ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
   // 若目标非目录，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX ENOTDIR)。
   // 若节点不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
-  // 若目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
+  // 若非零旧目录句柄不存在或与 Inode 不匹配，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EBADF)。
   // 处于 rmdir-whilst-open 状态的孤儿目录直接返回空列表。
+  // fh 为 0 时，句柄由客户端在本地管理。
   rpc ReadDirPlus(ReadDirPlusRequest) returns (ReadDirPlusResponse);
 
   // Fallocate 为常规文件预分配物理空间或打洞去分配空间（对接 Linux FUSE FUSE_FALLOCATE 协议）。
@@ -259,6 +265,36 @@ service StorageService {
   // 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
   // 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
   rpc StatFS(StatFSRequest) returns (StatFSResponse);
+
+  // CreateBranch 从已有分支或快照派生逻辑分支。
+  rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
+
+  // ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
+  rpc ReclaimOrphan(ReclaimOrphanRequest) returns (ReclaimOrphanResponse);
+
+  // ListBranches 列出磁盘中的逻辑分支。
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+
+  // DeleteBranch 删除指定逻辑分支。
+  rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+
+  // Commit 将分支工作区定格为快照。
+  rpc Commit(CommitRequest) returns (CommitResponse);
+
+  // Rollback 在目标分支无活跃写端时回档。
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // Merge 在目标分支无活跃写端时执行三路合并。
+  rpc Merge(MergeRequest) returns (MergeResponse);
+
+  // ResolveMerge 完成冲突物化后的合并。
+  rpc ResolveMerge(ResolveMergeRequest) returns (ResolveMergeResponse);
+
+  // AbortMerge 放弃合并并恢复目标分支。
+  rpc AbortMerge(AbortMergeRequest) returns (AbortMergeResponse);
+
+  // Diff 比较两个分支或快照的文件与数据块变化。
+  rpc Diff(DiffRequest) returns (DiffResponse);
 }
 
 // LookupRequest 定义 Lookup 接口输入参数。
@@ -276,6 +312,12 @@ message LookupRequest {
       expression: "!this.contains(b'\\x00') && !this.contains(b'/')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // LookupResponse 包含查找命中的节点元数据以及 FUSE 内核缓存有效时间。
@@ -295,6 +337,12 @@ message GetAttrRequest {
   // 目标节点的 Inode 编号。
   // 必须大于 0 且小于等于 int64 最大值 (9223372036854775807)，防止向数据库 BIGINT 转换时发生整型溢出。
   uint64 ino = 1 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 2 [(buf.validate.field).uint64 = {
     gt: 0
     lte: 9223372036854775807
   }];
@@ -359,10 +407,16 @@ message SetAttrRequest {
   bool mtime_now = 9;
 
   // 可选的文件句柄。
-  optional uint64 fh = 10 [(buf.validate.field).uint64 = {gt: 0, lte: 9223372036854775807}];
+  optional uint64 fh = 10 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 
   // 可选的客户端会话租约标识。
-  optional uint64 session_id = 11 [(buf.validate.field).uint64 = {gt: 0, lte: 9223372036854775807}];
+  optional uint64 session_id = 11 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 
   // 是否将状态变更时间设置为当前服务端时间。
   bool ctime_now = 12;
@@ -411,6 +465,12 @@ message MknodRequest {
 
   // 特殊设备号（仅当创建字符/块设备文件时有效，其余节点为 0）。
   uint32 rdev = 6;
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 7 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // MknodResponse 包含新创建节点的元数据以及 FUSE 内核缓存有效时间。
@@ -453,6 +513,12 @@ message MkdirRequest {
 
   // 所属组 ID。
   uint32 gid = 5 [(buf.validate.field).uint32.lte = 2147483647];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 6 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // MkdirResponse 包含新创建目录的元数据以及 FUSE 内核缓存有效时间。
@@ -504,6 +570,12 @@ message SymlinkRequest {
 
   // 所属组 ID。
   uint32 gid = 5 [(buf.validate.field).uint32.lte = 2147483647];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 6 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // SymlinkResponse 包含新创建符号链接的元数据以及 FUSE 内核缓存有效时间。
@@ -525,6 +597,12 @@ message ReadlinkRequest {
     (buf.validate.field).uint64.gt = 0,
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 2 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // ReadlinkResponse 包含符号链接指向的目标路径。
@@ -566,6 +644,12 @@ message LinkRequest {
       expression: "!this.contains(b'\\x00') && !this.contains(b'/')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 4 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // LinkResponse 包含硬链接创建后更新的源节点元数据及内核缓存时长。
@@ -598,6 +682,15 @@ message UnlinkRequest {
       expression: "!this.contains(b'\\x00') && !this.contains(b'/')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+
+  // 是否仍有本地打开句柄；省略时使用旧版句柄语义。
+  optional bool open_in_client = 4;
 }
 
 // UnlinkResponse 定义 Unlink 接口返回参数。
@@ -621,6 +714,12 @@ message RmdirRequest {
       expression: "!this.contains(b'\\x00') && !this.contains(b'/')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // RmdirResponse 定义 Rmdir 接口返回参数。
@@ -665,6 +764,15 @@ message RenameRequest {
 
   // 重命名标志位。
   uint32 flags = 5;
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 6 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+
+  // 被覆盖的目标是否仍有本地打开句柄；省略时使用旧版句柄语义。
+  optional bool target_open_in_client = 7;
 }
 
 // RenameResponse 定义 Rename 接口返回参数。
@@ -820,11 +928,8 @@ message ReadRequest {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 活跃文件句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  // 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 读取起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
   uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
@@ -859,11 +964,8 @@ message WriteRequest {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 活跃文件句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  // 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 写入起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
   uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
@@ -923,10 +1025,7 @@ message FsyncRequest {
   ];
 
   // 待同步的文件句柄 (FileHandle)。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 是否仅同步数据内容 (fdatasync 语义)。若为 true，仅同步文件数据而不强制刷写非必要元数据。
   bool datasync = 3;
@@ -1010,10 +1109,7 @@ message FsyncDirRequest {
   ];
 
   // 待同步的目录 FileHandle。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 是否仅同步数据内容 (fdatasync 语义)。若为 true，仅同步目录数据而不强制刷写非必要元数据。
   bool datasync = 3;
@@ -1084,11 +1180,8 @@ message ReadDirRequest {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 活跃目录句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  // 兼容旧客户端的目录句柄；0 表示由客户端在本地管理句柄。
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
   uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
@@ -1150,11 +1243,8 @@ message ReadDirPlusRequest {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 活跃目录句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  // 兼容旧客户端的目录句柄；0 表示由客户端在本地管理句柄。
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 读取起始游标偏移量。0 表示从头开始读取（包含 "." 与 ".."）。
   uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
@@ -1186,11 +1276,8 @@ message FallocateRequest {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 活跃文件句柄标识。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
-  uint64 fh = 2 [
-    (buf.validate.field).uint64.gt = 0,
-    (buf.validate.field).uint64.lte = 9223372036854775807
-  ];
+  // 兼容旧客户端的文件句柄；0 表示由客户端在本地管理句柄。
+  uint64 fh = 2 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 操作起始偏移量（字节）。必须在 int64 正数范围内 (<= 9223372036854775807)。
   uint64 offset = 3 [(buf.validate.field).uint64.lte = 9223372036854775807];
@@ -1242,6 +1329,12 @@ message SetXattrRequest {
   // 扩展属性标志位 (0: 默认覆盖或创建, 1: XATTR_CREATE, 2: XATTR_REPLACE, 3: XATTR_CREATE | XATTR_REPLACE)。
   // flags = 3 允许进入领域层按目标属性存在性分别返回 EEXIST 或 ENODATA；flags > 3 在协议入口拒绝并返回 EINVAL。
   uint32 flags = 4 [(buf.validate.field).uint32.lte = 3];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 5 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // SetXattrResponse 定义 SetXattr 接口响应结果。
@@ -1267,6 +1360,12 @@ message GetXattrRequest {
       expression: "!this.contains(b'\\x00')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // GetXattrResponse 定义 GetXattr 接口响应结果。
@@ -1280,6 +1379,12 @@ message GetXattrResponse {
 message ListXattrRequest {
   // 目标节点的 Inode 编号。必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
   uint64 ino = 1 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 2 [(buf.validate.field).uint64 = {
     gt: 0
     lte: 9223372036854775807
   }];
@@ -1324,6 +1429,12 @@ message RemoveXattrRequest {
       expression: "!this.contains(b'\\x00')"
     }
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // RemoveXattrResponse 定义 RemoveXattr 接口响应结果。
@@ -1478,6 +1589,16 @@ message SetLkwResponse {}
 
 // RenewSessionRequest 定义 RenewSession 接口输入参数。
 message RenewSessionRequest {
+  option (buf.validate.message).cel = {
+    id: "renew_session_snapshot_read_only"
+    message: "commit_id requires read_only"
+    expression: "!has(this.commit_id) || this.read_only"
+  };
+  option (buf.validate.message).cel = {
+    id: "renew_session_context_requires_disk"
+    message: "branch, read-only and snapshot sessions require disk_id"
+    expression: "(!has(this.branch_name) && !this.read_only && !has(this.commit_id)) || has(this.disk_id)"
+  };
   // 待续期的客户端会话租约标识 (session_id)。
   // 必须大于 0 且在 int64 正数范围内 (<= 9223372036854775807)。
   uint64 session_id = 1 [(buf.validate.field).uint64 = {
@@ -1491,6 +1612,31 @@ message RenewSessionRequest {
     (buf.validate.field).cel = {
       id: "renew_session_disk_id_not_nil"
       message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 未指定时挂载默认分支 main。
+  optional string branch_name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "session_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  // 只读会话不会占用分支写租约。
+  bool read_only = 4;
+  // 指定快照时必须以只读方式挂载。
+  optional string commit_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "session_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
       expression: "this != '00000000-0000-0000-0000-000000000000'"
     }
   ];
@@ -1604,10 +1750,10 @@ message Disk {
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
 
-  // 当前已用字节数（不能超过 int64 正数最大值）。
+  // 整棵分支树按同一 Inode 最大逻辑大小去重后的已用字节数。
   uint64 used_bytes = 5 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
-  // 当前已用 Inode 数量（不能超过 int64 正数最大值）。
+  // 整棵分支树去重后的有效 Inode 数量。
   uint64 used_inodes = 6 [(buf.validate.field).uint64.lte = 9223372036854775807];
 
   // 磁盘创建时间戳（必填）。
@@ -1615,6 +1761,23 @@ message Disk {
 
   // 磁盘最后更新时间戳（必填）。
   google.protobuf.Timestamp updated_at = 8 [(buf.validate.field).required = true];
+
+  // 分支树摘要。旧版服务可省略。
+  repeated Branch branches = 9;
+
+  // 默认分支名。旧版服务可省略；新建磁盘默认为 main。
+  optional string default_branch = 10 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "disk_default_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
 }
 
 // CreateDiskRequest 定义 CreateDisk 接口输入参数。
@@ -1743,6 +1906,12 @@ message StatFSRequest {
     (buf.validate.field).uint64.gt = 0,
     (buf.validate.field).uint64.lte = 9223372036854775807
   ];
+
+  // 客户端会话标识，用于确定目标分支或快照。
+  optional uint64 session_id = 2 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
 }
 
 // StatFSResponse 定义 StatFS 接口输出参数，对齐 Linux FUSE FUSE_STATFS = 17 协议与 4096 字节块统计语义。
@@ -1781,4 +1950,501 @@ message StatFSResponse {
   uint32 namelen = 11;
 }
 
+// BranchState 描述分支当前是否处于合并中。
+enum BranchState {
+  BRANCH_STATE_UNSPECIFIED = 0;
+  BRANCH_STATE_NORMAL = 1;
+  BRANCH_STATE_MERGING = 2;
+}
 
+// Branch 描述磁盘中的逻辑分支。
+message Branch {
+  string branch_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "branch_id_not_nil"
+      message: "branch_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string disk_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "branch_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  optional string parent_branch = 4 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "parent_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  optional string fork_commit_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "fork_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  optional string head_commit_id = 6 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "head_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  BranchState state = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp created_at = 8 [(buf.validate.field).required = true];
+}
+
+// CreateBranchRequest 可从指定分支及其快照派生；未指定源分支时使用 main。
+message CreateBranchRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "create_branch_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "create_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  optional string source_branch = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "source_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  optional string source_commit_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "source_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+}
+
+message CreateBranchResponse {
+  Branch branch = 1 [(buf.validate.field).required = true];
+}
+
+// ConflictStrategy 指定检测到冲突后的处理方式；未指定时按 ABORT_ON_CONFLICT 处理。
+enum ConflictStrategy {
+  CONFLICT_STRATEGY_UNSPECIFIED = 0;
+  CONFLICT_STRATEGY_ABORT_ON_CONFLICT = 1;
+  CONFLICT_STRATEGY_OURS = 2;
+  CONFLICT_STRATEGY_THEIRS = 3;
+  CONFLICT_STRATEGY_MATERIALIZE = 4;
+}
+
+// MergeResult 描述合并的完成或待决状态。
+enum MergeResult {
+  MERGE_RESULT_UNSPECIFIED = 0;
+  MERGE_RESULT_MERGED = 1;
+  MERGE_RESULT_CONFLICTS = 2;
+  MERGE_RESULT_MATERIALIZED = 3;
+}
+
+// DiffChangeType 描述文件的变更类型。
+enum DiffChangeType {
+  DIFF_CHANGE_TYPE_UNSPECIFIED = 0;
+  DIFF_CHANGE_TYPE_ADDED = 1;
+  DIFF_CHANGE_TYPE_MODIFIED = 2;
+  DIFF_CHANGE_TYPE_DELETED = 3;
+  DIFF_CHANGE_TYPE_RENAMED = 4;
+}
+
+// CommitInfo 描述不可变快照及其父版本。
+
+message CommitInfo {
+  string commit_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "commit_info_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string disk_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "commit_info_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string branch_name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "commit_info_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  optional string parent_commit_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "commit_info_parent_commit_id_not_nil"
+      message: "parent_commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  optional string merge_parent_commit_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "commit_info_merge_parent_commit_id_not_nil"
+      message: "merge_parent_commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string message = 6;
+  google.protobuf.Timestamp created_at = 7 [(buf.validate.field).required = true];
+}
+
+// MergeConflict 描述三路合并中的单个冲突；不存在的版本不携带属性。
+
+message MergeConflict {
+  string path = 1 [(buf.validate.field).string.min_len = 1];
+  InodeAttribute base_attr = 2;
+  InodeAttribute ours_attr = 3;
+  InodeAttribute theirs_attr = 4;
+  string reason = 5;
+}
+
+// DiffEntry 描述单个路径与变更的 4 MiB 数据块索引。
+
+message DiffEntry {
+  DiffChangeType change_type = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string path = 2 [(buf.validate.field).string.min_len = 1];
+  string old_path = 3;
+  InodeAttribute old_attr = 4;
+  InodeAttribute new_attr = 5;
+  repeated uint64 modified_block_indices = 6;
+}
+
+message ReclaimOrphanRequest {
+  uint64 session_id = 1 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+  string disk_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "reclaim_orphan_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  optional string branch_name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "reclaim_orphan_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  uint64 ino = 4 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+}
+
+message ReclaimOrphanResponse {}
+
+message ListBranchesRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "list_branches_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+}
+
+message ListBranchesResponse {
+  repeated Branch branches = 1;
+}
+
+message DeleteBranchRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "delete_branch_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "delete_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+}
+
+message DeleteBranchResponse {}
+
+message CommitRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "commit_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string branch_name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "commit_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  string message = 3;
+}
+
+message CommitResponse {
+  CommitInfo commit = 1 [(buf.validate.field).required = true];
+}
+
+message RollbackRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "rollback_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string branch_name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "rollback_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  string commit_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "rollback_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+}
+
+message RollbackResponse {}
+
+message MergeRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "merge_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string source_branch = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "merge_source_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  string target_branch = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "merge_target_branch_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  ConflictStrategy strategy = 4 [(buf.validate.field).enum.defined_only = true];
+}
+
+message MergeResponse {
+  MergeResult result = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string merge_commit_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "merge_response_merge_commit_id_not_nil"
+      message: "merge_commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  repeated MergeConflict conflicts = 3;
+}
+
+message ResolveMergeRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "resolve_merge_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string branch_name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "resolve_merge_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  string message = 3;
+}
+
+message ResolveMergeResponse {
+  CommitInfo commit = 1 [(buf.validate.field).required = true];
+}
+
+message AbortMergeRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "abort_merge_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string branch_name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "abort_merge_branch_name_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+}
+
+message AbortMergeResponse {}
+
+message DiffRequest {
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "diff_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+  string from_ref = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "diff_from_ref_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+  string to_ref = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_bytes: 255
+      pattern: "^[^/\\x00-\\x1f\\x7f]+$"
+    },
+    (buf.validate.field).cel = {
+      id: "diff_to_ref_not_dot"
+      message: "branch name cannot be . or .."
+      expression: "this != '.' && this != '..'"
+    }
+  ];
+}
+
+message DiffResponse {
+  repeated DiffEntry entries = 1;
+}
