@@ -1,6 +1,6 @@
 # Bowl vs Drive9 (`mem9-ai/drive9`) 性能基准测试套件
 
-> 最新复跑：2026-11-02，Bowl `ee8d113`。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-03，Bowl `0655a17`。完整结果见 [REPORT.md](REPORT.md)。
 
 本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机 VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
 

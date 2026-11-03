@@ -1,28 +1,28 @@
-[2026-11-02T10:40:04Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
-[2026-11-02T10:40:08Z] Compiled and compressed binaries ready in /tmp/bowl-jfsbench-20261102-104004-XC3YZt
-[2026-11-02T10:40:08Z] Step 2/6: Creating temporary SSH KeyPair bowl-jfsbench-kp-20261102-104004 in us-west-1...
-[2026-11-02T10:40:09Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
-[2026-11-02T10:40:10Z] Created Server Instance: i-rj98t4cevb40k5jnxppn, Client Instance: i-rj98t4cevb40k5jnxppo
-[2026-11-02T10:40:10Z] Waiting for both instances to reach Running state...
-[2026-11-02T10:40:17Z] Server (i-rj98t4cevb40k5jnxppn): Public=43.110.149.71, Private=172.16.1.216
-[2026-11-02T10:40:17Z] Client (i-rj98t4cevb40k5jnxppo): Public=43.110.149.85, Private=172.16.1.217
-[2026-11-02T10:40:17Z] Waiting for SSH readiness on Server (43.110.149.71) and Client (43.110.149.85)...
-[2026-11-02T10:40:39Z] Direct SSH ready on bowl-bench-client (43.110.149.85)
-[2026-11-02T10:40:52Z] Direct SSH ready on bowl-bench-server (43.110.149.71)
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-[2026-11-02T10:41:22Z] Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (172.16.1.216)...
-Warning: Permanently added '43.110.149.71' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.71' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.71' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.71' (ED25519) to the list of known hosts.
+[2026-11-02T15:53:30Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
+[2026-11-02T15:53:36Z] Compiled and compressed binaries ready in /tmp/bowl-jfsbench-20261102-155330-ktPmKZ
+[2026-11-02T15:53:36Z] Step 2/6: Creating temporary SSH KeyPair bowl-jfsbench-kp-20261102-155330 in us-west-1...
+[2026-11-02T15:53:37Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
+[2026-11-02T15:53:38Z] Created Server Instance: i-rj93ymmufo05cjc13acy, Client Instance: i-rj93ymmufo05cjc13acz
+[2026-11-02T15:53:38Z] Waiting for both instances to reach Running state...
+[2026-11-02T15:53:45Z] Server (i-rj93ymmufo05cjc13acy): Public=47.251.249.246, Private=172.16.1.223
+[2026-11-02T15:53:45Z] Client (i-rj93ymmufo05cjc13acz): Public=47.89.249.207, Private=172.16.1.222
+[2026-11-02T15:53:45Z] Waiting for SSH readiness on Server (47.251.249.246) and Client (47.89.249.207)...
+[2026-11-02T15:54:05Z] Direct SSH ready on bowl-bench-server (47.251.249.246)
+[2026-11-02T15:54:07Z] Direct SSH ready on bowl-bench-client (47.89.249.207)
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+[2026-11-02T15:54:20Z] Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (172.16.1.223)...
+Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 Preconfiguring packages ...
-Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%Failed to stop iperf3.service: Unit iperf3.service not loaded.
+(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
 Preparing to unpack .../00-libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
 Unpacking libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Selecting previously unselected package libiperf0:amd64.
@@ -219,33 +219,33 @@ CREATE DATABASE
 CREATE DATABASE
 ALTER SYSTEM
 ALTER SYSTEM
-2026/11/02 18:43:24 OK   20261015165500_create_metadata_tables.sql (4.58ms)
-2026/11/02 18:43:24 OK   20261016180000_add_symlink_target_to_inodes.sql (1.95ms)
-2026/11/02 18:43:24 OK   20261017000000_create_file_handles_table.sql (2.37ms)
-2026/11/02 18:43:24 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.35ms)
-2026/11/02 18:43:24 OK   20261017020000_convert_entries_name_to_bytea.sql (5.65ms)
-2026/11/02 18:43:24 OK   20261017030000_create_inode_xattrs_table.sql (2.08ms)
-2026/11/02 18:43:24 OK   20261018000000_create_file_locks_tables.sql (6.73ms)
-2026/11/02 18:43:24 OK   20261018010000_add_session_id_to_file_handles.sql (1.81ms)
-2026/11/02 18:43:24 OK   20261019000000_align_juicefs_meta_foundation.sql (4.52ms)
-2026/11/02 18:43:24 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.18ms)
-2026/11/02 18:43:24 OK   20261028000000_add_chunks_and_slice_refs.sql (3.32ms)
-2026/11/02 18:43:24 OK   20261029000000_alter_chunks_indx_to_bigint.sql (4.06ms)
-2026/11/02 18:43:24 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.11ms)
-2026/11/02 18:43:24 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.29ms)
-2026/11/02 18:43:24 goose: successfully migrated database to version: 20261101000000
+2026/11/02 23:55:38 OK   20261015165500_create_metadata_tables.sql (4.2ms)
+2026/11/02 23:55:38 OK   20261016180000_add_symlink_target_to_inodes.sql (2.03ms)
+2026/11/02 23:55:38 OK   20261017000000_create_file_handles_table.sql (2.44ms)
+2026/11/02 23:55:38 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.73ms)
+2026/11/02 23:55:38 OK   20261017020000_convert_entries_name_to_bytea.sql (5.59ms)
+2026/11/02 23:55:38 OK   20261017030000_create_inode_xattrs_table.sql (2.07ms)
+2026/11/02 23:55:38 OK   20261018000000_create_file_locks_tables.sql (6.94ms)
+2026/11/02 23:55:38 OK   20261018010000_add_session_id_to_file_handles.sql (1.82ms)
+2026/11/02 23:55:38 OK   20261019000000_align_juicefs_meta_foundation.sql (4.23ms)
+2026/11/02 23:55:38 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.13ms)
+2026/11/02 23:55:38 OK   20261028000000_add_chunks_and_slice_refs.sql (3.39ms)
+2026/11/02 23:55:38 OK   20261029000000_alter_chunks_indx_to_bigint.sql (4.07ms)
+2026/11/02 23:55:38 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.21ms)
+2026/11/02 23:55:38 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.43ms)
+2026/11/02 23:55:38 goose: successfully migrated database to version: 20261101000000
 Synchronizing state of redis-server.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
 Executing: /usr/lib/systemd/systemd-sysv-install enable redis-server
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-s3.service → /etc/systemd/system/jfs-s3.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-webdav.service → /etc/systemd/system/jfs-webdav.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
-[2026-11-02T10:43:25Z] Server node (172.16.1.216) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy.
-[2026-11-02T10:43:25Z] Measuring Server local cloud_essd disk baseline...
-Warning: Permanently added '43.110.149.71' (ED25519) to the list of known hosts.
-[2026-11-02T10:43:52Z] Server baseline: {"server":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","pg_version":"psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","redis_version":"Redis server v=7.0.15","minio_version":"rclone v1.68.2"},"disk_baseline":{"local_seq_write_mib_s":"173.53","local_seq_read_mib_s":"174.37"}}
-[2026-11-02T10:43:52Z] Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (172.16.1.217)...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
+[2026-11-02T15:55:39Z] Server node (172.16.1.223) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy.
+[2026-11-02T15:55:39Z] Measuring Server local cloud_essd disk baseline...
+Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
+[2026-11-02T15:56:05Z] Server baseline: {"server":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","pg_version":"psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","redis_version":"Redis server v=7.0.15","minio_version":"rclone v1.68.2"},"disk_baseline":{"local_seq_write_mib_s":"164.09","local_seq_read_mib_s":"184.29"}}
+[2026-11-02T15:56:05Z] Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (172.16.1.222)...
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
@@ -934,6 +934,21 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
+parse_options.c: In function ‘createGlobalOptions’:
+parse_options.c:469:33: warning: ‘%s’ directive writing up to 1023 bytes into a region of size 1011 [-Wformat-overflow=]
+  469 |   sprintf(apiStr, "API for I/O [%s]", APIs);
+      |                                 ^~    ~~~~
+In file included from /usr/include/stdio.h:980,
+                 from parse_options.c:19:
+In function ‘sprintf’,
+    inlined from ‘createGlobalOptions’ at parse_options.c:469:3:
+/usr/include/x86_64-linux-gnu/bits/stdio2.h:30:10: note: ‘__builtin___sprintf_chk’ output between 15 and 1038 bytes into a destination of size 1024
+   30 |   return __builtin___sprintf_chk (__s, __USE_FORTIFY_LEVEL - 1,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   31 |                                   __glibc_objsize (__s), __fmt,
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   32 |                                   __va_arg_pack ());
+      |                                   ~~~~~~~~~~~~~~~~~
 mdtest.c: In function ‘collective_create_remove’:
 mdtest.c:775:39: warning: ‘/mdtest_tree.’ directive writing 13 bytes into a region of size between 1 and 4096 [-Wformat-overflow=]
   775 |             sprintf(unique_mk_dir, "%s/mdtest_tree.%d.0", testdir,
@@ -1091,21 +1106,6 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-parse_options.c: In function ‘createGlobalOptions’:
-parse_options.c:469:33: warning: ‘%s’ directive writing up to 1023 bytes into a region of size 1011 [-Wformat-overflow=]
-  469 |   sprintf(apiStr, "API for I/O [%s]", APIs);
-      |                                 ^~    ~~~~
-In file included from /usr/include/stdio.h:980,
-                 from parse_options.c:19:
-In function ‘sprintf’,
-    inlined from ‘createGlobalOptions’ at parse_options.c:469:3:
-/usr/include/x86_64-linux-gnu/bits/stdio2.h:30:10: note: ‘__builtin___sprintf_chk’ output between 15 and 1038 bytes into a destination of size 1024
-   30 |   return __builtin___sprintf_chk (__s, __USE_FORTIFY_LEVEL - 1,
-      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   31 |                                   __glibc_objsize (__s), __fmt,
-      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-   32 |                                   __va_arg_pack ());
-      |                                   ~~~~~~~~~~~~~~~~~
 ior.c: In function ‘GetPlatformName’:
 ior.c:699:37: warning: ‘)’ directive writing 1 byte into a region of size between 0 and 1023 [-Wformat-overflow=]
   699 |         sprintf(platformName, "%s(%s)", nodeName, sysName);
@@ -1221,6 +1221,8 @@ mdtest.c:948:39: warning: ‘__builtin___sprintf_chk’ may write a terminating 
       |                                       ^
 In function ‘sprintf’,
     inlined from ‘directory_test’ at mdtest.c:948:13:
+  CC       libaiori_a-ior-output.o
+  CC       libaiori_a-option.o
 /usr/include/x86_64-linux-gnu/bits/stdio2.h:30:10: note: ‘__builtin___sprintf_chk’ output 2 or more bytes (assuming 4097) into a destination of size 4096
    30 |   return __builtin___sprintf_chk (__s, __USE_FORTIFY_LEVEL - 1,
       |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1242,7 +1244,6 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-  CC       libaiori_a-ior-output.o
 mdtest.c: In function ‘file_test’:
 mdtest.c:1043:39: warning: ‘__builtin___sprintf_chk’ may write a terminating nul past the end of the destination [-Wformat-overflow=]
  1043 |             sprintf( temp_path, "%s/%s", testdir, path );
@@ -1351,7 +1352,7 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-  CC       libaiori_a-option.o
+  CC       libaiori_a-aiori.o
 mdtest.c: In function ‘create_remove_directory_tree’:
 mdtest.c:1612:30: warning: ‘%d’ directive writing between 1 and 11 bytes into a region of size between 0 and 4095 [-Wformat-overflow=]
  1612 |             sprintf(dir, "%s.%d/", base_tree_name, currDir);
@@ -1378,7 +1379,6 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-  CC       libaiori_a-aiori.o
 mdtest.c: In function ‘mdtest_run’:
 mdtest.c:1920:35: warning: ‘%s’ directive writing up to 1023 bytes into a region of size 1011 [-Wformat-overflow=]
  1920 |     sprintf(apiStr, "API for I/O [%s]", APIs);
@@ -1421,6 +1421,11 @@ In function ‘sprintf’,
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
 mdtest.c: In function ‘mdtest_run’:
+  CC       libaiori_a-aiori-DUMMY.o
+  CC       libaiori_a-aiori-MPIIO.o
+  CC       libaiori_a-aiori-MMAP.o
+  CC       libaiori_a-aiori-POSIX.o
+  CC       mdtest-mdtest-main.o
 mdtest.c:1729:31: warning: ‘.0’ directive writing 2 bytes into a region of size between 1 and 4096 [-Wformat-overflow=]
  1729 |   sprintf(unique_stat_dir, "%s.0", base_tree_name);
       |                               ^~
@@ -1462,19 +1467,14 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
-  CC       libaiori_a-aiori-DUMMY.o
-  CC       libaiori_a-aiori-MPIIO.o
-  CC       libaiori_a-aiori-MMAP.o
-  CC       libaiori_a-aiori-POSIX.o
-  CC       mdtest-mdtest-main.o
   CC       mdtest-aiori.o
   CC       mdtest-aiori-DUMMY.o
   CC       mdtest-aiori-MPIIO.o
   CC       mdtest-aiori-MMAP.o
   CC       mdtest-aiori-POSIX.o
   AR       libaiori.a
-ar: `u' modifier ignored since `D' is the default (see `U')
-  CCLD     ior
+ar: `u' modifier ignored since `D' is the default (see `U')  CCLD     ior
+
   CCLD     mdtest
 Making all in test
 make[3]: Nothing to be done for 'all'.
@@ -1484,49 +1484,49 @@ Making all in contrib
   CC       cbif.o
   CCLD     cbif
 make[1]: Nothing to be done for 'all-am'.
-[2026-11-02T10:44:28Z] Measuring internal VPC RTT and throughput (172.16.1.217 -> 172.16.1.216)...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-[2026-11-02T10:44:36Z] Client info & VPC network baseline: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0","juicefs_version":"juicefs version 1.2.1+2024-08-30.cd871d1","fio_version":"fio-3.36","mdtest_version":"mdtest-3.3.0"},"network":{"ping_rtt_ms":"0.043/0.072/0.313/0.059","iperf3_gbps":"15.71"}}
-[2026-11-02T10:44:36Z] Step 5/6: Running benchmark suites (bowl jfs_pg jfs_redis) on Client -> Server...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
+[2026-11-02T15:56:37Z] Measuring internal VPC RTT and throughput (172.16.1.222 -> 172.16.1.223)...
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+[2026-11-02T15:56:47Z] Client info & VPC network baseline: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0","juicefs_version":"juicefs version 1.2.1+2024-08-30.cd871d1","fio_version":"fio-3.36","mdtest_version":"mdtest-3.3.0"},"network":{"ping_rtt_ms":"0.035/0.064/0.269/0.051","iperf3_gbps":"15.71"}}
+[2026-11-02T15:56:47Z] Step 5/6: Running benchmark suites (bowl jfs_pg jfs_redis) on Client -> Server...
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
 ==================================================================
 [bowl] Starting benchmark suites on /mnt/bowl ...
 ==================================================================
 [bowl] [1/3] Running juicefs bench /mnt/bowl -p 4 ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
-2026/11/02 18:44:46.156689 juicefs[5717] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+2026/11/02 23:56:52.098596 juicefs[5703] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
 +------------------+----------------+---------------+
 |       ITEM       |      VALUE     |      COST     |
 +------------------+----------------+---------------+
-|   Write big file |   324.20 MiB/s |  12.63 s/file |
-|    Read big file |  1598.78 MiB/s |   2.56 s/file |
-| Write small file |  444.4 files/s |  9.00 ms/file |
-|  Read small file |  125.8 files/s | 31.79 ms/file |
-|        Stat file | 6415.9 files/s |  0.62 ms/file |
+|   Write big file |   340.02 MiB/s |  12.05 s/file |
+|    Read big file |  1782.86 MiB/s |   2.30 s/file |
+| Write small file |  343.5 files/s | 11.64 ms/file |
+|  Read small file | 1873.5 files/s |  2.14 ms/file |
+|        Stat file | 6851.0 files/s |  0.58 ms/file |
 +------------------+----------------+---------------+
 [bowl] [2/3] Running fio suite (8 workloads) on /mnt/bowl/fio_work ...
   -> [bowl] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
 [bowl] [3/3] Running mdtest suite on /mnt/bowl ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 18:50:36 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:02:41 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1539,19 +1539,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :        490.859        490.859        490.859          0.000
-   Directory stat            :       2840.454       2840.454       2840.454          0.000
-   Directory removal         :        526.699        526.699        526.699          0.000
-   File creation             :        545.538        545.538        545.538          0.000
-   File stat                 :       2841.550       2841.550       2841.550          0.000
-   File read                 :        493.494        493.494        493.494          0.000
-   File removal              :        532.026        532.026        532.026          0.000
-   Tree creation             :        551.727        551.727        551.727          0.000
-   Tree removal              :        519.560        519.560        519.560          0.000
--- finished at 11/02/2026 18:52:50 --
+   Directory creation        :        512.721        512.721        512.721          0.000
+   Directory stat            :       2883.826       2883.826       2883.826          0.000
+   Directory removal         :        593.843        593.843        593.843          0.000
+   File creation             :        686.044        686.044        686.044          0.000
+   File stat                 :       2863.764       2863.764       2863.764          0.000
+   File read                 :        870.383        870.383        870.383          0.000
+   File removal              :        589.159        589.159        589.159          0.000
+   Tree creation             :        595.629        595.629        595.629          0.000
+   Tree removal              :        613.293        613.293        613.293          0.000
+-- finished at 11/03/2026 00:04:34 --
 
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 18:52:52 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:04:35 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1564,26 +1564,26 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       1835.713       1835.247       1835.594          0.200
-   Directory stat            :     104555.009     103088.686     103472.249        625.350
-   Directory removal         :       2192.980       2192.954       2192.969          0.009
-   File creation             :       1583.204       1583.152       1583.189          0.021
-   File stat                 :      99770.202      99504.077      99622.885         95.192
-   File read                 :       2791.909       2791.624       2791.824          0.116
-   File removal              :       1996.267       1996.063       1996.126          0.082
-   Tree creation             :        265.202        265.202        265.202          0.000
-   Tree removal              :        329.221        329.221        329.221          0.000
--- finished at 11/02/2026 18:52:54 --
+   Directory creation        :       1963.777       1963.763       1963.772          0.006
+   Directory stat            :     273354.962     273105.156     273263.346         94.742
+   Directory removal         :       2353.678       2353.673       2353.677          0.002
+   File creation             :       1931.278       1931.256       1931.266          0.008
+   File stat                 :     240798.488     240709.872     240750.889         35.052
+   File read                 :       5017.802       5017.746       5017.773          0.025
+   File removal              :       2316.711       2316.702       2316.706          0.003
+   Tree creation             :        267.245        267.245        267.245          0.000
+   Tree removal              :        334.185        334.185        334.185          0.000
+-- finished at 11/03/2026 00:04:37 --
 
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
-2026/11/02 18:52:55.234021 juicefs[6056] <INFO>: Meta address: postgres://postgres:****@172.16.1.216:5432/jfs_pg?sslmode=disable [interface.go:504]
-2026/11/02 18:52:55.244256 juicefs[6056] <WARNING>: The latency to database is too high: 10.077207ms [sql.go:311]
-2026/11/02 18:52:55.253094 juicefs[6056] <INFO>: Data use minio://172.16.1.216:9001/jfs-pg/jfs-pg-bench/ [format.go:484]
-2026/11/02 18:52:55.313032 juicefs[6056] <INFO>: Volume is formatted as {
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+2026/11/03 00:04:38.367548 juicefs[5983] <INFO>: Meta address: postgres://postgres:****@172.16.1.223:5432/jfs_pg?sslmode=disable [interface.go:504]
+2026/11/03 00:04:38.380010 juicefs[5983] <WARNING>: The latency to database is too high: 12.352693ms [sql.go:311]
+2026/11/03 00:04:38.388574 juicefs[5983] <INFO>: Data use minio://172.16.1.223:9001/jfs-pg/jfs-pg-bench/ [format.go:484]
+2026/11/03 00:04:38.452492 juicefs[5983] <INFO>: Volume is formatted as {
   "Name": "jfs-pg-bench",
-  "UUID": "a436b8fa-7af7-4805-9962-31a0fb7014cc",
+  "UUID": "add5b410-07cc-4694-8f3a-df426891f516",
   "Storage": "minio",
-  "Bucket": "http://172.16.1.216:9001/jfs-pg",
+  "Bucket": "http://172.16.1.223:9001/jfs-pg",
   "AccessKey": "minioadmin",
   "SecretKey": "removed",
   "BlockSize": 4096,
@@ -1596,53 +1596,53 @@ Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
   "DirStats": true,
   "EnableACL": false
 } [format.go:521]
-2026/11/02 18:52:55.340325 juicefs[6066] <INFO>: Meta address: postgres://postgres:****@172.16.1.216:5432/jfs_pg?sslmode=disable [interface.go:504]
-2026/11/02 18:52:55.346720 juicefs[6066] <INFO>: Data use minio://172.16.1.216:9001/jfs-pg/jfs-pg-bench/ [mount.go:629]
-2026/11/02 18:52:55.847667 juicefs[6066] <INFO>: [92mOK[0m, jfs-pg-bench is ready at /mnt/jfs_pg [mount_unix.go:200]
+2026/11/03 00:04:38.479378 juicefs[5992] <INFO>: Meta address: postgres://postgres:****@172.16.1.223:5432/jfs_pg?sslmode=disable [interface.go:504]
+2026/11/03 00:04:38.485464 juicefs[5992] <INFO>: Data use minio://172.16.1.223:9001/jfs-pg/jfs-pg-bench/ [mount.go:629]
+2026/11/03 00:04:38.986113 juicefs[5992] <INFO>: [92mOK[0m, jfs-pg-bench is ready at /mnt/jfs_pg [mount_unix.go:200]
 ==================================================================
 [jfs_pg] Starting benchmark suites on /mnt/jfs_pg ...
 ==================================================================
 [jfs_pg] [1/3] Running juicefs bench /mnt/jfs_pg -p 4 ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 25.9 s, CPU: 64.2%, Memory: 643.9 MiB
-+------------------+------------------+---------------+
-|       ITEM       |       VALUE      |      COST     |
-+------------------+------------------+---------------+
-|   Write big file |     307.73 MiB/s |  13.31 s/file |
-|    Read big file |     451.21 MiB/s |   9.08 s/file |
-| Write small file |    397.4 files/s | 10.07 ms/file |
-|  Read small file |   3143.5 files/s |  1.27 ms/file |
-|        Stat file |  12817.7 files/s |  0.31 ms/file |
-|   FUSE operation | 71353 operations |    1.57 ms/op |
-|      Update meta |  6578 operations |    1.59 ms/op |
-|       Put object |  1424 operations |  183.11 ms/op |
-|       Get object |  1024 operations |  185.60 ms/op |
-|    Delete object |  1424 operations |    0.72 ms/op |
-| Write into cache |  1172 operations |    6.77 ms/op |
-|  Read from cache |   400 operations |    0.07 ms/op |
-+------------------+------------------+---------------+
+Time used: 25.6 s, CPU: 63.2%, Memory: 644.1 MiB
++------------------+------------------+--------------+
+|       ITEM       |       VALUE      |     COST     |
++------------------+------------------+--------------+
+|   Write big file |     303.92 MiB/s | 13.48 s/file |
+|    Read big file |     454.98 MiB/s |  9.00 s/file |
+| Write small file |    520.9 files/s | 7.68 ms/file |
+|  Read small file |   2705.1 files/s | 1.48 ms/file |
+|        Stat file |  13524.9 files/s | 0.30 ms/file |
+|   FUSE operation | 71371 operations |   1.43 ms/op |
+|      Update meta |  6601 operations |   1.76 ms/op |
+|       Put object |  1424 operations | 182.57 ms/op |
+|       Get object |  1024 operations | 110.86 ms/op |
+|    Delete object |  1424 operations |   0.73 ms/op |
+| Write into cache |  1173 operations |   7.05 ms/op |
+|  Read from cache |   403 operations |   0.30 ms/op |
++------------------+------------------+--------------+
 [jfs_pg] [2/3] Running fio suite (8 workloads) on /mnt/jfs_pg/fio_work ...
   -> [jfs_pg] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
 [jfs_pg] [3/3] Running mdtest suite on /mnt/jfs_pg ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 18:59:05 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:10:50 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_pg/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1655,19 +1655,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :        868.634        868.634        868.634          0.000
-   Directory stat            :       4224.858       4224.858       4224.858          0.000
-   Directory removal         :        755.674        755.674        755.674          0.000
-   File creation             :       1042.376       1042.376       1042.376          0.000
-   File stat                 :       4272.506       4272.506       4272.506          0.000
-   File read                 :       2218.995       2218.995       2218.995          0.000
-   File removal              :        858.846        858.846        858.846          0.000
-   Tree creation             :        911.293        911.293        911.293          0.000
-   Tree removal              :        701.832        701.832        701.832          0.000
--- finished at 11/02/2026 19:00:18 --
+   Directory creation        :        506.417        506.417        506.417          0.000
+   Directory stat            :       1162.700       1162.700       1162.700          0.000
+   Directory removal         :        538.461        538.461        538.461          0.000
+   File creation             :       1129.713       1129.713       1129.713          0.000
+   File stat                 :       4647.792       4647.792       4647.792          0.000
+   File read                 :       2444.656       2444.656       2444.656          0.000
+   File removal              :        934.645        934.645        934.645          0.000
+   Tree creation             :        913.377        913.377        913.377          0.000
+   Tree removal              :        778.425        778.425        778.425          0.000
+-- finished at 11/03/2026 00:12:24 --
 
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 19:00:19 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:12:25 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_pg/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1680,26 +1680,26 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       2915.028       2914.211       2914.821          0.353
-   Directory stat            :     355074.111     343049.779     346431.032       4999.486
-   Directory removal         :       2811.944       2811.841       2811.870          0.043
-   File creation             :       3247.097       3247.062       3247.081          0.013
-   File stat                 :     271731.746     271595.002     271667.907         48.978
-   File read                 :      13062.666      13062.573      13062.637          0.038
-   File removal              :       3184.866       3184.832       3184.845          0.013
-   Tree creation             :        559.364        559.364        559.364          0.000
-   Tree removal              :        270.009        270.009        270.009          0.000
--- finished at 11/02/2026 19:00:20 --
+   Directory creation        :       3091.398       3091.341       3091.380          0.023
+   Directory stat            :      61010.747      60991.712      61003.949          7.788
+   Directory removal         :       3079.434       3079.294       3079.354          0.051
+   File creation             :       3484.398       3483.771       3484.175          0.239
+   File stat                 :     289650.912     286193.581     287137.165       1454.519
+   File read                 :      14019.636      14017.419      14018.996          0.913
+   File removal              :       3207.739       3207.630       3207.662          0.045
+   Tree creation             :        454.226        454.226        454.226          0.000
+   Tree removal              :        603.405        603.405        603.405          0.000
+-- finished at 11/03/2026 00:12:26 --
 
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
-2026/11/02 19:00:21.256124 juicefs[6335] <INFO>: Meta address: redis://172.16.1.216:6379/1 [interface.go:504]
-2026/11/02 19:00:21.259150 juicefs[6335] <INFO>: Ping redis latency: 65.593µs [redis.go:3515]
-2026/11/02 19:00:21.259387 juicefs[6335] <INFO>: Data use minio://172.16.1.216:9001/jfs-redis/jfs-redis-bench/ [format.go:484]
-2026/11/02 19:00:21.266470 juicefs[6335] <INFO>: Volume is formatted as {
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+2026/11/03 00:12:27.283480 juicefs[13992] <INFO>: Meta address: redis://172.16.1.223:6379/1 [interface.go:504]
+2026/11/03 00:12:27.287528 juicefs[13992] <INFO>: Ping redis latency: 60.281µs [redis.go:3515]
+2026/11/03 00:12:27.287767 juicefs[13992] <INFO>: Data use minio://172.16.1.223:9001/jfs-redis/jfs-redis-bench/ [format.go:484]
+2026/11/03 00:12:27.296188 juicefs[13992] <INFO>: Volume is formatted as {
   "Name": "jfs-redis-bench",
-  "UUID": "051374c3-02e7-4a27-a606-24951e8c8c42",
+  "UUID": "61dbcfa4-c9b0-4c6c-bd90-6826a9e891c7",
   "Storage": "minio",
-  "Bucket": "http://172.16.1.216:9001/jfs-redis",
+  "Bucket": "http://172.16.1.223:9001/jfs-redis",
   "AccessKey": "minioadmin",
   "SecretKey": "removed",
   "BlockSize": 4096,
@@ -1712,54 +1712,54 @@ Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
   "DirStats": true,
   "EnableACL": false
 } [format.go:521]
-2026/11/02 19:00:21.291501 juicefs[6344] <INFO>: Meta address: redis://172.16.1.216:6379/1 [interface.go:504]
-2026/11/02 19:00:21.292271 juicefs[6344] <INFO>: Ping redis latency: 52.643µs [redis.go:3515]
-2026/11/02 19:00:21.293090 juicefs[6344] <INFO>: Data use minio://172.16.1.216:9001/jfs-redis/jfs-redis-bench/ [mount.go:629]
-2026/11/02 19:00:21.793866 juicefs[6344] <INFO>: [92mOK[0m, jfs-redis-bench is ready at /mnt/jfs_redis [mount_unix.go:200]
+2026/11/03 00:12:27.321938 juicefs[14001] <INFO>: Meta address: redis://172.16.1.223:6379/1 [interface.go:504]
+2026/11/03 00:12:27.322820 juicefs[14001] <INFO>: Ping redis latency: 44.34µs [redis.go:3515]
+2026/11/03 00:12:27.323650 juicefs[14001] <INFO>: Data use minio://172.16.1.223:9001/jfs-redis/jfs-redis-bench/ [mount.go:629]
 ==================================================================
 [jfs_redis] Starting benchmark suites on /mnt/jfs_redis ...
 ==================================================================
 [jfs_redis] [1/3] Running juicefs bench /mnt/jfs_redis -p 4 ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+2026/11/03 00:12:27.823939 juicefs[14001] <INFO>: [92mOK[0m, jfs-redis-bench is ready at /mnt/jfs_redis [mount_unix.go:200]
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 24.4 s, CPU: 65.9%, Memory: 604.1 MiB
+Time used: 25.0 s, CPU: 63.2%, Memory: 641.2 MiB
 +------------------+------------------+--------------+
 |       ITEM       |       VALUE      |     COST     |
 +------------------+------------------+--------------+
-|   Write big file |     305.82 MiB/s | 13.39 s/file |
-|    Read big file |     453.25 MiB/s |  9.04 s/file |
-| Write small file |    886.2 files/s | 4.51 ms/file |
-|  Read small file |   5092.5 files/s | 0.79 ms/file |
-|        Stat file |  17136.3 files/s | 0.23 ms/file |
-|   FUSE operation | 71308 operations |   1.57 ms/op |
-|      Update meta |  1740 operations |   0.50 ms/op |
-|       Put object |  1424 operations | 184.04 ms/op |
-|       Get object |  1024 operations | 193.90 ms/op |
-|    Delete object |  1424 operations |   0.62 ms/op |
-| Write into cache |  1187 operations |   6.14 ms/op |
-|  Read from cache |   400 operations |   0.10 ms/op |
+|   Write big file |     303.74 MiB/s | 13.49 s/file |
+|    Read big file |     459.94 MiB/s |  8.91 s/file |
+| Write small file |    682.6 files/s | 5.86 ms/file |
+|  Read small file |   3188.8 files/s | 1.25 ms/file |
+|        Stat file |  16577.3 files/s | 0.24 ms/file |
+|   FUSE operation | 71298 operations |   1.54 ms/op |
+|      Update meta |  1740 operations |   0.59 ms/op |
+|       Put object |  1424 operations | 186.54 ms/op |
+|       Get object |  1024 operations | 183.55 ms/op |
+|    Delete object |  1392 operations |   0.94 ms/op |
+| Write into cache |  1195 operations |   6.89 ms/op |
+|  Read from cache |   400 operations |   0.58 ms/op |
 +------------------+------------------+--------------+
 [jfs_redis] [2/3] Running fio suite (8 workloads) on /mnt/jfs_redis/fio_work ...
   -> [jfs_redis] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
 [jfs_redis] [3/3] Running mdtest suite on /mnt/jfs_redis ...
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 19:06:29 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:18:36 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_redis/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1772,19 +1772,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       2077.495       2077.495       2077.495          0.000
-   Directory stat            :      14682.053      14682.053      14682.053          0.000
-   Directory removal         :       1716.342       1716.342       1716.342          0.000
-   File creation             :       1995.628       1995.628       1995.628          0.000
-   File stat                 :      14241.683      14241.683      14241.683          0.000
-   File read                 :       4188.248       4188.248       4188.248          0.000
-   File removal              :       1868.754       1868.754       1868.754          0.000
-   Tree creation             :       2093.573       2093.573       2093.573          0.000
-   Tree removal              :       1732.894       1732.894       1732.894          0.000
--- finished at 11/02/2026 19:07:02 --
+   Directory creation        :       2418.552       2418.552       2418.552          0.000
+   Directory stat            :      14796.435      14796.435      14796.435          0.000
+   Directory removal         :       1954.886       1954.886       1954.886          0.000
+   File creation             :       2252.597       2252.597       2252.597          0.000
+   File stat                 :      16351.861      16351.861      16351.861          0.000
+   File read                 :       4842.695       4842.695       4842.695          0.000
+   File removal              :       2101.462       2101.462       2101.462          0.000
+   Tree creation             :       2431.773       2431.773       2431.773          0.000
+   Tree removal              :       1972.288       1972.288       1972.288          0.000
+-- finished at 11/03/2026 00:19:05 --
 
-Warning: Permanently added '172.16.1.216' (ED25519) to the list of known hosts.
--- started at 11/02/2026 19:07:02 --
+Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+-- started at 11/03/2026 00:19:06 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_redis/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1797,19 +1797,19 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       6170.564       6170.530       6170.549          0.013
-   Directory stat            :     446598.998     445859.763     446327.012        279.140
-   Directory removal         :       5786.666       5786.541       5786.624          0.049
-   File creation             :       6540.476       6536.177       6539.383          1.851
-   File stat                 :      62806.446      62412.109      62517.488        166.922
-   File read                 :      17852.345      17843.626      17849.878          3.617
-   File removal              :       7337.224       7335.795       7336.169          0.609
-   Tree creation             :        252.828        252.828        252.828          0.000
-   Tree removal              :       1468.493       1468.493       1468.493          0.000
--- finished at 11/02/2026 19:07:03 --
+   Directory creation        :       5943.512       5943.399       5943.469          0.045
+   Directory stat            :     463900.718     463332.573     463568.213        213.634
+   Directory removal         :       7568.275       7567.952       7568.178          0.131
+   File creation             :       7063.449       7057.198       7061.822          2.670
+   File stat                 :      64716.872      64157.060      64327.593        226.134
+   File read                 :      18971.369      18956.783      18965.219          5.285
+   File removal              :       8080.484       8078.779       8079.223          0.728
+   Tree creation             :        369.210        369.210        369.210          0.000
+   Tree removal              :        594.458        594.458        594.458          0.000
+-- finished at 11/03/2026 00:19:06 --
 
-[2026-11-02T11:07:03Z] Benchmark targets (bowl jfs_pg jfs_redis) completed at 2026-11-02T11:07:03Z. Fetching results...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-[2026-11-02T11:07:48Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-02T11:07:50Z] Verified both ECS instances (i-rj98t4cevb40k5jnxppn, i-rj98t4cevb40k5jnxppo) are deleted (Remaining: 0).
-[2026-11-02T11:07:51Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-ee8d113/juicefs/REPORT.md
+[2026-11-02T16:19:07Z] Benchmark targets (bowl jfs_pg jfs_redis) completed at 2026-11-02T16:19:07Z. Fetching results...
+Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+[2026-11-02T16:19:49Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
+[2026-11-02T16:19:51Z] Verified both ECS instances (i-rj93ymmufo05cjc13acy, i-rj93ymmufo05cjc13acz) are deleted (Remaining: 0).
+[2026-11-02T16:19:52Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-0655a17/juicefs/REPORT.md

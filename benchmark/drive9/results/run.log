@@ -1,18 +1,18 @@
-[2026-11-02T10:40:05Z] Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64...
-[2026-11-02T10:40:06Z] Cross-compiling Drive9 binaries (drive9-server, drive9) from /Users/fanxing/code/other/filesystem/drive9 for linux/amd64...
-[2026-11-02T10:40:17Z] Binaries compiled & packaged (Bowl=ee8d113, Drive9=b529a36f).
-[2026-11-02T10:40:17Z] Creating temporary SSH KeyPair bowl-d9-bench-kp-20261102184005 in us-west-1...
-[2026-11-02T10:40:18Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
-[2026-11-02T10:40:19Z] Created Server=i-rj96chrxq3htln3b3rul, Client=i-rj96chrxq3htln3b3rum
-[2026-11-02T10:40:19Z] Waiting for instances ["i-rj96chrxq3htln3b3rul","i-rj96chrxq3htln3b3rum"] to reach Running status...
-[2026-11-02T10:40:26Z] Server Node: Public=47.251.118.226, Private=172.16.1.218
-[2026-11-02T10:40:26Z] Client Node: Public=43.110.151.153, Private=172.16.1.219
-[2026-11-02T10:40:26Z] Waiting for SSH readiness on Server (47.251.118.226)...
-[2026-11-02T10:40:52Z] SSH is ready on Server (47.251.118.226).
-[2026-11-02T10:40:52Z] Waiting for SSH readiness on Client (43.110.151.153)...
-[2026-11-02T10:40:58Z] SSH is ready on Client (43.110.151.153).
-[2026-11-02T10:40:58Z] Uploading server-bins.tar.gz and migrations to Server (47.251.118.226)...
-[2026-11-02T10:43:13Z] Configuring PostgreSQL 16, Bowl Storage, TiDB v8.5.5, and Drive9 Server on Server node...
+[2026-11-02T15:53:31Z] Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64...
+[2026-11-02T15:53:33Z] Cross-compiling Drive9 binaries (drive9-server, drive9) from /Users/fanxing/code/other/filesystem/drive9 for linux/amd64...
+[2026-11-02T15:53:44Z] Binaries compiled & packaged (Bowl=0655a17, Drive9=b529a36f).
+[2026-11-02T15:53:44Z] Creating temporary SSH KeyPair bowl-d9-bench-kp-20261102235331 in us-west-1...
+[2026-11-02T15:53:45Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
+[2026-11-02T15:53:46Z] Created Server=i-rj9ip6zekn1tbk2yerd7, Client=i-rj9ip6zekn1tbk2yerd8
+[2026-11-02T15:53:46Z] Waiting for instances ["i-rj9ip6zekn1tbk2yerd7","i-rj9ip6zekn1tbk2yerd8"] to reach Running status...
+[2026-11-02T15:53:53Z] Server Node: Public=47.88.19.96, Private=172.16.1.225
+[2026-11-02T15:53:53Z] Client Node: Public=47.251.2.46, Private=172.16.1.224
+[2026-11-02T15:53:53Z] Waiting for SSH readiness on Server (47.88.19.96)...
+[2026-11-02T15:54:11Z] SSH is ready on Server (47.88.19.96).
+[2026-11-02T15:54:11Z] Waiting for SSH readiness on Client (47.251.2.46)...
+[2026-11-02T15:54:15Z] SSH is ready on Client (47.251.2.46).
+[2026-11-02T15:54:16Z] Uploading server-bins.tar.gz and migrations to Server (47.88.19.96)...
+[2026-11-02T15:55:05Z] Configuring PostgreSQL 16, Bowl Storage, TiDB v8.5.5, and Drive9 Server on Server node...
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
@@ -33,24 +33,24 @@ ALTER ROLE
 CREATE DATABASE
 ALTER SYSTEM
 ALTER SYSTEM
-2026/11/02 18:43:41 OK   20261015165500_create_metadata_tables.sql (4.26ms)
-2026/11/02 18:43:41 OK   20261016180000_add_symlink_target_to_inodes.sql (1.68ms)
-2026/11/02 18:43:41 OK   20261017000000_create_file_handles_table.sql (2.22ms)
-2026/11/02 18:43:41 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.88ms)
-2026/11/02 18:43:41 OK   20261017020000_convert_entries_name_to_bytea.sql (5.48ms)
-2026/11/02 18:43:41 OK   20261017030000_create_inode_xattrs_table.sql (2.16ms)
-2026/11/02 18:43:41 OK   20261018000000_create_file_locks_tables.sql (6.63ms)
-2026/11/02 18:43:41 OK   20261018010000_add_session_id_to_file_handles.sql (1.85ms)
-2026/11/02 18:43:41 OK   20261019000000_align_juicefs_meta_foundation.sql (4.55ms)
-2026/11/02 18:43:41 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.18ms)
-2026/11/02 18:43:41 OK   20261028000000_add_chunks_and_slice_refs.sql (3.37ms)
-2026/11/02 18:43:41 OK   20261029000000_alter_chunks_indx_to_bigint.sql (3.64ms)
-2026/11/02 18:43:41 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.21ms)
-2026/11/02 18:43:41 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.44ms)
-2026/11/02 18:43:41 goose: successfully migrated database to version: 20261101000000
+2026/11/02 23:55:34 OK   20261015165500_create_metadata_tables.sql (4.11ms)
+2026/11/02 23:55:34 OK   20261016180000_add_symlink_target_to_inodes.sql (1.78ms)
+2026/11/02 23:55:34 OK   20261017000000_create_file_handles_table.sql (2.15ms)
+2026/11/02 23:55:34 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.61ms)
+2026/11/02 23:55:34 OK   20261017020000_convert_entries_name_to_bytea.sql (5.49ms)
+2026/11/02 23:55:34 OK   20261017030000_create_inode_xattrs_table.sql (2.24ms)
+2026/11/02 23:55:34 OK   20261018000000_create_file_locks_tables.sql (6.89ms)
+2026/11/02 23:55:34 OK   20261018010000_add_session_id_to_file_handles.sql (1.82ms)
+2026/11/02 23:55:34 OK   20261019000000_align_juicefs_meta_foundation.sql (4.84ms)
+2026/11/02 23:55:34 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.24ms)
+2026/11/02 23:55:34 OK   20261028000000_add_chunks_and_slice_refs.sql (3.27ms)
+2026/11/02 23:55:34 OK   20261029000000_alter_chunks_indx_to_bigint.sql (3.69ms)
+2026/11/02 23:55:34 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.19ms)
+2026/11/02 23:55:34 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.1ms)
+2026/11/02 23:55:34 goose: successfully migrated database to version: 20261101000000
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 4710k  100 4710k    0     0  80.2M      0 --:--:-- --:--:-- --:--:-- 80.6M
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 4710k  100 4710k    0     0  85.3M      0 --:--:-- --:--:-- --:--:-- 86.7M
 Successfully set mirror to https://tiup-mirrors.pingcap.com
 Detected shell: bash
 Shell profile:  /root/.bashrc
@@ -63,13 +63,13 @@ Have a try:     tiup playground
 Checking updates for component telemetry... The component `telemetry` version  is not installed; downloading from repository.
 The component `telemetry` not found (may be deleted from repository); skipped
 Error: use `tiup install telemetry` to install component `telemetry` first: component not installed
-download https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 13.36 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 15.83 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 16.62 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 19.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 23.97 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 24.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 26.33 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 29.97 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 32.28 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 35.88 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 38.38 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 39.38 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 39.97 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 45.33 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 46.44 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 49.98 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 52.20 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 54.47 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 57.67 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 59.73 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 61.75 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 62.14 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 62.48 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 69.42 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 71.12 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 72.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 76.42 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 77.22 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 80.67 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 81.06 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 85.78 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 87.22 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 87.39 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 93.50 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 94.61 MiB / 94.61 MiBCreated symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
+download https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 13.11 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 15.92 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 18.23 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 20.91 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 23.42 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 24.92 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 28.28 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 30.56 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 32.59 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 33.91 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 36.48 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 37.00 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 42.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 44.94 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 46.78 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 49.84 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 51.91 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 54.20 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 57.22 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 57.94 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 59.56 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 63.62 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 65.56 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 68.62 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 70.84 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 72.61 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 74.59 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 78.31 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 80.25 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 82.36 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 84.08 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 86.61 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 90.09 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 91.42 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 94.61 MiB / 94.61 MiBCreated symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/tidb.service → /etc/systemd/system/tidb.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/drive9-server.service → /etc/systemd/system/drive9-server.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/iperf3-bench.service → /etc/systemd/system/iperf3-bench.service.
 Bowl Storage (:9000) and Drive9 Server (:9009) are healthy.
-[2026-11-02T10:44:31Z] Uploading client-bins.tar.gz to Client (43.110.151.153)...
-[2026-11-02T10:45:00Z] Installing benchmark tools and mounting Bowl + Drive9 on Client...
+[2026-11-02T15:56:25Z] Uploading client-bins.tar.gz to Client (47.251.2.46)...
+[2026-11-02T15:56:40Z] Installing benchmark tools and mounting Bowl + Drive9 on Client...
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
@@ -92,36 +92,36 @@ Created symlink /etc/systemd/system/multi-user.target.wants/drive9-sync-fuse.ser
 /mnt/drive9_default is mounted.
 /mnt/drive9_sync is mounted.
 Filesystem                                 Size  Used Avail Use% Mounted on
-bowl:01a19bdd-1e2b-73de-a3af-2c4a524abe1f  2.0P     0  2.0P   0% /mnt/bowl
+bowl:01a19cfa-75e5-7411-a6d4-e580ac40434b  2.0P     0  2.0P   0% /mnt/bowl
 drive9                                     1.0T  4.0K  1.0T   1% /mnt/drive9_default
 drive9                                     1.0T  4.0K  1.0T   1% /mnt/drive9_sync
-[2026-11-02T10:45:27Z] Collecting VPC network RTT & bandwidth baselines...
-[2026-11-02T10:45:44Z] === [Suite 1: juicefs bench -p 4] Target: bowl (/mnt/bowl) ===
-2026/11/02 18:45:46.741503 juicefs[8656] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
+[2026-11-02T15:57:07Z] Collecting VPC network RTT & bandwidth baselines...
+[2026-11-02T15:57:25Z] === [Suite 1: juicefs bench -p 4] Target: bowl (/mnt/bowl) ===
+2026/11/02 23:57:28.046415 juicefs[8635] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
 +------------------+----------------+---------------+
 |       ITEM       |      VALUE     |      COST     |
 +------------------+----------------+---------------+
-|   Write big file |   282.50 MiB/s |  14.50 s/file |
-|    Read big file |   951.07 MiB/s |   4.31 s/file |
-| Write small file |  268.3 files/s | 14.91 ms/file |
-|  Read small file |  661.0 files/s |  6.05 ms/file |
-|        Stat file | 6574.9 files/s |  0.61 ms/file |
+|   Write big file |   284.83 MiB/s |  14.38 s/file |
+|    Read big file |  1202.87 MiB/s |   3.41 s/file |
+| Write small file |  326.8 files/s | 12.24 ms/file |
+|  Read small file | 1722.5 files/s |  2.32 ms/file |
+|        Stat file | 6956.6 files/s |  0.57 ms/file |
 +------------------+----------------+---------------+
-[2026-11-02T10:46:09Z] === [Suite 1: juicefs bench -p 4] Target: drive9_default (/mnt/drive9_default) ===
-2026/11/02 18:46:11.418054 juicefs[8729] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
+[2026-11-02T15:57:48Z] === [Suite 1: juicefs bench -p 4] Target: drive9_default (/mnt/drive9_default) ===
+2026/11/02 23:57:50.900942 juicefs[8709] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-+------------------+------------------+--------------+
-|       ITEM       |       VALUE      |     COST     |
-+------------------+------------------+--------------+
-|   Write big file |     200.20 MiB/s | 20.46 s/file |
-|    Read big file |     180.51 MiB/s | 22.69 s/file |
-| Write small file |   2478.9 files/s | 1.61 ms/file |
-|  Read small file |   7723.0 files/s | 0.52 ms/file |
-|        Stat file | 105162.9 files/s | 0.04 ms/file |
-+------------------+------------------+--------------+
++------------------+-----------------+--------------+
+|       ITEM       |      VALUE      |     COST     |
++------------------+-----------------+--------------+
+|   Write big file |    199.10 MiB/s | 20.57 s/file |
+|    Read big file |    182.03 MiB/s | 22.50 s/file |
+| Write small file |  2184.7 files/s | 1.83 ms/file |
+|  Read small file |  6506.2 files/s | 0.61 ms/file |
+|        Stat file | 64870.3 files/s | 0.06 ms/file |
++------------------+-----------------+--------------+
 drain ok: /mnt/drive9_default duration=0ms
 pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
 native_syncfs_supported=false fuse_protocol=7.39
@@ -131,23 +131,20 @@ git_hash: unknown
 git_branch: unknown
 build_time: unknown
 go_version: go1.25.1
-[2026-11-02T10:47:17Z] === [Suite 1: juicefs bench -p 4] Target: drive9_sync (/mnt/drive9_sync) ===
-2026/11/02 18:47:20.147051 juicefs[8845] <WARNING>: open stats file under mount point /mnt/drive9_sync: open /mnt/drive9_sync/.stats: no such file or directory [stats.go:349]
+[2026-11-02T15:59:06Z] === [Suite 1: juicefs bench -p 4] Target: drive9_sync (/mnt/drive9_sync) ===
+2026/11/02 23:59:09.151981 juicefs[8825] <WARNING>: open stats file under mount point /mnt/drive9_sync: open /mnt/drive9_sync/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-+------------------+--------------+----------------+
-|       ITEM       |     VALUE    |      COST      |
-+------------------+--------------+----------------+
-|   Write big file |  64.54 MiB/s |   63.46 s/file |
-|    Read big file | 346.40 MiB/s |   11.82 s/file |
-| Write small file | 99.1 files/s |  40.37 ms/file |
-|  Read small file | 12.8 files/s | 311.34 ms/file |
-|        Stat file | 22.2 files/s | 180.37 ms/file |
-+------------------+--------------+----------------+
-[2026-11-02T10:49:35Z] === [Suite 2: drive9_fuse_bench.py] Running Cold-Cache & Hot-Cache across Bowl, Drive9 Default, and Drive9 Sync ===
-drain ok: /mnt/drive9_default duration=0ms
-pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
-native_syncfs_supported=false fuse_protocol=7.39
++------------------+---------------+---------------+
+|       ITEM       |     VALUE     |      COST     |
++------------------+---------------+---------------+
+|   Write big file |   60.73 MiB/s |  67.45 s/file |
+|    Read big file |  262.09 MiB/s |  15.63 s/file |
+| Write small file | 100.0 files/s | 40.01 ms/file |
+|  Read small file | 189.7 files/s | 21.09 ms/file |
+|        Stat file | 508.3 files/s |  7.87 ms/file |
++------------------+---------------+---------------+
+[2026-11-02T16:00:46Z] === [Suite 2: drive9_fuse_bench.py] Running Cold-Cache & Hot-Cache across Bowl, Drive9 Default, and Drive9 Sync ===
 component: drive9 mount
 version: dev
 git_hash: unknown
@@ -157,28 +154,31 @@ go_version: go1.25.1
 drain ok: /mnt/drive9_default duration=0ms
 pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
 native_syncfs_supported=false fuse_protocol=7.39
-component: drive9 mount
-version: dev
-git_hash: unknown
-git_branch: unknown
-build_time: unknown
-go_version: go1.25.1
-[2026-11-02T11:06:46Z] === [Suite 3: fuse_perf_baseline.py] Target: bowl (/mnt/bowl) ===
-[2026-11-02T11:06:51Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_default (/mnt/drive9_default) ===
-component: drive9 mount
-version: dev
-git_hash: unknown
-git_branch: unknown
-build_time: unknown
-go_version: go1.25.1
 drain ok: /mnt/drive9_default duration=0ms
 pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
 native_syncfs_supported=false fuse_protocol=7.39
-[2026-11-02T11:06:55Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_sync (/mnt/drive9_sync) ===
-[2026-11-02T11:07:00Z] Downloading raw benchmark results to /tmp/bowl-benchmark-ee8d113/drive9...
-[2026-11-02T11:07:23Z] Destroying temporary ECS instances now that benchmarks are complete...
-[2026-11-02T11:07:32Z] Verified remaining target ECS instances count after DeleteInstances: 0
-[2026-11-02T11:07:33Z] Generating summary.json and REPORT.md via parse_results.py...
-[2026-11-02T11:07:33Z] === Benchmark Suite Completed Successfully! Report saved to /tmp/bowl-benchmark-ee8d113/drive9/REPORT.md ===
-[2026-11-02T11:07:33Z] === Triggering Cloud Resource Cleanup Trap (exit_code=0) ===
-[2026-11-02T11:07:33Z] === Cloud Resource Cleanup Finished ===
+component: drive9 mount
+version: dev
+git_hash: unknown
+git_branch: unknown
+build_time: unknown
+go_version: go1.25.1
+[2026-11-02T16:17:44Z] === [Suite 3: fuse_perf_baseline.py] Target: bowl (/mnt/bowl) ===
+[2026-11-02T16:17:49Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_default (/mnt/drive9_default) ===
+drain ok: /mnt/drive9_default duration=0ms
+pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
+native_syncfs_supported=false fuse_protocol=7.39
+component: drive9 mount
+version: dev
+git_hash: unknown
+git_branch: unknown
+build_time: unknown
+go_version: go1.25.1
+[2026-11-02T16:17:53Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_sync (/mnt/drive9_sync) ===
+[2026-11-02T16:17:58Z] Downloading raw benchmark results to /tmp/bowl-benchmark-0655a17/drive9/results...
+[2026-11-02T16:18:22Z] Destroying temporary ECS instances now that benchmarks are complete...
+[2026-11-02T16:18:30Z] Verified remaining target ECS instances count after DeleteInstances: 0
+[2026-11-02T16:18:31Z] Generating summary.json and REPORT.md via parse_results.py...
+[2026-11-02T16:18:31Z] === Benchmark Suite Completed Successfully! Report saved to /tmp/bowl-benchmark-0655a17/drive9/REPORT.md ===
+[2026-11-02T16:18:31Z] === Triggering Cloud Resource Cleanup Trap (exit_code=0) ===
+[2026-11-02T16:18:31Z] === Cloud Resource Cleanup Finished ===

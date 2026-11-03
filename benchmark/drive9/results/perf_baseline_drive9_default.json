@@ -5,7 +5,7 @@
     "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
     "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
   },
-  "generated_at_unix": 1793617613.5502093,
+  "generated_at_unix": 1793636271.8196857,
   "params": {
     "large_bytes": 16777216,
     "large_mb": 16,
@@ -19,51 +19,51 @@
     "large_file_reads": [
       {
         "bytes": 16777216,
-        "bytes_per_second": 727891518.0121753,
+        "bytes_per_second": 631411047.5904644,
         "files": 1,
-        "files_per_second": 43.38571536613556,
-        "mib_per_second": 694.1714458581689,
+        "files_per_second": 37.63503119888689,
+        "mib_per_second": 602.1604991821903,
         "pass": 1,
         "rows": 0,
-        "seconds": 0.023049060999937865
+        "seconds": 0.02657098899999255
       },
       {
         "bytes": 16777216,
-        "bytes_per_second": 773284852.5844697,
+        "bytes_per_second": 708307179.0329552,
         "files": 1,
-        "files_per_second": 46.09136894848762,
-        "mib_per_second": 737.4619031758019,
+        "files_per_second": 42.2183977981183,
+        "mib_per_second": 675.4943647698929,
         "pass": 2,
         "rows": 0,
-        "seconds": 0.021696036000093954
+        "seconds": 0.023686356000098385
       }
     ],
     "large_file_write": {
       "bytes": 16777216,
-      "bytes_per_second": 63180574.62264806,
+      "bytes_per_second": 61771089.04081588,
       "files": 1,
-      "files_per_second": 3.765855707087997,
-      "mib_per_second": 60.253691313407955,
+      "files_per_second": 3.6818438196668555,
+      "mib_per_second": 58.90950111466969,
       "rows": 0,
-      "seconds": 0.2655438970000432
+      "seconds": 0.27160304700009874
     },
     "small_file_read": {
       "bytes": 65536,
-      "bytes_per_second": 95479.22757444755,
+      "bytes_per_second": 101269.54421773202,
       "files": 64,
-      "files_per_second": 93.24143317817143,
-      "mib_per_second": 0.09105608708805804,
+      "files_per_second": 98.89603927512893,
+      "mib_per_second": 0.0965781633546181,
       "rows": 0,
-      "seconds": 0.686390136
+      "seconds": 0.647144217999994
     },
     "small_file_write": {
       "bytes": 65536,
-      "bytes_per_second": 893460.2502400964,
+      "bytes_per_second": 848078.8663635104,
       "files": 64,
-      "files_per_second": 872.5197756250941,
-      "mib_per_second": 0.852070093383881,
+      "files_per_second": 828.2020179331156,
+      "mib_per_second": 0.8087910331378082,
       "rows": 0,
-      "seconds": 0.07335077300012927
+      "seconds": 0.07727583200016852
     },
     "sqlite_insert_transaction": {
       "bytes": 0,
@@ -71,21 +71,21 @@
       "files": 0,
       "mib_per_second": 0.0,
       "rows": 256,
-      "rows_per_second": 6573.814954302455,
-      "seconds": 0.0389423799999804
+      "rows_per_second": 6208.851503647797,
+      "seconds": 0.0412314579998565
     },
     "sqlite_read_aggregate": {
       "bytes": 131072,
-      "bytes_per_second": 367267795.71443,
+      "bytes_per_second": 281521097.09683394,
       "files": 0,
       "integrity_check": "ok",
       "journal_mode": "delete",
       "max_version": 2,
-      "mib_per_second": 350.2538640159893,
+      "mib_per_second": 268.47943982776064,
       "payload_verified_rows": 256,
       "rows": 256,
-      "rows_per_second": 717319.913504746,
-      "seconds": 0.0003568839999843476
+      "rows_per_second": 549845.8927672538,
+      "seconds": 0.0004655850000290229
     },
     "sqlite_update_transaction": {
       "bytes": 0,
@@ -93,8 +93,8 @@
       "files": 0,
       "mib_per_second": 0.0,
       "rows": 86,
-      "rows_per_second": 1117.5326500822875,
-      "seconds": 0.07695524599989767
+      "rows_per_second": 1053.6980451824054,
+      "seconds": 0.08161730999995598
     },
     "sqlite_wal_checkpoint_truncate": {
       "bytes": 0,
@@ -106,8 +106,8 @@
       "integrity_check": "ok",
       "mib_per_second": 0.0,
       "rows": 256,
-      "rows_per_second": 29272.873263220255,
-      "seconds": 0.00874529799989432
+      "rows_per_second": 28959.495507520693,
+      "seconds": 0.008839932999990197
     },
     "sqlite_wal_insert_transaction": {
       "bytes": 0,
@@ -115,21 +115,21 @@
       "files": 0,
       "mib_per_second": 0.0,
       "rows": 256,
-      "rows_per_second": 7715.875425723077,
-      "seconds": 0.03317834800009223
+      "rows_per_second": 7798.8230235452675,
+      "seconds": 0.03282546600007663
     },
     "sqlite_wal_read_aggregate": {
       "bytes": 131072,
-      "bytes_per_second": 630554005.5438883,
+      "bytes_per_second": 462944190.95516557,
       "files": 0,
       "integrity_check": "ok",
       "journal_mode": "wal",
       "max_version": 2,
-      "mib_per_second": 601.3431601942905,
+      "mib_per_second": 441.497984843412,
       "payload_verified_rows": 256,
       "rows": 256,
-      "rows_per_second": 1231550.792077907,
-      "seconds": 0.00020786799996130867
+      "rows_per_second": 904187.8729593077,
+      "seconds": 0.0002831270001024677
     },
     "sqlite_wal_update_transaction": {
       "bytes": 0,
@@ -137,8 +137,8 @@
       "files": 0,
       "mib_per_second": 0.0,
       "rows": 86,
-      "rows_per_second": 2860.5777362537615,
-      "seconds": 0.03006385699995917
+      "rows_per_second": 2669.0853959871833,
+      "seconds": 0.03222077500004161
     }
   }
 }

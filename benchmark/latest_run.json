@@ -1,6 +1,6 @@
 {
-  "bowl_commit": "ee8d11385a12642a8ef4ea307ecdb25745b82562",
-  "date_local": "2026-11-02",
+  "bowl_commit": "0655a176e5d6b68b955f647914857cd20e518597",
+  "date_local": "2026-11-03",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
   "zone": "us-west-1a",
@@ -38,7 +38,7 @@
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-02T11:08:48.614991+00:00",
+    "verified_at_utc": "2026-11-02T16:21:03.462030+00:00",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
     "created_instances_total": 6
@@ -55,6 +55,76 @@
     "ADR-0028 同时调整数据库交互、WAL 提交与内核缓存保留；本轮未隔离单项优化收益",
     "ADR-0026 使用服务端页缓存，未测试整机断电恢复",
     "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读",
-    "原始日志保留原始尾随空格"
-  ]
+    "原始日志保留原始尾随空格",
+    "前后两轮使用同规格的新建云主机；未进行多轮统计或单项优化隔离，前后变化不能直接归因于某一处代码修改"
+  ],
+  "previous_bowl_commit": "ee8d11385a12642a8ef4ea307ecdb25745b82562",
+  "started_at_local": "2026-11-02T23:53:30+08:00",
+  "completed_at_local": "2026-11-03T00:19:52+08:00",
+  "comparison_to_previous_run": {
+    "juicefs": {
+      "Write big file": {
+        "previous": 324.2,
+        "current": 340.02,
+        "unit": "MiB/s",
+        "current_over_previous": 1.0488
+      },
+      "Read big file": {
+        "previous": 1598.78,
+        "current": 1782.86,
+        "unit": "MiB/s",
+        "current_over_previous": 1.1151
+      },
+      "Write small file": {
+        "previous": 444.4,
+        "current": 343.5,
+        "unit": "files/s",
+        "current_over_previous": 0.773
+      },
+      "Read small file": {
+        "previous": 125.8,
+        "current": 1873.5,
+        "unit": "files/s",
+        "current_over_previous": 14.8927
+      },
+      "Stat file": {
+        "previous": 6415.9,
+        "current": 6851.0,
+        "unit": "files/s",
+        "current_over_previous": 1.0678
+      }
+    },
+    "drive9": {
+      "Write big file": {
+        "previous": 282.5,
+        "current": 284.83,
+        "unit": "MiB/s",
+        "current_over_previous": 1.0082
+      },
+      "Read big file": {
+        "previous": 951.07,
+        "current": 1202.87,
+        "unit": "MiB/s",
+        "current_over_previous": 1.2648
+      },
+      "Write small file": {
+        "previous": 268.3,
+        "current": 326.8,
+        "unit": "files/s",
+        "current_over_previous": 1.218
+      },
+      "Read small file": {
+        "previous": 661.0,
+        "current": 1722.5,
+        "unit": "files/s",
+        "current_over_previous": 2.6059
+      },
+      "Stat file": {
+        "previous": 6574.9,
+        "current": 6956.6,
+        "unit": "files/s",
+        "current_over_previous": 1.0581
+      }
+    }
+  }
 }
