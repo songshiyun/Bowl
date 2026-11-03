@@ -18,7 +18,7 @@ import (
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
-// DefaultReleaseRetryInterval 是待释放句柄异步重试队列的默认轮询周期。
+// DefaultReleaseRetryInterval 是孤儿回收异步重试的默认轮询周期。
 const DefaultReleaseRetryInterval = 200 * time.Millisecond
 
 // DefaultRPCTimeout 是 FUSE 常规请求（不含阻塞锁 SetLkw）的默认单请求超时预算。
@@ -29,42 +29,45 @@ var _ fuse.RawFileSystem = (*RawFS)(nil)
 
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
-	DiskID               string
-	RootIno              uint64
-	ReadOnly             bool
-	DirectIO             bool
-	AllowOther           bool
-	Debug                bool
-	RPCTimeout           time.Duration
-	ReleaseRetryInterval time.Duration
-	OnUnmount            func()
+	DiskID                 string
+	RootIno                uint64
+	ReadOnly               bool
+	DirectIO               bool
+	AllowOther             bool
+	Debug                  bool
+	RPCTimeout             time.Duration
+	ReleaseRetryInterval   time.Duration
+	NamespaceCacheCapacity int
+	BranchName             string
+	OnUnmount              func()
 }
 
-type releaseRetryKey struct {
-	isDir     bool
-	fh        uint64
+type reclaimRetryItem struct {
+	ino       uint64
 	sessionID uint64
-}
-
-type releaseRetryItem struct {
-	key     releaseRetryKey
-	fileReq *storagev1.ReleaseRequest
-	dirReq  *storagev1.ReleaseDirRequest
 }
 
 // RawFS 封装底层 FUSE 请求处理，桥接 Linux 内核 VFS 与 StorageService RPC。
 type RawFS struct {
 	fuse.RawFileSystem
 
-	client    storagev1connect.StorageServiceClient
-	locks     *LockTable
-	sessions  *session.Manager
-	cfg       Config
-	nextReqID atomic.Uint64
+	client  storagev1connect.StorageServiceClient
+	locks   *LockTable
+	handles *HandleTable
+	cache   *NamespaceCache
+	// 协调目录变更、句柄引用和缓存填充。
+	namespaceMu    sync.RWMutex
+	tmpMu          sync.RWMutex
+	tmpFiles       map[uint64]*tmpFile
+	serverToLocal  map[uint64]uint64
+	orphanSessions map[uint64]uint64
+	nextTmp        atomic.Uint64
+	sessions       *session.Manager
+	cfg            Config
+	nextReqID      atomic.Uint64
 
 	releaseMu       sync.Mutex
-	releaseQueue    []releaseRetryItem
-	releaseWake     chan struct{}
+	releaseQueue    []reclaimRetryItem
 	releaseCtx      context.Context
 	releaseCancel   context.CancelFunc
 	releaseLoopDone chan struct{}
@@ -88,25 +91,30 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
 		client:           client,
 		locks:            NewLockTable(),
+		cache:            NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		tmpFiles:         make(map[uint64]*tmpFile),
+		serverToLocal:    make(map[uint64]uint64),
+		orphanSessions:   make(map[uint64]uint64),
 		sessions:         sessions,
 		cfg:              cfg,
-		releaseWake:      make(chan struct{}, 1),
 		releaseCtx:       releaseCtx,
 		releaseCancel:    releaseCancel,
 		readAheadHandles: make(map[uint64]*handleReadAhead),
 	}
+	fs.handles = NewHandleTable(fs.reclaimOrphan)
 	if sessions != nil {
 		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
 	}
 	return fs
 }
 
-// onSessionExpired 清理指定 ClientSession 的预读缓存与待释放句柄重试项。
+// onSessionExpired 清理旧会话的目录缓存、预读缓存与孤儿回收重试项。
 func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 	if fs == nil {
 		return
 	}
 
+	fs.cache.clear()
 	fs.readAheadMu.Lock()
 	var targets []*handleReadAhead
 	for fh, hra := range fs.readAheadHandles {
@@ -126,7 +134,7 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 	fs.releaseMu.Lock()
 	remaining := fs.releaseQueue[:0]
 	for _, item := range fs.releaseQueue {
-		if expiredSID != 0 && item.key.sessionID != expiredSID {
+		if expiredSID != 0 && item.sessionID != expiredSID {
 			remaining = append(remaining, item)
 		}
 	}
@@ -137,6 +145,21 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
 // 严防内核越过根映射以非 1 且等于 RootIno 的编号直接访问，返回 ENOENT。
 func (fs *RawFS) ToServerIno(kernelIno uint64) (uint64, fuse.Status) {
+	fs.tmpMu.RLock()
+	tmp := fs.tmpFiles[kernelIno]
+	fs.tmpMu.RUnlock()
+	if tmp != nil {
+		tmp.mu.Lock()
+		serverIno := tmp.serverIno
+		tmp.mu.Unlock()
+		if serverIno != 0 {
+			return serverIno, fuse.OK
+		}
+		return kernelIno, fuse.OK
+	}
+	if kernelIno&(uint64(1)<<63) != 0 {
+		return 0, fuse.ENOENT
+	}
 	if kernelIno == fuse.FUSE_ROOT_ID {
 		return fs.cfg.RootIno, fuse.OK
 	}
@@ -149,6 +172,12 @@ func (fs *RawFS) ToServerIno(kernelIno uint64) (uint64, fuse.Status) {
 // ToKernelIno 将服务端持久化 Inode 映射为 Linux 内核可见的 Inode。
 // 当 serverIno 等于目标 Disk.RootIno 时，强制映射为 1 (fuse.FUSE_ROOT_ID)。
 func (fs *RawFS) ToKernelIno(serverIno uint64) uint64 {
+	fs.tmpMu.RLock()
+	localIno := fs.serverToLocal[serverIno]
+	fs.tmpMu.RUnlock()
+	if localIno != 0 {
+		return localIno
+	}
 	if serverIno == fs.cfg.RootIno {
 		return fuse.FUSE_ROOT_ID
 	}
@@ -211,17 +240,54 @@ func (fs *RawFS) ToStatusWithSession(err error, cancel <-chan struct{}) fuse.Sta
 	return fuse.Status(errno)
 }
 
-// ResolveHandle 查询并校验文件句柄 fh 所属的会话 ID。
-// 若句柄不存在或其所属会话已被淘汰，返回 (0, fuse.EBADF)。
+// ResolveHandle 校验本地句柄及其关联会话。
 func (fs *RawFS) ResolveHandle(fh uint64) (uint64, fuse.Status) {
-	if fs.sessions == nil {
+	if _, ok := fs.handles.Get(fh); !ok {
 		return 0, fuse.EBADF
+	}
+	if fs.sessions == nil {
+		return 0, fuse.OK
 	}
 	sid, err := fs.sessions.ResolveHandleSession(fh)
 	if err != nil {
 		return 0, fuse.EBADF
 	}
 	return sid, fuse.OK
+}
+
+func (fs *RawFS) checkedHandle(ino, fh uint64, dir bool) (FileHandle, uint64, fuse.Status) {
+	h, ok := fs.handles.Get(fh)
+	if !ok || h.Ino != ino || h.IsDir != dir {
+		return FileHandle{}, 0, fuse.EBADF
+	}
+	sid, status := fs.ResolveHandle(fh)
+	return h, sid, status
+}
+
+func optionalSession(sid uint64) *uint64 {
+	if sid == 0 {
+		return nil
+	}
+	return &sid
+}
+
+func (fs *RawFS) currentSession() *uint64 {
+	if fs.sessions == nil {
+		return nil
+	}
+	return optionalSession(fs.sessions.CurrentSessionID())
+}
+
+func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.Status) {
+	fh, err := fs.handles.Open(ino, flags, dir)
+	if err != nil {
+		return 0, fuse.Status(err.(syscall.Errno))
+	}
+	fs.locks.RegisterHandle(fh, flags)
+	if fs.sessions != nil {
+		fs.sessions.BindHandle(fh, fs.sessions.CurrentSessionID())
+	}
+	return fh, fuse.OK
 }
 
 // NextRequestID 原子单调递增生成在 [1, math.MaxInt64] 范围内的唯一请求 ID。
@@ -245,88 +311,47 @@ func (fs *RawFS) OnUnmount() {
 	}
 }
 
-// shouldEnqueueReleaseRetry 判断 Release / ReleaseDir 失败后是否应入队异步重试。
-// 当服务端返回 EBADF / ENOENT / EINVAL 时，说明句柄或节点已不存在（已完成销毁或不可恢复），视为已完成销毁。
-func shouldEnqueueReleaseRetry(err error) bool {
+func shouldRetryReclaim(err error) bool {
 	if err == nil {
 		return false
 	}
-	errno := rpc.MapError(err)
-	switch errno {
-	case 0, syscall.EBADF, syscall.ENOENT, syscall.EINVAL:
-		return false
-	default:
+	switch connect.CodeOf(err) {
+	case connect.CodeUnavailable, connect.CodeDeadlineExceeded, connect.CodeResourceExhausted, connect.CodeAborted, connect.CodeInternal:
 		return true
+	default:
+		return errors.Is(err, context.DeadlineExceeded)
 	}
 }
 
-func (fs *RawFS) enqueueReleaseFileRetry(req *storagev1.ReleaseRequest, sessionID uint64) {
-	if req == nil {
+// markOrphan 记录解链时使用的会话，避免轮换后误用新会话回收旧节点。
+// 调用方须持有 namespaceMu。
+func (fs *RawFS) markOrphan(ino uint64, sid *uint64) {
+	var sessionID uint64
+	if sid != nil {
+		sessionID = *sid
+	}
+	fs.orphanSessions[ino] = sessionID
+	fs.handles.MarkOrphan(ino)
+}
+
+func (fs *RawFS) reclaimOrphan(ino uint64) {
+	sid := fs.orphanSessions[ino]
+	delete(fs.orphanSessions, ino)
+	if fs.sessions != nil && (sid == 0 || sid != fs.sessions.CurrentSessionID()) {
 		return
 	}
-	var lockOwnerPtr *uint64
-	if req.LockOwner != nil {
-		lo := *req.LockOwner
-		lockOwnerPtr = &lo
-	}
-	var sidPtr *uint64
-	if req.SessionId != nil {
-		sid := *req.SessionId
-		sidPtr = &sid
-	}
-	cloned := &storagev1.ReleaseRequest{
-		Ino:          req.GetIno(),
-		Fh:           req.GetFh(),
-		LockOwner:    lockOwnerPtr,
-		ReleaseFlags: req.GetReleaseFlags(),
-		SessionId:    sidPtr,
-	}
-	fs.enqueueReleaseRetryItem(releaseRetryItem{
-		key: releaseRetryKey{
-			isDir:     false,
-			fh:        req.GetFh(),
-			sessionID: sessionID,
-		},
-		fileReq: cloned,
-	})
-}
-
-func (fs *RawFS) enqueueReleaseDirRetry(req *storagev1.ReleaseDirRequest, sessionID uint64) {
-	if req == nil {
+	serverIno, status := fs.ToServerIno(ino)
+	if status != fuse.OK || fs.client == nil {
 		return
 	}
-	var sidPtr *uint64
-	if req.SessionId != nil {
-		sid := *req.SessionId
-		sidPtr = &sid
+	item := reclaimRetryItem{ino: serverIno, sessionID: sid}
+	if fs.tryReclaim(context.Background(), item) {
+		return
 	}
-	cloned := &storagev1.ReleaseDirRequest{
-		Ino:       req.GetIno(),
-		Fh:        req.GetFh(),
-		SessionId: sidPtr,
-	}
-	fs.enqueueReleaseRetryItem(releaseRetryItem{
-		key: releaseRetryKey{
-			isDir:     true,
-			fh:        req.GetFh(),
-			sessionID: sessionID,
-		},
-		dirReq: cloned,
-	})
-}
-
-func (fs *RawFS) enqueueReleaseRetryItem(item releaseRetryItem) {
 	fs.releaseMu.Lock()
 	if fs.releaseClosed {
 		fs.releaseMu.Unlock()
 		return
-	}
-	for i := range fs.releaseQueue {
-		if fs.releaseQueue[i].key == item.key {
-			fs.releaseQueue[i] = item
-			fs.releaseMu.Unlock()
-			return
-		}
 	}
 	fs.releaseQueue = append(fs.releaseQueue, item)
 	if !fs.releaseStarted {
@@ -335,110 +360,66 @@ func (fs *RawFS) enqueueReleaseRetryItem(item releaseRetryItem) {
 		go fs.releaseRetryLoop()
 	}
 	fs.releaseMu.Unlock()
+}
 
-	select {
-	case fs.releaseWake <- struct{}{}:
-	default:
+// tryReclaim 返回 true 表示回收完成或错误不可重试。
+func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool {
+	ctx, cancel := context.WithTimeout(parent, fs.cfg.RPCTimeout)
+	defer cancel()
+	req := &storagev1.ReclaimOrphanRequest{Ino: item.ino, SessionId: item.sessionID, DiskId: fs.cfg.DiskID}
+	if fs.cfg.BranchName != "" {
+		req.BranchName = &fs.cfg.BranchName
 	}
+	_, err := fs.client.ReclaimOrphan(ctx, connect.NewRequest(req))
+	return !shouldRetryReclaim(err)
 }
 
 func (fs *RawFS) releaseRetryLoop() {
 	defer close(fs.releaseLoopDone)
-
-	interval := fs.cfg.ReleaseRetryInterval
-	if interval <= 0 {
-		interval = DefaultReleaseRetryInterval
-	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(fs.cfg.ReleaseRetryInterval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-fs.releaseCtx.Done():
 			return
-		case <-fs.releaseWake:
-			select {
-			case <-fs.releaseCtx.Done():
-				return
-			case <-ticker.C:
-			}
 		case <-ticker.C:
+			fs.drainReleaseQueueOnce(fs.releaseCtx)
 		}
-
-		fs.drainReleaseQueueOnce(fs.releaseCtx)
 	}
 }
 
-func (fs *RawFS) drainReleaseQueueOnce(parentCtx context.Context) {
+func (fs *RawFS) drainReleaseQueueOnce(ctx context.Context) {
 	fs.releaseMu.Lock()
-	if len(fs.releaseQueue) == 0 {
-		fs.releaseMu.Unlock()
-		return
-	}
-	snapshot := make([]releaseRetryItem, len(fs.releaseQueue))
-	copy(snapshot, fs.releaseQueue)
+	queue := fs.releaseQueue
+	fs.releaseQueue = nil
 	fs.releaseMu.Unlock()
-
-	completed := make(map[releaseRetryKey]struct{})
-	for _, item := range snapshot {
-		if parentCtx.Err() != nil {
-			break
-		}
-		if fs.sessions != nil && item.key.sessionID != 0 {
-			if fs.sessions.CurrentSessionID() != item.key.sessionID {
-				completed[item.key] = struct{}{}
-				continue
-			}
-		}
-		if fs.client == nil {
-			completed[item.key] = struct{}{}
+	for _, item := range queue {
+		if ctx.Err() != nil {
+			fs.releaseMu.Lock()
+			fs.releaseQueue = append(fs.releaseQueue, item)
+			fs.releaseMu.Unlock()
 			continue
 		}
-
-		reqCtx, cancel := context.WithTimeout(parentCtx, 5*time.Second)
-		var err error
-		if item.key.isDir {
-			_, err = fs.client.ReleaseDir(reqCtx, connect.NewRequest(item.dirReq))
-		} else {
-			_, err = fs.client.Release(reqCtx, connect.NewRequest(item.fileReq))
+		if fs.sessions != nil && item.sessionID != fs.sessions.CurrentSessionID() {
+			continue
 		}
-		cancel()
-
-		if !shouldEnqueueReleaseRetry(err) {
-			completed[item.key] = struct{}{}
+		if !fs.tryReclaim(ctx, item) {
+			fs.releaseMu.Lock()
+			fs.releaseQueue = append(fs.releaseQueue, item)
+			fs.releaseMu.Unlock()
 		}
 	}
-
-	if len(completed) == 0 {
-		return
-	}
-
-	fs.releaseMu.Lock()
-	remaining := fs.releaseQueue[:0]
-	for _, item := range fs.releaseQueue {
-		if _, done := completed[item.key]; !done {
-			remaining = append(remaining, item)
-		}
-	}
-	fs.releaseQueue = remaining
-	fs.releaseMu.Unlock()
 }
 
 func (fs *RawFS) stopAndDrainReleaseQueue() {
 	fs.releaseMu.Lock()
-	alreadyClosed := fs.releaseClosed
 	fs.releaseClosed = true
-	started := fs.releaseStarted
-	loopDone := fs.releaseLoopDone
+	started, done := fs.releaseStarted, fs.releaseLoopDone
 	fs.releaseMu.Unlock()
-
-	if !alreadyClosed && fs.releaseCancel != nil {
-		fs.releaseCancel()
+	fs.releaseCancel()
+	if started {
+		<-done
 	}
-	if started && loopDone != nil {
-		<-loopDone
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	fs.drainReleaseQueueOnce(ctx)

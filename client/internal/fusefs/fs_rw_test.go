@@ -34,6 +34,10 @@ type rwMockStorageServer struct {
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
 }
 
+func (m *rwMockStorageServer) GetAttr(_ context.Context, req *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error) {
+	return connect.NewResponse(&storagev1.GetAttrResponse{Inode: &storagev1.Inode{Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}}}), nil
+}
+
 func (m *rwMockStorageServer) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 	if m.readFn != nil {
 		return m.readFn(ctx, req)
@@ -157,6 +161,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 			DiskID:  diskID,
 			RootIno: rootIno,
 		})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -176,9 +181,9 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 
 		// 验证精确 3 次 RPC 调用
 		require.Len(t, calls, 3)
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 0, size: 4 * 1024 * 1024, sid: curSID}, calls[0])
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 4 * 1024 * 1024, size: 4 * 1024 * 1024, sid: curSID}, calls[1])
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 8 * 1024 * 1024, size: 1 * 1024 * 1024, sid: curSID}, calls[2])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 0, size: 4 * 1024 * 1024, sid: curSID}, calls[0])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 4 * 1024 * 1024, size: 4 * 1024 * 1024, sid: curSID}, calls[1])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 8 * 1024 * 1024, size: 1 * 1024 * 1024, sid: curSID}, calls[2])
 	})
 
 	t.Run("<= 4 MiB 单次直通读取并复用传入 buf", func(t *testing.T) {
@@ -190,7 +195,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 				calls++
 				require.Equal(t, uint64(fileIno), req.Msg.GetIno())
-				require.Equal(t, uint64(testFH), req.Msg.GetFh())
+				require.Zero(t, req.Msg.GetFh())
 				require.Equal(t, uint64(1024), req.Msg.GetOffset())
 				require.Equal(t, uint32(readSize), req.Msg.GetSize())
 				return connect.NewResponse(&storagev1.ReadResponse{Data: data}), nil
@@ -202,6 +207,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		buf := make([]byte, readSize)
 		input := &fuse.ReadIn{
@@ -234,6 +240,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -262,6 +269,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		buf := make([]byte, 512)
 		input := &fuse.ReadIn{
@@ -299,6 +307,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -330,6 +339,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -356,6 +366,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -385,7 +396,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		require.Equal(t, fuse.EBADF, status)
 	})
 
-	t.Run("只写句柄读取服务端返回 EBADF", func(t *testing.T) {
+	t.Run("只写句柄在本地拒绝读取", func(t *testing.T) {
 		mockSrv := &rwMockStorageServer{
 			readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 				return nil, makeStorageError(connect.CodeFailedPrecondition, "EBADF", "bad file descriptor")
@@ -397,6 +408,7 @@ func TestRawFS_Read_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_WRONLY, false))
 
 		input := &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -435,6 +447,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 			RootIno:  rootIno,
 			ReadOnly: true, // 只读挂载
 		})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDONLY, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -470,7 +483,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 			writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
 				called = true
 				require.Equal(t, uint64(fileIno), req.Msg.GetIno())
-				require.Equal(t, uint64(testFH), req.Msg.GetFh())
+				require.Zero(t, req.Msg.GetFh())
 				require.Equal(t, 0, len(req.Msg.GetData()))
 				return connect.NewResponse(&storagev1.WriteResponse{Size: 0}), nil
 			},
@@ -481,6 +494,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -501,7 +515,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 			writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
 				called = true
 				require.Equal(t, uint64(fileIno), req.Msg.GetIno())
-				require.Equal(t, uint64(testFH), req.Msg.GetFh())
+				require.Zero(t, req.Msg.GetFh())
 				require.Equal(t, uint64(50), req.Msg.GetOffset())
 				require.Equal(t, data, req.Msg.GetData())
 				return connect.NewResponse(&storagev1.WriteResponse{Size: uint32(len(data))}), nil
@@ -513,6 +527,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -568,6 +583,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, curSID)
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -581,9 +597,9 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 
 		// 验证精确 3 次分片与偏移计算
 		require.Len(t, calls, 3)
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 100, dataLen: 4 * 1024 * 1024, sid: curSID}, calls[0])
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 100 + 4*1024*1024, dataLen: 4 * 1024 * 1024, sid: curSID}, calls[1])
-		require.Equal(t, callRecord{ino: fileIno, fh: testFH, offset: 100 + 8*1024*1024, dataLen: 1 * 1024 * 1024, sid: curSID}, calls[2])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 100, dataLen: 4 * 1024 * 1024, sid: curSID}, calls[0])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 100 + 4*1024*1024, dataLen: 4 * 1024 * 1024, sid: curSID}, calls[1])
+		require.Equal(t, callRecord{ino: fileIno, fh: 0, offset: 100 + 8*1024*1024, dataLen: 1 * 1024 * 1024, sid: curSID}, calls[2])
 	})
 
 	t.Run("第 3 片写入返回 ENOSPC 时返回前 8 MiB 短写与 fuse.OK", func(t *testing.T) {
@@ -607,6 +623,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -632,6 +649,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -666,6 +684,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -679,7 +698,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		require.Equal(t, 1, calls)
 	})
 
-	t.Run("只读句柄写入服务端返回 EBADF", func(t *testing.T) {
+	t.Run("只读句柄在本地拒绝写入", func(t *testing.T) {
 		mockSrv := &rwMockStorageServer{
 			writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
 				return nil, makeStorageError(connect.CodeFailedPrecondition, "EBADF", "bad file descriptor")
@@ -691,6 +710,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDONLY, false))
 
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
@@ -722,6 +742,7 @@ func TestRawFS_Write_ChunkingAndBoundaries(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 		input := &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: fileIno},
 			Fh:       testFH,
@@ -779,6 +800,7 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 		t.Cleanup(fs.OnUnmount)
 
 		got := make([]byte, 0, totalSize)
@@ -822,6 +844,7 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 		t.Cleanup(fs.OnUnmount)
 
 		randomOffsets := []uint64{0, 1024 * 1024, 512 * 1024, 8 * 1024 * 1024, 256 * 1024}
@@ -888,6 +911,7 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 		mgr.BindHandle(testFH, mgr.CurrentSessionID())
 
 		fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 		t.Cleanup(fs.OnUnmount)
 
 		// 辅助函数：通过两次连续顺序读填充 4 MiB 预读缓冲，并验证第 3 次顺序读命中缓存（版本号仍为 expectedVer）
@@ -1013,7 +1037,7 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 			InHeader: fuse.InHeader{NodeId: fileIno},
 			Fh:       testFH,
 		})
-		mgr.BindHandle(testFH, mgr.CurrentSessionID())
+		require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 		version.Store(6)
 
 		resAfterRelease, st := fs.Read(nil, &fuse.ReadIn{

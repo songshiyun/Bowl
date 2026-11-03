@@ -40,197 +40,172 @@ func ToProtoOpenFlags(sysFlags uint32) uint32 {
 	return protoFlags
 }
 
-// Create 实现原子创建常规文件并打开分配文件句柄，对应 Linux FUSE FUSE_CREATE 协议。
+// Create 创建服务端目录项并分配本地句柄。
 func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
-
+	if input.Flags&uint32(syscall.O_ACCMODE) == syscall.O_ACCMODE {
+		return fuse.EINVAL
+	}
 	parentIno, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-
-	var sessionID *uint64
+	var sid uint64
 	if fs.sessions != nil {
-		sid, err := fs.sessions.AcquireSessionID(ctx)
-		if err != nil {
-			return fs.ToStatus(err, cancel)
-		}
-		sessionID = &sid
+		sid = fs.sessions.CurrentSessionID()
 	}
-
 	resp, err := fs.client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: parentIno,
-		Name:      []byte(name),
-		Mode:      input.Mode & 0xffff,
-		Uid:       input.Uid,
-		Gid:       input.Gid,
-		Flags:     ToProtoOpenFlags(input.Flags),
-		SessionId: sessionID,
+		ParentIno: parentIno, Name: []byte(name), Mode: input.Mode & 0xffff,
+		Uid: input.Uid, Gid: input.Gid, Flags: ToProtoOpenFlags(input.Flags), SessionId: optionalSession(sid),
 	}))
 	if err != nil {
 		return fs.ToStatusWithSession(err, cancel)
 	}
-
-	fh := resp.Msg.GetFh()
-	fs.locks.RegisterHandle(fh, input.Flags)
-	if fs.sessions != nil && sessionID != nil {
-		fs.sessions.BindHandle(fh, *sessionID)
+	inode := resp.Msg.GetInode()
+	if inode == nil || inode.GetAttr() == nil {
+		return fuse.EIO
 	}
-
-	fs.FillEntryOut(&out.EntryOut, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
-	out.Fh = fh
-	out.OpenFlags = resp.Msg.GetOpenFlags()
-	if fs.cfg.DirectIO {
-		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
-	}
-
-	return fuse.OK
-}
-
-// Open 实现打开指定 Inode 常规文件并分配文件句柄，对应 Linux FUSE FUSE_OPEN 协议。
-func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
-	if fs.cfg.ReadOnly {
-		accMode := input.Flags & uint32(syscall.O_ACCMODE)
-		if accMode != uint32(syscall.O_RDONLY) || (input.Flags&uint32(syscall.O_TRUNC)) != 0 {
-			return fuse.Status(syscall.EROFS)
-		}
-	}
-
-	ino, status := fs.ToServerIno(input.NodeId)
+	ino := fs.ToKernelIno(inode.GetIno())
+	fh, status := fs.openHandle(ino, input.Flags, false)
 	if status != fuse.OK {
 		return status
 	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	var sessionID *uint64
-	if fs.sessions != nil {
-		sid, err := fs.sessions.AcquireSessionID(ctx)
-		if err != nil {
-			return fs.ToStatus(err, cancel)
-		}
-		sessionID = &sid
-	}
-
-	resp, err := fs.client.Open(ctx, connect.NewRequest(&storagev1.OpenRequest{
-		Ino:       ino,
-		Flags:     ToProtoOpenFlags(input.Flags),
-		SessionId: sessionID,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	if (input.Flags & uint32(syscall.O_TRUNC)) != 0 {
-		fs.invalidateReadAheadByIno(ino)
-	}
-
-	fh := resp.Msg.GetFh()
-	fs.locks.RegisterHandle(fh, input.Flags)
-	if fs.sessions != nil && sessionID != nil {
-		fs.sessions.BindHandle(fh, *sessionID)
-	}
-
+	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
+	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.addTmpLookup(ino)
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()
 	if fs.cfg.DirectIO {
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
 	}
-
 	return fuse.OK
 }
 
-// Flush 释放 LockOwner 持有的全部本地 POSIX 记录锁。
+// Open 读取缓存中的节点类型并在本地分配句柄。
+func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
+	mode := input.Flags & uint32(syscall.O_ACCMODE)
+	if mode == syscall.O_ACCMODE {
+		return fuse.EINVAL
+	}
+	if fs.cfg.ReadOnly && (mode != syscall.O_RDONLY || input.Flags&syscall.O_TRUNC != 0) {
+		return fuse.Status(syscall.EROFS)
+	}
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
+		return status
+	}
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	epoch := fs.cache.version()
+	cached, status := fs.getInode(cancel, input.NodeId)
+	if status != fuse.OK {
+		return status
+	}
+	if fs.cache.version() != epoch {
+		return fuse.Status(syscall.ESTALE)
+	}
+	if cached.inode.GetAttr().GetMode()&syscall.S_IFMT == syscall.S_IFDIR {
+		return fuse.Status(syscall.EISDIR)
+	}
+	if input.Flags&syscall.O_TRUNC != 0 {
+		set := &fuse.SetAttrIn{}
+		set.NodeId = input.NodeId
+		set.Valid = fuse.FATTR_SIZE
+		if status, local := fs.setTmpAttr(set, &fuse.AttrOut{}); local {
+			if status != fuse.OK {
+				return status
+			}
+		} else {
+			ino, st := fs.ToServerIno(input.NodeId)
+			if st != fuse.OK {
+				return st
+			}
+			ctx, done := fs.RPCContext(cancel)
+			zero := uint64(0)
+			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Size: &zero, SessionId: fs.currentSession()}))
+			done()
+			fs.cache.invalidateInode(input.NodeId)
+			fs.invalidateReadAheadByIno(ino)
+			if err != nil {
+				return fs.ToStatus(err, cancel)
+			}
+			fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+		}
+	}
+	fh, status := fs.openHandle(input.NodeId, input.Flags, false)
+	if status != fuse.OK {
+		return status
+	}
+	out.Fh = fh
+	if fs.cfg.DirectIO {
+		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
+	}
+	return fuse.OK
+}
+
+// Flush 释放当前 LockOwner 的本地 POSIX 锁。普通写入已同步提交服务端。
 func (fs *RawFS) Flush(_ <-chan struct{}, input *fuse.FlushIn) fuse.Status {
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
-	if _, status := fs.ResolveHandle(input.Fh); status != fuse.OK {
+	fs.namespaceMu.RLock()
+	defer fs.namespaceMu.RUnlock()
+	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
+	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
 	return fuse.OK
 }
 
-// Fsync 实现文件数据与元数据落盘同步操作，对应 Linux FUSE FUSE_FSYNC 协议。
-// 根据 input.FsyncFlags 区分完整 fsync 与仅数据同步 fdatasync。
+// Fsync 等待服务端完成文件持久化。
 func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
+		return status
+	}
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	if status != fuse.OK {
+		return status
+	}
+	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+		return status
+	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
-		return status
-	}
-
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-
-	datasync := (input.FsyncFlags & 0x1) != 0
 	_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		Datasync:  datasync,
-		SessionId: &sid,
+		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
 	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	return fuse.OK
+	return fs.ToStatusWithSession(err, cancel)
 }
 
-// Release 实现文件句柄关闭与销毁，对应 Linux FUSE FUSE_RELEASE 协议。
-// 无论服务端调用成功与否，必定在退出时解绑客户端内存中的句柄会话映射；
-// 在本地清理 flock 锁，并在孤儿节点无句柄引用时通知服务端回收。
-func (fs *RawFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
+// Release 在本地释放句柄与 flock；最后一个孤儿句柄触发回收。
+func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	h, ok := fs.handles.Get(input.Fh)
+	if !ok || h.Ino != input.NodeId || h.IsDir {
+		return
+	}
 	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)
 	fs.locks.ForgetHandle(input.Fh)
-	defer fs.removeReadAheadByFh(input.Fh)
+	fs.removeReadAheadByFh(input.Fh)
+	orphan := fs.handles.IsOrphan(input.NodeId)
+	fs.handles.Release(input.Fh)
 	if fs.sessions != nil {
-		defer fs.sessions.UnbindHandle(input.Fh)
+		fs.sessions.UnbindHandle(input.Fh)
 	}
-
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
-		return
-	}
-
-	if fs.sessions == nil {
-		return
-	}
-
-	sid, ok := fs.sessions.LookupHandleSession(input.Fh)
-	if !ok {
-		return
-	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	lockOwner := input.LockOwner
-	releaseFlags := input.ReleaseFlags & 0x3
-
-	req := &storagev1.ReleaseRequest{
-		Ino:          ino,
-		Fh:           input.Fh,
-		LockOwner:    &lockOwner,
-		ReleaseFlags: releaseFlags,
-		SessionId:    &sid,
-	}
-	_, err := fs.client.Release(ctx, connect.NewRequest(req))
-	if isServerEBADF(err) && fs.sessions != nil {
-		fs.sessions.TriggerRenew()
-	}
-	if shouldEnqueueReleaseRetry(err) {
-		fs.enqueueReleaseFileRetry(req, sid)
-	}
+	fs.dropTmpIfUnused(input.NodeId, orphan)
 }

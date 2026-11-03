@@ -124,3 +124,25 @@ func (t *HandleTable) MarkOrphan(ino uint64) {
 		t.onOrphan(ino)
 	}
 }
+
+// AnyOpen 判断是否存在本地活动句柄。
+func (t *HandleTable) AnyOpen() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.handles) != 0
+}
+
+// ClearOrphan 在孤儿重新具名化后取消回收标记。
+func (t *HandleTable) ClearOrphan(ino uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.orphans, ino)
+}
+
+// IsOrphan 判断节点是否等待最后一个句柄关闭。
+func (t *HandleTable) IsOrphan(ino uint64) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, ok := t.orphans[ino]
+	return ok
+}

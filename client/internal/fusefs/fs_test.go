@@ -462,6 +462,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RootIno: rootIno,
 		})
 		t.Cleanup(rawFS.OnUnmount)
+		require.Equal(t, fuse.OK, rawFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		payload := []byte("adr-0027-30s-budget-verification-payload")
 		start := time.Now()
@@ -592,6 +593,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RPCTimeout: 80 * time.Millisecond,
 		})
 		t.Cleanup(shortFS.OnUnmount)
+		require.Equal(t, fuse.OK, shortFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		var entryOut fuse.EntryOut
 		start := time.Now()
@@ -607,6 +609,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RootIno: rootIno,
 		})
 		t.Cleanup(defaultFS.OnUnmount)
+		require.Equal(t, fuse.OK, defaultFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		cancelCh := make(chan struct{})
 		go func() {

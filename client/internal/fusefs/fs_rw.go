@@ -3,6 +3,7 @@ package fusefs
 import (
 	"context"
 	"sync"
+	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
@@ -169,10 +170,10 @@ func (fs *RawFS) startPrefetchLocked(hra *handleReadAhead, fh uint64, nextOffset
 		defer pfCancel()
 		resp, err := fs.client.Read(pfCtx, connect.NewRequest(&storagev1.ReadRequest{
 			Ino:       ino,
-			Fh:        fh,
+			Fh:        0,
 			Offset:    nextOffset,
 			Size:      MaxRPCChunkSize,
-			SessionId: &sid,
+			SessionId: optionalSession(sid),
 		}))
 		if err != nil {
 			if isServerEBADF(err) && fs.sessions != nil {
@@ -223,10 +224,10 @@ func (fs *RawFS) fetchReadWindow(ctx context.Context, hra *handleReadAhead, ino,
 	hra.mu.Unlock()
 	resp, err := fs.client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
 		Ino:       ino,
-		Fh:        fh,
+		Fh:        0,
 		Offset:    offset,
 		Size:      MaxRPCChunkSize,
-		SessionId: &sid,
+		SessionId: optionalSession(sid),
 	}))
 	hra.mu.Lock()
 	if err != nil {
@@ -239,22 +240,27 @@ func (fs *RawFS) fetchReadWindow(ctx context.Context, hra *handleReadAhead, ino,
 }
 
 // Read 实现常规文件数据读取，对应 Linux FUSE FUSE_READ 协议。
-// 遵循 ADR-0019 / ADR-0023 规范：
-//  1. 映射内核 Inode 为服务端 Inode，并校验句柄所属活跃会话 session_id；
+// 校验本地句柄与访问模式，并在服务端请求中省略旧版句柄：
+//  1. 映射内核 Inode 为服务端 Inode，并校验句柄所属活跃会话；
 //  2. 目标读取长度以 input.Size 与传入非空 buf 长度二者较小值为准；长度为 0 时立即返回空数据；
 //  3. 在同一文件句柄上维护顺序读检测与 4 MiB 对齐预读缓冲：当检测到连续顺序读取时，按 4 MiB 窗口向服务端拉取并异步预取下一 4 MiB 窗口，
 //     使后续落入窗口内的读取直接命中客户端内存；非连续随机读保持按请求尺寸直通读取，不产生额外放大；
 //  4. 当 want > MaxRPCChunkSize 时按 4 MiB 顺序循环分片读取；
 //  5. 遇到 EOF 或短读立即停止分片循环并返回已读数据；中途分片报错但已有数据读取成功时按短读返回 fuse.OK，首片失败返回对应 errno。
 func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
+	fs.namespaceMu.RLock()
+	defer fs.namespaceMu.RUnlock()
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return nil, status
 	}
 
-	sid, status := fs.ResolveHandle(input.Fh)
+	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return nil, status
+	}
+	if !handle.CanRead() {
+		return nil, fuse.EBADF
 	}
 
 	want := int(input.Size)
@@ -263,6 +269,9 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 	}
 	if want == 0 {
 		return fuse.ReadResultData(nil), fuse.OK
+	}
+	if result, local := fs.readTmp(input.NodeId, input.Offset, want, buf); local {
+		return result, fuse.OK
 	}
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
@@ -383,10 +392,10 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 
 		resp, err := fs.client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
 			Ino:       ino,
-			Fh:        input.Fh,
+			Fh:        0,
 			Offset:    input.Offset,
 			Size:      uint32(want),
-			SessionId: &sid,
+			SessionId: optionalSession(sid),
 		}))
 		if err != nil {
 			return nil, fs.ToStatusWithSession(err, cancel)
@@ -426,10 +435,10 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 
 		resp, err := fs.client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
 			Ino:       ino,
-			Fh:        input.Fh,
+			Fh:        0,
 			Offset:    curOffset,
 			Size:      uint32(chunkReqSize),
-			SessionId: &sid,
+			SessionId: optionalSession(sid),
 		}))
 		if err != nil {
 			if isServerEBADF(err) && fs.sessions != nil {
@@ -465,13 +474,16 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 }
 
 // Write 实现常规文件数据写入，对应 Linux FUSE FUSE_WRITE 协议。
-// 遵循无缓存直通设计与 ADR-0019 规范：
+// 常规文件写入直接提交服务端；匿名文件在具名化前保存在本地：
 // 1. --ro 只读挂载下直接拦截返回 EROFS；
 // 2. 映射 Inode 并校验句柄所属会话 session_id，立即同步失效目标 Inode 的预读缓冲；
 // 3. 当 len(data) <= MaxRPCChunkSize（包含 0 字节写入探针）时发起单次 Write RPC 直通落盘并校验模式；
 // 4. 当 len(data) > MaxRPCChunkSize 时按 4 MiB 顺序分片调用，并累加实际写入字节数；
 // 5. 遵循 POSIX 短写语义：若中途分片报错（如 ENOSPC）且已有数据写入成功，返回已写入字节数与 fuse.OK；首片即失败返回对应 errno。
 func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (uint32, fuse.Status) {
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
+	epoch := fs.cache.version()
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return 0, status
 	}
@@ -481,9 +493,12 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		return 0, status
 	}
 
-	sid, status := fs.ResolveHandle(input.Fh)
+	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return 0, status
+	}
+	if !handle.CanWrite() {
+		return 0, fuse.EBADF
 	}
 
 	if cancel != nil {
@@ -494,6 +509,19 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		}
 	}
 
+	appendMode := handle.Flags&syscall.O_APPEND != 0
+	if n, st, local := fs.writeTmp(input.NodeId, input.Offset, data, appendMode); local {
+		return n, st
+	}
+	if appendMode {
+		cached, st := fs.getInode(cancel, input.NodeId)
+		if st != fuse.OK {
+			return 0, st
+		}
+		copyInput := *input
+		copyInput.Offset = cached.inode.GetAttr().GetSize()
+		input = &copyInput
+	}
 	fs.invalidateReadAheadByIno(ino)
 	defer fs.invalidateReadAheadByIno(ino)
 
@@ -506,14 +534,17 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	if dataLen <= MaxRPCChunkSize {
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
 			Ino:       ino,
-			Fh:        input.Fh,
+			Fh:        0,
 			Offset:    input.Offset,
 			Data:      data,
-			SessionId: &sid,
+			SessionId: optionalSession(sid),
 		}))
 		if err != nil {
+			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
+		fs.cache.invalidateInode(input.NodeId)
+		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		return resp.Msg.GetSize(), fuse.OK
 	}
 
@@ -539,12 +570,13 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
 			Ino:       ino,
-			Fh:        input.Fh,
+			Fh:        0,
 			Offset:    curOffset,
 			Data:      chunk,
-			SessionId: &sid,
+			SessionId: optionalSession(sid),
 		}))
 		if err != nil {
+			fs.cache.invalidateInode(input.NodeId)
 			if isServerEBADF(err) && fs.sessions != nil {
 				fs.sessions.TriggerRenew()
 			}
@@ -554,6 +586,8 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
 
+		fs.cache.invalidateInode(input.NodeId)
+		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		n := resp.Msg.GetSize()
 		totalWritten += n
 		if n < chunkSize {
