@@ -60,11 +60,32 @@ func (s *Server) Commit(ctx context.Context, req *connect.Request[storagev1.Comm
 	if err != nil {
 		return nil, toConnectError(err)
 	}
-	return connect.NewResponse(&storagev1.CommitResponse{Commit: &storagev1.CommitInfo{
+	return connect.NewResponse(&storagev1.CommitResponse{Commit: toProtoCommit(info)}), nil
+}
+
+func toProtoCommit(info *meta.CommitInfo) *storagev1.CommitInfo {
+	return &storagev1.CommitInfo{
 		CommitId: info.CommitID, DiskId: info.DiskID, BranchName: info.BranchName,
 		ParentCommitId: info.ParentCommitID, MergeParentCommitId: info.MergeParentCommitID,
 		Message: info.Message, CreatedAt: timestamppb.New(info.CreatedAt),
-	}}), nil
+	}
+}
+
+// ResolveMerge 在清理冲突副本后完成合并。
+func (s *Server) ResolveMerge(ctx context.Context, req *connect.Request[storagev1.ResolveMergeRequest]) (*connect.Response[storagev1.ResolveMergeResponse], error) {
+	info, err := s.metaManager.ResolveMerge(ctx, meta.ResolveMergeParams{DiskID: req.Msg.DiskId, BranchName: req.Msg.BranchName, Message: req.Msg.Message})
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.ResolveMergeResponse{Commit: toProtoCommit(info)}), nil
+}
+
+// AbortMerge 恢复合并前的工作区。
+func (s *Server) AbortMerge(ctx context.Context, req *connect.Request[storagev1.AbortMergeRequest]) (*connect.Response[storagev1.AbortMergeResponse], error) {
+	if err := s.metaManager.AbortMerge(ctx, meta.AbortMergeParams{DiskID: req.Msg.DiskId, BranchName: req.Msg.BranchName}); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.AbortMergeResponse{}), nil
 }
 
 // Merge 将源分支的变更合入目标分支。

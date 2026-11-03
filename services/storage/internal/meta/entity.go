@@ -604,6 +604,19 @@ type MergeParams struct {
 	Strategy     ConflictStrategy
 }
 
+// ResolveMergeParams 指定待完成的合并。
+type ResolveMergeParams struct {
+	DiskID     string
+	BranchName string
+	Message    string
+}
+
+// AbortMergeParams 指定待取消的合并。
+type AbortMergeParams struct {
+	DiskID     string
+	BranchName string
+}
+
 // MergeResult 描述合并后的快照或冲突。
 type MergeResult struct {
 	Result        MergeResultType

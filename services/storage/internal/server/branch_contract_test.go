@@ -99,30 +99,36 @@ func TestLocalOpenStateIsNotIgnored(t *testing.T) {
 	}
 }
 
-func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
+func TestMergeResolutionHandlers(t *testing.T) {
 	mockMgr := metamock.NewMockManager(t)
 	client, cleanup := setupTestServer(t, mockMgr)
 	defer cleanup()
 	ctx := context.Background()
 	const disk = "11111111-1111-7111-8111-111111111111"
-	calls := map[string]func() error{
-		"ResolveMerge": func() error {
-			_, err := client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: disk, BranchName: "main"}))
-			return err
-		},
-		"AbortMerge": func() error {
-			_, err := client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: "main"}))
-			return err
-		},
-	}
-	for name, call := range calls {
-		t.Run(name, func(t *testing.T) {
-			err := call()
-			require.Error(t, err)
-			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-		})
-	}
-	_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: "bad", Name: "dev"}))
+	const commit = "22222222-2222-7222-8222-222222222222"
+	const parent = "33333333-3333-7333-8333-333333333333"
+	const source = "44444444-4444-7444-8444-444444444444"
+	info := &meta.CommitInfo{CommitID: commit, DiskID: disk, BranchName: "main", ParentCommitID: proto.String(parent), MergeParentCommitID: proto.String(source), Message: "解决冲突", CreatedAt: time.Now()}
+	mockMgr.EXPECT().ResolveMerge(mock.Anything, meta.ResolveMergeParams{DiskID: disk, BranchName: "main", Message: "解决冲突"}).Return(info, nil).Once()
+	response, err := client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: disk, BranchName: "main", Message: "解决冲突"}))
+	require.NoError(t, err)
+	require.Equal(t, commit, response.Msg.Commit.CommitId)
+	require.Equal(t, proto.String(parent), response.Msg.Commit.ParentCommitId)
+	require.Equal(t, proto.String(source), response.Msg.Commit.MergeParentCommitId)
+	mockMgr.EXPECT().ResolveMerge(mock.Anything, meta.ResolveMergeParams{DiskID: disk, BranchName: "main"}).Return(nil, meta.ErrBusy).Once()
+	_, err = client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: disk, BranchName: "main"}))
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	mockMgr.EXPECT().AbortMerge(mock.Anything, meta.AbortMergeParams{DiskID: disk, BranchName: "main"}).Return(nil).Once()
+	_, err = client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: "main"}))
+	require.NoError(t, err)
+	mockMgr.EXPECT().AbortMerge(mock.Anything, meta.AbortMergeParams{DiskID: disk, BranchName: "main"}).Return(meta.ErrBusy).Once()
+	_, err = client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: "main"}))
+	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(err))
+	_, err = client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: "bad", BranchName: "main"}))
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	_, err = client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: disk, BranchName: ".."}))
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	_, err = client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: "bad", Name: "dev"}))
 	require.Error(t, err)
 	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }

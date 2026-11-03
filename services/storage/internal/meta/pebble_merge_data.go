@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 
 	"github.com/cockroachdb/pebble/v2"
 
@@ -211,6 +212,31 @@ func mergePath(store *pebble.DB, wanted uint64) (string, error) {
 	return "", nil
 }
 
+func mergePathInode(store *pebble.DB, path string) (mergeInode, error) {
+	ino := uint64(RootIno)
+	if path == "/" {
+		return getMergeInode(store, ino)
+	}
+	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+		if part == "" {
+			return mergeInode{}, ErrInvalidArgument
+		}
+		value, closer, err := store.Get(pebblekv.EntryKey(ino, []byte(part)))
+		if errors.Is(err, pebble.ErrNotFound) {
+			return mergeInode{}, nil
+		}
+		if err != nil {
+			return mergeInode{}, err
+		}
+		entry, decodeErr := pebblekv.DecodeEntry(value)
+		if err := errors.Join(decodeErr, closer.Close()); err != nil {
+			return mergeInode{}, err
+		}
+		ino = entry.Ino
+	}
+	return getMergeInode(store, ino)
+}
+
 func (m *manager) mergeConflict(stores [3]*pebble.DB, ino uint64, path, reason string) (MergeConflict, error) {
 	c := MergeConflict{Path: path, Reason: reason}
 	attrs := []**Inode{&c.BaseAttr, &c.OursAttr, &c.TheirsAttr}
@@ -232,11 +258,38 @@ func (m *manager) mergeConflict(stores [3]*pebble.DB, ino uint64, path, reason s
 	if c.Path == "" {
 		c.Path = "/"
 	}
+	// 同一路径上的节点可能被一侧替换为另一个 Inode。
+	for i, store := range stores {
+		if *attrs[i] != nil || c.Path == "/" {
+			continue
+		}
+		node, err := mergePathInode(store, c.Path)
+		if err != nil {
+			return c, err
+		}
+		if node.exists {
+			*attrs[i] = m.newPebbleInode(node.value)
+		}
+	}
 	return c, nil
 }
 
 // mergeWorkspace 比较候选节点和受影响目录；未修改节点不会参与扫描。
-func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty map[uint64]bool) (sizes map[uint64]uint64, conflicts []MergeConflict, err error) {
+func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty map[uint64]bool, strategy ConflictStrategy) (sizes map[uint64]uint64, conflicts []MergeConflict, err error) {
+	return m.mergeWorkspaceWithForced(stage, stores, dirty, strategy, nil)
+}
+
+func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stores [3]*pebble.DB, dirty map[uint64]bool, strategy ConflictStrategy, forcedInodes map[uint64]bool) (sizes map[uint64]uint64, conflicts []MergeConflict, err error) {
+	abort := strategy == ConflictStrategyUnspecified || strategy == ConflictStrategyAbortOnConflict
+	conflictedInodes := make(map[uint64]bool)
+	for ino := range forcedInodes {
+		conflict, err := m.mergeConflict(stores, ino, "", "目录移动导致父目录循环或丢失")
+		if err != nil {
+			return nil, nil, err
+		}
+		conflicts = append(conflicts, conflict)
+		conflictedInodes[ino] = true
+	}
 	entries := make(map[mergeEntry][3]pebblekv.Entry)
 	exists := make(map[mergeEntry][3]bool)
 	directories := make(map[uint64][3]bool)
@@ -292,16 +345,14 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 		}
 	}
 	for ino := range removedBoth {
-		if oursAdded[ino] && theirsAdded[ino] {
+		if oursAdded[ino] && theirsAdded[ino] && !conflictedInodes[ino] {
 			conflict, err := m.mergeConflict(stores, ino, "", "节点被移动到不同位置")
 			if err != nil {
 				return nil, nil, err
 			}
 			conflicts = append(conflicts, conflict)
+			conflictedInodes[ino] = true
 		}
-	}
-	if len(conflicts) != 0 {
-		return nil, conflicts, nil
 	}
 	// 同一路径独立创建的相同文件统一使用源分支编号，方便后续再次合并。
 	identical := make(map[mergeEntry]bool)
@@ -353,6 +404,111 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 	for key, pair := range pairs {
 		identical[key] = !invalidPairs[pair] && counts[pair] == links[pair]
 	}
+	// 先识别节点冲突，再决定目录项，以免删除或移动与另一侧的修改交叉应用。
+	ids := make([]uint64, 0, len(dirty))
+	for ino := range dirty {
+		ids = append(ids, ino)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, ino := range ids {
+		var state [3]mergeInode
+		for side := range stores {
+			state[side], err = getMergeInode(stores[side], ino)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		bo, err := mergeInodesEqual(stores[0], state[0], stores[1], state[1])
+		if err != nil {
+			return nil, nil, err
+		}
+		bt, err := mergeInodesEqual(stores[0], state[0], stores[2], state[2])
+		if err != nil {
+			return nil, nil, err
+		}
+		ot, err := mergeInodesEqual(stores[1], state[1], stores[2], state[2])
+		if err != nil {
+			return nil, nil, err
+		}
+		timeConflict := false
+		if state[0].exists && state[1].exists && state[2].exists && state[0].value.Mode&S_IFMT != S_IFDIR {
+			timeConflict = (!bo && bt && !mergeTimesEqual(state[0].value, state[2].value)) ||
+				(bo && !bt && !mergeTimesEqual(state[0].value, state[1].value)) ||
+				(bo && bt && !mergeTimesEqual(state[0].value, state[1].value) && !mergeTimesEqual(state[0].value, state[2].value) && !mergeTimesEqual(state[1].value, state[2].value))
+		}
+		if (!bo && !bt && !ot || timeConflict) && !conflictedInodes[ino] {
+			conflict, err := m.mergeConflict(stores, ino, "", "节点被双方修改")
+			if err != nil {
+				return nil, nil, err
+			}
+			conflicts = append(conflicts, conflict)
+			conflictedInodes[ino] = true
+		}
+	}
+	conflictedDirectories := make(map[uint64]bool)
+	for _, key := range keys {
+		v, e := entries[key], exists[key]
+		same := func(a, b int) bool { return e[a] == e[b] && (!e[a] || v[a].Ino == v[b].Ino) }
+		dirs := directories[key.parent]
+		if dirs[0] && (!dirs[1] && (!same(0, 2) || e[2] && conflictedInodes[v[2].Ino]) ||
+			!dirs[2] && (!same(0, 1) || e[1] && conflictedInodes[v[1].Ino])) {
+			if !conflictedInodes[key.parent] {
+				conflict, err := m.mergeConflict(stores, key.parent, "", "目录被删除，同时包含另一侧的变更")
+				if err != nil {
+					return nil, nil, err
+				}
+				conflicts = append(conflicts, conflict)
+			}
+			conflictedInodes[key.parent] = true
+			conflictedDirectories[key.parent] = true
+		}
+	}
+	for _, key := range keys {
+		v, e := entries[key], exists[key]
+		same := func(a, b int) bool { return e[a] == e[b] && (!e[a] || v[a].Ino == v[b].Ino) }
+		if same(1, 2) {
+			continue
+		}
+		conflict := !same(0, 1) && !same(0, 2) && !identical[key]
+		var first uint64
+		different := false
+		for side := range stores {
+			conflict = conflict || e[side] && conflictedInodes[v[side].Ino]
+			if e[side] {
+				if first != 0 && first != v[side].Ino {
+					different = true
+				}
+				first = v[side].Ino
+			}
+		}
+		if conflict && different {
+			for side := range stores {
+				if e[side] && v[side].Mode&S_IFMT == S_IFDIR {
+					conflictedDirectories[v[side].Ino] = true
+				}
+			}
+		}
+	}
+	// 目录删除冲突须同时选定其子树，避免留下不可访问的节点。
+	for changed := true; changed; {
+		changed = false
+		for _, key := range keys {
+			if !conflictedDirectories[key.parent] {
+				continue
+			}
+			v, e := entries[key], exists[key]
+			for side := range stores {
+				if !e[side] {
+					continue
+				}
+				conflictedInodes[v[side].Ino] = true
+				if v[side].Mode&S_IFMT == S_IFDIR && !conflictedDirectories[v[side].Ino] {
+					conflictedDirectories[v[side].Ino] = true
+					changed = true
+				}
+			}
+		}
+	}
 	batch := stage.NewBatch()
 	defer func() { err = errors.Join(err, batch.Close()) }()
 	linkDelta := make(map[uint64]int64)
@@ -362,19 +518,17 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 	for _, key := range keys {
 		v, e := entries[key], exists[key]
 		same := func(a, b int) bool { return e[a] == e[b] && (!e[a] || v[a].Ino == v[b].Ino) }
-		dirs := directories[key.parent]
-		if dirs[0] && (!dirs[1] && !same(0, 2) || !dirs[2] && !same(0, 1)) {
-			conflict, err := m.mergeConflict(stores, key.parent, "", "目录被删除，同时包含另一侧的变更")
-			if err != nil {
-				return nil, nil, err
-			}
-			conflicts = append(conflicts, conflict)
+		forced := conflictedDirectories[key.parent]
+		for side := range stores {
+			forced = forced || e[side] && conflictedInodes[v[side].Ino]
+		}
+		if forced && strategy != ConflictStrategyTheirs {
 			continue
 		}
-		if same(0, 2) || same(1, 2) {
+		if same(1, 2) || !forced && same(0, 2) {
 			continue
 		}
-		if !same(0, 1) && !identical[key] {
+		if !forced && !same(0, 1) && !identical[key] {
 			path, err := mergePath(stores[1], key.parent)
 			if err != nil {
 				return nil, nil, err
@@ -403,7 +557,9 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 				}
 			}
 			conflicts = append(conflicts, conflict)
-			continue
+			if strategy != ConflictStrategyTheirs {
+				continue
+			}
 		}
 		if e[1] {
 			dirty[v[1].Ino] = true
@@ -427,7 +583,8 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 		}
 		changed[key.parent] = true
 	}
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 && abort {
+		sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
 		return nil, conflicts, nil
 	}
 	stat, err := readCreateStat(stage)
@@ -446,7 +603,7 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 	}
 	sequence := stat.NextWriteSeq
 	stat.NextWriteSeq++
-	ids := make([]uint64, 0, len(dirty))
+	ids = make([]uint64, 0, len(dirty))
 	for ino := range dirty {
 		ids = append(ids, ino)
 	}
@@ -469,26 +626,15 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 		if err != nil {
 			return nil, nil, err
 		}
-		ot, err := mergeInodesEqual(stores[1], state[1], stores[2], state[2])
-		if err != nil {
-			return nil, nil, err
-		}
-		timeConflict := false
-		if state[0].exists && state[1].exists && state[2].exists && state[0].value.Mode&S_IFMT != S_IFDIR {
-			timeConflict = (!bo && bt && !mergeTimesEqual(state[0].value, state[2].value)) ||
-				(bo && !bt && !mergeTimesEqual(state[0].value, state[1].value))
-		}
-		if !bo && !bt && !ot || timeConflict {
-			conflict, err := m.mergeConflict(stores, ino, "", "节点被双方修改")
-			if err != nil {
-				return nil, nil, err
-			}
-			conflicts = append(conflicts, conflict)
-			continue
-		}
 		chosen := state[1]
 		copySource := !bt && bo
-		if bo && bt && state[0].exists && state[1].exists && state[2].exists &&
+		if conflictedInodes[ino] {
+			copySource = strategy == ConflictStrategyTheirs && state[2].exists
+			if strategy == ConflictStrategyTheirs {
+				chosen = state[2]
+			}
+		}
+		if !conflictedInodes[ino] && bo && bt && state[0].exists && state[1].exists && state[2].exists &&
 			mergeTimesEqual(state[0].value, state[1].value) && !mergeTimesEqual(state[0].value, state[2].value) {
 			copySource = true
 		}
@@ -515,8 +661,18 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 				if err != nil {
 					return nil, nil, err
 				}
-				conflicts = append(conflicts, conflict)
-				continue
+				if abort {
+					return nil, append(conflicts, conflict), nil
+				}
+				if forcedInodes[ino] {
+					return nil, nil, ErrInvalidArgument
+				}
+				next := make(map[uint64]bool, len(forcedInodes)+1)
+				for id := range forcedInodes {
+					next[id] = true
+				}
+				next[ino] = true
+				return m.mergeWorkspaceWithForced(stage, stores, dirty, strategy, next)
 			}
 			live = refs > 0
 			links = 2 + dirDelta[ino]
@@ -584,7 +740,7 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 		stat.Inodes++
 		sizes[ino] = chosen.value.Size
 	}
-	if len(conflicts) > 0 {
+	if len(conflicts) > 0 && abort {
 		return nil, conflicts, nil
 	}
 	invalidDir, err := checkMergedDirectoryParents(stores[1], mergedDirs)
@@ -596,7 +752,34 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 		if err != nil {
 			return nil, nil, err
 		}
-		return nil, []MergeConflict{conflict}, nil
+		if abort {
+			return nil, append(conflicts, conflict), nil
+		}
+		next := make(map[uint64]bool, len(forcedInodes)+len(mergedDirs))
+		for id := range forcedInodes {
+			next[id] = true
+		}
+		seen := make(map[uint64]bool)
+		for ino := invalidDir; ino != RootIno && ino != 0 && !seen[ino]; {
+			seen[ino] = true
+			if dir, ok := mergedDirs[ino]; ok {
+				next[ino] = true
+				ino = dir.parent
+				continue
+			}
+			node, err := getMergeInode(stores[1], ino)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !node.exists {
+				break
+			}
+			ino = node.value.ParentIno
+		}
+		if len(next) == len(forcedInodes) {
+			return nil, nil, ErrInvalidArgument
+		}
+		return m.mergeWorkspaceWithForced(stage, stores, dirty, strategy, next)
 	}
 	for ino := range changed {
 		if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
@@ -609,5 +792,6 @@ func (m *manager) mergeWorkspace(stage *pebble.DB, stores [3]*pebble.DB, dirty m
 	if err := batch.Commit(pebble.Sync); err != nil {
 		return nil, nil, err
 	}
-	return sizes, nil, nil
+	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
+	return sizes, conflicts, nil
 }

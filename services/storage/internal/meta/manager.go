@@ -91,6 +91,8 @@ type Manager interface {
 	DeleteBranch(ctx context.Context, params DeleteBranchParams) error
 	Commit(ctx context.Context, params CommitParams) (*CommitInfo, error)
 	Merge(ctx context.Context, params MergeParams) (*MergeResult, error)
+	ResolveMerge(ctx context.Context, params ResolveMergeParams) (*CommitInfo, error)
+	AbortMerge(ctx context.Context, params AbortMergeParams) error
 	Rollback(ctx context.Context, params RollbackParams) error
 	Diff(ctx context.Context, params DiffParams) ([]DiffEntry, error)
 	StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
