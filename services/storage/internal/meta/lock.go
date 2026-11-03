@@ -1021,6 +1021,18 @@ func (m *manager) SetLkw(ctx context.Context, params SetLkwParams) error {
 				}
 
 				if !hasActiveConflict && !hasEarlierWaiterConflict {
+					// 防止等待期间会话过期后，原持锁者消失而过期等待者仍获锁。
+					if bq := quotaTxFromQuerier(q); bq != nil && bq.RawDBTX() != nil {
+						raw := bq.RawDBTX()
+						var alive bool
+						err := raw.QueryRow(ctx, `SELECT expires_at > clock_timestamp() FROM client_sessions WHERE session_id = $1 FOR SHARE`, sessionID).Scan(&alive)
+						if errors.Is(err, pgx.ErrNoRows) || (err == nil && !alive) {
+							return errExpiredSessionBadHandle
+						}
+						if err != nil {
+							return fmt.Errorf("检查等待者会话: %w", err)
+						}
+					}
 					var txPreGrantLocks []db.FileLock
 					affStart := reqStart
 					affEnd := reqEnd

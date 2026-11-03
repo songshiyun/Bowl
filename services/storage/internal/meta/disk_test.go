@@ -2255,9 +2255,21 @@ func TestDeleteDisk_PostgresIntegration(t *testing.T) {
 		require.Error(t, err)
 		require.ErrorIs(t, err, meta.ErrBusy)
 
-		// 推进 s1, s2 的租约至已过期
-		_, err = pool.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id IN ($1, $2)", int64(s1), int64(s2))
+		// 在等待者读取句柄后锁住会话行，确保会话过期与锁授予交错。
+		leaseTx, err := pool.Begin(ctx)
 		require.NoError(t, err)
+		defer func() { _ = leaseTx.Rollback(context.Background()) }()
+		var leasePID int32
+		require.NoError(t, leaseTx.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&leasePID))
+		_, err = leaseTx.Exec(ctx, "UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id IN ($1, $2)", int64(s1), int64(s2))
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			var blocked bool
+			err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+				WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE '%locked_locks%')`, leasePID).Scan(&blocked)
+			return err == nil && blocked
+		}, 3*time.Second, 5*time.Millisecond)
+		require.NoError(t, leaseTx.Commit(ctx))
 
 		// 6. 执行 DeleteDisk 强制删除磁盘实体及其所有元数据
 		startTime := time.Now()
