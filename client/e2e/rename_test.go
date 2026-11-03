@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,11 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // createRegularFile 辅助函数：通过 unix.Mknod 创建常规空文件。
@@ -28,7 +24,7 @@ func createRegularFile(t *testing.T, path string) {
 // TestE2E_Rename_BasicAndCrossDir 验证同目录改名、跨目录移动、标准覆盖重命名与非法覆盖（ENOTEMPTY/EISDIR/ENOTDIR）。
 func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -111,7 +107,7 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 // TestE2E_Rename_NoReplace 验证 RENAME_NOREPLACE 标志位行为。
 func TestE2E_Rename_NoReplace(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -154,7 +150,7 @@ func TestE2E_Rename_NoReplace(t *testing.T) {
 // TestE2E_Rename_Exchange 验证 RENAME_EXCHANGE 常规文件与非空目录双向原子原地互换。
 func TestE2E_Rename_Exchange(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -225,7 +221,7 @@ func TestE2E_Rename_Exchange(t *testing.T) {
 // TestE2E_Rename_AncestorCycle 验证将父目录移入自身子孙的祖先环拒绝（EINVAL）。
 func TestE2E_Rename_AncestorCycle(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -262,7 +258,7 @@ func TestE2E_Rename_AncestorCycle(t *testing.T) {
 // TestE2E_Rename_Whiteout 验证 RENAME_WHITEOUT 标志位被拒绝（EOPNOTSUPP 或 EINVAL）。
 func TestE2E_Rename_Whiteout(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -283,19 +279,13 @@ func TestE2E_Rename_Whiteout(t *testing.T) {
 // TestE2E_Rename_ReadOnly 验证只读模式下 Rename 直接拦截返回 EROFS。
 func TestE2E_Rename_ReadOnly(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
 
-	// 1. 直连 StorageService 在磁盘中预置文件
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err := client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
-		ParentIno: disk.GetRootIno(),
-		Name:      []byte("ro_rename_src.txt"),
-		Mode:      uint32(syscall.S_IFREG | 0644),
-	}))
-	require.NoError(t, err, "在服务端预置文件应成功")
+	prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+		createRegularFile(t, filepath.Join(mp, "ro_rename_src.txt"))
+	})
+	var err error
 
 	// 2. 以只读模式挂载
 	mountpoint := t.TempDir()

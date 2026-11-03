@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,11 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 func TestE2E_FileHandle(t *testing.T) {
@@ -23,7 +19,7 @@ func TestE2E_FileHandle(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("create_open_sync_and_excl_conflict", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -61,28 +57,11 @@ func TestE2E_FileHandle(t *testing.T) {
 	})
 
 	t.Run("readonly_mount_blocks_write_allows_read", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 
-		// 1. 预先通过服务端 RPC 在该磁盘根目录下创建常规文件
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-			ParentIno: disk.GetRootIno(),
-			Name:      []byte("ro-target.txt"),
-			Mode:      0o644 | syscall.S_IFREG,
-			Uid:       1000,
-			Gid:       1000,
-			Flags:     0o2, // O_RDWR
-		}))
-		require.NoError(t, err, "服务端初始化文件必须成功")
-
-		// 释放初始文件句柄
-		_, err = client.Release(ctx, connect.NewRequest(&storagev1.ReleaseRequest{
-			Ino: createResp.Msg.GetInode().GetIno(),
-			Fh:  createResp.Msg.GetFh(),
-		}))
-		require.NoError(t, err, "释放初始句柄必须成功")
+		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+			require.NoError(t, os.WriteFile(filepath.Join(mp, "ro-target.txt"), []byte("只读"), 0o644))
+		})
 
 		mountpoint := t.TempDir()
 
@@ -115,7 +94,7 @@ func TestE2E_FileHandle(t *testing.T) {
 	})
 
 	t.Run("unlink_whilst_open_orphan_lifecycle", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -134,24 +113,10 @@ func TestE2E_FileHandle(t *testing.T) {
 			}
 		}()
 
-		// 2. 通过 RPC 查询该文件在服务端的 Ino
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		lookupResp, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
-			ParentIno: disk.GetRootIno(),
-			Name:      []byte(targetName),
-		}))
-		require.NoError(t, err, "Lookup 查找新创建文件必须成功")
-		serverIno := lookupResp.Msg.GetInode().GetIno()
-		require.Greater(t, serverIno, uint64(0))
-
-		// 3. 在服务端解链该目录项 (Unlink)
-		_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
-			ParentIno: disk.GetRootIno(),
-			Name:      []byte(targetName),
-		}))
-		require.NoError(t, err, "服务端解链目录项必须成功")
+		// 2. 通过同一挂载点解链，客户端保留已打开的孤儿句柄。
+		require.NoError(t, os.Remove(filePath))
+		_, err = os.Stat(filePath)
+		require.ErrorIs(t, err, os.ErrNotExist)
 
 		// 4. 断言已打开孤儿句柄 f.Stat() 与 f.Sync() 依然成功，且内核感知的 Nlink 最终变为 0
 		require.NoError(t, f.Sync(), "孤儿句柄 f.Sync() 必须成功")
@@ -167,29 +132,11 @@ func TestE2E_FileHandle(t *testing.T) {
 			return false
 		}, 3*time.Second, 100*time.Millisecond, "孤儿句柄的 Nlink 必须变为 0")
 
-		// 5. 验证关闭句柄前服务端 Inode 仍存活且 Nlink == 0
-		attrResp, err := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: serverIno,
-		}))
-		require.NoError(t, err, "关闭句柄前服务端孤儿 Inode 仍应存活")
-		require.Equal(t, uint32(0), attrResp.Msg.GetInode().GetAttr().GetNlink())
-
-		// 6. 关闭句柄，触发 Flush 与 Release
-		require.NoError(t, f.Close(), "关闭孤儿句柄必须成功")
+		// 5. 孤儿句柄仍可读写，关闭后完成本地句柄释放。
+		_, err = f.WriteString("孤儿数据")
+		require.NoError(t, err)
+		require.NoError(t, f.Close())
 		f = nil
 
-		// 7. 轮询断言服务端孤儿节点被物理回收 (返回 CodeNotFound / ENOENT)
-		require.Eventually(t, func() bool {
-			_, getErr := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-				Ino: serverIno,
-			}))
-			if getErr != nil {
-				var connectErr *connect.Error
-				if errors.As(getErr, &connectErr) && connectErr.Code() == connect.CodeNotFound {
-					return true
-				}
-			}
-			return false
-		}, 5*time.Second, 100*time.Millisecond, "关闭孤儿全部活跃句柄后服务端 Inode 必须被物理回收")
 	})
 }

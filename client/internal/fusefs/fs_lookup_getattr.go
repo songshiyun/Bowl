@@ -118,7 +118,7 @@ func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.Sta
 	defer cancelFunc()
 
 	resp, err := fs.client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{
-		Ino: ino,
+		Ino: ino, SessionId: fs.currentSession(),
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)

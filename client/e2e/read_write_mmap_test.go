@@ -31,7 +31,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("large_file_span_blocks_and_chunks_sha256", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -109,7 +109,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 	})
 
 	t.Run("concurrent_append_o_append", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -243,7 +243,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 	})
 
 	t.Run("mmap_shared_sync_and_persist", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -282,7 +282,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 	})
 
 	t.Run("exec_linux_elf_binary_direct_run", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")

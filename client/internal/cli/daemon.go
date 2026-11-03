@@ -114,7 +114,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	_ = unix.Dup2(logFd, int(os.Stderr.Fd()))
 
 	// 2. 初始化 ClientSession
-	sessionMgr, err := session.New(ctx, client, session.Config{DiskID: cfg.DiskID})
+	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
 	if err != nil {
 		notifyErr(fmt.Errorf("初始化客户端会话失败: %w", err))
 		return 1
@@ -131,11 +131,16 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 		return 1
 	}
 
-	go server.Serve()
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		server.Serve()
+	}()
 
 	// 4. 等待内核挂载彻底就绪
 	if err := server.WaitMount(); err != nil {
 		_ = server.Unmount()
+		<-serveDone
 		notifyErr(fmt.Errorf("等待挂载就绪失败: %w", err))
 		return 1
 	}
@@ -146,6 +151,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	// 6. 启动会话保活心跳
 	if err := sessionMgr.Start(ctx); err != nil {
 		_ = server.Unmount()
+		<-serveDone
 		return 1
 	}
 
@@ -165,7 +171,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 		}
 	}()
 
-	server.Wait()
+	<-serveDone
 	close(stopWait)
 	_ = logF.Sync()
 	return 0

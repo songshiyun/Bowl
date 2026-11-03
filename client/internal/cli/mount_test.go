@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -28,6 +30,72 @@ type cliMockStorageHandler struct {
 
 	getDiskFn      func(context.Context, *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
+}
+
+func TestMount_BranchAndCommit(t *testing.T) {
+	diskID := uuid.NewString()
+	commitID := uuid.NewString()
+	var getDiskCalls atomic.Int32
+	server := &cliMockStorageHandler{getDiskFn: func(_ context.Context, _ *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
+		getDiskCalls.Add(1)
+		return connect.NewResponse(&storagev1.GetDiskResponse{Disk: &storagev1.Disk{
+			DiskId: diskID, RootIno: 1001, Branches: []*storagev1.Branch{{Name: "main"}},
+		}}), nil
+	}}
+	endpoint := setupTestStorageServer(t, server)
+	mountpoint := t.TempDir()
+	tests := []struct {
+		name           string
+		flags          []string
+		code           int
+		branch, commit string
+		ro             bool
+		message        string
+	}{
+		{name: "默认分支", branch: "main"},
+		{name: "指定分支", flags: []string{"--branch=feature-x"}, branch: "feature-x"},
+		{name: "只读分支", flags: []string{"--ro", "--branch", "main"}, branch: "main", ro: true},
+		{name: "提交快照", flags: []string{"--ro", "--commit", commitID}, commit: commitID, ro: true},
+		{name: "分支与提交互斥", flags: []string{"--branch", "main", "--commit", commitID, "--ro"}, code: 2, message: "mutually exclusive"},
+		{name: "提交需要只读", flags: []string{"--commit", commitID}, code: 2, message: "requires --ro"},
+		{name: "无效提交", flags: []string{"--ro", "--commit", "invalid"}, code: 2, message: "UUID"},
+		{name: "空提交 UUID", flags: []string{"--ro", "--commit", uuid.Nil.String()}, code: 2, message: "UUID"},
+		{name: "单点分支", flags: []string{"--branch", "."}, code: 2},
+		{name: "双点分支", flags: []string{"--branch", ".."}, code: 2},
+		{name: "斜杠分支", flags: []string{"--branch", "a/b"}, code: 2},
+		{name: "空字节分支", flags: []string{"--branch", "a\x00b"}, code: 2},
+		{name: "换行分支", flags: []string{"--branch", "a\nb"}, code: 2},
+		{name: "控制字符分支", flags: []string{"--branch", "a\x7f"}, code: 2},
+		{name: "过长分支", flags: []string{"--branch", strings.Repeat("x", 256)}, code: 2},
+		{name: "最大长度分支", flags: []string{"--branch", strings.Repeat("x", 255)}, branch: strings.Repeat("x", 255)},
+		{name: "缺少分支值", flags: []string{"--branch"}, code: 2},
+		{name: "缺少提交值", flags: []string{"--commit"}, code: 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var called bool
+			cli.SetMountRunnerForTest(t, func(_ context.Context, _ storagev1connect.StorageServiceClient, cfg fusefs.Config, _ string, _, _ io.Writer) error {
+				called = true
+				require.Equal(t, uint64(1), cfg.RootIno)
+				require.Equal(t, tc.branch, cfg.BranchName)
+				require.Equal(t, tc.commit, cfg.CommitID)
+				require.Equal(t, tc.ro, cfg.ReadOnly)
+				return nil
+			})
+			before := getDiskCalls.Load()
+			args := []string{"mount", "-f", "--endpoint", endpoint, diskID, mountpoint}
+			args = append(args, tc.flags...)
+			var stdout, stderr bytes.Buffer
+			require.Equal(t, tc.code, cli.Execute(args, &stdout, &stderr), stderr.String())
+			if tc.code == 2 {
+				require.Equal(t, before, getDiskCalls.Load())
+				require.False(t, called)
+				require.Contains(t, stderr.String(), tc.message)
+			} else {
+				require.True(t, called)
+			}
+		})
+	}
 }
 
 func (h *cliMockStorageHandler) GetDisk(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
@@ -223,4 +291,46 @@ func TestMount_ForegroundRunner_PropagatesDiskIDToRenewSession(t *testing.T) {
 	code := cli.Execute([]string{"mount", "-f", "--endpoint", endpoint, validUUID, tmpDir}, &stdout, &stderr)
 	require.Equal(t, 1, code)
 	require.Equal(t, validUUID, capturedDiskID, "runForegroundMount 调用 session.New 时必须透传 cfg.DiskID")
+}
+
+func TestMount_前台会话传递分支和提交(t *testing.T) {
+	diskID, commitID := uuid.NewString(), uuid.NewString()
+	for _, tc := range []struct {
+		name, branch, commit string
+		ro                   bool
+	}{
+		{name: "默认分支", branch: "main"},
+		{name: "只读分支", branch: "feature-x", ro: true},
+		{name: "提交快照", commit: commitID, ro: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured *storagev1.RenewSessionRequest
+			server := &cliMockStorageHandler{
+				getDiskFn: func(context.Context, *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
+					return connect.NewResponse(&storagev1.GetDiskResponse{Disk: &storagev1.Disk{DiskId: diskID, RootIno: 42, Branches: []*storagev1.Branch{{Name: "main"}}}}), nil
+				},
+				renewSessionFn: func(_ context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+					captured = req.Msg
+					return nil, connect.NewError(connect.CodePermissionDenied, os.ErrPermission)
+				},
+			}
+			args := []string{"mount", "-f", "--endpoint", setupTestStorageServer(t, server), diskID, t.TempDir()}
+			if tc.branch != "" && tc.branch != "main" {
+				args = append(args, "--branch", tc.branch)
+			}
+			if tc.commit != "" {
+				args = append(args, "--commit", tc.commit)
+			}
+			if tc.ro {
+				args = append(args, "--ro")
+			}
+			var stdout, stderr bytes.Buffer
+			require.Equal(t, 1, cli.Execute(args, &stdout, &stderr))
+			require.NotNil(t, captured)
+			require.Equal(t, diskID, captured.GetDiskId())
+			require.Equal(t, tc.branch, captured.GetBranchName())
+			require.Equal(t, tc.commit, captured.GetCommitId())
+			require.Equal(t, tc.ro, captured.GetReadOnly())
+		})
+	}
 }

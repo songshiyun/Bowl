@@ -49,46 +49,54 @@ func newTestStorageClient(t *testing.T) storagev1connect.StorageServiceClient {
 	return client
 }
 
-// createDiskWithRootInoGT1 连续创建磁盘直到获取 root_ino > 1 的磁盘，确保真实验证 1 <-> root_ino 非恒等映射。
-func createDiskWithRootInoGT1(t *testing.T, client storagev1connect.StorageServiceClient) *storagev1.Disk {
+// createTestDisk 创建独立测试磁盘。
+func createTestDisk(t *testing.T, client storagev1connect.StorageServiceClient) *storagev1.Disk {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	resp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name: fmt.Sprintf("e2e-disk-%d", time.Now().UnixNano()), MaxBytes: 10 * 1024 * 1024 * 1024,
+	}))
+	require.NoError(t, err)
+	disk := resp.Msg.GetDisk()
+	require.NotNil(t, disk)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: disk.GetDiskId()}))
+		require.NoError(t, err, "清理测试磁盘失败")
+		_, err = client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: disk.GetDiskId()}))
+		require.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+	})
+	return disk
+}
 
-	for i := 0; i < 5; i++ {
-		resp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
-			Name:     fmt.Sprintf("e2e-disk-%d-%d", time.Now().UnixNano(), i),
-			MaxBytes: 10 * 1024 * 1024 * 1024, // 10 GiB
-		}))
-		require.NoError(t, err, "创建磁盘失败")
+// commitMain 创建当前 main 分支的不可变快照。
+func commitMain(t *testing.T, client storagev1connect.StorageServiceClient, diskID string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Commit(ctx, connect.NewRequest(&storagev1.CommitRequest{DiskId: diskID, BranchName: "main"}))
+	require.NoError(t, err, "创建分支提交失败")
+	require.NotNil(t, resp.Msg.GetCommit())
+	id := resp.Msg.GetCommit().GetCommitId()
+	require.NotEmpty(t, id)
+	return id
+}
 
-		disk := resp.Msg.GetDisk()
-		if disk.GetRootIno() == 1 {
-			_, delErr := client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-				DiskId: disk.GetDiskId(),
-			}))
-			require.NoError(t, delErr, "清理过渡磁盘 (root_ino == 1) 失败")
-			continue
-		}
-		if disk.GetRootIno() > 1 {
-			diskID := disk.GetDiskId()
-			t.Cleanup(func() {
-				cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cleanCancel()
-				_, delErr := client.DeleteDisk(cleanCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-					DiskId: diskID,
-				}))
-				require.NoError(t, delErr, "清理测试磁盘失败: %s", diskID)
-				_, getErr := client.GetDisk(cleanCtx, connect.NewRequest(&storagev1.GetDiskRequest{
-					DiskId: diskID,
-				}))
-				require.Error(t, getErr, "删除磁盘后 GetDisk 必须返回错误: %s", diskID)
-				require.Equal(t, connect.CodeNotFound, connect.CodeOf(getErr), "删除磁盘后 GetDisk 应返回 CodeNotFound")
-			})
-			return disk
-		}
+// prepareSnapshot 通过可写挂载准备文件并提交，供只读挂载读取。
+func prepareSnapshot(t *testing.T, client storagev1connect.StorageServiceClient, diskID string, prepare func(string)) string {
+	t.Helper()
+	mp := t.TempDir()
+	cmd, _, stderr := startBowlMount(t, getStorageEndpoint(), diskID, mp)
+	if err := waitForMount(mp, 10*time.Second); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("准备数据时挂载失败: %v: %s", err, stderr.String())
 	}
-	t.Fatal("未能在 5 次重试内创建出 root_ino > 1 的磁盘")
-	return nil
+	defer stopBowlMountGracefully(t, cmd, mp, 5*time.Second)
+	prepare(mp)
+	return commitMain(t, client, diskID)
 }
 
 // isMounted 通过读取 /proc/self/mountinfo 确认目标路径是否为已生效的挂载点。

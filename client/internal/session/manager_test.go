@@ -630,6 +630,9 @@ func TestManager_DiskIDPropagation_And_CloseSession(t *testing.T) {
 
 		mgr, err := session.New(context.Background(), client, session.Config{
 			DiskID:              testDiskID,
+			BranchName:          "feature-x",
+			ReadOnly:            true,
+			CommitID:            "22222222-2222-4222-8222-222222222222",
 			MinInterval:         15 * time.Millisecond,
 			MaxInterval:         50 * time.Millisecond,
 			InitialRetryBackoff: 15 * time.Millisecond,
@@ -662,6 +665,9 @@ func TestManager_DiskIDPropagation_And_CloseSession(t *testing.T) {
 		for i, r := range reqs {
 			require.NotNil(t, r.DiskId, "第 %d 次 RenewSession 请求必须携带 DiskId", i+1)
 			require.Equal(t, testDiskID, r.GetDiskId(), "第 %d 次 RenewSession 请求的 DiskId 必须等于配置的 DiskID", i+1)
+			require.Equal(t, "feature-x", r.GetBranchName())
+			require.True(t, r.GetReadOnly())
+			require.Equal(t, "22222222-2222-4222-8222-222222222222", r.GetCommitId())
 		}
 
 		require.Equal(t, []uint64{rotatedSID}, closeCalls, "Close() 必须恰好调用一次 CloseSession 且携带当前最新活跃的 SessionId")

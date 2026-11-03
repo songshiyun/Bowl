@@ -40,6 +40,8 @@ const (
 
 // Ioctl 实现 FUSE_IOCTL 请求处理，将 Linux 标准 FS_IOC_GETFLAGS / FS_IOC_SETFLAGS 双向桥接至 StorageService RPC。
 func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) fuse.Status {
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
 	ino, st := fs.ToServerIno(input.NodeId)
 	if st != fuse.OK {
 		return st
@@ -55,7 +57,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino,
+			Ino: ino, SessionId: fs.currentSession(),
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -91,7 +93,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino,
+			Ino: ino, SessionId: fs.currentSession(),
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -148,12 +150,14 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:   ino,
-			Flags: &protoFlags,
+			Ino:       ino,
+			Flags:     &protoFlags,
+			SessionId: fs.currentSession(),
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
+		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {
 			output.Result = 0
@@ -187,12 +191,14 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:   ino,
-			Flags: &protoFlags,
+			Ino:       ino,
+			Flags:     &protoFlags,
+			SessionId: fs.currentSession(),
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
+		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {
 			output.Result = 0

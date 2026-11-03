@@ -3,6 +3,7 @@ package fusefs
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,7 @@ type Config struct {
 	ReleaseRetryInterval   time.Duration
 	NamespaceCacheCapacity int
 	BranchName             string
+	CommitID               string
 	OnUnmount              func()
 }
 
@@ -57,6 +59,7 @@ type RawFS struct {
 	cache   *NamespaceCache
 	// 协调目录变更、句柄引用和缓存填充。
 	namespaceMu    sync.RWMutex
+	dirtyInodes    map[uint64]struct{}
 	tmpMu          sync.RWMutex
 	tmpFiles       map[uint64]*tmpFile
 	serverToLocal  map[uint64]uint64
@@ -92,6 +95,7 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		client:           client,
 		locks:            NewLockTable(),
 		cache:            NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		dirtyInodes:      make(map[uint64]struct{}),
 		tmpFiles:         make(map[uint64]*tmpFile),
 		serverToLocal:    make(map[uint64]uint64),
 		orphanSessions:   make(map[uint64]uint64),
@@ -304,6 +308,24 @@ func (fs *RawFS) NextRequestID() uint64 {
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
 	fs.locks.Close()
+	fs.namespaceMu.Lock()
+	for ino := range fs.dirtyInodes {
+		ctx, done := fs.RPCContext(nil)
+		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
+		done()
+		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
+			slog.Warn("卸载时同步文件失败", "ino", ino, "error", err)
+		}
+	}
+	clear(fs.dirtyInodes)
+	fs.handles.clear()
+	fs.cache.clear()
+	fs.tmpMu.Lock()
+	clear(fs.tmpFiles)
+	clear(fs.serverToLocal)
+	fs.tmpMu.Unlock()
+	clear(fs.orphanSessions)
+	fs.namespaceMu.Unlock()
 	fs.clearAllReadAhead()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {

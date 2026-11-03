@@ -21,7 +21,7 @@ func TestE2E_Xattr(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("xattr_crud_probes_and_flags", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -161,7 +161,7 @@ func TestE2E_Xattr(t *testing.T) {
 	})
 
 	t.Run("xattr_read_only_mount", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 
 		// 1. 先用读写模式挂载写入一个预置属性
 		mountpointRW := t.TempDir()
@@ -173,6 +173,7 @@ func TestE2E_Xattr(t *testing.T) {
 		require.NoError(t, err, "创建只读测试文件成功")
 		require.NoError(t, f.Close(), "关闭只读测试文件成功")
 		require.NoError(t, unix.Setxattr(filePath, "user.ro_key", []byte("ro_value"), 0))
+		commitMain(t, client, disk.GetDiskId())
 		stopBowlMountGracefully(t, cmdRW, mountpointRW, 5*time.Second)
 
 		// 2. 以 --ro 只读模式重新挂载

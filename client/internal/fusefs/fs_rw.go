@@ -543,6 +543,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
+		fs.dirtyInodes[ino] = struct{}{}
 		fs.cache.invalidateInode(input.NodeId)
 		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		return resp.Msg.GetSize(), fuse.OK
@@ -589,6 +590,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.cache.invalidateInode(input.NodeId)
 		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		n := resp.Msg.GetSize()
+		fs.dirtyInodes[ino] = struct{}{}
 		totalWritten += n
 		if n < chunkSize {
 			break

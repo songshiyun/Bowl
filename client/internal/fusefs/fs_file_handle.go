@@ -151,17 +151,33 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	return fuse.OK
 }
 
-// Flush 释放当前 LockOwner 的本地 POSIX 锁。普通写入已同步提交服务端。
-func (fs *RawFS) Flush(_ <-chan struct{}, input *fuse.FlushIn) fuse.Status {
+// Flush 同步已写入的文件并释放当前 LockOwner 的本地 POSIX 锁。
+func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.namespaceMu.Lock()
+	defer fs.namespaceMu.Unlock()
 	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
 	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
+	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+		return status
+	}
+	ino, status := fs.ToServerIno(input.NodeId)
+	if status != fuse.OK {
+		return status
+	}
+	if _, dirty := fs.dirtyInodes[ino]; dirty {
+		ctx, done := fs.RPCContext(cancel)
+		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
+		done()
+		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
+			return fs.ToStatusWithSession(err, cancel)
+		}
+		delete(fs.dirtyInodes, ino)
+	}
 	return fuse.OK
 }
 
@@ -188,6 +204,9 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
 		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
 	}))
+	if err == nil {
+		delete(fs.dirtyInodes, ino)
+	}
 	return fs.ToStatusWithSession(err, cancel)
 }
 
