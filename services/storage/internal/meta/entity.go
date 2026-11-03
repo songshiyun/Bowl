@@ -208,6 +208,14 @@ type RenameParams struct {
 	Flags        uint32
 }
 
+// ReclaimOrphanParams 定义回收孤儿节点的输入参数。
+type ReclaimOrphanParams struct {
+	SessionID  uint64
+	DiskID     string
+	BranchName *string
+	Ino        uint64
+}
+
 // CreateParams 定义原子创建常规文件并分配初始文件句柄的输入参数。
 // 严禁在 Flags 中携带 O_TMPFILE 标志位（匿名临时文件必须通过 TmpFile 接口创建）。
 type CreateParams struct {

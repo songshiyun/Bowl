@@ -130,3 +130,15 @@ func (s *Server) CloseSession(ctx context.Context, req *connect.Request[storagev
 
 	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
 }
+
+// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
+func (s *Server) ReclaimOrphan(ctx context.Context, req *connect.Request[storagev1.ReclaimOrphanRequest]) (*connect.Response[storagev1.ReclaimOrphanResponse], error) {
+	err := s.metaManager.ReclaimOrphan(ctx, meta.ReclaimOrphanParams{
+		SessionID: req.Msg.GetSessionId(), DiskID: req.Msg.GetDiskId(),
+		BranchName: req.Msg.BranchName, Ino: req.Msg.GetIno(),
+	})
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.ReclaimOrphanResponse{}), nil
+}

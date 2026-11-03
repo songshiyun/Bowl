@@ -55,6 +55,7 @@ type Manager interface {
 	Unlink(ctx context.Context, parentIno uint64, name []byte) error
 	Rmdir(ctx context.Context, parentIno uint64, name []byte) error
 	Rename(ctx context.Context, params RenameParams) error
+	ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams) error
 	Create(ctx context.Context, params CreateParams) (*CreateResult, error)
 	TmpFile(ctx context.Context, params TmpFileParams) (*CreateResult, error)
 	Open(ctx context.Context, params OpenParams) (*OpenResult, error)

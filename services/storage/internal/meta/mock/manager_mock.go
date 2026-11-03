@@ -1814,6 +1814,63 @@ func (_c *MockManager_Readlink_Call) RunAndReturn(run func(ctx context.Context, 
 	return _c
 }
 
+// ReclaimOrphan provides a mock function for the type MockManager
+func (_mock *MockManager) ReclaimOrphan(ctx context.Context, params meta.ReclaimOrphanParams) error {
+	ret := _mock.Called(ctx, params)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReclaimOrphan")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReclaimOrphanParams) error); ok {
+		r0 = returnFunc(ctx, params)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockManager_ReclaimOrphan_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReclaimOrphan'
+type MockManager_ReclaimOrphan_Call struct {
+	*mock.Call
+}
+
+// ReclaimOrphan is a helper method to define mock.On call
+//   - ctx context.Context
+//   - params meta.ReclaimOrphanParams
+func (_e *MockManager_Expecter) ReclaimOrphan(ctx any, params any) *MockManager_ReclaimOrphan_Call {
+	return &MockManager_ReclaimOrphan_Call{Call: _e.mock.On("ReclaimOrphan", ctx, params)}
+}
+
+func (_c *MockManager_ReclaimOrphan_Call) Run(run func(ctx context.Context, params meta.ReclaimOrphanParams)) *MockManager_ReclaimOrphan_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 meta.ReclaimOrphanParams
+		if args[1] != nil {
+			arg1 = args[1].(meta.ReclaimOrphanParams)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockManager_ReclaimOrphan_Call) Return(err error) *MockManager_ReclaimOrphan_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockManager_ReclaimOrphan_Call) RunAndReturn(run func(ctx context.Context, params meta.ReclaimOrphanParams) error) *MockManager_ReclaimOrphan_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Release provides a mock function for the type MockManager
 func (_mock *MockManager) Release(ctx context.Context, params meta.ReleaseParams) error {
 	ret := _mock.Called(ctx, params)

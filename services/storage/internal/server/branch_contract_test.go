@@ -86,13 +86,17 @@ func TestRenewSessionSnapshotAndBusy(t *testing.T) {
 func TestLocalOpenStateIsNotIgnored(t *testing.T) {
 	mockMgr, client, cleanup := setupTopologyXattrTestServer(t)
 	defer cleanup()
-	mockMgr.EXPECT().Unlink(mock.Anything, uint64(1), []byte("file")).Return(nil).Maybe()
-	_, err := client.Unlink(context.Background(), connect.NewRequest(&storagev1.UnlinkRequest{
-		ParentIno: 1, Name: []byte("file"), OpenInClient: proto.Bool(true),
-	}))
-	require.Error(t, err)
-	require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
-	mockMgr.AssertNotCalled(t, "Unlink", mock.Anything, uint64(1), []byte("file"))
+	for _, open := range []bool{false, true} {
+		withOpen := mock.MatchedBy(func(ctx context.Context) bool {
+			value, set := meta.OpenInClientFromContext(ctx)
+			return set && value == open
+		})
+		mockMgr.EXPECT().Unlink(withOpen, uint64(1), []byte("file")).Return(nil).Once()
+		_, err := client.Unlink(context.Background(), connect.NewRequest(&storagev1.UnlinkRequest{
+			ParentIno: 1, Name: []byte("file"), OpenInClient: proto.Bool(open),
+		}))
+		require.NoError(t, err)
+	}
 }
 
 func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
@@ -139,10 +143,6 @@ func TestNewVersionRPCsAreValidatedAndUnimplemented(t *testing.T) {
 			_, err := client.Diff(ctx, connect.NewRequest(&storagev1.DiffRequest{DiskId: disk, FromRef: "main", ToRef: "dev"}))
 			return err
 		},
-		"ReclaimOrphan": func() error {
-			_, err := client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: disk, Ino: 1}))
-			return err
-		},
 	}
 	for name, call := range calls {
 		t.Run(name, func(t *testing.T) {
@@ -162,14 +162,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	calls := map[string]func() error{
-		"按会话删除目录": func() error {
-			_, err := client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{ParentIno: 1, Name: []byte("x"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话重命名": func() error {
-			_, err := client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), SessionId: proto.Uint64(1)}))
-			return err
-		},
 		"按会话设置扩展属性": func() error {
 			_, err := client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
 			return err
@@ -184,18 +176,6 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 		},
 		"按会话删除扩展属性": func() error {
 			_, err := client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: []byte("user.test"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"按会话删除": func() error {
-			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), SessionId: proto.Uint64(1)}))
-			return err
-		},
-		"本地文件未打开": func() error {
-			_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), OpenInClient: proto.Bool(false)}))
-			return err
-		},
-		"目标文件已打开": func() error {
-			_, err := client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), TargetOpenInClient: proto.Bool(true)}))
 			return err
 		},
 		"本地句柄读取": func() error {
@@ -226,6 +206,43 @@ func TestEvolvedRequestsDoNotUseLegacySemantics(t *testing.T) {
 			require.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 		})
 	}
+}
+
+func TestSessionTopologyAndReclaimHandlers(t *testing.T) {
+	mgr := metamock.NewMockManager(t)
+	client, cleanup := setupTestServer(t, mgr)
+	defer cleanup()
+	sid := uint64(41)
+	branch := "main"
+	disk := "11111111-1111-7111-8111-111111111111"
+	withSession := mock.MatchedBy(func(ctx context.Context) bool {
+		id, ok := meta.SessionIDFromContext(ctx)
+		return ok && id != nil && *id == sid
+	})
+	withSessionAndOpen := mock.MatchedBy(func(ctx context.Context) bool {
+		id, ok := meta.SessionIDFromContext(ctx)
+		open, set := meta.OpenInClientFromContext(ctx)
+		return ok && id != nil && *id == sid && set && open
+	})
+	mgr.EXPECT().Unlink(withSessionAndOpen, uint64(1), []byte("file")).Return(nil).Once()
+	mgr.EXPECT().Rmdir(withSession, uint64(1), []byte("dir")).Return(nil).Once()
+	mgr.EXPECT().Rename(withSessionAndOpen, meta.RenameParams{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new")}).Return(nil).Once()
+	mgr.EXPECT().ReclaimOrphan(mock.Anything, meta.ReclaimOrphanParams{SessionID: sid, DiskID: disk, BranchName: &branch, Ino: 2}).Return(nil).Once()
+	ctx := context.Background()
+	_, err := client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("file"), SessionId: &sid, OpenInClient: proto.Bool(true)}))
+	require.NoError(t, err)
+	_, err = client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{ParentIno: 1, Name: []byte("dir"), SessionId: &sid}))
+	require.NoError(t, err)
+	_, err = client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{OldParentIno: 1, OldName: []byte("old"), NewParentIno: 1, NewName: []byte("new"), SessionId: &sid, TargetOpenInClient: proto.Bool(true)}))
+	require.NoError(t, err)
+	_, err = client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{SessionId: sid, DiskId: disk, BranchName: &branch, Ino: 2}))
+	require.NoError(t, err)
+	mgr.EXPECT().ReclaimOrphan(mock.Anything, meta.ReclaimOrphanParams{SessionID: sid, DiskID: disk, Ino: 3}).Return(meta.ErrBadFileHandle).Once()
+	_, err = client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{SessionId: sid, DiskId: disk, Ino: 3}))
+	require.Error(t, err)
+	require.Equal(t, "EBADF", server.ExtractErrorInfo(err).GetReason())
+	_, err = client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{SessionId: sid, DiskId: "bad", Ino: 3}))
+	require.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
 }
 
 func TestSessionReadAndReadDirHandlers(t *testing.T) {

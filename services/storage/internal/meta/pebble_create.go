@@ -60,6 +60,10 @@ func (m *manager) pebbleCreateResult(ctx context.Context, sid *uint64, params Cr
 
 // withWritablePebbleBranch 在分支锁内使用已验证的可写会话。
 func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn func(string, string, *TreeQuota, *pebble.DB) error) (err error) {
+	return m.withWritablePebbleBranchFor(ctx, sid, nil, fn)
+}
+
+func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, check func(pgtype.UUID, string) error, fn func(string, string, *TreeQuota, *pebble.DB) error) (err error) {
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
@@ -82,6 +86,11 @@ func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn 
 	}
 	if readOnly {
 		return ErrPerm
+	}
+	if check != nil {
+		if err := check(diskID, branchName); err != nil {
+			return err
+		}
 	}
 	row, err := m.store.GetDisk(ctx, diskID)
 	if errors.Is(err, pgx.ErrNoRows) {

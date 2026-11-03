@@ -195,6 +195,11 @@ func (m *manager) Unlink(ctx context.Context, parentIno uint64, name []byte) err
 	if err := validateEntryNameAllowEmpty(name); err != nil {
 		return err
 	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.unlinkPebbleNode(ctx, sid, parentIno, name)
+	} else if _, openSet := OpenInClientFromContext(ctx); openSet {
+		return m.unlinkPebbleNode(ctx, sid, parentIno, name)
+	}
 
 	mutationTracker := m.newDirMutationTracker()
 	defer mutationTracker.done()
@@ -345,6 +350,11 @@ func (m *manager) Rmdir(ctx context.Context, parentIno uint64, name []byte) erro
 	}
 	if err := validateEntryNameAllowEmpty(name); err != nil {
 		return err
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.rmdirPebbleNode(ctx, sid, parentIno, name)
+	} else if _, openSet := OpenInClientFromContext(ctx); openSet {
+		return m.rmdirPebbleNode(ctx, sid, parentIno, name)
 	}
 
 	mutationTracker := m.newDirMutationTracker()
@@ -521,6 +531,11 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	}
 	if err := validateEntryName(params.NewName); err != nil {
 		return err
+	}
+	if sid, ok := SessionIDFromContext(ctx); ok && sid != nil {
+		return m.renamePebbleNode(ctx, sid, params)
+	} else if _, openSet := OpenInClientFromContext(ctx); openSet {
+		return m.renamePebbleNode(ctx, sid, params)
 	}
 
 	mutationTracker := m.newDirMutationTracker()

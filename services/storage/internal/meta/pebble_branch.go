@@ -18,6 +18,19 @@ import (
 
 type sessionIDContextKey struct{}
 
+type openInClientContextKey struct{}
+
+// WithOpenInClient 将客户端本地打开状态放入请求上下文。
+func WithOpenInClient(ctx context.Context, open bool) context.Context {
+	return context.WithValue(ctx, openInClientContextKey{}, open)
+}
+
+// OpenInClientFromContext 返回客户端是否设置了本地打开状态。
+func OpenInClientFromContext(ctx context.Context) (bool, bool) {
+	open, ok := ctx.Value(openInClientContextKey{}).(bool)
+	return open, ok
+}
+
 // WithSessionID 将客户端会话标识放入请求上下文。
 func WithSessionID(ctx context.Context, sessionID *uint64) context.Context {
 	return context.WithValue(ctx, sessionIDContextKey{}, sessionID)

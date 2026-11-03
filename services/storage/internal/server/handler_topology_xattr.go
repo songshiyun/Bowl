@@ -32,8 +32,11 @@ func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRe
 
 // Unlink 删除指定父目录下的非目录项（解链）。
 func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.UnlinkRequest]) (*connect.Response[storagev1.UnlinkResponse], error) {
-	if req.Msg.SessionId != nil || req.Msg.OpenInClient != nil {
-		return nil, branchContextUnimplemented()
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
+	if req.Msg.OpenInClient != nil {
+		ctx = meta.WithOpenInClient(ctx, *req.Msg.OpenInClient)
 	}
 	err := s.metaManager.Unlink(ctx, req.Msg.GetParentIno(), req.Msg.GetName())
 	if err != nil {
@@ -46,7 +49,7 @@ func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.Unli
 // Rmdir 移除指定父目录下的空目录项。
 func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.RmdirRequest]) (*connect.Response[storagev1.RmdirResponse], error) {
 	if req.Msg.SessionId != nil {
-		return nil, branchContextUnimplemented()
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
 	}
 	err := s.metaManager.Rmdir(ctx, req.Msg.GetParentIno(), req.Msg.GetName())
 	if err != nil {
@@ -58,8 +61,11 @@ func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.Rmdir
 
 // Rename 执行原子文件/目录重命名、移动或双向交换。
 func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
-	if req.Msg.SessionId != nil || req.Msg.TargetOpenInClient != nil {
-		return nil, branchContextUnimplemented()
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
+	if req.Msg.TargetOpenInClient != nil {
+		ctx = meta.WithOpenInClient(ctx, *req.Msg.TargetOpenInClient)
 	}
 	err := s.metaManager.Rename(ctx, meta.RenameParams{
 		OldParentIno: req.Msg.GetOldParentIno(),
