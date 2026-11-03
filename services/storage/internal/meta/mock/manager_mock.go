@@ -6,7 +6,6 @@ package mock
 
 import (
 	"context"
-	"time"
 
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 	mock "github.com/stretchr/testify/mock"
@@ -40,8 +39,8 @@ func (_m *MockManager) EXPECT() *MockManager_Expecter {
 }
 
 // AbortMerge provides a mock function for the type MockManager
-func (_mock *MockManager) AbortMerge(ctx context.Context, params meta.AbortMergeParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) AbortMerge(context1 context.Context, abortMergeParams meta.AbortMergeParams) error {
+	ret := _mock.Called(context1, abortMergeParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AbortMerge")
@@ -49,7 +48,7 @@ func (_mock *MockManager) AbortMerge(ctx context.Context, params meta.AbortMerge
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.AbortMergeParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, abortMergeParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -62,13 +61,13 @@ type MockManager_AbortMerge_Call struct {
 }
 
 // AbortMerge is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.AbortMergeParams
-func (_e *MockManager_Expecter) AbortMerge(ctx any, params any) *MockManager_AbortMerge_Call {
-	return &MockManager_AbortMerge_Call{Call: _e.mock.On("AbortMerge", ctx, params)}
+//   - context1 context.Context
+//   - abortMergeParams meta.AbortMergeParams
+func (_e *MockManager_Expecter) AbortMerge(context1 any, abortMergeParams any) *MockManager_AbortMerge_Call {
+	return &MockManager_AbortMerge_Call{Call: _e.mock.On("AbortMerge", context1, abortMergeParams)}
 }
 
-func (_c *MockManager_AbortMerge_Call) Run(run func(ctx context.Context, params meta.AbortMergeParams)) *MockManager_AbortMerge_Call {
+func (_c *MockManager_AbortMerge_Call) Run(run func(context1 context.Context, abortMergeParams meta.AbortMergeParams)) *MockManager_AbortMerge_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -91,14 +90,14 @@ func (_c *MockManager_AbortMerge_Call) Return(err error) *MockManager_AbortMerge
 	return _c
 }
 
-func (_c *MockManager_AbortMerge_Call) RunAndReturn(run func(ctx context.Context, params meta.AbortMergeParams) error) *MockManager_AbortMerge_Call {
+func (_c *MockManager_AbortMerge_Call) RunAndReturn(run func(context1 context.Context, abortMergeParams meta.AbortMergeParams) error) *MockManager_AbortMerge_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CloseSession provides a mock function for the type MockManager
-func (_mock *MockManager) CloseSession(ctx context.Context, sessionID uint64) error {
-	ret := _mock.Called(ctx, sessionID)
+func (_mock *MockManager) CloseSession(context1 context.Context, v uint64) error {
+	ret := _mock.Called(context1, v)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CloseSession")
@@ -106,7 +105,7 @@ func (_mock *MockManager) CloseSession(ctx context.Context, sessionID uint64) er
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) error); ok {
-		r0 = returnFunc(ctx, sessionID)
+		r0 = returnFunc(context1, v)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -119,13 +118,13 @@ type MockManager_CloseSession_Call struct {
 }
 
 // CloseSession is a helper method to define mock.On call
-//   - ctx context.Context
-//   - sessionID uint64
-func (_e *MockManager_Expecter) CloseSession(ctx any, sessionID any) *MockManager_CloseSession_Call {
-	return &MockManager_CloseSession_Call{Call: _e.mock.On("CloseSession", ctx, sessionID)}
+//   - context1 context.Context
+//   - v uint64
+func (_e *MockManager_Expecter) CloseSession(context1 any, v any) *MockManager_CloseSession_Call {
+	return &MockManager_CloseSession_Call{Call: _e.mock.On("CloseSession", context1, v)}
 }
 
-func (_c *MockManager_CloseSession_Call) Run(run func(ctx context.Context, sessionID uint64)) *MockManager_CloseSession_Call {
+func (_c *MockManager_CloseSession_Call) Run(run func(context1 context.Context, v uint64)) *MockManager_CloseSession_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -148,80 +147,14 @@ func (_c *MockManager_CloseSession_Call) Return(err error) *MockManager_CloseSes
 	return _c
 }
 
-func (_c *MockManager_CloseSession_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64) error) *MockManager_CloseSession_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CollectGarbage provides a mock function for the type MockManager
-func (_mock *MockManager) CollectGarbage(ctx context.Context, limit int32) (int, error) {
-	ret := _mock.Called(ctx, limit)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CollectGarbage")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, int32) (int, error)); ok {
-		return returnFunc(ctx, limit)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, int32) int); ok {
-		r0 = returnFunc(ctx, limit)
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, int32) error); ok {
-		r1 = returnFunc(ctx, limit)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_CollectGarbage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CollectGarbage'
-type MockManager_CollectGarbage_Call struct {
-	*mock.Call
-}
-
-// CollectGarbage is a helper method to define mock.On call
-//   - ctx context.Context
-//   - limit int32
-func (_e *MockManager_Expecter) CollectGarbage(ctx any, limit any) *MockManager_CollectGarbage_Call {
-	return &MockManager_CollectGarbage_Call{Call: _e.mock.On("CollectGarbage", ctx, limit)}
-}
-
-func (_c *MockManager_CollectGarbage_Call) Run(run func(ctx context.Context, limit int32)) *MockManager_CollectGarbage_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 int32
-		if args[1] != nil {
-			arg1 = args[1].(int32)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_CollectGarbage_Call) Return(n int, err error) *MockManager_CollectGarbage_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockManager_CollectGarbage_Call) RunAndReturn(run func(ctx context.Context, limit int32) (int, error)) *MockManager_CollectGarbage_Call {
+func (_c *MockManager_CloseSession_Call) RunAndReturn(run func(context1 context.Context, v uint64) error) *MockManager_CloseSession_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Commit provides a mock function for the type MockManager
-func (_mock *MockManager) Commit(ctx context.Context, params meta.CommitParams) (*meta.CommitInfo, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Commit(context1 context.Context, commitParams meta.CommitParams) (*meta.CommitInfo, error) {
+	ret := _mock.Called(context1, commitParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Commit")
@@ -230,17 +163,17 @@ func (_mock *MockManager) Commit(ctx context.Context, params meta.CommitParams) 
 	var r0 *meta.CommitInfo
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CommitParams) (*meta.CommitInfo, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, commitParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CommitParams) *meta.CommitInfo); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, commitParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.CommitInfo)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CommitParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, commitParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -253,13 +186,13 @@ type MockManager_Commit_Call struct {
 }
 
 // Commit is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.CommitParams
-func (_e *MockManager_Expecter) Commit(ctx any, params any) *MockManager_Commit_Call {
-	return &MockManager_Commit_Call{Call: _e.mock.On("Commit", ctx, params)}
+//   - context1 context.Context
+//   - commitParams meta.CommitParams
+func (_e *MockManager_Expecter) Commit(context1 any, commitParams any) *MockManager_Commit_Call {
+	return &MockManager_Commit_Call{Call: _e.mock.On("Commit", context1, commitParams)}
 }
 
-func (_c *MockManager_Commit_Call) Run(run func(ctx context.Context, params meta.CommitParams)) *MockManager_Commit_Call {
+func (_c *MockManager_Commit_Call) Run(run func(context1 context.Context, commitParams meta.CommitParams)) *MockManager_Commit_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -282,77 +215,14 @@ func (_c *MockManager_Commit_Call) Return(commitInfo *meta.CommitInfo, err error
 	return _c
 }
 
-func (_c *MockManager_Commit_Call) RunAndReturn(run func(ctx context.Context, params meta.CommitParams) (*meta.CommitInfo, error)) *MockManager_Commit_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CompactChunk provides a mock function for the type MockManager
-func (_mock *MockManager) CompactChunk(ctx context.Context, ino uint64, indx int64) error {
-	ret := _mock.Called(ctx, ino, indx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CompactChunk")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, int64) error); ok {
-		r0 = returnFunc(ctx, ino, indx)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_CompactChunk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CompactChunk'
-type MockManager_CompactChunk_Call struct {
-	*mock.Call
-}
-
-// CompactChunk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-//   - indx int64
-func (_e *MockManager_Expecter) CompactChunk(ctx any, ino any, indx any) *MockManager_CompactChunk_Call {
-	return &MockManager_CompactChunk_Call{Call: _e.mock.On("CompactChunk", ctx, ino, indx)}
-}
-
-func (_c *MockManager_CompactChunk_Call) Run(run func(ctx context.Context, ino uint64, indx int64)) *MockManager_CompactChunk_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 uint64
-		if args[1] != nil {
-			arg1 = args[1].(uint64)
-		}
-		var arg2 int64
-		if args[2] != nil {
-			arg2 = args[2].(int64)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_CompactChunk_Call) Return(err error) *MockManager_CompactChunk_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_CompactChunk_Call) RunAndReturn(run func(ctx context.Context, ino uint64, indx int64) error) *MockManager_CompactChunk_Call {
+func (_c *MockManager_Commit_Call) RunAndReturn(run func(context1 context.Context, commitParams meta.CommitParams) (*meta.CommitInfo, error)) *MockManager_Commit_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Create provides a mock function for the type MockManager
-func (_mock *MockManager) Create(ctx context.Context, params meta.CreateParams) (*meta.CreateResult, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Create(context1 context.Context, createParams meta.CreateParams) (*meta.CreateResult, error) {
+	ret := _mock.Called(context1, createParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Create")
@@ -361,17 +231,17 @@ func (_mock *MockManager) Create(ctx context.Context, params meta.CreateParams) 
 	var r0 *meta.CreateResult
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateParams) (*meta.CreateResult, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, createParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateParams) *meta.CreateResult); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, createParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.CreateResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CreateParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, createParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -384,13 +254,13 @@ type MockManager_Create_Call struct {
 }
 
 // Create is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.CreateParams
-func (_e *MockManager_Expecter) Create(ctx any, params any) *MockManager_Create_Call {
-	return &MockManager_Create_Call{Call: _e.mock.On("Create", ctx, params)}
+//   - context1 context.Context
+//   - createParams meta.CreateParams
+func (_e *MockManager_Expecter) Create(context1 any, createParams any) *MockManager_Create_Call {
+	return &MockManager_Create_Call{Call: _e.mock.On("Create", context1, createParams)}
 }
 
-func (_c *MockManager_Create_Call) Run(run func(ctx context.Context, params meta.CreateParams)) *MockManager_Create_Call {
+func (_c *MockManager_Create_Call) Run(run func(context1 context.Context, createParams meta.CreateParams)) *MockManager_Create_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -413,14 +283,14 @@ func (_c *MockManager_Create_Call) Return(createResult *meta.CreateResult, err e
 	return _c
 }
 
-func (_c *MockManager_Create_Call) RunAndReturn(run func(ctx context.Context, params meta.CreateParams) (*meta.CreateResult, error)) *MockManager_Create_Call {
+func (_c *MockManager_Create_Call) RunAndReturn(run func(context1 context.Context, createParams meta.CreateParams) (*meta.CreateResult, error)) *MockManager_Create_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CreateBranch provides a mock function for the type MockManager
-func (_mock *MockManager) CreateBranch(ctx context.Context, params meta.CreateBranchParams) (*meta.Branch, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) CreateBranch(context1 context.Context, createBranchParams meta.CreateBranchParams) (*meta.Branch, error) {
+	ret := _mock.Called(context1, createBranchParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateBranch")
@@ -429,17 +299,17 @@ func (_mock *MockManager) CreateBranch(ctx context.Context, params meta.CreateBr
 	var r0 *meta.Branch
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateBranchParams) (*meta.Branch, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, createBranchParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateBranchParams) *meta.Branch); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, createBranchParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Branch)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CreateBranchParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, createBranchParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -452,13 +322,13 @@ type MockManager_CreateBranch_Call struct {
 }
 
 // CreateBranch is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.CreateBranchParams
-func (_e *MockManager_Expecter) CreateBranch(ctx any, params any) *MockManager_CreateBranch_Call {
-	return &MockManager_CreateBranch_Call{Call: _e.mock.On("CreateBranch", ctx, params)}
+//   - context1 context.Context
+//   - createBranchParams meta.CreateBranchParams
+func (_e *MockManager_Expecter) CreateBranch(context1 any, createBranchParams any) *MockManager_CreateBranch_Call {
+	return &MockManager_CreateBranch_Call{Call: _e.mock.On("CreateBranch", context1, createBranchParams)}
 }
 
-func (_c *MockManager_CreateBranch_Call) Run(run func(ctx context.Context, params meta.CreateBranchParams)) *MockManager_CreateBranch_Call {
+func (_c *MockManager_CreateBranch_Call) Run(run func(context1 context.Context, createBranchParams meta.CreateBranchParams)) *MockManager_CreateBranch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -481,14 +351,14 @@ func (_c *MockManager_CreateBranch_Call) Return(branch *meta.Branch, err error) 
 	return _c
 }
 
-func (_c *MockManager_CreateBranch_Call) RunAndReturn(run func(ctx context.Context, params meta.CreateBranchParams) (*meta.Branch, error)) *MockManager_CreateBranch_Call {
+func (_c *MockManager_CreateBranch_Call) RunAndReturn(run func(context1 context.Context, createBranchParams meta.CreateBranchParams) (*meta.Branch, error)) *MockManager_CreateBranch_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // CreateDisk provides a mock function for the type MockManager
-func (_mock *MockManager) CreateDisk(ctx context.Context, params meta.CreateDiskParams) (*meta.Disk, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) CreateDisk(context1 context.Context, createDiskParams meta.CreateDiskParams) (*meta.Disk, error) {
+	ret := _mock.Called(context1, createDiskParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateDisk")
@@ -497,17 +367,17 @@ func (_mock *MockManager) CreateDisk(ctx context.Context, params meta.CreateDisk
 	var r0 *meta.Disk
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateDiskParams) (*meta.Disk, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, createDiskParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.CreateDiskParams) *meta.Disk); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, createDiskParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Disk)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.CreateDiskParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, createDiskParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -520,13 +390,13 @@ type MockManager_CreateDisk_Call struct {
 }
 
 // CreateDisk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.CreateDiskParams
-func (_e *MockManager_Expecter) CreateDisk(ctx any, params any) *MockManager_CreateDisk_Call {
-	return &MockManager_CreateDisk_Call{Call: _e.mock.On("CreateDisk", ctx, params)}
+//   - context1 context.Context
+//   - createDiskParams meta.CreateDiskParams
+func (_e *MockManager_Expecter) CreateDisk(context1 any, createDiskParams any) *MockManager_CreateDisk_Call {
+	return &MockManager_CreateDisk_Call{Call: _e.mock.On("CreateDisk", context1, createDiskParams)}
 }
 
-func (_c *MockManager_CreateDisk_Call) Run(run func(ctx context.Context, params meta.CreateDiskParams)) *MockManager_CreateDisk_Call {
+func (_c *MockManager_CreateDisk_Call) Run(run func(context1 context.Context, createDiskParams meta.CreateDiskParams)) *MockManager_CreateDisk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -549,14 +419,14 @@ func (_c *MockManager_CreateDisk_Call) Return(disk *meta.Disk, err error) *MockM
 	return _c
 }
 
-func (_c *MockManager_CreateDisk_Call) RunAndReturn(run func(ctx context.Context, params meta.CreateDiskParams) (*meta.Disk, error)) *MockManager_CreateDisk_Call {
+func (_c *MockManager_CreateDisk_Call) RunAndReturn(run func(context1 context.Context, createDiskParams meta.CreateDiskParams) (*meta.Disk, error)) *MockManager_CreateDisk_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // DeleteBranch provides a mock function for the type MockManager
-func (_mock *MockManager) DeleteBranch(ctx context.Context, params meta.DeleteBranchParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) DeleteBranch(context1 context.Context, deleteBranchParams meta.DeleteBranchParams) error {
+	ret := _mock.Called(context1, deleteBranchParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteBranch")
@@ -564,7 +434,7 @@ func (_mock *MockManager) DeleteBranch(ctx context.Context, params meta.DeleteBr
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DeleteBranchParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, deleteBranchParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -577,13 +447,13 @@ type MockManager_DeleteBranch_Call struct {
 }
 
 // DeleteBranch is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.DeleteBranchParams
-func (_e *MockManager_Expecter) DeleteBranch(ctx any, params any) *MockManager_DeleteBranch_Call {
-	return &MockManager_DeleteBranch_Call{Call: _e.mock.On("DeleteBranch", ctx, params)}
+//   - context1 context.Context
+//   - deleteBranchParams meta.DeleteBranchParams
+func (_e *MockManager_Expecter) DeleteBranch(context1 any, deleteBranchParams any) *MockManager_DeleteBranch_Call {
+	return &MockManager_DeleteBranch_Call{Call: _e.mock.On("DeleteBranch", context1, deleteBranchParams)}
 }
 
-func (_c *MockManager_DeleteBranch_Call) Run(run func(ctx context.Context, params meta.DeleteBranchParams)) *MockManager_DeleteBranch_Call {
+func (_c *MockManager_DeleteBranch_Call) Run(run func(context1 context.Context, deleteBranchParams meta.DeleteBranchParams)) *MockManager_DeleteBranch_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -606,14 +476,14 @@ func (_c *MockManager_DeleteBranch_Call) Return(err error) *MockManager_DeleteBr
 	return _c
 }
 
-func (_c *MockManager_DeleteBranch_Call) RunAndReturn(run func(ctx context.Context, params meta.DeleteBranchParams) error) *MockManager_DeleteBranch_Call {
+func (_c *MockManager_DeleteBranch_Call) RunAndReturn(run func(context1 context.Context, deleteBranchParams meta.DeleteBranchParams) error) *MockManager_DeleteBranch_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // DeleteDisk provides a mock function for the type MockManager
-func (_mock *MockManager) DeleteDisk(ctx context.Context, diskID string) error {
-	ret := _mock.Called(ctx, diskID)
+func (_mock *MockManager) DeleteDisk(context1 context.Context, s string) error {
+	ret := _mock.Called(context1, s)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DeleteDisk")
@@ -621,7 +491,7 @@ func (_mock *MockManager) DeleteDisk(ctx context.Context, diskID string) error {
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, diskID)
+		r0 = returnFunc(context1, s)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -634,13 +504,13 @@ type MockManager_DeleteDisk_Call struct {
 }
 
 // DeleteDisk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - diskID string
-func (_e *MockManager_Expecter) DeleteDisk(ctx any, diskID any) *MockManager_DeleteDisk_Call {
-	return &MockManager_DeleteDisk_Call{Call: _e.mock.On("DeleteDisk", ctx, diskID)}
+//   - context1 context.Context
+//   - s string
+func (_e *MockManager_Expecter) DeleteDisk(context1 any, s any) *MockManager_DeleteDisk_Call {
+	return &MockManager_DeleteDisk_Call{Call: _e.mock.On("DeleteDisk", context1, s)}
 }
 
-func (_c *MockManager_DeleteDisk_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_DeleteDisk_Call {
+func (_c *MockManager_DeleteDisk_Call) Run(run func(context1 context.Context, s string)) *MockManager_DeleteDisk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -663,14 +533,14 @@ func (_c *MockManager_DeleteDisk_Call) Return(err error) *MockManager_DeleteDisk
 	return _c
 }
 
-func (_c *MockManager_DeleteDisk_Call) RunAndReturn(run func(ctx context.Context, diskID string) error) *MockManager_DeleteDisk_Call {
+func (_c *MockManager_DeleteDisk_Call) RunAndReturn(run func(context1 context.Context, s string) error) *MockManager_DeleteDisk_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Diff provides a mock function for the type MockManager
-func (_mock *MockManager) Diff(ctx context.Context, params meta.DiffParams) ([]meta.DiffEntry, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Diff(context1 context.Context, diffParams meta.DiffParams) ([]meta.DiffEntry, error) {
+	ret := _mock.Called(context1, diffParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Diff")
@@ -679,17 +549,17 @@ func (_mock *MockManager) Diff(ctx context.Context, params meta.DiffParams) ([]m
 	var r0 []meta.DiffEntry
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DiffParams) ([]meta.DiffEntry, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, diffParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.DiffParams) []meta.DiffEntry); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, diffParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]meta.DiffEntry)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.DiffParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, diffParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -702,13 +572,13 @@ type MockManager_Diff_Call struct {
 }
 
 // Diff is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.DiffParams
-func (_e *MockManager_Expecter) Diff(ctx any, params any) *MockManager_Diff_Call {
-	return &MockManager_Diff_Call{Call: _e.mock.On("Diff", ctx, params)}
+//   - context1 context.Context
+//   - diffParams meta.DiffParams
+func (_e *MockManager_Expecter) Diff(context1 any, diffParams any) *MockManager_Diff_Call {
+	return &MockManager_Diff_Call{Call: _e.mock.On("Diff", context1, diffParams)}
 }
 
-func (_c *MockManager_Diff_Call) Run(run func(ctx context.Context, params meta.DiffParams)) *MockManager_Diff_Call {
+func (_c *MockManager_Diff_Call) Run(run func(context1 context.Context, diffParams meta.DiffParams)) *MockManager_Diff_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -731,14 +601,14 @@ func (_c *MockManager_Diff_Call) Return(diffEntrys []meta.DiffEntry, err error) 
 	return _c
 }
 
-func (_c *MockManager_Diff_Call) RunAndReturn(run func(ctx context.Context, params meta.DiffParams) ([]meta.DiffEntry, error)) *MockManager_Diff_Call {
+func (_c *MockManager_Diff_Call) RunAndReturn(run func(context1 context.Context, diffParams meta.DiffParams) ([]meta.DiffEntry, error)) *MockManager_Diff_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Fallocate provides a mock function for the type MockManager
-func (_mock *MockManager) Fallocate(ctx context.Context, params meta.FallocateParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Fallocate(context1 context.Context, fallocateParams meta.FallocateParams) error {
+	ret := _mock.Called(context1, fallocateParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Fallocate")
@@ -746,7 +616,7 @@ func (_mock *MockManager) Fallocate(ctx context.Context, params meta.FallocatePa
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.FallocateParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, fallocateParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -759,13 +629,13 @@ type MockManager_Fallocate_Call struct {
 }
 
 // Fallocate is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.FallocateParams
-func (_e *MockManager_Expecter) Fallocate(ctx any, params any) *MockManager_Fallocate_Call {
-	return &MockManager_Fallocate_Call{Call: _e.mock.On("Fallocate", ctx, params)}
+//   - context1 context.Context
+//   - fallocateParams meta.FallocateParams
+func (_e *MockManager_Expecter) Fallocate(context1 any, fallocateParams any) *MockManager_Fallocate_Call {
+	return &MockManager_Fallocate_Call{Call: _e.mock.On("Fallocate", context1, fallocateParams)}
 }
 
-func (_c *MockManager_Fallocate_Call) Run(run func(ctx context.Context, params meta.FallocateParams)) *MockManager_Fallocate_Call {
+func (_c *MockManager_Fallocate_Call) Run(run func(context1 context.Context, fallocateParams meta.FallocateParams)) *MockManager_Fallocate_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -788,71 +658,14 @@ func (_c *MockManager_Fallocate_Call) Return(err error) *MockManager_Fallocate_C
 	return _c
 }
 
-func (_c *MockManager_Fallocate_Call) RunAndReturn(run func(ctx context.Context, params meta.FallocateParams) error) *MockManager_Fallocate_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Flush provides a mock function for the type MockManager
-func (_mock *MockManager) Flush(ctx context.Context, params meta.FlushParams) error {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Flush")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.FlushParams) error); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_Flush_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Flush'
-type MockManager_Flush_Call struct {
-	*mock.Call
-}
-
-// Flush is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.FlushParams
-func (_e *MockManager_Expecter) Flush(ctx any, params any) *MockManager_Flush_Call {
-	return &MockManager_Flush_Call{Call: _e.mock.On("Flush", ctx, params)}
-}
-
-func (_c *MockManager_Flush_Call) Run(run func(ctx context.Context, params meta.FlushParams)) *MockManager_Flush_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.FlushParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.FlushParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_Flush_Call) Return(err error) *MockManager_Flush_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_Flush_Call) RunAndReturn(run func(ctx context.Context, params meta.FlushParams) error) *MockManager_Flush_Call {
+func (_c *MockManager_Fallocate_Call) RunAndReturn(run func(context1 context.Context, fallocateParams meta.FallocateParams) error) *MockManager_Fallocate_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Fsync provides a mock function for the type MockManager
-func (_mock *MockManager) Fsync(ctx context.Context, params meta.FsyncParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Fsync(context1 context.Context, fsyncParams meta.FsyncParams) error {
+	ret := _mock.Called(context1, fsyncParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Fsync")
@@ -860,7 +673,7 @@ func (_mock *MockManager) Fsync(ctx context.Context, params meta.FsyncParams) er
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.FsyncParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, fsyncParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -873,13 +686,13 @@ type MockManager_Fsync_Call struct {
 }
 
 // Fsync is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.FsyncParams
-func (_e *MockManager_Expecter) Fsync(ctx any, params any) *MockManager_Fsync_Call {
-	return &MockManager_Fsync_Call{Call: _e.mock.On("Fsync", ctx, params)}
+//   - context1 context.Context
+//   - fsyncParams meta.FsyncParams
+func (_e *MockManager_Expecter) Fsync(context1 any, fsyncParams any) *MockManager_Fsync_Call {
+	return &MockManager_Fsync_Call{Call: _e.mock.On("Fsync", context1, fsyncParams)}
 }
 
-func (_c *MockManager_Fsync_Call) Run(run func(ctx context.Context, params meta.FsyncParams)) *MockManager_Fsync_Call {
+func (_c *MockManager_Fsync_Call) Run(run func(context1 context.Context, fsyncParams meta.FsyncParams)) *MockManager_Fsync_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -902,14 +715,14 @@ func (_c *MockManager_Fsync_Call) Return(err error) *MockManager_Fsync_Call {
 	return _c
 }
 
-func (_c *MockManager_Fsync_Call) RunAndReturn(run func(ctx context.Context, params meta.FsyncParams) error) *MockManager_Fsync_Call {
+func (_c *MockManager_Fsync_Call) RunAndReturn(run func(context1 context.Context, fsyncParams meta.FsyncParams) error) *MockManager_Fsync_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // FsyncDir provides a mock function for the type MockManager
-func (_mock *MockManager) FsyncDir(ctx context.Context, params meta.FsyncDirParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) FsyncDir(context1 context.Context, fsyncDirParams meta.FsyncDirParams) error {
+	ret := _mock.Called(context1, fsyncDirParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FsyncDir")
@@ -917,7 +730,7 @@ func (_mock *MockManager) FsyncDir(ctx context.Context, params meta.FsyncDirPara
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.FsyncDirParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, fsyncDirParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -930,13 +743,13 @@ type MockManager_FsyncDir_Call struct {
 }
 
 // FsyncDir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.FsyncDirParams
-func (_e *MockManager_Expecter) FsyncDir(ctx any, params any) *MockManager_FsyncDir_Call {
-	return &MockManager_FsyncDir_Call{Call: _e.mock.On("FsyncDir", ctx, params)}
+//   - context1 context.Context
+//   - fsyncDirParams meta.FsyncDirParams
+func (_e *MockManager_Expecter) FsyncDir(context1 any, fsyncDirParams any) *MockManager_FsyncDir_Call {
+	return &MockManager_FsyncDir_Call{Call: _e.mock.On("FsyncDir", context1, fsyncDirParams)}
 }
 
-func (_c *MockManager_FsyncDir_Call) Run(run func(ctx context.Context, params meta.FsyncDirParams)) *MockManager_FsyncDir_Call {
+func (_c *MockManager_FsyncDir_Call) Run(run func(context1 context.Context, fsyncDirParams meta.FsyncDirParams)) *MockManager_FsyncDir_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -959,14 +772,14 @@ func (_c *MockManager_FsyncDir_Call) Return(err error) *MockManager_FsyncDir_Cal
 	return _c
 }
 
-func (_c *MockManager_FsyncDir_Call) RunAndReturn(run func(ctx context.Context, params meta.FsyncDirParams) error) *MockManager_FsyncDir_Call {
+func (_c *MockManager_FsyncDir_Call) RunAndReturn(run func(context1 context.Context, fsyncDirParams meta.FsyncDirParams) error) *MockManager_FsyncDir_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetAttr provides a mock function for the type MockManager
-func (_mock *MockManager) GetAttr(ctx context.Context, ino uint64) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, ino)
+func (_mock *MockManager) GetAttr(context1 context.Context, v uint64) (*meta.Inode, error) {
+	ret := _mock.Called(context1, v)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAttr")
@@ -975,17 +788,17 @@ func (_mock *MockManager) GetAttr(ctx context.Context, ino uint64) (*meta.Inode,
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, ino)
+		return returnFunc(context1, v)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) *meta.Inode); ok {
-		r0 = returnFunc(ctx, ino)
+		r0 = returnFunc(context1, v)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, ino)
+		r1 = returnFunc(context1, v)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -998,13 +811,13 @@ type MockManager_GetAttr_Call struct {
 }
 
 // GetAttr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-func (_e *MockManager_Expecter) GetAttr(ctx any, ino any) *MockManager_GetAttr_Call {
-	return &MockManager_GetAttr_Call{Call: _e.mock.On("GetAttr", ctx, ino)}
+//   - context1 context.Context
+//   - v uint64
+func (_e *MockManager_Expecter) GetAttr(context1 any, v any) *MockManager_GetAttr_Call {
+	return &MockManager_GetAttr_Call{Call: _e.mock.On("GetAttr", context1, v)}
 }
 
-func (_c *MockManager_GetAttr_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_GetAttr_Call {
+func (_c *MockManager_GetAttr_Call) Run(run func(context1 context.Context, v uint64)) *MockManager_GetAttr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1027,14 +840,14 @@ func (_c *MockManager_GetAttr_Call) Return(inode *meta.Inode, err error) *MockMa
 	return _c
 }
 
-func (_c *MockManager_GetAttr_Call) RunAndReturn(run func(ctx context.Context, ino uint64) (*meta.Inode, error)) *MockManager_GetAttr_Call {
+func (_c *MockManager_GetAttr_Call) RunAndReturn(run func(context1 context.Context, v uint64) (*meta.Inode, error)) *MockManager_GetAttr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetDisk provides a mock function for the type MockManager
-func (_mock *MockManager) GetDisk(ctx context.Context, diskID string) (*meta.Disk, error) {
-	ret := _mock.Called(ctx, diskID)
+func (_mock *MockManager) GetDisk(context1 context.Context, s string) (*meta.Disk, error) {
+	ret := _mock.Called(context1, s)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetDisk")
@@ -1043,17 +856,17 @@ func (_mock *MockManager) GetDisk(ctx context.Context, diskID string) (*meta.Dis
 	var r0 *meta.Disk
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*meta.Disk, error)); ok {
-		return returnFunc(ctx, diskID)
+		return returnFunc(context1, s)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *meta.Disk); ok {
-		r0 = returnFunc(ctx, diskID)
+		r0 = returnFunc(context1, s)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Disk)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, diskID)
+		r1 = returnFunc(context1, s)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1066,13 +879,13 @@ type MockManager_GetDisk_Call struct {
 }
 
 // GetDisk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - diskID string
-func (_e *MockManager_Expecter) GetDisk(ctx any, diskID any) *MockManager_GetDisk_Call {
-	return &MockManager_GetDisk_Call{Call: _e.mock.On("GetDisk", ctx, diskID)}
+//   - context1 context.Context
+//   - s string
+func (_e *MockManager_Expecter) GetDisk(context1 any, s any) *MockManager_GetDisk_Call {
+	return &MockManager_GetDisk_Call{Call: _e.mock.On("GetDisk", context1, s)}
 }
 
-func (_c *MockManager_GetDisk_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_GetDisk_Call {
+func (_c *MockManager_GetDisk_Call) Run(run func(context1 context.Context, s string)) *MockManager_GetDisk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1095,150 +908,14 @@ func (_c *MockManager_GetDisk_Call) Return(disk *meta.Disk, err error) *MockMana
 	return _c
 }
 
-func (_c *MockManager_GetDisk_Call) RunAndReturn(run func(ctx context.Context, diskID string) (*meta.Disk, error)) *MockManager_GetDisk_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetLk provides a mock function for the type MockManager
-func (_mock *MockManager) GetLk(ctx context.Context, params meta.GetLkParams) (*meta.FileLock, error) {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetLk")
-	}
-
-	var r0 *meta.FileLock
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.GetLkParams) (*meta.FileLock, error)); ok {
-		return returnFunc(ctx, params)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.GetLkParams) *meta.FileLock); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*meta.FileLock)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.GetLkParams) error); ok {
-		r1 = returnFunc(ctx, params)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_GetLk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetLk'
-type MockManager_GetLk_Call struct {
-	*mock.Call
-}
-
-// GetLk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.GetLkParams
-func (_e *MockManager_Expecter) GetLk(ctx any, params any) *MockManager_GetLk_Call {
-	return &MockManager_GetLk_Call{Call: _e.mock.On("GetLk", ctx, params)}
-}
-
-func (_c *MockManager_GetLk_Call) Run(run func(ctx context.Context, params meta.GetLkParams)) *MockManager_GetLk_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.GetLkParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.GetLkParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_GetLk_Call) Return(fileLock *meta.FileLock, err error) *MockManager_GetLk_Call {
-	_c.Call.Return(fileLock, err)
-	return _c
-}
-
-func (_c *MockManager_GetLk_Call) RunAndReturn(run func(ctx context.Context, params meta.GetLkParams) (*meta.FileLock, error)) *MockManager_GetLk_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetParents provides a mock function for the type MockManager
-func (_mock *MockManager) GetParents(ctx context.Context, ino uint64) (map[uint64]uint32, error) {
-	ret := _mock.Called(ctx, ino)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetParents")
-	}
-
-	var r0 map[uint64]uint32
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (map[uint64]uint32, error)); ok {
-		return returnFunc(ctx, ino)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) map[uint64]uint32); ok {
-		r0 = returnFunc(ctx, ino)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[uint64]uint32)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, ino)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_GetParents_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetParents'
-type MockManager_GetParents_Call struct {
-	*mock.Call
-}
-
-// GetParents is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-func (_e *MockManager_Expecter) GetParents(ctx any, ino any) *MockManager_GetParents_Call {
-	return &MockManager_GetParents_Call{Call: _e.mock.On("GetParents", ctx, ino)}
-}
-
-func (_c *MockManager_GetParents_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_GetParents_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 uint64
-		if args[1] != nil {
-			arg1 = args[1].(uint64)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_GetParents_Call) Return(uint64ToUint32 map[uint64]uint32, err error) *MockManager_GetParents_Call {
-	_c.Call.Return(uint64ToUint32, err)
-	return _c
-}
-
-func (_c *MockManager_GetParents_Call) RunAndReturn(run func(ctx context.Context, ino uint64) (map[uint64]uint32, error)) *MockManager_GetParents_Call {
+func (_c *MockManager_GetDisk_Call) RunAndReturn(run func(context1 context.Context, s string) (*meta.Disk, error)) *MockManager_GetDisk_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // GetXattr provides a mock function for the type MockManager
-func (_mock *MockManager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error) {
-	ret := _mock.Called(ctx, ino, name)
+func (_mock *MockManager) GetXattr(context1 context.Context, v uint64, bytes []byte) ([]byte, error) {
+	ret := _mock.Called(context1, v, bytes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetXattr")
@@ -1247,17 +924,17 @@ func (_mock *MockManager) GetXattr(ctx context.Context, ino uint64, name []byte)
 	var r0 []byte
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) ([]byte, error)); ok {
-		return returnFunc(ctx, ino, name)
+		return returnFunc(context1, v, bytes)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) []byte); ok {
-		r0 = returnFunc(ctx, ino, name)
+		r0 = returnFunc(context1, v, bytes)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]byte)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64, []byte) error); ok {
-		r1 = returnFunc(ctx, ino, name)
+		r1 = returnFunc(context1, v, bytes)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1270,14 +947,14 @@ type MockManager_GetXattr_Call struct {
 }
 
 // GetXattr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-//   - name []byte
-func (_e *MockManager_Expecter) GetXattr(ctx any, ino any, name any) *MockManager_GetXattr_Call {
-	return &MockManager_GetXattr_Call{Call: _e.mock.On("GetXattr", ctx, ino, name)}
+//   - context1 context.Context
+//   - v uint64
+//   - bytes []byte
+func (_e *MockManager_Expecter) GetXattr(context1 any, v any, bytes any) *MockManager_GetXattr_Call {
+	return &MockManager_GetXattr_Call{Call: _e.mock.On("GetXattr", context1, v, bytes)}
 }
 
-func (_c *MockManager_GetXattr_Call) Run(run func(ctx context.Context, ino uint64, name []byte)) *MockManager_GetXattr_Call {
+func (_c *MockManager_GetXattr_Call) Run(run func(context1 context.Context, v uint64, bytes []byte)) *MockManager_GetXattr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1300,19 +977,19 @@ func (_c *MockManager_GetXattr_Call) Run(run func(ctx context.Context, ino uint6
 	return _c
 }
 
-func (_c *MockManager_GetXattr_Call) Return(bytes []byte, err error) *MockManager_GetXattr_Call {
-	_c.Call.Return(bytes, err)
+func (_c *MockManager_GetXattr_Call) Return(bytes1 []byte, err error) *MockManager_GetXattr_Call {
+	_c.Call.Return(bytes1, err)
 	return _c
 }
 
-func (_c *MockManager_GetXattr_Call) RunAndReturn(run func(ctx context.Context, ino uint64, name []byte) ([]byte, error)) *MockManager_GetXattr_Call {
+func (_c *MockManager_GetXattr_Call) RunAndReturn(run func(context1 context.Context, v uint64, bytes []byte) ([]byte, error)) *MockManager_GetXattr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Link provides a mock function for the type MockManager
-func (_mock *MockManager) Link(ctx context.Context, params meta.LinkParams) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Link(context1 context.Context, linkParams meta.LinkParams) (*meta.Inode, error) {
+	ret := _mock.Called(context1, linkParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Link")
@@ -1321,17 +998,17 @@ func (_mock *MockManager) Link(ctx context.Context, params meta.LinkParams) (*me
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.LinkParams) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, linkParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.LinkParams) *meta.Inode); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, linkParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.LinkParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, linkParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1344,13 +1021,13 @@ type MockManager_Link_Call struct {
 }
 
 // Link is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.LinkParams
-func (_e *MockManager_Expecter) Link(ctx any, params any) *MockManager_Link_Call {
-	return &MockManager_Link_Call{Call: _e.mock.On("Link", ctx, params)}
+//   - context1 context.Context
+//   - linkParams meta.LinkParams
+func (_e *MockManager_Expecter) Link(context1 any, linkParams any) *MockManager_Link_Call {
+	return &MockManager_Link_Call{Call: _e.mock.On("Link", context1, linkParams)}
 }
 
-func (_c *MockManager_Link_Call) Run(run func(ctx context.Context, params meta.LinkParams)) *MockManager_Link_Call {
+func (_c *MockManager_Link_Call) Run(run func(context1 context.Context, linkParams meta.LinkParams)) *MockManager_Link_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1373,14 +1050,14 @@ func (_c *MockManager_Link_Call) Return(inode *meta.Inode, err error) *MockManag
 	return _c
 }
 
-func (_c *MockManager_Link_Call) RunAndReturn(run func(ctx context.Context, params meta.LinkParams) (*meta.Inode, error)) *MockManager_Link_Call {
+func (_c *MockManager_Link_Call) RunAndReturn(run func(context1 context.Context, linkParams meta.LinkParams) (*meta.Inode, error)) *MockManager_Link_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListBranches provides a mock function for the type MockManager
-func (_mock *MockManager) ListBranches(ctx context.Context, diskID string) ([]meta.Branch, error) {
-	ret := _mock.Called(ctx, diskID)
+func (_mock *MockManager) ListBranches(context1 context.Context, s string) ([]meta.Branch, error) {
+	ret := _mock.Called(context1, s)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBranches")
@@ -1389,17 +1066,17 @@ func (_mock *MockManager) ListBranches(ctx context.Context, diskID string) ([]me
 	var r0 []meta.Branch
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]meta.Branch, error)); ok {
-		return returnFunc(ctx, diskID)
+		return returnFunc(context1, s)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []meta.Branch); ok {
-		r0 = returnFunc(ctx, diskID)
+		r0 = returnFunc(context1, s)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]meta.Branch)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, diskID)
+		r1 = returnFunc(context1, s)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1412,13 +1089,13 @@ type MockManager_ListBranches_Call struct {
 }
 
 // ListBranches is a helper method to define mock.On call
-//   - ctx context.Context
-//   - diskID string
-func (_e *MockManager_Expecter) ListBranches(ctx any, diskID any) *MockManager_ListBranches_Call {
-	return &MockManager_ListBranches_Call{Call: _e.mock.On("ListBranches", ctx, diskID)}
+//   - context1 context.Context
+//   - s string
+func (_e *MockManager_Expecter) ListBranches(context1 any, s any) *MockManager_ListBranches_Call {
+	return &MockManager_ListBranches_Call{Call: _e.mock.On("ListBranches", context1, s)}
 }
 
-func (_c *MockManager_ListBranches_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_ListBranches_Call {
+func (_c *MockManager_ListBranches_Call) Run(run func(context1 context.Context, s string)) *MockManager_ListBranches_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1441,14 +1118,14 @@ func (_c *MockManager_ListBranches_Call) Return(branchs []meta.Branch, err error
 	return _c
 }
 
-func (_c *MockManager_ListBranches_Call) RunAndReturn(run func(ctx context.Context, diskID string) ([]meta.Branch, error)) *MockManager_ListBranches_Call {
+func (_c *MockManager_ListBranches_Call) RunAndReturn(run func(context1 context.Context, s string) ([]meta.Branch, error)) *MockManager_ListBranches_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListDisks provides a mock function for the type MockManager
-func (_mock *MockManager) ListDisks(ctx context.Context, params meta.ListDisksParams) (*meta.ListDisksResult, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) ListDisks(context1 context.Context, listDisksParams meta.ListDisksParams) (*meta.ListDisksResult, error) {
+	ret := _mock.Called(context1, listDisksParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListDisks")
@@ -1457,17 +1134,17 @@ func (_mock *MockManager) ListDisks(ctx context.Context, params meta.ListDisksPa
 	var r0 *meta.ListDisksResult
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ListDisksParams) (*meta.ListDisksResult, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, listDisksParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ListDisksParams) *meta.ListDisksResult); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, listDisksParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.ListDisksResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.ListDisksParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, listDisksParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1480,13 +1157,13 @@ type MockManager_ListDisks_Call struct {
 }
 
 // ListDisks is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ListDisksParams
-func (_e *MockManager_Expecter) ListDisks(ctx any, params any) *MockManager_ListDisks_Call {
-	return &MockManager_ListDisks_Call{Call: _e.mock.On("ListDisks", ctx, params)}
+//   - context1 context.Context
+//   - listDisksParams meta.ListDisksParams
+func (_e *MockManager_Expecter) ListDisks(context1 any, listDisksParams any) *MockManager_ListDisks_Call {
+	return &MockManager_ListDisks_Call{Call: _e.mock.On("ListDisks", context1, listDisksParams)}
 }
 
-func (_c *MockManager_ListDisks_Call) Run(run func(ctx context.Context, params meta.ListDisksParams)) *MockManager_ListDisks_Call {
+func (_c *MockManager_ListDisks_Call) Run(run func(context1 context.Context, listDisksParams meta.ListDisksParams)) *MockManager_ListDisks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1509,14 +1186,14 @@ func (_c *MockManager_ListDisks_Call) Return(listDisksResult *meta.ListDisksResu
 	return _c
 }
 
-func (_c *MockManager_ListDisks_Call) RunAndReturn(run func(ctx context.Context, params meta.ListDisksParams) (*meta.ListDisksResult, error)) *MockManager_ListDisks_Call {
+func (_c *MockManager_ListDisks_Call) RunAndReturn(run func(context1 context.Context, listDisksParams meta.ListDisksParams) (*meta.ListDisksResult, error)) *MockManager_ListDisks_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ListXattr provides a mock function for the type MockManager
-func (_mock *MockManager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
-	ret := _mock.Called(ctx, ino)
+func (_mock *MockManager) ListXattr(context1 context.Context, v uint64) ([][]byte, error) {
+	ret := _mock.Called(context1, v)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListXattr")
@@ -1525,17 +1202,17 @@ func (_mock *MockManager) ListXattr(ctx context.Context, ino uint64) ([][]byte, 
 	var r0 [][]byte
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) ([][]byte, error)); ok {
-		return returnFunc(ctx, ino)
+		return returnFunc(context1, v)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) [][]byte); ok {
-		r0 = returnFunc(ctx, ino)
+		r0 = returnFunc(context1, v)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([][]byte)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, ino)
+		r1 = returnFunc(context1, v)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1548,13 +1225,13 @@ type MockManager_ListXattr_Call struct {
 }
 
 // ListXattr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-func (_e *MockManager_Expecter) ListXattr(ctx any, ino any) *MockManager_ListXattr_Call {
-	return &MockManager_ListXattr_Call{Call: _e.mock.On("ListXattr", ctx, ino)}
+//   - context1 context.Context
+//   - v uint64
+func (_e *MockManager_Expecter) ListXattr(context1 any, v any) *MockManager_ListXattr_Call {
+	return &MockManager_ListXattr_Call{Call: _e.mock.On("ListXattr", context1, v)}
 }
 
-func (_c *MockManager_ListXattr_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_ListXattr_Call {
+func (_c *MockManager_ListXattr_Call) Run(run func(context1 context.Context, v uint64)) *MockManager_ListXattr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1577,14 +1254,14 @@ func (_c *MockManager_ListXattr_Call) Return(bytess [][]byte, err error) *MockMa
 	return _c
 }
 
-func (_c *MockManager_ListXattr_Call) RunAndReturn(run func(ctx context.Context, ino uint64) ([][]byte, error)) *MockManager_ListXattr_Call {
+func (_c *MockManager_ListXattr_Call) RunAndReturn(run func(context1 context.Context, v uint64) ([][]byte, error)) *MockManager_ListXattr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Lookup provides a mock function for the type MockManager
-func (_mock *MockManager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, parentIno, name)
+func (_mock *MockManager) Lookup(context1 context.Context, v uint64, bytes []byte) (*meta.Inode, error) {
+	ret := _mock.Called(context1, v, bytes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Lookup")
@@ -1593,17 +1270,17 @@ func (_mock *MockManager) Lookup(ctx context.Context, parentIno uint64, name []b
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, parentIno, name)
+		return returnFunc(context1, v, bytes)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) *meta.Inode); ok {
-		r0 = returnFunc(ctx, parentIno, name)
+		r0 = returnFunc(context1, v, bytes)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64, []byte) error); ok {
-		r1 = returnFunc(ctx, parentIno, name)
+		r1 = returnFunc(context1, v, bytes)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1616,14 +1293,14 @@ type MockManager_Lookup_Call struct {
 }
 
 // Lookup is a helper method to define mock.On call
-//   - ctx context.Context
-//   - parentIno uint64
-//   - name []byte
-func (_e *MockManager_Expecter) Lookup(ctx any, parentIno any, name any) *MockManager_Lookup_Call {
-	return &MockManager_Lookup_Call{Call: _e.mock.On("Lookup", ctx, parentIno, name)}
+//   - context1 context.Context
+//   - v uint64
+//   - bytes []byte
+func (_e *MockManager_Expecter) Lookup(context1 any, v any, bytes any) *MockManager_Lookup_Call {
+	return &MockManager_Lookup_Call{Call: _e.mock.On("Lookup", context1, v, bytes)}
 }
 
-func (_c *MockManager_Lookup_Call) Run(run func(ctx context.Context, parentIno uint64, name []byte)) *MockManager_Lookup_Call {
+func (_c *MockManager_Lookup_Call) Run(run func(context1 context.Context, v uint64, bytes []byte)) *MockManager_Lookup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1651,14 +1328,14 @@ func (_c *MockManager_Lookup_Call) Return(inode *meta.Inode, err error) *MockMan
 	return _c
 }
 
-func (_c *MockManager_Lookup_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name []byte) (*meta.Inode, error)) *MockManager_Lookup_Call {
+func (_c *MockManager_Lookup_Call) RunAndReturn(run func(context1 context.Context, v uint64, bytes []byte) (*meta.Inode, error)) *MockManager_Lookup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Merge provides a mock function for the type MockManager
-func (_mock *MockManager) Merge(ctx context.Context, params meta.MergeParams) (*meta.MergeResult, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Merge(context1 context.Context, mergeParams meta.MergeParams) (*meta.MergeResult, error) {
+	ret := _mock.Called(context1, mergeParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Merge")
@@ -1667,17 +1344,17 @@ func (_mock *MockManager) Merge(ctx context.Context, params meta.MergeParams) (*
 	var r0 *meta.MergeResult
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MergeParams) (*meta.MergeResult, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, mergeParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MergeParams) *meta.MergeResult); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, mergeParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.MergeResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.MergeParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, mergeParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1690,13 +1367,13 @@ type MockManager_Merge_Call struct {
 }
 
 // Merge is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.MergeParams
-func (_e *MockManager_Expecter) Merge(ctx any, params any) *MockManager_Merge_Call {
-	return &MockManager_Merge_Call{Call: _e.mock.On("Merge", ctx, params)}
+//   - context1 context.Context
+//   - mergeParams meta.MergeParams
+func (_e *MockManager_Expecter) Merge(context1 any, mergeParams any) *MockManager_Merge_Call {
+	return &MockManager_Merge_Call{Call: _e.mock.On("Merge", context1, mergeParams)}
 }
 
-func (_c *MockManager_Merge_Call) Run(run func(ctx context.Context, params meta.MergeParams)) *MockManager_Merge_Call {
+func (_c *MockManager_Merge_Call) Run(run func(context1 context.Context, mergeParams meta.MergeParams)) *MockManager_Merge_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1719,14 +1396,14 @@ func (_c *MockManager_Merge_Call) Return(mergeResult *meta.MergeResult, err erro
 	return _c
 }
 
-func (_c *MockManager_Merge_Call) RunAndReturn(run func(ctx context.Context, params meta.MergeParams) (*meta.MergeResult, error)) *MockManager_Merge_Call {
+func (_c *MockManager_Merge_Call) RunAndReturn(run func(context1 context.Context, mergeParams meta.MergeParams) (*meta.MergeResult, error)) *MockManager_Merge_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Mkdir provides a mock function for the type MockManager
-func (_mock *MockManager) Mkdir(ctx context.Context, params meta.MkdirParams) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Mkdir(context1 context.Context, mkdirParams meta.MkdirParams) (*meta.Inode, error) {
+	ret := _mock.Called(context1, mkdirParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Mkdir")
@@ -1735,17 +1412,17 @@ func (_mock *MockManager) Mkdir(ctx context.Context, params meta.MkdirParams) (*
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MkdirParams) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, mkdirParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MkdirParams) *meta.Inode); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, mkdirParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.MkdirParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, mkdirParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1758,13 +1435,13 @@ type MockManager_Mkdir_Call struct {
 }
 
 // Mkdir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.MkdirParams
-func (_e *MockManager_Expecter) Mkdir(ctx any, params any) *MockManager_Mkdir_Call {
-	return &MockManager_Mkdir_Call{Call: _e.mock.On("Mkdir", ctx, params)}
+//   - context1 context.Context
+//   - mkdirParams meta.MkdirParams
+func (_e *MockManager_Expecter) Mkdir(context1 any, mkdirParams any) *MockManager_Mkdir_Call {
+	return &MockManager_Mkdir_Call{Call: _e.mock.On("Mkdir", context1, mkdirParams)}
 }
 
-func (_c *MockManager_Mkdir_Call) Run(run func(ctx context.Context, params meta.MkdirParams)) *MockManager_Mkdir_Call {
+func (_c *MockManager_Mkdir_Call) Run(run func(context1 context.Context, mkdirParams meta.MkdirParams)) *MockManager_Mkdir_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1787,14 +1464,14 @@ func (_c *MockManager_Mkdir_Call) Return(inode *meta.Inode, err error) *MockMana
 	return _c
 }
 
-func (_c *MockManager_Mkdir_Call) RunAndReturn(run func(ctx context.Context, params meta.MkdirParams) (*meta.Inode, error)) *MockManager_Mkdir_Call {
+func (_c *MockManager_Mkdir_Call) RunAndReturn(run func(context1 context.Context, mkdirParams meta.MkdirParams) (*meta.Inode, error)) *MockManager_Mkdir_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Mknod provides a mock function for the type MockManager
-func (_mock *MockManager) Mknod(ctx context.Context, params meta.MknodParams) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Mknod(context1 context.Context, mknodParams meta.MknodParams) (*meta.Inode, error) {
+	ret := _mock.Called(context1, mknodParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Mknod")
@@ -1803,17 +1480,17 @@ func (_mock *MockManager) Mknod(ctx context.Context, params meta.MknodParams) (*
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MknodParams) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, mknodParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.MknodParams) *meta.Inode); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, mknodParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.MknodParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, mknodParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1826,13 +1503,13 @@ type MockManager_Mknod_Call struct {
 }
 
 // Mknod is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.MknodParams
-func (_e *MockManager_Expecter) Mknod(ctx any, params any) *MockManager_Mknod_Call {
-	return &MockManager_Mknod_Call{Call: _e.mock.On("Mknod", ctx, params)}
+//   - context1 context.Context
+//   - mknodParams meta.MknodParams
+func (_e *MockManager_Expecter) Mknod(context1 any, mknodParams any) *MockManager_Mknod_Call {
+	return &MockManager_Mknod_Call{Call: _e.mock.On("Mknod", context1, mknodParams)}
 }
 
-func (_c *MockManager_Mknod_Call) Run(run func(ctx context.Context, params meta.MknodParams)) *MockManager_Mknod_Call {
+func (_c *MockManager_Mknod_Call) Run(run func(context1 context.Context, mknodParams meta.MknodParams)) *MockManager_Mknod_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1855,150 +1532,14 @@ func (_c *MockManager_Mknod_Call) Return(inode *meta.Inode, err error) *MockMana
 	return _c
 }
 
-func (_c *MockManager_Mknod_Call) RunAndReturn(run func(ctx context.Context, params meta.MknodParams) (*meta.Inode, error)) *MockManager_Mknod_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Open provides a mock function for the type MockManager
-func (_mock *MockManager) Open(ctx context.Context, params meta.OpenParams) (*meta.OpenResult, error) {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Open")
-	}
-
-	var r0 *meta.OpenResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.OpenParams) (*meta.OpenResult, error)); ok {
-		return returnFunc(ctx, params)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.OpenParams) *meta.OpenResult); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*meta.OpenResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.OpenParams) error); ok {
-		r1 = returnFunc(ctx, params)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_Open_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Open'
-type MockManager_Open_Call struct {
-	*mock.Call
-}
-
-// Open is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.OpenParams
-func (_e *MockManager_Expecter) Open(ctx any, params any) *MockManager_Open_Call {
-	return &MockManager_Open_Call{Call: _e.mock.On("Open", ctx, params)}
-}
-
-func (_c *MockManager_Open_Call) Run(run func(ctx context.Context, params meta.OpenParams)) *MockManager_Open_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.OpenParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.OpenParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_Open_Call) Return(openResult *meta.OpenResult, err error) *MockManager_Open_Call {
-	_c.Call.Return(openResult, err)
-	return _c
-}
-
-func (_c *MockManager_Open_Call) RunAndReturn(run func(ctx context.Context, params meta.OpenParams) (*meta.OpenResult, error)) *MockManager_Open_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// OpenDir provides a mock function for the type MockManager
-func (_mock *MockManager) OpenDir(ctx context.Context, params meta.OpenDirParams) (*meta.OpenDirResult, error) {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for OpenDir")
-	}
-
-	var r0 *meta.OpenDirResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.OpenDirParams) (*meta.OpenDirResult, error)); ok {
-		return returnFunc(ctx, params)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.OpenDirParams) *meta.OpenDirResult); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*meta.OpenDirResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.OpenDirParams) error); ok {
-		r1 = returnFunc(ctx, params)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_OpenDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OpenDir'
-type MockManager_OpenDir_Call struct {
-	*mock.Call
-}
-
-// OpenDir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.OpenDirParams
-func (_e *MockManager_Expecter) OpenDir(ctx any, params any) *MockManager_OpenDir_Call {
-	return &MockManager_OpenDir_Call{Call: _e.mock.On("OpenDir", ctx, params)}
-}
-
-func (_c *MockManager_OpenDir_Call) Run(run func(ctx context.Context, params meta.OpenDirParams)) *MockManager_OpenDir_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.OpenDirParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.OpenDirParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_OpenDir_Call) Return(openDirResult *meta.OpenDirResult, err error) *MockManager_OpenDir_Call {
-	_c.Call.Return(openDirResult, err)
-	return _c
-}
-
-func (_c *MockManager_OpenDir_Call) RunAndReturn(run func(ctx context.Context, params meta.OpenDirParams) (*meta.OpenDirResult, error)) *MockManager_OpenDir_Call {
+func (_c *MockManager_Mknod_Call) RunAndReturn(run func(context1 context.Context, mknodParams meta.MknodParams) (*meta.Inode, error)) *MockManager_Mknod_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Read provides a mock function for the type MockManager
-func (_mock *MockManager) Read(ctx context.Context, req *meta.ReadRequest) (*meta.ReadResponse, error) {
-	ret := _mock.Called(ctx, req)
+func (_mock *MockManager) Read(context1 context.Context, readRequest *meta.ReadRequest) (*meta.ReadResponse, error) {
+	ret := _mock.Called(context1, readRequest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Read")
@@ -2007,17 +1548,17 @@ func (_mock *MockManager) Read(ctx context.Context, req *meta.ReadRequest) (*met
 	var r0 *meta.ReadResponse
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.ReadRequest) (*meta.ReadResponse, error)); ok {
-		return returnFunc(ctx, req)
+		return returnFunc(context1, readRequest)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.ReadRequest) *meta.ReadResponse); ok {
-		r0 = returnFunc(ctx, req)
+		r0 = returnFunc(context1, readRequest)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.ReadResponse)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, *meta.ReadRequest) error); ok {
-		r1 = returnFunc(ctx, req)
+		r1 = returnFunc(context1, readRequest)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2030,13 +1571,13 @@ type MockManager_Read_Call struct {
 }
 
 // Read is a helper method to define mock.On call
-//   - ctx context.Context
-//   - req *meta.ReadRequest
-func (_e *MockManager_Expecter) Read(ctx any, req any) *MockManager_Read_Call {
-	return &MockManager_Read_Call{Call: _e.mock.On("Read", ctx, req)}
+//   - context1 context.Context
+//   - readRequest *meta.ReadRequest
+func (_e *MockManager_Expecter) Read(context1 any, readRequest any) *MockManager_Read_Call {
+	return &MockManager_Read_Call{Call: _e.mock.On("Read", context1, readRequest)}
 }
 
-func (_c *MockManager_Read_Call) Run(run func(ctx context.Context, req *meta.ReadRequest)) *MockManager_Read_Call {
+func (_c *MockManager_Read_Call) Run(run func(context1 context.Context, readRequest *meta.ReadRequest)) *MockManager_Read_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2059,14 +1600,14 @@ func (_c *MockManager_Read_Call) Return(readResponse *meta.ReadResponse, err err
 	return _c
 }
 
-func (_c *MockManager_Read_Call) RunAndReturn(run func(ctx context.Context, req *meta.ReadRequest) (*meta.ReadResponse, error)) *MockManager_Read_Call {
+func (_c *MockManager_Read_Call) RunAndReturn(run func(context1 context.Context, readRequest *meta.ReadRequest) (*meta.ReadResponse, error)) *MockManager_Read_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ReadDir provides a mock function for the type MockManager
-func (_mock *MockManager) ReadDir(ctx context.Context, params meta.ReadDirParams) ([]meta.DirEntry, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) ReadDir(context1 context.Context, readDirParams meta.ReadDirParams) ([]meta.DirEntry, error) {
+	ret := _mock.Called(context1, readDirParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadDir")
@@ -2075,17 +1616,17 @@ func (_mock *MockManager) ReadDir(ctx context.Context, params meta.ReadDirParams
 	var r0 []meta.DirEntry
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReadDirParams) ([]meta.DirEntry, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, readDirParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReadDirParams) []meta.DirEntry); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, readDirParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]meta.DirEntry)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.ReadDirParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, readDirParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2098,13 +1639,13 @@ type MockManager_ReadDir_Call struct {
 }
 
 // ReadDir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ReadDirParams
-func (_e *MockManager_Expecter) ReadDir(ctx any, params any) *MockManager_ReadDir_Call {
-	return &MockManager_ReadDir_Call{Call: _e.mock.On("ReadDir", ctx, params)}
+//   - context1 context.Context
+//   - readDirParams meta.ReadDirParams
+func (_e *MockManager_Expecter) ReadDir(context1 any, readDirParams any) *MockManager_ReadDir_Call {
+	return &MockManager_ReadDir_Call{Call: _e.mock.On("ReadDir", context1, readDirParams)}
 }
 
-func (_c *MockManager_ReadDir_Call) Run(run func(ctx context.Context, params meta.ReadDirParams)) *MockManager_ReadDir_Call {
+func (_c *MockManager_ReadDir_Call) Run(run func(context1 context.Context, readDirParams meta.ReadDirParams)) *MockManager_ReadDir_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2127,14 +1668,14 @@ func (_c *MockManager_ReadDir_Call) Return(dirEntrys []meta.DirEntry, err error)
 	return _c
 }
 
-func (_c *MockManager_ReadDir_Call) RunAndReturn(run func(ctx context.Context, params meta.ReadDirParams) ([]meta.DirEntry, error)) *MockManager_ReadDir_Call {
+func (_c *MockManager_ReadDir_Call) RunAndReturn(run func(context1 context.Context, readDirParams meta.ReadDirParams) ([]meta.DirEntry, error)) *MockManager_ReadDir_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ReadDirPlus provides a mock function for the type MockManager
-func (_mock *MockManager) ReadDirPlus(ctx context.Context, params meta.ReadDirPlusParams) ([]meta.DirEntryPlus, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) ReadDirPlus(context1 context.Context, readDirPlusParams meta.ReadDirPlusParams) ([]meta.DirEntryPlus, error) {
+	ret := _mock.Called(context1, readDirPlusParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadDirPlus")
@@ -2143,17 +1684,17 @@ func (_mock *MockManager) ReadDirPlus(ctx context.Context, params meta.ReadDirPl
 	var r0 []meta.DirEntryPlus
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReadDirPlusParams) ([]meta.DirEntryPlus, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, readDirPlusParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReadDirPlusParams) []meta.DirEntryPlus); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, readDirPlusParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]meta.DirEntryPlus)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.ReadDirPlusParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, readDirPlusParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2166,13 +1707,13 @@ type MockManager_ReadDirPlus_Call struct {
 }
 
 // ReadDirPlus is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ReadDirPlusParams
-func (_e *MockManager_Expecter) ReadDirPlus(ctx any, params any) *MockManager_ReadDirPlus_Call {
-	return &MockManager_ReadDirPlus_Call{Call: _e.mock.On("ReadDirPlus", ctx, params)}
+//   - context1 context.Context
+//   - readDirPlusParams meta.ReadDirPlusParams
+func (_e *MockManager_Expecter) ReadDirPlus(context1 any, readDirPlusParams any) *MockManager_ReadDirPlus_Call {
+	return &MockManager_ReadDirPlus_Call{Call: _e.mock.On("ReadDirPlus", context1, readDirPlusParams)}
 }
 
-func (_c *MockManager_ReadDirPlus_Call) Run(run func(ctx context.Context, params meta.ReadDirPlusParams)) *MockManager_ReadDirPlus_Call {
+func (_c *MockManager_ReadDirPlus_Call) Run(run func(context1 context.Context, readDirPlusParams meta.ReadDirPlusParams)) *MockManager_ReadDirPlus_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2195,14 +1736,14 @@ func (_c *MockManager_ReadDirPlus_Call) Return(dirEntryPluss []meta.DirEntryPlus
 	return _c
 }
 
-func (_c *MockManager_ReadDirPlus_Call) RunAndReturn(run func(ctx context.Context, params meta.ReadDirPlusParams) ([]meta.DirEntryPlus, error)) *MockManager_ReadDirPlus_Call {
+func (_c *MockManager_ReadDirPlus_Call) RunAndReturn(run func(context1 context.Context, readDirPlusParams meta.ReadDirPlusParams) ([]meta.DirEntryPlus, error)) *MockManager_ReadDirPlus_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Readlink provides a mock function for the type MockManager
-func (_mock *MockManager) Readlink(ctx context.Context, ino uint64) ([]byte, error) {
-	ret := _mock.Called(ctx, ino)
+func (_mock *MockManager) Readlink(context1 context.Context, v uint64) ([]byte, error) {
+	ret := _mock.Called(context1, v)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Readlink")
@@ -2211,17 +1752,17 @@ func (_mock *MockManager) Readlink(ctx context.Context, ino uint64) ([]byte, err
 	var r0 []byte
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) ([]byte, error)); ok {
-		return returnFunc(ctx, ino)
+		return returnFunc(context1, v)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) []byte); ok {
-		r0 = returnFunc(ctx, ino)
+		r0 = returnFunc(context1, v)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]byte)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, ino)
+		r1 = returnFunc(context1, v)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2234,13 +1775,13 @@ type MockManager_Readlink_Call struct {
 }
 
 // Readlink is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-func (_e *MockManager_Expecter) Readlink(ctx any, ino any) *MockManager_Readlink_Call {
-	return &MockManager_Readlink_Call{Call: _e.mock.On("Readlink", ctx, ino)}
+//   - context1 context.Context
+//   - v uint64
+func (_e *MockManager_Expecter) Readlink(context1 any, v any) *MockManager_Readlink_Call {
+	return &MockManager_Readlink_Call{Call: _e.mock.On("Readlink", context1, v)}
 }
 
-func (_c *MockManager_Readlink_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_Readlink_Call {
+func (_c *MockManager_Readlink_Call) Run(run func(context1 context.Context, v uint64)) *MockManager_Readlink_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2263,14 +1804,14 @@ func (_c *MockManager_Readlink_Call) Return(bytes []byte, err error) *MockManage
 	return _c
 }
 
-func (_c *MockManager_Readlink_Call) RunAndReturn(run func(ctx context.Context, ino uint64) ([]byte, error)) *MockManager_Readlink_Call {
+func (_c *MockManager_Readlink_Call) RunAndReturn(run func(context1 context.Context, v uint64) ([]byte, error)) *MockManager_Readlink_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ReclaimOrphan provides a mock function for the type MockManager
-func (_mock *MockManager) ReclaimOrphan(ctx context.Context, params meta.ReclaimOrphanParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) ReclaimOrphan(context1 context.Context, reclaimOrphanParams meta.ReclaimOrphanParams) error {
+	ret := _mock.Called(context1, reclaimOrphanParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReclaimOrphan")
@@ -2278,7 +1819,7 @@ func (_mock *MockManager) ReclaimOrphan(ctx context.Context, params meta.Reclaim
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReclaimOrphanParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, reclaimOrphanParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2291,13 +1832,13 @@ type MockManager_ReclaimOrphan_Call struct {
 }
 
 // ReclaimOrphan is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ReclaimOrphanParams
-func (_e *MockManager_Expecter) ReclaimOrphan(ctx any, params any) *MockManager_ReclaimOrphan_Call {
-	return &MockManager_ReclaimOrphan_Call{Call: _e.mock.On("ReclaimOrphan", ctx, params)}
+//   - context1 context.Context
+//   - reclaimOrphanParams meta.ReclaimOrphanParams
+func (_e *MockManager_Expecter) ReclaimOrphan(context1 any, reclaimOrphanParams any) *MockManager_ReclaimOrphan_Call {
+	return &MockManager_ReclaimOrphan_Call{Call: _e.mock.On("ReclaimOrphan", context1, reclaimOrphanParams)}
 }
 
-func (_c *MockManager_ReclaimOrphan_Call) Run(run func(ctx context.Context, params meta.ReclaimOrphanParams)) *MockManager_ReclaimOrphan_Call {
+func (_c *MockManager_ReclaimOrphan_Call) Run(run func(context1 context.Context, reclaimOrphanParams meta.ReclaimOrphanParams)) *MockManager_ReclaimOrphan_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2320,128 +1861,14 @@ func (_c *MockManager_ReclaimOrphan_Call) Return(err error) *MockManager_Reclaim
 	return _c
 }
 
-func (_c *MockManager_ReclaimOrphan_Call) RunAndReturn(run func(ctx context.Context, params meta.ReclaimOrphanParams) error) *MockManager_ReclaimOrphan_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Release provides a mock function for the type MockManager
-func (_mock *MockManager) Release(ctx context.Context, params meta.ReleaseParams) error {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Release")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReleaseParams) error); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_Release_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Release'
-type MockManager_Release_Call struct {
-	*mock.Call
-}
-
-// Release is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ReleaseParams
-func (_e *MockManager_Expecter) Release(ctx any, params any) *MockManager_Release_Call {
-	return &MockManager_Release_Call{Call: _e.mock.On("Release", ctx, params)}
-}
-
-func (_c *MockManager_Release_Call) Run(run func(ctx context.Context, params meta.ReleaseParams)) *MockManager_Release_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.ReleaseParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.ReleaseParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_Release_Call) Return(err error) *MockManager_Release_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_Release_Call) RunAndReturn(run func(ctx context.Context, params meta.ReleaseParams) error) *MockManager_Release_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ReleaseDir provides a mock function for the type MockManager
-func (_mock *MockManager) ReleaseDir(ctx context.Context, params meta.ReleaseDirParams) error {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ReleaseDir")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ReleaseDirParams) error); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_ReleaseDir_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReleaseDir'
-type MockManager_ReleaseDir_Call struct {
-	*mock.Call
-}
-
-// ReleaseDir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ReleaseDirParams
-func (_e *MockManager_Expecter) ReleaseDir(ctx any, params any) *MockManager_ReleaseDir_Call {
-	return &MockManager_ReleaseDir_Call{Call: _e.mock.On("ReleaseDir", ctx, params)}
-}
-
-func (_c *MockManager_ReleaseDir_Call) Run(run func(ctx context.Context, params meta.ReleaseDirParams)) *MockManager_ReleaseDir_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.ReleaseDirParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.ReleaseDirParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_ReleaseDir_Call) Return(err error) *MockManager_ReleaseDir_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_ReleaseDir_Call) RunAndReturn(run func(ctx context.Context, params meta.ReleaseDirParams) error) *MockManager_ReleaseDir_Call {
+func (_c *MockManager_ReclaimOrphan_Call) RunAndReturn(run func(context1 context.Context, reclaimOrphanParams meta.ReclaimOrphanParams) error) *MockManager_ReclaimOrphan_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RemoveXattr provides a mock function for the type MockManager
-func (_mock *MockManager) RemoveXattr(ctx context.Context, ino uint64, name []byte) error {
-	ret := _mock.Called(ctx, ino, name)
+func (_mock *MockManager) RemoveXattr(context1 context.Context, v uint64, bytes []byte) error {
+	ret := _mock.Called(context1, v, bytes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RemoveXattr")
@@ -2449,7 +1876,7 @@ func (_mock *MockManager) RemoveXattr(ctx context.Context, ino uint64, name []by
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) error); ok {
-		r0 = returnFunc(ctx, ino, name)
+		r0 = returnFunc(context1, v, bytes)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2462,14 +1889,14 @@ type MockManager_RemoveXattr_Call struct {
 }
 
 // RemoveXattr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-//   - name []byte
-func (_e *MockManager_Expecter) RemoveXattr(ctx any, ino any, name any) *MockManager_RemoveXattr_Call {
-	return &MockManager_RemoveXattr_Call{Call: _e.mock.On("RemoveXattr", ctx, ino, name)}
+//   - context1 context.Context
+//   - v uint64
+//   - bytes []byte
+func (_e *MockManager_Expecter) RemoveXattr(context1 any, v any, bytes any) *MockManager_RemoveXattr_Call {
+	return &MockManager_RemoveXattr_Call{Call: _e.mock.On("RemoveXattr", context1, v, bytes)}
 }
 
-func (_c *MockManager_RemoveXattr_Call) Run(run func(ctx context.Context, ino uint64, name []byte)) *MockManager_RemoveXattr_Call {
+func (_c *MockManager_RemoveXattr_Call) Run(run func(context1 context.Context, v uint64, bytes []byte)) *MockManager_RemoveXattr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2497,14 +1924,14 @@ func (_c *MockManager_RemoveXattr_Call) Return(err error) *MockManager_RemoveXat
 	return _c
 }
 
-func (_c *MockManager_RemoveXattr_Call) RunAndReturn(run func(ctx context.Context, ino uint64, name []byte) error) *MockManager_RemoveXattr_Call {
+func (_c *MockManager_RemoveXattr_Call) RunAndReturn(run func(context1 context.Context, v uint64, bytes []byte) error) *MockManager_RemoveXattr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Rename provides a mock function for the type MockManager
-func (_mock *MockManager) Rename(ctx context.Context, params meta.RenameParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Rename(context1 context.Context, renameParams meta.RenameParams) error {
+	ret := _mock.Called(context1, renameParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Rename")
@@ -2512,7 +1939,7 @@ func (_mock *MockManager) Rename(ctx context.Context, params meta.RenameParams) 
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenameParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, renameParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2525,13 +1952,13 @@ type MockManager_Rename_Call struct {
 }
 
 // Rename is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.RenameParams
-func (_e *MockManager_Expecter) Rename(ctx any, params any) *MockManager_Rename_Call {
-	return &MockManager_Rename_Call{Call: _e.mock.On("Rename", ctx, params)}
+//   - context1 context.Context
+//   - renameParams meta.RenameParams
+func (_e *MockManager_Expecter) Rename(context1 any, renameParams any) *MockManager_Rename_Call {
+	return &MockManager_Rename_Call{Call: _e.mock.On("Rename", context1, renameParams)}
 }
 
-func (_c *MockManager_Rename_Call) Run(run func(ctx context.Context, params meta.RenameParams)) *MockManager_Rename_Call {
+func (_c *MockManager_Rename_Call) Run(run func(context1 context.Context, renameParams meta.RenameParams)) *MockManager_Rename_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2554,14 +1981,14 @@ func (_c *MockManager_Rename_Call) Return(err error) *MockManager_Rename_Call {
 	return _c
 }
 
-func (_c *MockManager_Rename_Call) RunAndReturn(run func(ctx context.Context, params meta.RenameParams) error) *MockManager_Rename_Call {
+func (_c *MockManager_Rename_Call) RunAndReturn(run func(context1 context.Context, renameParams meta.RenameParams) error) *MockManager_Rename_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RenewBranchSession provides a mock function for the type MockManager
-func (_mock *MockManager) RenewBranchSession(ctx context.Context, params meta.RenewBranchSessionParams) (meta.RenewSessionResult, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) RenewBranchSession(context1 context.Context, renewBranchSessionParams meta.RenewBranchSessionParams) (meta.RenewSessionResult, error) {
+	ret := _mock.Called(context1, renewBranchSessionParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RenewBranchSession")
@@ -2570,15 +1997,15 @@ func (_mock *MockManager) RenewBranchSession(ctx context.Context, params meta.Re
 	var r0 meta.RenewSessionResult
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenewBranchSessionParams) (meta.RenewSessionResult, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, renewBranchSessionParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RenewBranchSessionParams) meta.RenewSessionResult); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, renewBranchSessionParams)
 	} else {
 		r0 = ret.Get(0).(meta.RenewSessionResult)
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.RenewBranchSessionParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, renewBranchSessionParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2591,13 +2018,13 @@ type MockManager_RenewBranchSession_Call struct {
 }
 
 // RenewBranchSession is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.RenewBranchSessionParams
-func (_e *MockManager_Expecter) RenewBranchSession(ctx any, params any) *MockManager_RenewBranchSession_Call {
-	return &MockManager_RenewBranchSession_Call{Call: _e.mock.On("RenewBranchSession", ctx, params)}
+//   - context1 context.Context
+//   - renewBranchSessionParams meta.RenewBranchSessionParams
+func (_e *MockManager_Expecter) RenewBranchSession(context1 any, renewBranchSessionParams any) *MockManager_RenewBranchSession_Call {
+	return &MockManager_RenewBranchSession_Call{Call: _e.mock.On("RenewBranchSession", context1, renewBranchSessionParams)}
 }
 
-func (_c *MockManager_RenewBranchSession_Call) Run(run func(ctx context.Context, params meta.RenewBranchSessionParams)) *MockManager_RenewBranchSession_Call {
+func (_c *MockManager_RenewBranchSession_Call) Run(run func(context1 context.Context, renewBranchSessionParams meta.RenewBranchSessionParams)) *MockManager_RenewBranchSession_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2620,218 +2047,14 @@ func (_c *MockManager_RenewBranchSession_Call) Return(renewSessionResult meta.Re
 	return _c
 }
 
-func (_c *MockManager_RenewBranchSession_Call) RunAndReturn(run func(ctx context.Context, params meta.RenewBranchSessionParams) (meta.RenewSessionResult, error)) *MockManager_RenewBranchSession_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RenewSession provides a mock function for the type MockManager
-func (_mock *MockManager) RenewSession(ctx context.Context, sessionID uint64) (time.Time, error) {
-	ret := _mock.Called(ctx, sessionID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RenewSession")
-	}
-
-	var r0 time.Time
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (time.Time, error)); ok {
-		return returnFunc(ctx, sessionID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) time.Time); ok {
-		r0 = returnFunc(ctx, sessionID)
-	} else {
-		r0 = ret.Get(0).(time.Time)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, sessionID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_RenewSession_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewSession'
-type MockManager_RenewSession_Call struct {
-	*mock.Call
-}
-
-// RenewSession is a helper method to define mock.On call
-//   - ctx context.Context
-//   - sessionID uint64
-func (_e *MockManager_Expecter) RenewSession(ctx any, sessionID any) *MockManager_RenewSession_Call {
-	return &MockManager_RenewSession_Call{Call: _e.mock.On("RenewSession", ctx, sessionID)}
-}
-
-func (_c *MockManager_RenewSession_Call) Run(run func(ctx context.Context, sessionID uint64)) *MockManager_RenewSession_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 uint64
-		if args[1] != nil {
-			arg1 = args[1].(uint64)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_RenewSession_Call) Return(time1 time.Time, err error) *MockManager_RenewSession_Call {
-	_c.Call.Return(time1, err)
-	return _c
-}
-
-func (_c *MockManager_RenewSession_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64) (time.Time, error)) *MockManager_RenewSession_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RenewSessionWithDisk provides a mock function for the type MockManager
-func (_mock *MockManager) RenewSessionWithDisk(ctx context.Context, sessionID uint64, diskID *string) (meta.RenewSessionResult, error) {
-	ret := _mock.Called(ctx, sessionID, diskID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RenewSessionWithDisk")
-	}
-
-	var r0 meta.RenewSessionResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, *string) (meta.RenewSessionResult, error)); ok {
-		return returnFunc(ctx, sessionID, diskID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, *string) meta.RenewSessionResult); ok {
-		r0 = returnFunc(ctx, sessionID, diskID)
-	} else {
-		r0 = ret.Get(0).(meta.RenewSessionResult)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64, *string) error); ok {
-		r1 = returnFunc(ctx, sessionID, diskID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_RenewSessionWithDisk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewSessionWithDisk'
-type MockManager_RenewSessionWithDisk_Call struct {
-	*mock.Call
-}
-
-// RenewSessionWithDisk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - sessionID uint64
-//   - diskID *string
-func (_e *MockManager_Expecter) RenewSessionWithDisk(ctx any, sessionID any, diskID any) *MockManager_RenewSessionWithDisk_Call {
-	return &MockManager_RenewSessionWithDisk_Call{Call: _e.mock.On("RenewSessionWithDisk", ctx, sessionID, diskID)}
-}
-
-func (_c *MockManager_RenewSessionWithDisk_Call) Run(run func(ctx context.Context, sessionID uint64, diskID *string)) *MockManager_RenewSessionWithDisk_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 uint64
-		if args[1] != nil {
-			arg1 = args[1].(uint64)
-		}
-		var arg2 *string
-		if args[2] != nil {
-			arg2 = args[2].(*string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_RenewSessionWithDisk_Call) Return(renewSessionResult meta.RenewSessionResult, err error) *MockManager_RenewSessionWithDisk_Call {
-	_c.Call.Return(renewSessionResult, err)
-	return _c
-}
-
-func (_c *MockManager_RenewSessionWithDisk_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64, diskID *string) (meta.RenewSessionResult, error)) *MockManager_RenewSessionWithDisk_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RenewSessionWithStatus provides a mock function for the type MockManager
-func (_mock *MockManager) RenewSessionWithStatus(ctx context.Context, sessionID uint64) (meta.RenewSessionResult, error) {
-	ret := _mock.Called(ctx, sessionID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RenewSessionWithStatus")
-	}
-
-	var r0 meta.RenewSessionResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (meta.RenewSessionResult, error)); ok {
-		return returnFunc(ctx, sessionID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) meta.RenewSessionResult); ok {
-		r0 = returnFunc(ctx, sessionID)
-	} else {
-		r0 = ret.Get(0).(meta.RenewSessionResult)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, sessionID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_RenewSessionWithStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RenewSessionWithStatus'
-type MockManager_RenewSessionWithStatus_Call struct {
-	*mock.Call
-}
-
-// RenewSessionWithStatus is a helper method to define mock.On call
-//   - ctx context.Context
-//   - sessionID uint64
-func (_e *MockManager_Expecter) RenewSessionWithStatus(ctx any, sessionID any) *MockManager_RenewSessionWithStatus_Call {
-	return &MockManager_RenewSessionWithStatus_Call{Call: _e.mock.On("RenewSessionWithStatus", ctx, sessionID)}
-}
-
-func (_c *MockManager_RenewSessionWithStatus_Call) Run(run func(ctx context.Context, sessionID uint64)) *MockManager_RenewSessionWithStatus_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 uint64
-		if args[1] != nil {
-			arg1 = args[1].(uint64)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_RenewSessionWithStatus_Call) Return(renewSessionResult meta.RenewSessionResult, err error) *MockManager_RenewSessionWithStatus_Call {
-	_c.Call.Return(renewSessionResult, err)
-	return _c
-}
-
-func (_c *MockManager_RenewSessionWithStatus_Call) RunAndReturn(run func(ctx context.Context, sessionID uint64) (meta.RenewSessionResult, error)) *MockManager_RenewSessionWithStatus_Call {
+func (_c *MockManager_RenewBranchSession_Call) RunAndReturn(run func(context1 context.Context, renewBranchSessionParams meta.RenewBranchSessionParams) (meta.RenewSessionResult, error)) *MockManager_RenewBranchSession_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // ResolveMerge provides a mock function for the type MockManager
-func (_mock *MockManager) ResolveMerge(ctx context.Context, params meta.ResolveMergeParams) (*meta.CommitInfo, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) ResolveMerge(context1 context.Context, resolveMergeParams meta.ResolveMergeParams) (*meta.CommitInfo, error) {
+	ret := _mock.Called(context1, resolveMergeParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ResolveMerge")
@@ -2840,17 +2063,17 @@ func (_mock *MockManager) ResolveMerge(ctx context.Context, params meta.ResolveM
 	var r0 *meta.CommitInfo
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ResolveMergeParams) (*meta.CommitInfo, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, resolveMergeParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.ResolveMergeParams) *meta.CommitInfo); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, resolveMergeParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.CommitInfo)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.ResolveMergeParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, resolveMergeParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2863,13 +2086,13 @@ type MockManager_ResolveMerge_Call struct {
 }
 
 // ResolveMerge is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.ResolveMergeParams
-func (_e *MockManager_Expecter) ResolveMerge(ctx any, params any) *MockManager_ResolveMerge_Call {
-	return &MockManager_ResolveMerge_Call{Call: _e.mock.On("ResolveMerge", ctx, params)}
+//   - context1 context.Context
+//   - resolveMergeParams meta.ResolveMergeParams
+func (_e *MockManager_Expecter) ResolveMerge(context1 any, resolveMergeParams any) *MockManager_ResolveMerge_Call {
+	return &MockManager_ResolveMerge_Call{Call: _e.mock.On("ResolveMerge", context1, resolveMergeParams)}
 }
 
-func (_c *MockManager_ResolveMerge_Call) Run(run func(ctx context.Context, params meta.ResolveMergeParams)) *MockManager_ResolveMerge_Call {
+func (_c *MockManager_ResolveMerge_Call) Run(run func(context1 context.Context, resolveMergeParams meta.ResolveMergeParams)) *MockManager_ResolveMerge_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2892,14 +2115,14 @@ func (_c *MockManager_ResolveMerge_Call) Return(commitInfo *meta.CommitInfo, err
 	return _c
 }
 
-func (_c *MockManager_ResolveMerge_Call) RunAndReturn(run func(ctx context.Context, params meta.ResolveMergeParams) (*meta.CommitInfo, error)) *MockManager_ResolveMerge_Call {
+func (_c *MockManager_ResolveMerge_Call) RunAndReturn(run func(context1 context.Context, resolveMergeParams meta.ResolveMergeParams) (*meta.CommitInfo, error)) *MockManager_ResolveMerge_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Rmdir provides a mock function for the type MockManager
-func (_mock *MockManager) Rmdir(ctx context.Context, parentIno uint64, name []byte) error {
-	ret := _mock.Called(ctx, parentIno, name)
+func (_mock *MockManager) Rmdir(context1 context.Context, v uint64, bytes []byte) error {
+	ret := _mock.Called(context1, v, bytes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Rmdir")
@@ -2907,7 +2130,7 @@ func (_mock *MockManager) Rmdir(ctx context.Context, parentIno uint64, name []by
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) error); ok {
-		r0 = returnFunc(ctx, parentIno, name)
+		r0 = returnFunc(context1, v, bytes)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2920,14 +2143,14 @@ type MockManager_Rmdir_Call struct {
 }
 
 // Rmdir is a helper method to define mock.On call
-//   - ctx context.Context
-//   - parentIno uint64
-//   - name []byte
-func (_e *MockManager_Expecter) Rmdir(ctx any, parentIno any, name any) *MockManager_Rmdir_Call {
-	return &MockManager_Rmdir_Call{Call: _e.mock.On("Rmdir", ctx, parentIno, name)}
+//   - context1 context.Context
+//   - v uint64
+//   - bytes []byte
+func (_e *MockManager_Expecter) Rmdir(context1 any, v any, bytes any) *MockManager_Rmdir_Call {
+	return &MockManager_Rmdir_Call{Call: _e.mock.On("Rmdir", context1, v, bytes)}
 }
 
-func (_c *MockManager_Rmdir_Call) Run(run func(ctx context.Context, parentIno uint64, name []byte)) *MockManager_Rmdir_Call {
+func (_c *MockManager_Rmdir_Call) Run(run func(context1 context.Context, v uint64, bytes []byte)) *MockManager_Rmdir_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2955,14 +2178,14 @@ func (_c *MockManager_Rmdir_Call) Return(err error) *MockManager_Rmdir_Call {
 	return _c
 }
 
-func (_c *MockManager_Rmdir_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name []byte) error) *MockManager_Rmdir_Call {
+func (_c *MockManager_Rmdir_Call) RunAndReturn(run func(context1 context.Context, v uint64, bytes []byte) error) *MockManager_Rmdir_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Rollback provides a mock function for the type MockManager
-func (_mock *MockManager) Rollback(ctx context.Context, params meta.RollbackParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Rollback(context1 context.Context, rollbackParams meta.RollbackParams) error {
+	ret := _mock.Called(context1, rollbackParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Rollback")
@@ -2970,7 +2193,7 @@ func (_mock *MockManager) Rollback(ctx context.Context, params meta.RollbackPara
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.RollbackParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, rollbackParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2983,13 +2206,13 @@ type MockManager_Rollback_Call struct {
 }
 
 // Rollback is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.RollbackParams
-func (_e *MockManager_Expecter) Rollback(ctx any, params any) *MockManager_Rollback_Call {
-	return &MockManager_Rollback_Call{Call: _e.mock.On("Rollback", ctx, params)}
+//   - context1 context.Context
+//   - rollbackParams meta.RollbackParams
+func (_e *MockManager_Expecter) Rollback(context1 any, rollbackParams any) *MockManager_Rollback_Call {
+	return &MockManager_Rollback_Call{Call: _e.mock.On("Rollback", context1, rollbackParams)}
 }
 
-func (_c *MockManager_Rollback_Call) Run(run func(ctx context.Context, params meta.RollbackParams)) *MockManager_Rollback_Call {
+func (_c *MockManager_Rollback_Call) Run(run func(context1 context.Context, rollbackParams meta.RollbackParams)) *MockManager_Rollback_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3012,14 +2235,14 @@ func (_c *MockManager_Rollback_Call) Return(err error) *MockManager_Rollback_Cal
 	return _c
 }
 
-func (_c *MockManager_Rollback_Call) RunAndReturn(run func(ctx context.Context, params meta.RollbackParams) error) *MockManager_Rollback_Call {
+func (_c *MockManager_Rollback_Call) RunAndReturn(run func(context1 context.Context, rollbackParams meta.RollbackParams) error) *MockManager_Rollback_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // SetAttr provides a mock function for the type MockManager
-func (_mock *MockManager) SetAttr(ctx context.Context, ino uint64, input meta.SetAttrInput) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, ino, input)
+func (_mock *MockManager) SetAttr(context1 context.Context, v uint64, setAttrInput meta.SetAttrInput) (*meta.Inode, error) {
+	ret := _mock.Called(context1, v, setAttrInput)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SetAttr")
@@ -3028,17 +2251,17 @@ func (_mock *MockManager) SetAttr(ctx context.Context, ino uint64, input meta.Se
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, meta.SetAttrInput) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, ino, input)
+		return returnFunc(context1, v, setAttrInput)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, meta.SetAttrInput) *meta.Inode); ok {
-		r0 = returnFunc(ctx, ino, input)
+		r0 = returnFunc(context1, v, setAttrInput)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64, meta.SetAttrInput) error); ok {
-		r1 = returnFunc(ctx, ino, input)
+		r1 = returnFunc(context1, v, setAttrInput)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3051,14 +2274,14 @@ type MockManager_SetAttr_Call struct {
 }
 
 // SetAttr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-//   - input meta.SetAttrInput
-func (_e *MockManager_Expecter) SetAttr(ctx any, ino any, input any) *MockManager_SetAttr_Call {
-	return &MockManager_SetAttr_Call{Call: _e.mock.On("SetAttr", ctx, ino, input)}
+//   - context1 context.Context
+//   - v uint64
+//   - setAttrInput meta.SetAttrInput
+func (_e *MockManager_Expecter) SetAttr(context1 any, v any, setAttrInput any) *MockManager_SetAttr_Call {
+	return &MockManager_SetAttr_Call{Call: _e.mock.On("SetAttr", context1, v, setAttrInput)}
 }
 
-func (_c *MockManager_SetAttr_Call) Run(run func(ctx context.Context, ino uint64, input meta.SetAttrInput)) *MockManager_SetAttr_Call {
+func (_c *MockManager_SetAttr_Call) Run(run func(context1 context.Context, v uint64, setAttrInput meta.SetAttrInput)) *MockManager_SetAttr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3086,128 +2309,14 @@ func (_c *MockManager_SetAttr_Call) Return(inode *meta.Inode, err error) *MockMa
 	return _c
 }
 
-func (_c *MockManager_SetAttr_Call) RunAndReturn(run func(ctx context.Context, ino uint64, input meta.SetAttrInput) (*meta.Inode, error)) *MockManager_SetAttr_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SetLk provides a mock function for the type MockManager
-func (_mock *MockManager) SetLk(ctx context.Context, params meta.SetLkParams) error {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetLk")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SetLkParams) error); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_SetLk_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetLk'
-type MockManager_SetLk_Call struct {
-	*mock.Call
-}
-
-// SetLk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.SetLkParams
-func (_e *MockManager_Expecter) SetLk(ctx any, params any) *MockManager_SetLk_Call {
-	return &MockManager_SetLk_Call{Call: _e.mock.On("SetLk", ctx, params)}
-}
-
-func (_c *MockManager_SetLk_Call) Run(run func(ctx context.Context, params meta.SetLkParams)) *MockManager_SetLk_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.SetLkParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.SetLkParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_SetLk_Call) Return(err error) *MockManager_SetLk_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_SetLk_Call) RunAndReturn(run func(ctx context.Context, params meta.SetLkParams) error) *MockManager_SetLk_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SetLkw provides a mock function for the type MockManager
-func (_mock *MockManager) SetLkw(ctx context.Context, params meta.SetLkwParams) error {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetLkw")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SetLkwParams) error); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockManager_SetLkw_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetLkw'
-type MockManager_SetLkw_Call struct {
-	*mock.Call
-}
-
-// SetLkw is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.SetLkwParams
-func (_e *MockManager_Expecter) SetLkw(ctx any, params any) *MockManager_SetLkw_Call {
-	return &MockManager_SetLkw_Call{Call: _e.mock.On("SetLkw", ctx, params)}
-}
-
-func (_c *MockManager_SetLkw_Call) Run(run func(ctx context.Context, params meta.SetLkwParams)) *MockManager_SetLkw_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.SetLkwParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.SetLkwParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_SetLkw_Call) Return(err error) *MockManager_SetLkw_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockManager_SetLkw_Call) RunAndReturn(run func(ctx context.Context, params meta.SetLkwParams) error) *MockManager_SetLkw_Call {
+func (_c *MockManager_SetAttr_Call) RunAndReturn(run func(context1 context.Context, v uint64, setAttrInput meta.SetAttrInput) (*meta.Inode, error)) *MockManager_SetAttr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // SetXattr provides a mock function for the type MockManager
-func (_mock *MockManager) SetXattr(ctx context.Context, params meta.SetXattrParams) error {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) SetXattr(context1 context.Context, setXattrParams meta.SetXattrParams) error {
+	ret := _mock.Called(context1, setXattrParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SetXattr")
@@ -3215,7 +2324,7 @@ func (_mock *MockManager) SetXattr(ctx context.Context, params meta.SetXattrPara
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SetXattrParams) error); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, setXattrParams)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -3228,13 +2337,13 @@ type MockManager_SetXattr_Call struct {
 }
 
 // SetXattr is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.SetXattrParams
-func (_e *MockManager_Expecter) SetXattr(ctx any, params any) *MockManager_SetXattr_Call {
-	return &MockManager_SetXattr_Call{Call: _e.mock.On("SetXattr", ctx, params)}
+//   - context1 context.Context
+//   - setXattrParams meta.SetXattrParams
+func (_e *MockManager_Expecter) SetXattr(context1 any, setXattrParams any) *MockManager_SetXattr_Call {
+	return &MockManager_SetXattr_Call{Call: _e.mock.On("SetXattr", context1, setXattrParams)}
 }
 
-func (_c *MockManager_SetXattr_Call) Run(run func(ctx context.Context, params meta.SetXattrParams)) *MockManager_SetXattr_Call {
+func (_c *MockManager_SetXattr_Call) Run(run func(context1 context.Context, setXattrParams meta.SetXattrParams)) *MockManager_SetXattr_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3257,66 +2366,14 @@ func (_c *MockManager_SetXattr_Call) Return(err error) *MockManager_SetXattr_Cal
 	return _c
 }
 
-func (_c *MockManager_SetXattr_Call) RunAndReturn(run func(ctx context.Context, params meta.SetXattrParams) error) *MockManager_SetXattr_Call {
+func (_c *MockManager_SetXattr_Call) RunAndReturn(run func(context1 context.Context, setXattrParams meta.SetXattrParams) error) *MockManager_SetXattr_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// StartGCWorker provides a mock function for the type MockManager
-func (_mock *MockManager) StartGCWorker(ctx context.Context, interval time.Duration, batchLimit int32) {
-	_mock.Called(ctx, interval, batchLimit)
-	return
-}
-
-// MockManager_StartGCWorker_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartGCWorker'
-type MockManager_StartGCWorker_Call struct {
-	*mock.Call
-}
-
-// StartGCWorker is a helper method to define mock.On call
-//   - ctx context.Context
-//   - interval time.Duration
-//   - batchLimit int32
-func (_e *MockManager_Expecter) StartGCWorker(ctx any, interval any, batchLimit any) *MockManager_StartGCWorker_Call {
-	return &MockManager_StartGCWorker_Call{Call: _e.mock.On("StartGCWorker", ctx, interval, batchLimit)}
-}
-
-func (_c *MockManager_StartGCWorker_Call) Run(run func(ctx context.Context, interval time.Duration, batchLimit int32)) *MockManager_StartGCWorker_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 time.Duration
-		if args[1] != nil {
-			arg1 = args[1].(time.Duration)
-		}
-		var arg2 int32
-		if args[2] != nil {
-			arg2 = args[2].(int32)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_StartGCWorker_Call) Return() *MockManager_StartGCWorker_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *MockManager_StartGCWorker_Call) RunAndReturn(run func(ctx context.Context, interval time.Duration, batchLimit int32)) *MockManager_StartGCWorker_Call {
-	_c.Run(run)
-	return _c
-}
-
 // StatFS provides a mock function for the type MockManager
-func (_mock *MockManager) StatFS(ctx context.Context, ino uint64) (*meta.StatFSResult, error) {
-	ret := _mock.Called(ctx, ino)
+func (_mock *MockManager) StatFS(context1 context.Context, v uint64) (*meta.StatFSResult, error) {
+	ret := _mock.Called(context1, v)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StatFS")
@@ -3325,17 +2382,17 @@ func (_mock *MockManager) StatFS(ctx context.Context, ino uint64) (*meta.StatFSR
 	var r0 *meta.StatFSResult
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) (*meta.StatFSResult, error)); ok {
-		return returnFunc(ctx, ino)
+		return returnFunc(context1, v)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64) *meta.StatFSResult); ok {
-		r0 = returnFunc(ctx, ino)
+		r0 = returnFunc(context1, v)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.StatFSResult)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, uint64) error); ok {
-		r1 = returnFunc(ctx, ino)
+		r1 = returnFunc(context1, v)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3348,13 +2405,13 @@ type MockManager_StatFS_Call struct {
 }
 
 // StatFS is a helper method to define mock.On call
-//   - ctx context.Context
-//   - ino uint64
-func (_e *MockManager_Expecter) StatFS(ctx any, ino any) *MockManager_StatFS_Call {
-	return &MockManager_StatFS_Call{Call: _e.mock.On("StatFS", ctx, ino)}
+//   - context1 context.Context
+//   - v uint64
+func (_e *MockManager_Expecter) StatFS(context1 any, v any) *MockManager_StatFS_Call {
+	return &MockManager_StatFS_Call{Call: _e.mock.On("StatFS", context1, v)}
 }
 
-func (_c *MockManager_StatFS_Call) Run(run func(ctx context.Context, ino uint64)) *MockManager_StatFS_Call {
+func (_c *MockManager_StatFS_Call) Run(run func(context1 context.Context, v uint64)) *MockManager_StatFS_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3377,14 +2434,14 @@ func (_c *MockManager_StatFS_Call) Return(statFSResult *meta.StatFSResult, err e
 	return _c
 }
 
-func (_c *MockManager_StatFS_Call) RunAndReturn(run func(ctx context.Context, ino uint64) (*meta.StatFSResult, error)) *MockManager_StatFS_Call {
+func (_c *MockManager_StatFS_Call) RunAndReturn(run func(context1 context.Context, v uint64) (*meta.StatFSResult, error)) *MockManager_StatFS_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Symlink provides a mock function for the type MockManager
-func (_mock *MockManager) Symlink(ctx context.Context, params meta.SymlinkParams) (*meta.Inode, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) Symlink(context1 context.Context, symlinkParams meta.SymlinkParams) (*meta.Inode, error) {
+	ret := _mock.Called(context1, symlinkParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Symlink")
@@ -3393,17 +2450,17 @@ func (_mock *MockManager) Symlink(ctx context.Context, params meta.SymlinkParams
 	var r0 *meta.Inode
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SymlinkParams) (*meta.Inode, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, symlinkParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.SymlinkParams) *meta.Inode); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, symlinkParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Inode)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.SymlinkParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, symlinkParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3416,13 +2473,13 @@ type MockManager_Symlink_Call struct {
 }
 
 // Symlink is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.SymlinkParams
-func (_e *MockManager_Expecter) Symlink(ctx any, params any) *MockManager_Symlink_Call {
-	return &MockManager_Symlink_Call{Call: _e.mock.On("Symlink", ctx, params)}
+//   - context1 context.Context
+//   - symlinkParams meta.SymlinkParams
+func (_e *MockManager_Expecter) Symlink(context1 any, symlinkParams any) *MockManager_Symlink_Call {
+	return &MockManager_Symlink_Call{Call: _e.mock.On("Symlink", context1, symlinkParams)}
 }
 
-func (_c *MockManager_Symlink_Call) Run(run func(ctx context.Context, params meta.SymlinkParams)) *MockManager_Symlink_Call {
+func (_c *MockManager_Symlink_Call) Run(run func(context1 context.Context, symlinkParams meta.SymlinkParams)) *MockManager_Symlink_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3445,82 +2502,14 @@ func (_c *MockManager_Symlink_Call) Return(inode *meta.Inode, err error) *MockMa
 	return _c
 }
 
-func (_c *MockManager_Symlink_Call) RunAndReturn(run func(ctx context.Context, params meta.SymlinkParams) (*meta.Inode, error)) *MockManager_Symlink_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// TmpFile provides a mock function for the type MockManager
-func (_mock *MockManager) TmpFile(ctx context.Context, params meta.TmpFileParams) (*meta.CreateResult, error) {
-	ret := _mock.Called(ctx, params)
-
-	if len(ret) == 0 {
-		panic("no return value specified for TmpFile")
-	}
-
-	var r0 *meta.CreateResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.TmpFileParams) (*meta.CreateResult, error)); ok {
-		return returnFunc(ctx, params)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.TmpFileParams) *meta.CreateResult); ok {
-		r0 = returnFunc(ctx, params)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*meta.CreateResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.TmpFileParams) error); ok {
-		r1 = returnFunc(ctx, params)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockManager_TmpFile_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'TmpFile'
-type MockManager_TmpFile_Call struct {
-	*mock.Call
-}
-
-// TmpFile is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.TmpFileParams
-func (_e *MockManager_Expecter) TmpFile(ctx any, params any) *MockManager_TmpFile_Call {
-	return &MockManager_TmpFile_Call{Call: _e.mock.On("TmpFile", ctx, params)}
-}
-
-func (_c *MockManager_TmpFile_Call) Run(run func(ctx context.Context, params meta.TmpFileParams)) *MockManager_TmpFile_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 meta.TmpFileParams
-		if args[1] != nil {
-			arg1 = args[1].(meta.TmpFileParams)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockManager_TmpFile_Call) Return(createResult *meta.CreateResult, err error) *MockManager_TmpFile_Call {
-	_c.Call.Return(createResult, err)
-	return _c
-}
-
-func (_c *MockManager_TmpFile_Call) RunAndReturn(run func(ctx context.Context, params meta.TmpFileParams) (*meta.CreateResult, error)) *MockManager_TmpFile_Call {
+func (_c *MockManager_Symlink_Call) RunAndReturn(run func(context1 context.Context, symlinkParams meta.SymlinkParams) (*meta.Inode, error)) *MockManager_Symlink_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // TreeQuota provides a mock function for the type MockManager
-func (_mock *MockManager) TreeQuota(ctx context.Context, diskID string) (*meta.TreeQuota, error) {
-	ret := _mock.Called(ctx, diskID)
+func (_mock *MockManager) TreeQuota(context1 context.Context, s string) (*meta.TreeQuota, error) {
+	ret := _mock.Called(context1, s)
 
 	if len(ret) == 0 {
 		panic("no return value specified for TreeQuota")
@@ -3529,17 +2518,17 @@ func (_mock *MockManager) TreeQuota(ctx context.Context, diskID string) (*meta.T
 	var r0 *meta.TreeQuota
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*meta.TreeQuota, error)); ok {
-		return returnFunc(ctx, diskID)
+		return returnFunc(context1, s)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *meta.TreeQuota); ok {
-		r0 = returnFunc(ctx, diskID)
+		r0 = returnFunc(context1, s)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.TreeQuota)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, diskID)
+		r1 = returnFunc(context1, s)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3552,13 +2541,13 @@ type MockManager_TreeQuota_Call struct {
 }
 
 // TreeQuota is a helper method to define mock.On call
-//   - ctx context.Context
-//   - diskID string
-func (_e *MockManager_Expecter) TreeQuota(ctx any, diskID any) *MockManager_TreeQuota_Call {
-	return &MockManager_TreeQuota_Call{Call: _e.mock.On("TreeQuota", ctx, diskID)}
+//   - context1 context.Context
+//   - s string
+func (_e *MockManager_Expecter) TreeQuota(context1 any, s any) *MockManager_TreeQuota_Call {
+	return &MockManager_TreeQuota_Call{Call: _e.mock.On("TreeQuota", context1, s)}
 }
 
-func (_c *MockManager_TreeQuota_Call) Run(run func(ctx context.Context, diskID string)) *MockManager_TreeQuota_Call {
+func (_c *MockManager_TreeQuota_Call) Run(run func(context1 context.Context, s string)) *MockManager_TreeQuota_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3581,14 +2570,14 @@ func (_c *MockManager_TreeQuota_Call) Return(treeQuota *meta.TreeQuota, err erro
 	return _c
 }
 
-func (_c *MockManager_TreeQuota_Call) RunAndReturn(run func(ctx context.Context, diskID string) (*meta.TreeQuota, error)) *MockManager_TreeQuota_Call {
+func (_c *MockManager_TreeQuota_Call) RunAndReturn(run func(context1 context.Context, s string) (*meta.TreeQuota, error)) *MockManager_TreeQuota_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Unlink provides a mock function for the type MockManager
-func (_mock *MockManager) Unlink(ctx context.Context, parentIno uint64, name []byte) error {
-	ret := _mock.Called(ctx, parentIno, name)
+func (_mock *MockManager) Unlink(context1 context.Context, v uint64, bytes []byte) error {
+	ret := _mock.Called(context1, v, bytes)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Unlink")
@@ -3596,7 +2585,7 @@ func (_mock *MockManager) Unlink(ctx context.Context, parentIno uint64, name []b
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, uint64, []byte) error); ok {
-		r0 = returnFunc(ctx, parentIno, name)
+		r0 = returnFunc(context1, v, bytes)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -3609,14 +2598,14 @@ type MockManager_Unlink_Call struct {
 }
 
 // Unlink is a helper method to define mock.On call
-//   - ctx context.Context
-//   - parentIno uint64
-//   - name []byte
-func (_e *MockManager_Expecter) Unlink(ctx any, parentIno any, name any) *MockManager_Unlink_Call {
-	return &MockManager_Unlink_Call{Call: _e.mock.On("Unlink", ctx, parentIno, name)}
+//   - context1 context.Context
+//   - v uint64
+//   - bytes []byte
+func (_e *MockManager_Expecter) Unlink(context1 any, v any, bytes any) *MockManager_Unlink_Call {
+	return &MockManager_Unlink_Call{Call: _e.mock.On("Unlink", context1, v, bytes)}
 }
 
-func (_c *MockManager_Unlink_Call) Run(run func(ctx context.Context, parentIno uint64, name []byte)) *MockManager_Unlink_Call {
+func (_c *MockManager_Unlink_Call) Run(run func(context1 context.Context, v uint64, bytes []byte)) *MockManager_Unlink_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3644,14 +2633,14 @@ func (_c *MockManager_Unlink_Call) Return(err error) *MockManager_Unlink_Call {
 	return _c
 }
 
-func (_c *MockManager_Unlink_Call) RunAndReturn(run func(ctx context.Context, parentIno uint64, name []byte) error) *MockManager_Unlink_Call {
+func (_c *MockManager_Unlink_Call) RunAndReturn(run func(context1 context.Context, v uint64, bytes []byte) error) *MockManager_Unlink_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // UpdateDisk provides a mock function for the type MockManager
-func (_mock *MockManager) UpdateDisk(ctx context.Context, params meta.UpdateDiskParams) (*meta.Disk, error) {
-	ret := _mock.Called(ctx, params)
+func (_mock *MockManager) UpdateDisk(context1 context.Context, updateDiskParams meta.UpdateDiskParams) (*meta.Disk, error) {
+	ret := _mock.Called(context1, updateDiskParams)
 
 	if len(ret) == 0 {
 		panic("no return value specified for UpdateDisk")
@@ -3660,17 +2649,17 @@ func (_mock *MockManager) UpdateDisk(ctx context.Context, params meta.UpdateDisk
 	var r0 *meta.Disk
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.UpdateDiskParams) (*meta.Disk, error)); ok {
-		return returnFunc(ctx, params)
+		return returnFunc(context1, updateDiskParams)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, meta.UpdateDiskParams) *meta.Disk); ok {
-		r0 = returnFunc(ctx, params)
+		r0 = returnFunc(context1, updateDiskParams)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.Disk)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, meta.UpdateDiskParams) error); ok {
-		r1 = returnFunc(ctx, params)
+		r1 = returnFunc(context1, updateDiskParams)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3683,13 +2672,13 @@ type MockManager_UpdateDisk_Call struct {
 }
 
 // UpdateDisk is a helper method to define mock.On call
-//   - ctx context.Context
-//   - params meta.UpdateDiskParams
-func (_e *MockManager_Expecter) UpdateDisk(ctx any, params any) *MockManager_UpdateDisk_Call {
-	return &MockManager_UpdateDisk_Call{Call: _e.mock.On("UpdateDisk", ctx, params)}
+//   - context1 context.Context
+//   - updateDiskParams meta.UpdateDiskParams
+func (_e *MockManager_Expecter) UpdateDisk(context1 any, updateDiskParams any) *MockManager_UpdateDisk_Call {
+	return &MockManager_UpdateDisk_Call{Call: _e.mock.On("UpdateDisk", context1, updateDiskParams)}
 }
 
-func (_c *MockManager_UpdateDisk_Call) Run(run func(ctx context.Context, params meta.UpdateDiskParams)) *MockManager_UpdateDisk_Call {
+func (_c *MockManager_UpdateDisk_Call) Run(run func(context1 context.Context, updateDiskParams meta.UpdateDiskParams)) *MockManager_UpdateDisk_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3712,14 +2701,14 @@ func (_c *MockManager_UpdateDisk_Call) Return(disk *meta.Disk, err error) *MockM
 	return _c
 }
 
-func (_c *MockManager_UpdateDisk_Call) RunAndReturn(run func(ctx context.Context, params meta.UpdateDiskParams) (*meta.Disk, error)) *MockManager_UpdateDisk_Call {
+func (_c *MockManager_UpdateDisk_Call) RunAndReturn(run func(context1 context.Context, updateDiskParams meta.UpdateDiskParams) (*meta.Disk, error)) *MockManager_UpdateDisk_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Write provides a mock function for the type MockManager
-func (_mock *MockManager) Write(ctx context.Context, req *meta.WriteRequest) (*meta.WriteResponse, error) {
-	ret := _mock.Called(ctx, req)
+func (_mock *MockManager) Write(context1 context.Context, writeRequest *meta.WriteRequest) (*meta.WriteResponse, error) {
+	ret := _mock.Called(context1, writeRequest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Write")
@@ -3728,17 +2717,17 @@ func (_mock *MockManager) Write(ctx context.Context, req *meta.WriteRequest) (*m
 	var r0 *meta.WriteResponse
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.WriteRequest) (*meta.WriteResponse, error)); ok {
-		return returnFunc(ctx, req)
+		return returnFunc(context1, writeRequest)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, *meta.WriteRequest) *meta.WriteResponse); ok {
-		r0 = returnFunc(ctx, req)
+		r0 = returnFunc(context1, writeRequest)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*meta.WriteResponse)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, *meta.WriteRequest) error); ok {
-		r1 = returnFunc(ctx, req)
+		r1 = returnFunc(context1, writeRequest)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -3751,13 +2740,13 @@ type MockManager_Write_Call struct {
 }
 
 // Write is a helper method to define mock.On call
-//   - ctx context.Context
-//   - req *meta.WriteRequest
-func (_e *MockManager_Expecter) Write(ctx any, req any) *MockManager_Write_Call {
-	return &MockManager_Write_Call{Call: _e.mock.On("Write", ctx, req)}
+//   - context1 context.Context
+//   - writeRequest *meta.WriteRequest
+func (_e *MockManager_Expecter) Write(context1 any, writeRequest any) *MockManager_Write_Call {
+	return &MockManager_Write_Call{Call: _e.mock.On("Write", context1, writeRequest)}
 }
 
-func (_c *MockManager_Write_Call) Run(run func(ctx context.Context, req *meta.WriteRequest)) *MockManager_Write_Call {
+func (_c *MockManager_Write_Call) Run(run func(context1 context.Context, writeRequest *meta.WriteRequest)) *MockManager_Write_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -3780,7 +2769,7 @@ func (_c *MockManager_Write_Call) Return(writeResponse *meta.WriteResponse, err 
 	return _c
 }
 
-func (_c *MockManager_Write_Call) RunAndReturn(run func(ctx context.Context, req *meta.WriteRequest) (*meta.WriteResponse, error)) *MockManager_Write_Call {
+func (_c *MockManager_Write_Call) RunAndReturn(run func(context1 context.Context, writeRequest *meta.WriteRequest) (*meta.WriteResponse, error)) *MockManager_Write_Call {
 	_c.Call.Return(run)
 	return _c
 }

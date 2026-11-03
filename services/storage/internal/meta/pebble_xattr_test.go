@@ -144,10 +144,11 @@ func TestPebbleXattrBranchesAndSQL(t *testing.T) {
 	snapshot := meta.WithSessionID(f.ctx, &f.snap)
 	name := []byte("user.shared")
 
-	// 先确认观测器能捕获旧表查询，再单独记录扩展属性操作。
+	// 先确认观测器能捕获旧表检查，再单独记录扩展属性操作。
 	f.tracer.take()
-	var count int
-	require.NoError(t, f.traced.QueryRow(f.ctx, `SELECT count(*) FROM inode_xattrs`).Scan(&count))
+	var exists bool
+	require.NoError(t, f.traced.QueryRow(f.ctx, `SELECT to_regclass('public.inode_xattrs') IS NOT NULL`).Scan(&exists))
+	require.False(t, exists)
 	require.Contains(t, strings.Join(f.tracer.take(), "\n"), "inode_xattrs")
 
 	require.NoError(t, f.mgr.SetXattr(main, meta.SetXattrParams{Ino: 2, Name: name, Value: []byte("主分支"), Flags: meta.XattrReplace}))
@@ -181,21 +182,16 @@ func TestPebbleXattrBranchesAndSQL(t *testing.T) {
 	require.NotContains(t, queries, "inode_xattrs")
 }
 
-func TestPebbleXattrRPCAndLegacy(t *testing.T) {
+func TestPebbleXattrRPC(t *testing.T) {
 	f := newPebbleXattrFixture(t)
 	srv, err := server.New(server.Params{Config: config.ServerConfig{}, MetaManager: f.mgr})
 	require.NoError(t, err)
 	name := []byte("user.rpc")
-	legacyIno := f.disk.RootIno
-	require.NoError(t, f.mgr.SetXattr(f.ctx, meta.SetXattrParams{Ino: legacyIno, Name: name, Value: []byte("旧值")}))
 	_, err = srv.SetXattr(f.ctx, connect.NewRequest(&storagev1.SetXattrRequest{Ino: 1, Name: name, Value: []byte("分支值"), SessionId: &f.main}))
 	require.NoError(t, err)
 	branch, err := srv.GetXattr(f.ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: 1, Name: name, SessionId: &f.main}))
 	require.NoError(t, err)
 	require.Equal(t, []byte("分支值"), branch.Msg.Value)
-	legacy, err := srv.GetXattr(f.ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: legacyIno, Name: name}))
-	require.NoError(t, err)
-	require.Equal(t, []byte("旧值"), legacy.Msg.Value)
 	list, err := srv.ListXattr(f.ctx, connect.NewRequest(&storagev1.ListXattrRequest{Ino: 1, SessionId: &f.main}))
 	require.NoError(t, err)
 	require.Equal(t, [][]byte{name}, list.Msg.Names)
@@ -204,9 +200,7 @@ func TestPebbleXattrRPCAndLegacy(t *testing.T) {
 	require.Equal(t, "EPERM", server.ExtractErrorInfo(err).GetReason())
 	_, err = srv.RemoveXattr(f.ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{Ino: 1, Name: name, SessionId: &f.main}))
 	require.NoError(t, err)
-	legacy, err = srv.GetXattr(f.ctx, connect.NewRequest(&storagev1.GetXattrRequest{Ino: legacyIno, Name: name}))
-	require.NoError(t, err)
-	require.Equal(t, []byte("旧值"), legacy.Msg.Value)
+
 }
 
 func TestPebbleXattrSemantics(t *testing.T) {
@@ -311,16 +305,13 @@ func TestPebbleXattrValidationAndSessions(t *testing.T) {
 	require.ErrorIs(t, f.mgr.SetXattr(ctx, meta.SetXattrParams{Ino: 2, Name: []byte("x"), Value: make([]byte, meta.MaxXattrValueBytes+1)}), meta.ErrRange)
 	require.Empty(t, f.tracer.take(), "静态参数校验不能查询数据库")
 
-	legacy := uint64(604)
-	_, err := f.mgr.RenewSessionWithDisk(f.ctx, legacy, &f.disk.DiskID)
-	require.NoError(t, err)
-	_, err = f.pool.Exec(f.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, f.feature)
+	_, err := f.pool.Exec(f.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, f.feature)
 	require.NoError(t, err)
 	zero, tooLarge := uint64(0), uint64(math.MaxInt64)+1
 	for _, tc := range []struct {
 		sid uint64
 		err error
-	}{{missing, meta.ErrBadFileHandle}, {legacy, meta.ErrBadFileHandle}, {f.feature, meta.ErrBadFileHandle}, {zero, meta.ErrInvalidArgument}, {tooLarge, meta.ErrInvalidArgument}} {
+	}{{missing, meta.ErrBadFileHandle}, {f.feature, meta.ErrBadFileHandle}, {zero, meta.ErrInvalidArgument}, {tooLarge, meta.ErrInvalidArgument}} {
 		ctx := meta.WithSessionID(f.ctx, &tc.sid)
 		for _, err := range xattrOperations(f.mgr, ctx, 2, []byte("user.x")) {
 			require.ErrorIs(t, err, tc.err)

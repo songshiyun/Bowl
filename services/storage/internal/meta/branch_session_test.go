@@ -75,7 +75,7 @@ func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 	require.NoError(t, batch.Close())
 	require.NoError(t, branch.Close())
 	require.Equal(t, meta.TreeQuotaUsage{Bytes: 130, Inodes: 3}, quota.Usage())
-	_, err = mgr.CollectGarbage(ctx, 100)
+	err = mgr.CloseSession(ctx, 9999)
 	require.NoError(t, err)
 	branch, err = storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 }
 
 func TestBranchSessionExpiredSweep(t *testing.T) {
-	for _, action := range []string{"垃圾回收", "旧会话续期", "其他会话关闭", "写端接管"} {
+	for _, action := range []string{"其他会话关闭", "写端接管"} {
 		t.Run(action, func(t *testing.T) {
 			pool, ctx := setupIsolatedMetaTestDB(t, "branch_expired")
 			root := t.TempDir()
@@ -134,10 +134,6 @@ func TestBranchSessionExpiredSweep(t *testing.T) {
 			_, err = pool.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, 301)
 			require.NoError(t, err)
 			switch action {
-			case "垃圾回收":
-				_, err = mgr.CollectGarbage(ctx, 100)
-			case "旧会话续期":
-				_, err = mgr.RenewSession(ctx, 302)
 			case "其他会话关闭":
 				err = mgr.CloseSession(ctx, 302)
 			case "写端接管":
@@ -512,7 +508,7 @@ func TestBranchSessionCloseCommitFailureDoesNotLeaveActiveWriter(t *testing.T) {
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 	_, err = pool.Exec(ctx, `DROP TRIGGER test_reject_delete ON client_sessions`)
 	require.NoError(t, err)
-	_, err = mgr.CollectGarbage(ctx, 100)
+	err = mgr.CloseSession(ctx, 9999)
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE session_id = $1`, 1001).Scan(&count))

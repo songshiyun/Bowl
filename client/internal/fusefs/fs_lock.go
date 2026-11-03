@@ -7,14 +7,14 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-// 锁类型协议常量（对应 storagev1.FileLock.type）
+// 本地锁类型常量。
 const (
 	ProtoLockTypeRead   uint32 = 0 // F_RDLCK (共享读锁)
 	ProtoLockTypeWrite  uint32 = 1 // F_WRLCK (排他写锁)
 	ProtoLockTypeUnlock uint32 = 2 // F_UNLCK (释放锁)
 )
 
-// ToProtoLockType 将宿主机操作系统锁类型显式转换为服务端协议锁类型枚举。
+// ToProtoLockType 将宿主机操作系统锁类型显式转换为本地锁类型。
 // 宿主机 syscall.F_RDLCK -> 0，syscall.F_WRLCK -> 1，syscall.F_UNLCK -> 2；非法值返回 fuse.EINVAL。
 func ToProtoLockType(hostType uint32) (uint32, fuse.Status) {
 	switch hostType {
@@ -29,8 +29,8 @@ func ToProtoLockType(hostType uint32) (uint32, fuse.Status) {
 	}
 }
 
-// ToHostLockType 将服务端协议锁类型枚举显式转换为宿主机操作系统锁类型。
-// 协议 0 -> syscall.F_RDLCK，1 -> syscall.F_WRLCK，2 -> syscall.F_UNLCK；非法值返回 fuse.EINVAL。
+// ToHostLockType 将本地锁类型显式转换为宿主机操作系统锁类型。
+// 本地值 0 -> syscall.F_RDLCK，1 -> syscall.F_WRLCK，2 -> syscall.F_UNLCK；非法值返回 fuse.EINVAL。
 func ToHostLockType(protoType uint32) (uint32, fuse.Status) {
 	switch protoType {
 	case ProtoLockTypeRead:

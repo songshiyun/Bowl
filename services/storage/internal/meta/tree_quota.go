@@ -1,7 +1,6 @@
 package meta
 
 import (
-	"strconv"
 	"strings"
 	"sync"
 )
@@ -116,60 +115,6 @@ func (q *TreeQuota) applyLocked(branch string, ino, size uint64, live bool, pers
 	return nil
 }
 
-func (q *TreeQuota) legacyWriteAllowanceLocked(ino uint64) int64 {
-	oldSize := q.branches[legacyQuotaBranch][ino]
-	var otherMax uint64
-	for branch, size := range q.inodes[ino] {
-		if branch != legacyQuotaBranch {
-			otherMax = max(otherMax, size)
-		}
-	}
-	available := q.maxBytes - min(q.maxBytes, q.usage.Bytes)
-	if otherMax > oldSize {
-		extra := otherMax - oldSize
-		if extra > uint64(^uint64(0)>>1)-min(available, uint64(^uint64(0)>>1)) {
-			return int64(^uint64(0) >> 1)
-		}
-		available += extra
-	}
-	return int64(min(available, uint64(^uint64(0)>>1)))
-}
-
-type legacyQuotaReservation struct {
-	quota  *TreeQuota
-	branch string
-	ino    uint64
-	size   uint64
-}
-
-func (q *TreeQuota) reserveLegacy(ino, oldSize, newSize uint64) (*legacyQuotaReservation, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if _, exists := q.branches[legacyQuotaBranch][ino]; !exists {
-		if err := q.applyLocked(legacyQuotaBranch, ino, oldSize, true, nil, false); err != nil {
-			return nil, err
-		}
-	}
-	q.nextReservation++
-	branch := "\x00reservation:" + strconv.FormatUint(q.nextReservation, 10)
-	if err := q.applyLocked(branch, ino, newSize, true, nil, true); err != nil {
-		return nil, err
-	}
-	return &legacyQuotaReservation{quota: q, branch: branch, ino: ino, size: newSize}, nil
-}
-
-func (r *legacyQuotaReservation) finish(commit bool) {
-	q := r.quota
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if commit {
-		_ = q.applyLocked(legacyQuotaBranch, r.ino, r.size, true, nil, false)
-	}
-	_ = q.applyLocked(r.branch, r.ino, 0, false, nil, false)
-	delete(q.branches, r.branch)
-}
-
-// ReplaceBranch 原子替换一个分支的完整节点列表。
 func (q *TreeQuota) ReplaceBranch(branch string, sizes map[uint64]uint64) error {
 	return q.replaceBranch(branch, sizes, true)
 }

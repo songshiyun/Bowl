@@ -228,8 +228,7 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
 			return err
 		}
-		m.onDirEntryMutated(parentIno)
-		m.onDirEntryRemoved(parentIno, name)
+
 		return nil
 	})
 }
@@ -421,14 +420,14 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
 			return err
 		}
-		m.onDirEntryMutated(params.OldParentIno)
+
 		if crossParent {
-			m.onDirEntryMutated(params.NewParentIno)
+
 		}
 		if params.Flags != RenameExchange {
-			m.onDirEntryRemoved(params.OldParentIno, params.OldName)
+
 			if hasNew {
-				m.onDirEntryRemoved(params.NewParentIno, params.NewName)
+
 			}
 		}
 		return nil

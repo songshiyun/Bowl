@@ -10,17 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
-	"github.com/starsrc/bowl/services/storage/internal/server"
 )
 
 type pebbleCreateEnv struct {
@@ -180,10 +176,10 @@ func TestPebbleCreateBranchesAndRecords(t *testing.T) {
 	recoveredQuota, err := restarted.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, meta.TreeQuotaUsage{Bytes: 13, Inodes: 9}, recoveredQuota.Usage())
-	for table, want := range map[string]int{"inodes": 1, "entries": 0, "file_handles": 0} {
-		var count int
-		require.NoError(t, e.pool.QueryRow(e.ctx, "SELECT count(*) FROM "+table).Scan(&count))
-		require.Equal(t, want, count, table)
+	for _, table := range []string{"inodes", "entries", "file_handles"} {
+		var exists bool
+		require.NoError(t, e.pool.QueryRow(e.ctx, "SELECT to_regclass($1) IS NOT NULL", "public."+table).Scan(&exists))
+		require.False(t, exists, table)
 	}
 }
 
@@ -271,8 +267,6 @@ func TestPebbleCreateValidationAndSessions(t *testing.T) {
 	require.NoError(t, err)
 	unknown := uint64(999)
 	legacy := uint64(103)
-	_, err = e.mgr.RenewSession(e.ctx, legacy)
-	require.NoError(t, err)
 	for name, op := range ops {
 		t.Run(name, func(t *testing.T) {
 			for _, entry := range []string{"file", ".", ".."} {
@@ -330,9 +324,8 @@ func TestPebbleCreateValidationAndSessions(t *testing.T) {
 	}
 	_, err = e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("expired"), SessionID: &e.sid})
 	require.ErrorIs(t, err, meta.ErrBadFileHandle)
-	legacyCreated, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: e.disk.RootIno, Name: []byte("legacy"), SessionID: &legacy})
-	require.NoError(t, err)
-	require.Greater(t, legacyCreated.Fh, uint64(0))
+	_, err = e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: e.disk.RootIno, Name: []byte("legacy"), SessionID: &legacy})
+	require.ErrorIs(t, err, meta.ErrBadFileHandle)
 }
 
 func TestPebbleCreateSetgidAndQuota(t *testing.T) {
@@ -454,52 +447,4 @@ func TestPebbleCreateConcurrentQuota(t *testing.T) {
 		})
 	}
 	require.Equal(t, 1, createdBranches)
-}
-
-func TestPebbleCreateLegacyRPC(t *testing.T) {
-	e := setupPebbleCreate(t, 1000)
-	legacy := uint64(301)
-	_, err := e.mgr.RenewSessionWithDisk(e.ctx, legacy, &e.disk.DiskID)
-	require.NoError(t, err)
-	_, err = e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: e.disk.RootIno, Name: []byte("legacy-direct"), Mode: 0o644, SessionID: &legacy})
-	require.NoError(t, err)
-	srv, err := server.New(server.Params{Config: config.ServerConfig{}, MetaManager: e.mgr})
-	require.NoError(t, err)
-	response, err := srv.Create(e.ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: e.disk.RootIno, Name: []byte("legacy-rpc"), Mode: 0o644, SessionId: &legacy,
-	}))
-	require.NoError(t, err)
-	require.NotZero(t, response.Msg.Fh)
-	var count int
-	require.NoError(t, e.pool.QueryRow(e.ctx, `SELECT count(*) FROM entries WHERE parent_ino = $1 AND name = $2`, int64(e.disk.RootIno), []byte("legacy-rpc")).Scan(&count))
-	require.Equal(t, 1, count)
-
-	branch, err := srv.Create(e.ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: 1, Name: []byte("branch-rpc"), Mode: 0o644, SessionId: &e.sid,
-	}))
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), branch.Msg.Fh)
-	require.NoError(t, e.pool.QueryRow(e.ctx, `SELECT count(*) FROM entries WHERE name = $1`, []byte("branch-rpc")).Scan(&count))
-	require.Zero(t, count)
-	unknown := uint64(9999)
-	_, err = srv.Create(e.ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: 9999, Name: []byte("unknown"), SessionId: &unknown,
-	}))
-	require.Error(t, err)
-	require.Equal(t, "EBADF", server.ExtractErrorInfo(err).GetReason())
-	reader := uint64(302)
-	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: reader, DiskID: e.disk.DiskID, ReadOnly: true})
-	require.NoError(t, err)
-	_, err = srv.Create(e.ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: 1, Name: []byte("reader"), SessionId: &reader,
-	}))
-	require.Error(t, err)
-	require.Equal(t, "EPERM", server.ExtractErrorInfo(err).GetReason())
-	_, err = e.pool.Exec(e.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() WHERE session_id = $1`, int64(e.sid))
-	require.NoError(t, err)
-	_, err = srv.Create(e.ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: 1, Name: []byte("expired"), SessionId: &e.sid,
-	}))
-	require.Error(t, err)
-	require.Equal(t, "EBADF", server.ExtractErrorInfo(err).GetReason())
 }

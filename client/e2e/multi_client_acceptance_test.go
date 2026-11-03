@@ -201,7 +201,7 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 		require.Equal(t, 2, exitErr.ExitCode(), string(out))
 	})
 
-	t.Run("只读分支使用创建时的初始快照", func(t *testing.T) {
+	t.Run("只读分支固定挂载时的快照", func(t *testing.T) {
 		mp := t.TempDir()
 		cmd, _, stderr := startBowlMount(t, endpoint, diskID, mp, "--ro", "--branch", "main")
 		if err := waitForMount(mp, 10*time.Second); err != nil {
@@ -210,8 +210,15 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 			t.Fatalf("只读挂载失败: %v: %s", err, stderr.String())
 		}
 		defer stopBowlMountGracefully(t, cmd, mp, 5*time.Second)
-		_, err := os.Stat(filepath.Join(mp, "snapshot.txt"))
-		require.ErrorIs(t, err, os.ErrNotExist)
+		readonlyPath := filepath.Join(mp, "snapshot.txt")
+		data, err := os.ReadFile(readonlyPath)
+		require.NoError(t, err)
+		require.Equal(t, "版本一", string(data))
+		require.NoError(t, os.WriteFile(pathA, []byte("版本二"), 0o644))
+		data, err = os.ReadFile(readonlyPath)
+		require.NoError(t, err)
+		require.Equal(t, "版本一", string(data))
+		require.NoError(t, os.WriteFile(pathA, []byte("版本一"), 0o644))
 	})
 
 	t.Run("只读快照和独立可写分支", func(t *testing.T) {

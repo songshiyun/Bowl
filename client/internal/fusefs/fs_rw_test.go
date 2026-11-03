@@ -29,8 +29,6 @@ type rwMockStorageServer struct {
 	writeFn        func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
 	setAttrFn      func(context.Context, *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error)
 	fallocateFn    func(context.Context, *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error)
-	openFn         func(context.Context, *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error)
-	releaseFn      func(context.Context, *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
 }
 
@@ -66,20 +64,6 @@ func (m *rwMockStorageServer) Fallocate(ctx context.Context, req *connect.Reques
 		return m.fallocateFn(ctx, req)
 	}
 	return connect.NewResponse(&storagev1.FallocateResponse{}), nil
-}
-
-func (m *rwMockStorageServer) Open(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
-	if m.openFn != nil {
-		return m.openFn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.OpenResponse{Fh: 77777}), nil
-}
-
-func (m *rwMockStorageServer) Release(ctx context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
-	if m.releaseFn != nil {
-		return m.releaseFn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.ReleaseResponse{}), nil
 }
 
 func (m *rwMockStorageServer) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
@@ -899,10 +883,6 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 			fallocateFn: func(ctx context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
 				version.Add(1)
 				return connect.NewResponse(&storagev1.FallocateResponse{}), nil
-			},
-			openFn: func(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
-				version.Add(1)
-				return connect.NewResponse(&storagev1.OpenResponse{Fh: testFH + 1}), nil
 			},
 		}
 

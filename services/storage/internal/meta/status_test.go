@@ -229,15 +229,6 @@ func TestErrInvalidShrink_HierarchyAndStatus(t *testing.T) {
 	assert.Equal(t, "EINVAL", infoWrapped.GetReason())
 }
 
-func TestFileLockConstants(t *testing.T) {
-	assert.Equal(t, uint32(0), meta.F_RDLCK)
-	assert.Equal(t, uint32(1), meta.F_WRLCK)
-	assert.Equal(t, uint32(2), meta.F_UNLCK)
-	assert.Equal(t, uint32(0x1), meta.FuseLkFlock)
-	assert.Equal(t, uint32(0x2), meta.FuseReleaseFlockUnlock)
-	assert.Equal(t, uint64(0x7fffffffffffffff), meta.OffsetMax)
-}
-
 func TestToStatus_WrappedError(t *testing.T) {
 	wrapped := fmt.Errorf("上层操作包装: %w", meta.ErrNotFound)
 	st := meta.ToStatus(wrapped)

@@ -26,12 +26,7 @@ type handleMockStorageServer struct {
 
 	getAttrFn      func(context.Context, *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error)
 	createFn       func(context.Context, *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error)
-	openFn         func(context.Context, *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error)
-	flushFn        func(context.Context, *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error)
 	fsyncFn        func(context.Context, *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error)
-	releaseFn      func(context.Context, *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error)
-	setLkFn        func(context.Context, *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error)
-	setLkwFn       func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
 }
 
@@ -42,20 +37,6 @@ func (m *handleMockStorageServer) GetAttr(ctx context.Context, req *connect.Requ
 	return connect.NewResponse(&storagev1.GetAttrResponse{Inode: &storagev1.Inode{Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}}}), nil
 }
 
-func (m *handleMockStorageServer) SetLk(ctx context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
-	if m.setLkFn != nil {
-		return m.setLkFn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.SetLkResponse{}), nil
-}
-
-func (m *handleMockStorageServer) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-	if m.setLkwFn != nil {
-		return m.setLkwFn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
-}
-
 func (m *handleMockStorageServer) Create(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 	if m.createFn != nil {
 		return m.createFn(ctx, req)
@@ -63,30 +44,9 @@ func (m *handleMockStorageServer) Create(ctx context.Context, req *connect.Reque
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
 
-func (m *handleMockStorageServer) Open(ctx context.Context, req *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
-	if m.openFn != nil {
-		return m.openFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *handleMockStorageServer) Flush(ctx context.Context, req *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
-	if m.flushFn != nil {
-		return m.flushFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
 func (m *handleMockStorageServer) Fsync(ctx context.Context, req *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
 	if m.fsyncFn != nil {
 		return m.fsyncFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *handleMockStorageServer) Release(ctx context.Context, req *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
-	if m.releaseFn != nil {
-		return m.releaseFn(ctx, req)
 	}
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
@@ -266,24 +226,12 @@ func TestRawFS_Create(t *testing.T) {
 }
 
 func TestRawFS_本地句柄打开关闭与同步(t *testing.T) {
-	var getAttrs, opens, releases, flushes atomic.Int32
+	var getAttrs atomic.Int32
 	var syncRequests []*storagev1.FsyncRequest
 	mockSrv := &handleMockStorageServer{
 		getAttrFn: func(_ context.Context, req *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error) {
 			getAttrs.Add(1)
 			return connect.NewResponse(&storagev1.GetAttrResponse{Inode: &storagev1.Inode{Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644}}}), nil
-		},
-		openFn: func(_ context.Context, _ *connect.Request[storagev1.OpenRequest]) (*connect.Response[storagev1.OpenResponse], error) {
-			opens.Add(1)
-			return connect.NewResponse(&storagev1.OpenResponse{}), nil
-		},
-		releaseFn: func(_ context.Context, _ *connect.Request[storagev1.ReleaseRequest]) (*connect.Response[storagev1.ReleaseResponse], error) {
-			releases.Add(1)
-			return connect.NewResponse(&storagev1.ReleaseResponse{}), nil
-		},
-		flushFn: func(_ context.Context, _ *connect.Request[storagev1.FlushRequest]) (*connect.Response[storagev1.FlushResponse], error) {
-			flushes.Add(1)
-			return connect.NewResponse(&storagev1.FlushResponse{}), nil
 		},
 		fsyncFn: func(_ context.Context, req *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
 			syncRequests = append(syncRequests, req.Msg)
@@ -300,10 +248,8 @@ func TestRawFS_本地句柄打开关闭与同步(t *testing.T) {
 	require.Equal(t, fuse.OK, fs.Open(nil, input, &second))
 	require.NotEqual(t, first.Fh, second.Fh)
 	require.Equal(t, int32(1), getAttrs.Load())
-	require.Zero(t, opens.Load())
 	require.NotZero(t, first.OpenFlags&fuse.FOPEN_DIRECT_IO)
 	require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{InHeader: fuse.InHeader{NodeId: 2002}, Fh: first.Fh, LockOwner: 777}))
-	require.Zero(t, flushes.Load())
 	require.Equal(t, fuse.OK, fs.Fsync(nil, &fuse.FsyncIn{InHeader: fuse.InHeader{NodeId: 2002}, Fh: first.Fh}))
 	require.Equal(t, fuse.OK, fs.Fsync(nil, &fuse.FsyncIn{InHeader: fuse.InHeader{NodeId: 2002}, Fh: first.Fh, FsyncFlags: 1}))
 	require.Len(t, syncRequests, 2)
@@ -312,7 +258,6 @@ func TestRawFS_本地句柄打开关闭与同步(t *testing.T) {
 	require.True(t, syncRequests[1].GetDatasync())
 	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 2002}, Fh: first.Fh})
 	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 2002}, Fh: second.Fh})
-	require.Zero(t, releases.Load())
 	_, status := fs.ResolveHandle(first.Fh)
 	require.Equal(t, fuse.EBADF, status)
 

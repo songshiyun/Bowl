@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -25,8 +24,6 @@ type mockDirStorageServer struct {
 	storagev1connect.UnimplementedStorageServiceHandler
 
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
-	openDirFn      func(context.Context, *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error)
-	releaseDirFn   func(context.Context, *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error)
 	readDirFn      func(context.Context, *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error)
 	readDirPlusFn  func(context.Context, *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error)
 	fsyncDirFn     func(context.Context, *connect.Request[storagev1.FsyncDirRequest]) (*connect.Response[storagev1.FsyncDirResponse], error)
@@ -43,20 +40,6 @@ func (m *mockDirStorageServer) RenewSession(ctx context.Context, req *connect.Re
 	return connect.NewResponse(&storagev1.RenewSessionResponse{
 		ExpiresAt: timestamppb.New(time.Now().Add(60 * time.Second)),
 	}), nil
-}
-
-func (m *mockDirStorageServer) OpenDir(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
-	if m.openDirFn != nil {
-		return m.openDirFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *mockDirStorageServer) ReleaseDir(ctx context.Context, req *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
-	if m.releaseDirFn != nil {
-		return m.releaseDirFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
 
 func (m *mockDirStorageServer) ReadDir(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
@@ -115,17 +98,7 @@ func createTestSessionManager(t *testing.T, client storagev1connect.StorageServi
 }
 
 func TestRawFS_目录本地打开和关闭(t *testing.T) {
-	var opens, closes atomic.Int32
-	mockServer := &mockDirStorageServer{
-		openDirFn: func(_ context.Context, _ *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
-			opens.Add(1)
-			return connect.NewResponse(&storagev1.OpenDirResponse{}), nil
-		},
-		releaseDirFn: func(_ context.Context, _ *connect.Request[storagev1.ReleaseDirRequest]) (*connect.Response[storagev1.ReleaseDirResponse], error) {
-			closes.Add(1)
-			return connect.NewResponse(&storagev1.ReleaseDirResponse{}), nil
-		},
-	}
+	mockServer := &mockDirStorageServer{}
 	client := setupDirTestRPCServer(t, mockServer)
 	mgr := createTestSessionManager(t, client)
 	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{RootIno: 1001})
@@ -137,8 +110,6 @@ func TestRawFS_目录本地打开和关闭(t *testing.T) {
 	require.NotEqual(t, first.Fh, second.Fh)
 	fs.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: first.Fh})
 	fs.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: second.Fh})
-	require.Zero(t, opens.Load())
-	require.Zero(t, closes.Load())
 	_, status := fs.ResolveHandle(first.Fh)
 	require.Equal(t, fuse.EBADF, status)
 }
@@ -147,12 +118,6 @@ func TestRawFS_ReadDir(t *testing.T) {
 	var capturedReadDirReq *storagev1.ReadDirRequest
 
 	mockServer := &mockDirStorageServer{
-		openDirFn: func(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
-			return connect.NewResponse(&storagev1.OpenDirResponse{
-				Fh:        1234,
-				OpenFlags: 0,
-			}), nil
-		},
 		readDirFn: func(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
 			capturedReadDirReq = req.Msg
 			if req.Msg.Offset == 0 {
@@ -253,12 +218,6 @@ func TestRawFS_ReadDirPlus(t *testing.T) {
 	var capturedReadDirPlusReq *storagev1.ReadDirPlusRequest
 
 	mockServer := &mockDirStorageServer{
-		openDirFn: func(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
-			return connect.NewResponse(&storagev1.OpenDirResponse{
-				Fh:        5555,
-				OpenFlags: 0,
-			}), nil
-		},
 		readDirPlusFn: func(ctx context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
 			capturedReadDirPlusReq = req.Msg
 			return connect.NewResponse(&storagev1.ReadDirPlusResponse{
@@ -403,12 +362,6 @@ func TestRawFS_FsyncDir(t *testing.T) {
 	var capturedFsyncDirReq *storagev1.FsyncDirRequest
 
 	mockServer := &mockDirStorageServer{
-		openDirFn: func(ctx context.Context, req *connect.Request[storagev1.OpenDirRequest]) (*connect.Response[storagev1.OpenDirResponse], error) {
-			return connect.NewResponse(&storagev1.OpenDirResponse{
-				Fh:        6666,
-				OpenFlags: 0,
-			}), nil
-		},
 		fsyncDirFn: func(ctx context.Context, req *connect.Request[storagev1.FsyncDirRequest]) (*connect.Response[storagev1.FsyncDirResponse], error) {
 			capturedFsyncDirReq = req.Msg
 			return connect.NewResponse(&storagev1.FsyncDirResponse{}), nil

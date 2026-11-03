@@ -64,46 +64,6 @@ func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebble
 	return session, nil
 }
 
-func (m *manager) resolveDirReadSession(ctx context.Context, fh uint64, paramID *uint64) (pebbleReadSession, bool, error) {
-	contextID, contextSet := SessionIDFromContext(ctx)
-	contextSet = contextSet && contextID != nil
-	strict := fh == 0 || paramID == nil && contextSet
-	if paramID == nil {
-		paramID = contextID
-	} else if contextSet && *paramID != *contextID {
-		return pebbleReadSession{}, false, ErrInvalidArgument
-	}
-	if paramID == nil {
-		if fh == 0 {
-			return pebbleReadSession{}, false, ErrInvalidArgument
-		}
-		return pebbleReadSession{}, false, nil
-	}
-	if err := validateOptionalSessionID(paramID); err != nil {
-		return pebbleReadSession{}, false, err
-	}
-	if !strict && !m.hasPool() {
-		return pebbleReadSession{}, false, nil
-	}
-	session, err := m.findPebbleSession(ctx, paramID)
-	if err != nil {
-		if !strict && errors.Is(err, ErrBadFileHandle) {
-			return pebbleReadSession{}, false, nil
-		}
-		return pebbleReadSession{}, false, err
-	}
-	if !session.managed {
-		if !strict {
-			return pebbleReadSession{}, false, nil
-		}
-		return pebbleReadSession{}, false, ErrBadFileHandle
-	}
-	if !session.active {
-		return pebbleReadSession{}, false, ErrBadFileHandle
-	}
-	return session, true, nil
-}
-
 func (m *manager) withPebbleSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {

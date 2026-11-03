@@ -1,11 +1,9 @@
 package meta_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -67,11 +65,15 @@ func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list.Disks, 1)
 	require.Equal(t, disk.Branches, list.Disks[0].Branches)
-	fs, err := mgr.StatFS(ctx, disk.RootIno)
+	sid := uint64(101)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	fs, err := mgr.StatFS(meta.WithSessionID(ctx, &sid), disk.RootIno)
 	require.NoError(t, err)
 	require.Equal(t, disk.UsedBytes, fs.UsedBytes)
 	require.Equal(t, disk.UsedInodes, fs.Files)
 
+	require.NoError(t, mgr.CloseSession(ctx, sid))
 	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
 	_, err = os.Stat(filepath.Join(root, "disks", disk.DiskID))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -121,7 +123,10 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 	list, err := restarted.ListDisks(ctx, meta.ListDisksParams{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(210), list.Disks[0].UsedBytes)
-	fs, err := restarted.StatFS(ctx, disk.RootIno)
+	sid := uint64(301)
+	_, err = restarted.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	fs, err := restarted.StatFS(meta.WithSessionID(ctx, &sid), disk.RootIno)
 	require.NoError(t, err)
 	require.Equal(t, uint64(210), fs.UsedBytes)
 	require.Equal(t, uint64(5), fs.Files)
@@ -147,59 +152,7 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 	got, err = restarted.GetDisk(ctx, disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, uint64(220), got.UsedBytes)
-	require.NoError(t, restarted.DeleteDisk(ctx, disk.DiskID))
-}
-
-func TestDiskLegacyWritesRespectBranchQuota(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_legacy")
-	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 150})
-	require.NoError(t, err)
-	file, err := mgr.Mknod(ctx, meta.MknodParams{ParentIno: disk.RootIno, Name: []byte("old"), Mode: meta.S_IFREG | 0o644})
-	require.NoError(t, err)
-	size := uint64(100)
-	_, err = mgr.SetAttr(ctx, file.Ino, meta.SetAttrInput{Size: &size})
-	require.NoError(t, err)
-
-	storage := pebblekv.NewManager(root)
-	require.NoError(t, storage.Fork(disk.DiskID, *disk.Branches[0].HeadCommitID, "feature"))
-	feature, err := storage.OpenBranch(disk.DiskID, "feature")
-	require.NoError(t, err)
-	value, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: file.Ino, Mode: meta.S_IFREG | 0o644, Nlink: 1, Size: 150})
-	require.NoError(t, err)
-	require.NoError(t, feature.DB().Set(pebblekv.InodeKey(file.Ino), value, pebble.Sync))
-	require.NoError(t, feature.Close())
-	require.NoError(t, storage.Close())
-	_, err = pool.Exec(ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
-		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
-		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, disk.DiskID)
-	require.NoError(t, err)
-
-	restarted := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
-	got, err := restarted.GetDisk(ctx, disk.DiskID)
-	require.NoError(t, err)
-	require.Equal(t, uint64(150), got.UsedBytes)
-	size = 140
-	_, err = restarted.SetAttr(ctx, file.Ino, meta.SetAttrInput{Size: &size})
-	require.NoError(t, err)
-	firstHandle, err := restarted.Open(ctx, meta.OpenParams{Ino: file.Ino, Flags: meta.O_RDWR})
-	require.NoError(t, err)
-	_, err = restarted.Write(ctx, &meta.WriteRequest{Ino: file.Ino, Fh: firstHandle.Fh, Offset: 140, Data: []byte("12345")})
-	require.NoError(t, err)
-	_, err = restarted.Write(ctx, &meta.WriteRequest{Ino: file.Ino, Fh: firstHandle.Fh, Offset: 150, Data: []byte("x")})
-	require.ErrorIs(t, err, meta.ErrNoSpace)
-	require.NoError(t, restarted.Release(ctx, meta.ReleaseParams{Ino: file.Ino, Fh: firstHandle.Fh}))
-	second, err := restarted.Mknod(ctx, meta.MknodParams{ParentIno: disk.RootIno, Name: []byte("new"), Mode: meta.S_IFREG | 0o644})
-	require.NoError(t, err)
-	size = 1
-	_, err = restarted.SetAttr(ctx, second.Ino, meta.SetAttrInput{Size: &size})
-	require.ErrorIs(t, err, meta.ErrNoSpace)
-	handle, err := restarted.Open(ctx, meta.OpenParams{Ino: second.Ino, Flags: meta.O_RDWR})
-	require.NoError(t, err)
-	_, err = restarted.Write(ctx, &meta.WriteRequest{Ino: second.Ino, Fh: handle.Fh, Data: []byte("x")})
-	require.ErrorIs(t, err, meta.ErrNoSpace)
-	require.NoError(t, restarted.Release(ctx, meta.ReleaseParams{Ino: second.Ino, Fh: handle.Fh}))
+	require.NoError(t, restarted.CloseSession(ctx, sid))
 	require.NoError(t, restarted.DeleteDisk(ctx, disk.DiskID))
 }
 
@@ -236,25 +189,6 @@ func TestDiskDeleteChecksAllBranchSessions(t *testing.T) {
 	require.ErrorIs(t, quota.Apply("main", 2, 1, true, nil), meta.ErrNotFound)
 }
 
-func TestTreeQuotaTracksLegacyCreateAndUnlink(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_inode")
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(t.TempDir()))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
-	require.NoError(t, err)
-	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
-	require.NoError(t, err)
-	file, err := mgr.Mknod(ctx, meta.MknodParams{ParentIno: disk.RootIno, Name: []byte("file"), Mode: meta.S_IFREG | 0o644})
-	require.NoError(t, err)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 0, Inodes: 2}, quota.Usage())
-	size := uint64(50)
-	_, err = mgr.SetAttr(ctx, file.Ino, meta.SetAttrInput{Size: &size})
-	require.NoError(t, err)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 50, Inodes: 2}, quota.Usage())
-	require.NoError(t, mgr.Unlink(ctx, disk.RootIno, []byte("file")))
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 0, Inodes: 1}, quota.Usage())
-	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
-}
-
 func TestDiskDeleteDoesNotRequireReadableBranch(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_missing")
 	root := t.TempDir()
@@ -277,64 +211,40 @@ func TestDiskCreateRemovesStorageWhenCommitRegistrationFails(t *testing.T) {
 	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
 	_, err = mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
 	require.Error(t, err)
-	var disks, inodes int
+	var disks int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM disks`).Scan(&disks))
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM inodes`).Scan(&inodes))
 	require.Zero(t, disks)
-	require.Zero(t, inodes)
 	entries, err := os.ReadDir(filepath.Join(root, "disks"))
 	require.NoError(t, err)
 	require.Empty(t, entries)
 }
 
-func TestTreeQuotaDoesNotReportUncommittedReservation(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_pending")
+func TestDisksUseIndependentRootInodes(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_root_isolation")
 	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(t.TempDir()))
-	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
+	first, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "first", MaxBytes: 1024})
 	require.NoError(t, err)
-	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
+	second, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "second", MaxBytes: 1024})
 	require.NoError(t, err)
-	file, err := mgr.Mknod(ctx, meta.MknodParams{ParentIno: disk.RootIno, Name: []byte("file"), Mode: meta.S_IFREG | 0o644})
+	require.NotEqual(t, first.DiskID, second.DiskID)
+	require.Equal(t, uint64(1), first.RootIno)
+	require.Equal(t, uint64(1), second.RootIno)
+	firstID, secondID := uint64(101), uint64(102)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: firstID, DiskID: first.DiskID})
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `CREATE FUNCTION wait_quota_test() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN PERFORM pg_advisory_xact_lock(573001); RETURN NEW; END $$;
-		CREATE TRIGGER wait_quota_test BEFORE UPDATE OF size ON inodes FOR EACH ROW EXECUTE FUNCTION wait_quota_test()`)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: secondID, DiskID: second.DiskID})
 	require.NoError(t, err)
-	conn, err := pool.Acquire(ctx)
+	firstCtx := meta.WithSessionID(ctx, &firstID)
+	secondCtx := meta.WithSessionID(ctx, &secondID)
+	_, err = mgr.Mknod(firstCtx, meta.MknodParams{ParentIno: 1, Name: []byte("first-only"), Mode: meta.S_IFREG | 0o644})
 	require.NoError(t, err)
-	t.Cleanup(conn.Release)
-	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock(573001)`)
+	_, err = mgr.Lookup(secondCtx, 1, []byte("first-only"))
+	require.ErrorIs(t, err, meta.ErrNotFound)
+	_, err = mgr.Lookup(firstCtx, 1, []byte("first-only"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(573001)`) })
-	result := make(chan error, 1)
-	go func() {
-		size := uint64(70)
-		_, err := mgr.SetAttr(ctx, file.Ino, meta.SetAttrInput{Size: &size})
-		result <- err
-	}()
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND objid = 573001 AND NOT granted)`).Scan(&waiting)
-		return err == nil && waiting
-	}, 5*time.Second, 10*time.Millisecond)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 0, Inodes: 2}, quota.Usage())
-	require.ErrorIs(t, quota.Apply("feature", file.Ino+1000, 40, true, nil), meta.ErrNoSpace)
-	beforeCommit, err := mgr.GetDisk(ctx, disk.DiskID)
-	require.NoError(t, err)
-	require.Zero(t, beforeCommit.UsedBytes)
-	_, err = conn.Exec(ctx, `SELECT pg_advisory_unlock(573001)`)
-	require.NoError(t, err)
-	require.NoError(t, <-result)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 70, Inodes: 2}, quota.Usage())
-	_, err = pool.Exec(ctx, `DROP TRIGGER wait_quota_test ON inodes;
-		CREATE FUNCTION reject_quota_test() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION '写入失败'; END $$;
-		CREATE TRIGGER reject_quota_test BEFORE UPDATE OF size ON inodes FOR EACH ROW EXECUTE FUNCTION reject_quota_test()`)
-	require.NoError(t, err)
-	size := uint64(90)
-	_, err = mgr.SetAttr(ctx, file.Ino, meta.SetAttrInput{Size: &size})
-	require.Error(t, err)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 70, Inodes: 2}, quota.Usage())
-	require.NoError(t, quota.Apply("feature", file.Ino+1000, 30, true, nil))
-	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
+	for _, sessionID := range []uint64{firstID, secondID} {
+		require.NoError(t, mgr.CloseSession(ctx, sessionID))
+	}
+	require.NoError(t, mgr.DeleteDisk(ctx, first.DiskID))
+	require.NoError(t, mgr.DeleteDisk(ctx, second.DiskID))
 }

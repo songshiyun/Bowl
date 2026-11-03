@@ -21,4 +21,3 @@ packages:
   github.com/starsrc/bowl/services/storage/internal/meta:
     interfaces:
       Manager: {}
-      BlockStore: {}

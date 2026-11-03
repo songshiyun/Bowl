@@ -108,6 +108,15 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 	defer cancelFunc()
 
 	child, _ := fs.cache.entry(header.NodeId, name)
+	var inode *storagev1.Inode
+	if fs.handles.AnyOpen() {
+		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		if st != fuse.OK {
+			return st
+		}
+		inode = cached.inode
+		child = fs.ToKernelIno(inode.GetIno())
+	}
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
 		SessionId: fs.currentSession(),
@@ -119,6 +128,7 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 
 	fs.cache.invalidateDir(header.NodeId)
 	if child != 0 {
+		fs.handles.MarkRemovedDir(child, inode)
 		fs.cache.invalidateInode(child)
 		fs.cache.invalidateDir(child)
 	}

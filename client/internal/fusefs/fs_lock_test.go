@@ -2,7 +2,6 @@ package fusefs_test
 
 import (
 	"context"
-	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -23,31 +22,7 @@ import (
 type lockMockStorageServer struct {
 	storagev1connect.UnimplementedStorageServiceHandler
 
-	getLkFn        func(context.Context, *connect.Request[storagev1.GetLkRequest]) (*connect.Response[storagev1.GetLkResponse], error)
-	setLkFn        func(context.Context, *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error)
-	setLkwFn       func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
-}
-
-func (m *lockMockStorageServer) GetLk(ctx context.Context, req *connect.Request[storagev1.GetLkRequest]) (*connect.Response[storagev1.GetLkResponse], error) {
-	if m.getLkFn != nil {
-		return m.getLkFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *lockMockStorageServer) SetLk(ctx context.Context, req *connect.Request[storagev1.SetLkRequest]) (*connect.Response[storagev1.SetLkResponse], error) {
-	if m.setLkFn != nil {
-		return m.setLkFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *lockMockStorageServer) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-	if m.setLkwFn != nil {
-		return m.setLkwFn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
 
 func (m *lockMockStorageServer) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {

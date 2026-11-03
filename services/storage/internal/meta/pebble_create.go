@@ -14,14 +14,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
-// ErrLegacySession 标识有效的旧版会话，同时保留无效分支会话的错误语义。
-var ErrLegacySession error = legacyBranchSessionError{}
-
-type legacyBranchSessionError struct{}
-
-func (legacyBranchSessionError) Error() string { return "普通会话不能用于分支访问" }
-func (legacyBranchSessionError) Unwrap() error { return ErrBadFileHandle }
-
 type pebbleNodeParams struct {
 	parent uint64
 	name   []byte
@@ -32,7 +24,7 @@ type pebbleNodeParams struct {
 	target []byte
 }
 
-// createBranchSession 校验显式上下文，其他会话交由原子 SQL 判断。
+// createBranchSession 校验请求与上下文中的会话标识。
 func createBranchSession(ctx context.Context, paramID *uint64) (*uint64, bool, error) {
 	if contextID, ok := SessionIDFromContext(ctx); ok && contextID != nil {
 		if err := validateOptionalSessionID(contextID); err != nil {
@@ -83,7 +75,7 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 		return err
 	}
 	if !managed {
-		return ErrLegacySession
+		return ErrBadFileHandle
 	}
 	if readOnly {
 		return ErrPerm
@@ -311,7 +303,7 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 		if err := quota.applyLocked(branch, ino, size, true, func() error { return batch.Commit(pebble.Sync) }, true); err != nil {
 			return err
 		}
-		m.onDirEntryMutated(params.parent)
+
 		result = m.createdPebbleInode(inode)
 		return nil
 	})
@@ -384,7 +376,7 @@ func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkPa
 		if err := batch.Commit(pebble.Sync); err != nil {
 			return err
 		}
-		m.onDirEntryMutated(params.NewParentIno)
+
 		result = m.createdPebbleInode(inode)
 		return nil
 	})
