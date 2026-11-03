@@ -57,6 +57,7 @@ type RawFS struct {
 	fuse.RawFileSystem
 
 	client    storagev1connect.StorageServiceClient
+	locks     *LockTable
 	sessions  *session.Manager
 	cfg       Config
 	nextReqID atomic.Uint64
@@ -72,10 +73,6 @@ type RawFS struct {
 
 	readAheadMu      sync.Mutex
 	readAheadHandles map[uint64]*handleReadAhead
-
-	posixLockMu    sync.RWMutex
-	posixLockInos  map[uint64]map[uint64]struct{} // sessionID -> set of serverIno with POSIX lock activity
-	expiredLockSID map[uint64]struct{}            // 已淘汰的 sessionID，防止迟到的在途 SetLk/SetLkw 重新写入已过期会话桶
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
@@ -90,14 +87,13 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 	fs := &RawFS{
 		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
 		client:           client,
+		locks:            NewLockTable(),
 		sessions:         sessions,
 		cfg:              cfg,
 		releaseWake:      make(chan struct{}, 1),
 		releaseCtx:       releaseCtx,
 		releaseCancel:    releaseCancel,
 		readAheadHandles: make(map[uint64]*handleReadAhead),
-		posixLockInos:    make(map[uint64]map[uint64]struct{}),
-		expiredLockSID:   make(map[uint64]struct{}),
 	}
 	if sessions != nil {
 		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
@@ -105,13 +101,11 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 	return fs
 }
 
-// onSessionExpired 在指定 ClientSession 过期淘汰时立即清理所有关联的预读缓存、POSIX 锁活动标记与待释放句柄重试项。
+// onSessionExpired 清理指定 ClientSession 的预读缓存与待释放句柄重试项。
 func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 	if fs == nil {
 		return
 	}
-
-	fs.clearPosixLockActivity(expiredSID)
 
 	fs.readAheadMu.Lock()
 	var targets []*handleReadAhead
@@ -243,61 +237,12 @@ func (fs *RawFS) NextRequestID() uint64 {
 
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
-	fs.clearPosixLockActivity(0)
+	fs.locks.Close()
 	fs.clearAllReadAhead()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {
 		fs.cfg.OnUnmount()
 	}
-}
-
-// markPosixLockActivity 将指定会话下的服务端 Inode 标记为存在 POSIX 记录锁活动。
-func (fs *RawFS) markPosixLockActivity(sessionID, serverIno uint64) {
-	if fs == nil {
-		return
-	}
-	fs.posixLockMu.Lock()
-	if sessionID != 0 {
-		if _, expired := fs.expiredLockSID[sessionID]; expired {
-			fs.posixLockMu.Unlock()
-			return
-		}
-	}
-	inos := fs.posixLockInos[sessionID]
-	if inos == nil {
-		inos = make(map[uint64]struct{})
-		fs.posixLockInos[sessionID] = inos
-	}
-	inos[serverIno] = struct{}{}
-	fs.posixLockMu.Unlock()
-}
-
-// hasPosixLockActivity 查询指定会话下的服务端 Inode 是否发生过 POSIX 记录锁活动。
-func (fs *RawFS) hasPosixLockActivity(sessionID, serverIno uint64) bool {
-	if fs == nil {
-		return false
-	}
-	fs.posixLockMu.RLock()
-	inos := fs.posixLockInos[sessionID]
-	_, ok := inos[serverIno]
-	fs.posixLockMu.RUnlock()
-	return ok
-}
-
-// clearPosixLockActivity 清理指定过期会话（或 expiredSID == 0 时全部会话）的 POSIX 锁活动状态。
-func (fs *RawFS) clearPosixLockActivity(expiredSID uint64) {
-	if fs == nil {
-		return
-	}
-	fs.posixLockMu.Lock()
-	if expiredSID == 0 {
-		clear(fs.posixLockInos)
-		clear(fs.expiredLockSID)
-	} else {
-		delete(fs.posixLockInos, expiredSID)
-		fs.expiredLockSID[expiredSID] = struct{}{}
-	}
-	fs.posixLockMu.Unlock()
 }
 
 // shouldEnqueueReleaseRetry 判断 Release / ReleaseDir 失败后是否应入队异步重试。

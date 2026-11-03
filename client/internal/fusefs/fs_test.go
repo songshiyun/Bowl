@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -505,7 +504,6 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			writeAttempts       int
 			clientReadDeadlines []time.Time
 			serverReadRemDLs    []time.Duration
-			setLkwEntered       atomic.Bool
 		)
 
 		srv := &fullChainMockServer{
@@ -548,17 +546,6 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 					}
 				}
 				return connect.NewResponse(&storagev1.ReadResponse{Data: []byte("ok")}), nil
-			},
-			setLkwFn: func(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-				_, hasDL := ctx.Deadline()
-				require.False(t, hasDL, "SetLkw 必须豁免常规 RPCTimeout 与重试 MaxElapsedTime 截止时间")
-				setLkwEntered.Store(true)
-				select {
-				case <-time.After(150 * time.Millisecond):
-					return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
 			},
 		}
 
@@ -663,38 +650,31 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 		require.Less(t, serverReadRemDLs[1], serverReadRemDLs[0], "服务端第 2 次尝试收到的剩余预算必须随已消耗时间递减，不得重置为 30s")
 		mu.Unlock()
 
-		// 6. SetLkw 豁免常规超时（即便在 80ms shortFS 下阻塞 150ms 仍成功），且支持取消返回 EINTR
-		stLkwOK := shortFS.SetLkw(nil, &fuse.LkIn{
-			InHeader: fuse.InHeader{NodeId: fileIno},
-			Fh:       testFH,
-			Owner:    100,
-			Lk: fuse.FileLock{
-				Start: 0,
-				End:   10,
-				Typ:   uint32(syscall.F_WRLCK),
-			},
-		})
-		require.Equal(t, fuse.OK, stLkwOK, "SetLkw 必须豁免 80ms 常规 RPCTimeout")
-
-		setLkwEntered.Store(false)
+		// 6. 本地 SetLkw 不受 RPC 超时约束，并响应内核中断。
+		request := func(owner uint64, typ uint32) *fuse.LkIn {
+			return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: fileIno}, Fh: testFH, Owner: owner,
+				Lk: fuse.FileLock{Start: 0, End: 10, Typ: typ}}
+		}
+		require.Equal(t, fuse.OK, shortFS.SetLk(nil, request(100, uint32(syscall.F_WRLCK))))
+		cancelLock := make(chan struct{})
+		defer close(cancelLock)
+		lockDone := make(chan fuse.Status, 1)
+		go func() { lockDone <- shortFS.SetLkw(cancelLock, request(101, uint32(syscall.F_WRLCK))) }()
+		select {
+		case status := <-lockDone:
+			t.Fatalf("等待锁提前返回：%v", status)
+		case <-time.After(150 * time.Millisecond):
+		}
+		require.Equal(t, fuse.OK, shortFS.SetLk(nil, request(100, uint32(syscall.F_UNLCK))))
+		select {
+		case status := <-lockDone:
+			require.Equal(t, fuse.OK, status)
+		case <-time.After(time.Second):
+			t.Fatal("释放锁后等待者未被唤醒")
+		}
 		lkwCancel := make(chan struct{})
-		go func() {
-			for !setLkwEntered.Load() {
-				time.Sleep(5 * time.Millisecond)
-			}
-			close(lkwCancel)
-		}()
-		stLkwCancel := shortFS.SetLkw(lkwCancel, &fuse.LkIn{
-			InHeader: fuse.InHeader{NodeId: fileIno},
-			Fh:       testFH,
-			Owner:    100,
-			Lk: fuse.FileLock{
-				Start: 0,
-				End:   10,
-				Typ:   uint32(syscall.F_WRLCK),
-			},
-		})
-		require.Equal(t, fuse.EINTR, stLkwCancel, "SetLkw 在取消时必须返回 EINTR")
+		go func() { time.Sleep(40 * time.Millisecond); close(lkwCancel) }()
+		require.Equal(t, fuse.EINTR, shortFS.SetLkw(lkwCancel, request(102, uint32(syscall.F_WRLCK))))
 		// 7. 上游更早截止时间（caller context deadline < 30s DefaultMaxElapsedTime）在 NewClientFromConfig 默认拦截器下优先触发
 		upstreamCtx, upstreamCancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
 		defer upstreamCancel()
