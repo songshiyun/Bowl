@@ -36,6 +36,9 @@ type StorageClient interface {
 // Config 定义 ClientSession 生命周期的参数配置。
 type Config struct {
 	DiskID              string
+	BranchName          string
+	ReadOnly            bool
+	CommitID            string
 	MinInterval         time.Duration
 	MaxInterval         time.Duration
 	InitialRetryBackoff time.Duration
@@ -89,7 +92,7 @@ func New(ctx context.Context, client StorageClient, cfg Config) (*Manager, error
 
 	callStart := time.Now()
 	callCtx, cancel := context.WithTimeout(ctx, cfg.RenewRPCTimeout)
-	resp, err := client.RenewSession(callCtx, newRenewSessionRequest(initialSID, cfg.DiskID))
+	resp, err := client.RenewSession(callCtx, newRenewSessionRequest(cfg, initialSID))
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("activate initial session: %w", err)
@@ -257,7 +260,7 @@ func (m *Manager) renewLoop(ctx context.Context) {
 
 		rpcTimeout := min(m.cfg.RenewRPCTimeout, time.Until(exp))
 		callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
-		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(sid, m.cfg.DiskID))
+		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(m.cfg, sid))
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -342,7 +345,7 @@ func (m *Manager) handleSessionExpired(ctx context.Context, oldSID uint64) {
 	for {
 		callStart := time.Now()
 		callCtx, cancel := context.WithTimeout(ctx, m.cfg.RenewRPCTimeout)
-		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(newSID, m.cfg.DiskID))
+		resp, err := m.client.RenewSession(callCtx, newRenewSessionRequest(m.cfg, newSID))
 		cancel()
 		if err == nil {
 			var newExp time.Time
@@ -538,13 +541,20 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-func newRenewSessionRequest(sessionID uint64, diskID string) *connect.Request[storagev1.RenewSessionRequest] {
+func newRenewSessionRequest(cfg Config, sessionID uint64) *connect.Request[storagev1.RenewSessionRequest] {
 	req := &storagev1.RenewSessionRequest{
 		SessionId: sessionID,
 	}
-	if diskID != "" {
-		req.DiskId = &diskID
+	if cfg.DiskID != "" {
+		req.DiskId = &cfg.DiskID
 	}
+	if cfg.BranchName != "" {
+		req.BranchName = &cfg.BranchName
+	}
+	if cfg.CommitID != "" {
+		req.CommitId = &cfg.CommitID
+	}
+	req.ReadOnly = cfg.ReadOnly
 	return connect.NewRequest(req)
 }
 

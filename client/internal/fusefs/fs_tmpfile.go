@@ -352,6 +352,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 			return status, true
 		}
 		fs.installTmpAlias(input.Oldnodeid, tmp, inode.GetIno())
+		fs.dirtyInodes[inode.GetIno()] = struct{}{}
 	} else {
 		ctx, done := fs.RPCContext(cancel)
 		resp, err := fs.client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: tmp.serverIno, NewParentIno: parent, NewName: []byte(filename), SessionId: fs.currentSession()}))
@@ -414,6 +415,7 @@ func (fs *RawFS) syncTmpFile(cancel <-chan struct{}, ino uint64) fuse.Status {
 		return fs.ToStatus(err, cancel)
 	}
 	fs.installTmpAlias(ino, tmp, inode.GetIno())
+	fs.dirtyInodes[inode.GetIno()] = struct{}{}
 	fs.markOrphan(ino, sid)
 	return fuse.OK
 }

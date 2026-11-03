@@ -61,7 +61,7 @@ func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte
 	defer cancelFunc()
 
 	resp, err := fs.client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{
-		Ino: ino,
+		Ino: ino, SessionId: fs.currentSession(),
 	}))
 	if err != nil {
 		return nil, fs.ToStatus(err, cancel)

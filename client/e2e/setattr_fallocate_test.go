@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,11 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 func TestE2E_SetAttr(t *testing.T) {
@@ -24,7 +20,7 @@ func TestE2E_SetAttr(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("chmod_and_chown_strip_privilege_bits", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -63,7 +59,7 @@ func TestE2E_SetAttr(t *testing.T) {
 	})
 
 	t.Run("utimensat_explicit_and_now", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -100,7 +96,7 @@ func TestE2E_SetAttr(t *testing.T) {
 	})
 
 	t.Run("truncate_and_ftruncate_sparse_and_shrink", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -161,7 +157,7 @@ func TestE2E_SetAttr(t *testing.T) {
 	})
 
 	t.Run("fallocate_modes_and_punch_hole", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
@@ -235,27 +231,11 @@ func TestE2E_SetAttr(t *testing.T) {
 	})
 
 	t.Run("readonly_mount_blocks_mutations", func(t *testing.T) {
-		disk := createDiskWithRootInoGT1(t, client)
+		disk := createTestDisk(t, client)
 
-		// 1. 服务端先创建目标文件
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-			ParentIno: disk.GetRootIno(),
-			Name:      []byte("ro-test.txt"),
-			Mode:      0o644 | syscall.S_IFREG,
-			Uid:       1000,
-			Gid:       1000,
-			Flags:     0o2,
-		}))
-		require.NoError(t, err)
-
-		// 释放服务端打开句柄
-		_, _ = client.Release(ctx, connect.NewRequest(&storagev1.ReleaseRequest{
-			Ino: createResp.Msg.GetInode().GetIno(),
-			Fh:  createResp.Msg.GetFh(),
-		}))
+		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+			require.NoError(t, os.WriteFile(filepath.Join(mp, "ro-test.txt"), nil, 0o644))
+		})
 
 		// 2. 以 --ro 挂载
 		mountpoint := t.TempDir()

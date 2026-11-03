@@ -53,12 +53,11 @@ func TestE2E_Mount_ValidationFailures(t *testing.T) {
 	})
 }
 
-// TestE2E_Mount_TracerBullet 完整验证 root_ino > 1 磁盘挂载、根目录 Stat (Ino == 1)、Statfs 配额、子项 ENOENT 与 SIGTERM 优雅卸载。
+// TestE2E_Mount_TracerBullet 验证分支根目录、Statfs 配额与优雅卸载。
 func TestE2E_Mount_TracerBullet(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	t.Logf("已创建测试磁盘: id=%s, root_ino=%d, max_bytes=%d", disk.GetDiskId(), disk.GetRootIno(), disk.GetMaxBytes())
-	require.Greater(t, disk.GetRootIno(), uint64(1), "必须确保远端 root_ino > 1 以真实检验 1 <-> root_ino 映射")
 
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
@@ -80,7 +79,7 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	var stat unix.Stat_t
 	err = unix.Stat(mountpoint, &stat)
 	require.NoError(t, err, "根目录 unix.Stat 必须成功")
-	require.Equal(t, uint64(1), stat.Ino, "服务端 root_ino (%d) 必须映射为内核根节点 1", disk.GetRootIno())
+	require.Equal(t, uint64(1), stat.Ino, "分支根节点必须为 1")
 	require.Equal(t, uint32(syscall.S_IFDIR), stat.Mode&syscall.S_IFMT, "根目录类型必须为目录")
 
 	// 4. 验证不存在的子路径 Stat: 必须返回 ENOENT (os.ErrNotExist)

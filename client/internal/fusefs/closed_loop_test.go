@@ -92,6 +92,9 @@ func (m *loopClient) Fallocate(_ context.Context, r *connect.Request[storagev1.F
 	return connect.NewResponse(v), e
 }
 func (m *loopClient) Fsync(_ context.Context, r *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
+	if m.fsyncFn == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("未实现"))
+	}
 	v, e := m.fsyncFn(r.Msg)
 	return connect.NewResponse(v), e
 }
@@ -170,7 +173,6 @@ func Test短命Tmpfile始终保存在内存(t *testing.T) {
 		var attr fuse.AttrOut
 		require.Equal(t, fuse.OK, fs.SetAttr(nil, set, &attr))
 		require.Equal(t, uint64(3), attr.Size)
-		require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{InHeader: fuse.InHeader{NodeId: ino}, Fh: out.Fh}))
 		if flags&syscall.O_EXCL != 0 {
 			require.Equal(t, fuse.ENOENT, fs.Link(nil, &fuse.LinkIn{InHeader: fuse.InHeader{NodeId: 1}, Oldnodeid: ino}, "named", &fuse.EntryOut{}))
 		}

@@ -132,6 +132,14 @@ func (t *HandleTable) AnyOpen() bool {
 	return len(t.handles) != 0
 }
 
+func (t *HandleTable) clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	clear(t.handles)
+	clear(t.counts)
+	clear(t.orphans)
+}
+
 // ClearOrphan 在孤儿重新具名化后取消回收标记。
 func (t *HandleTable) ClearOrphan(ino uint64) {
 	t.mu.Lock()

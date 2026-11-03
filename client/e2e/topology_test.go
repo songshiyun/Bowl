@@ -3,24 +3,20 @@
 package e2e_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // TestE2E_Topology_MkdirRmdir 验证多层目录创建移除、父目录 nlink 增减联动以及 ENOTEMPTY / EEXIST / ENOENT 错误边界。
 func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -85,28 +81,19 @@ func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 // TestE2E_Topology_SgidInheritance 验证父目录包含 S_ISGID 时，通过 FUSE 创建子目录自动继承父目录 GID 与 S_ISGID 位。
 func TestE2E_Topology_SgidInheritance(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
-
-	// 1. 直连 StorageService 创建带有 S_ISGID 权限位与特定 GID 的父目录（解耦对未实现 SetAttr 的依赖）
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	parentName := "sgid_parent"
-	mkdirResp, err := client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
-		ParentIno: disk.GetRootIno(),
-		Name:      []byte(parentName),
-		Mode:      uint32(syscall.S_IFDIR | 02755), // S_ISGID | 0755
-		Uid:       1000,
-		Gid:       2000,
-	}))
-	require.NoError(t, err, "直连 StorageService 创建 SGID 父目录失败")
-	require.NotNil(t, mkdirResp.Msg.GetInode())
 
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
 	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+
+	parentName := "sgid_parent"
+	require.NoError(t, os.Mkdir(filepath.Join(mountpoint, parentName), 0o755))
+	require.NoError(t, os.Chown(filepath.Join(mountpoint, parentName), 1000, 2000))
+	require.NoError(t, os.Chmod(filepath.Join(mountpoint, parentName), 0o755|os.ModeSetgid))
+	var err error
 
 	parentDir := filepath.Join(mountpoint, parentName)
 	var parentStat unix.Stat_t
@@ -135,7 +122,7 @@ func TestE2E_Topology_SgidInheritance(t *testing.T) {
 // TestE2E_Topology_MknodUnlink 验证 FIFO 特殊节点创建、stat 校验、重复创建 EEXIST、EISDIR 与 ENOTDIR 边界及解链。
 func TestE2E_Topology_MknodUnlink(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -192,7 +179,7 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 // TestE2E_Topology_ReadOnly 验证 --ro 只读挂载下 Mkdir、Mknod、Rmdir、Unlink 均直接被客户端拦截返回 EROFS。
 func TestE2E_Topology_ReadOnly(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
 
 	// 1. 读写模式挂载准备已有目录与文件
@@ -206,6 +193,7 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	existFifo := filepath.Join(initMountpoint, "exist_fifo")
 	require.NoError(t, unix.Mkfifo(existFifo, 0644))
 
+	commitMain(t, client, disk.GetDiskId())
 	stopBowlMountGracefully(t, cmdRW, initMountpoint, 5*time.Second)
 
 	// 2. 以 --ro 只读模式重新挂载
