@@ -17,7 +17,7 @@ import (
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-func Test写入关闭和卸载同步(t *testing.T) {
+func Test写入关闭免同步与显式同步(t *testing.T) {
 	var syncRequests []*storagev1.FsyncRequest
 	var syncErr error
 	var writeCalls int
@@ -52,30 +52,31 @@ func Test写入关闭和卸载同步(t *testing.T) {
 	require.Equal(t, fuse.OK, status)
 	require.Equal(t, uint32(MaxRPCChunkSize), written)
 	require.Equal(t, 2, writeCalls)
+
+	// 关闭只排空内核页缓存并释放本地锁，不再触发跨机物理 fsync；
+	// 即使服务端同步会失败，Flush 也必须成功返回。
 	syncErr = connect.NewError(connect.CodeResourceExhausted, errors.New("空间不足"))
-	require.Equal(t, fuse.Status(syscall.ENOSPC), fs.Flush(nil, flush))
+	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
 	syncErr = nil
 	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
-	require.Len(t, syncRequests, 2)
-	for _, r := range syncRequests {
-		require.Equal(t, uint64(2), r.Ino)
-		require.Equal(t, mgr.CurrentSessionID(), r.GetSessionId())
-	}
-	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
-	require.Len(t, syncRequests, 2)
+	require.Empty(t, syncRequests)
 
-	_, status = fs.Write(nil, write, []byte("x"))
-	require.Equal(t, fuse.OK, status)
 	require.Equal(t, fuse.OK, fs.Fsync(nil, &fuse.FsyncIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: 9, FsyncFlags: 1}))
-	require.True(t, syncRequests[2].GetDatasync())
+	require.Len(t, syncRequests, 1)
+	require.Equal(t, uint64(2), syncRequests[0].GetIno())
+	require.Equal(t, mgr.CurrentSessionID(), syncRequests[0].GetSessionId())
+	require.True(t, syncRequests[0].GetDatasync())
+
+	// 已显式同步过的节点再次关闭不重复同步。
 	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
-	require.Len(t, syncRequests, 3)
+	require.Len(t, syncRequests, 1)
 
 	_, status = fs.Write(nil, write, []byte("y"))
 	require.Equal(t, fuse.OK, status)
 	fs.OnUnmount()
-	require.Len(t, syncRequests, 4)
-	require.Equal(t, mgr.CurrentSessionID(), syncRequests[3].GetSessionId())
+	require.Len(t, syncRequests, 2)
+	require.Equal(t, uint64(2), syncRequests[1].GetIno())
+	require.Equal(t, mgr.CurrentSessionID(), syncRequests[1].GetSessionId())
 	require.False(t, fs.handles.AnyOpen())
 	require.Empty(t, fs.dirtyInodes)
 }
@@ -112,7 +113,8 @@ func Test匿名文件关闭时同步(t *testing.T) {
 	_, status := fs.Write(nil, &fuse.WriteIn{InHeader: fuse.InHeader{NodeId: out.NodeId}, Fh: out.Fh}, []byte("内容"))
 	require.Equal(t, fuse.OK, status)
 	require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{InHeader: fuse.InHeader{NodeId: out.NodeId}, Fh: out.Fh}))
-	require.Equal(t, []string{"创建", "写入", "解链", "同步"}, events)
+	// 关闭匿名文件仍须上云并解链，但不再额外发起物理 fsync。
+	require.Equal(t, []string{"创建", "写入", "解链"}, events)
 }
 
 func TestIoctl更新属性清除缓存并携带会话(t *testing.T) {
@@ -231,14 +233,13 @@ func Test同步未实现与失败处理(t *testing.T) {
 	require.Equal(t, fuse.Status(syscall.EOPNOTSUPP), fs.Fsync(nil, &fuse.FsyncIn{InHeader: fuse.InHeader{NodeId: 2}, Fh: 9}))
 	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
 	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
-	require.Equal(t, 2, callCount)
+	require.Equal(t, 1, callCount, "Flush 不得新增 Fsync RPC")
 	_, status = fs.Write(nil, write, []byte("b"))
 	require.Equal(t, fuse.OK, status)
 	syncErr = connect.NewError(connect.CodeInternal, errors.New("写盘失败"))
-	require.Equal(t, fuse.EIO, fs.Flush(nil, flush))
-	syncErr = nil
+	require.Equal(t, fuse.OK, fs.Flush(nil, flush))
 	fs.OnUnmount()
-	require.Equal(t, 4, callCount)
+	require.Equal(t, 2, callCount)
 	require.True(t, unmounted)
 }
 

@@ -9,7 +9,7 @@ import (
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-// lookupInode 在调用方持有 namespaceMu 时查找目录项。
+// lookupInode 查找目录项；跨机 RPC 在锁外并发执行。
 func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string) (cachedInode, fuse.Status) {
 	if ino, ok := fs.cache.entry(parent, name); ok {
 		if ino == 0 {
@@ -23,7 +23,7 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 	if status != fuse.OK {
 		return cachedInode{}, status
 	}
-	epoch := fs.cache.version()
+	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: parentIno, Name: []byte(name), SessionId: fs.currentSession()}))
@@ -33,7 +33,7 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 	if err != nil {
 		status := fs.ToStatus(err, cancel)
 		if status == fuse.ENOENT {
-			fs.cache.putEntryAt(epoch, parent, name, 0)
+			fs.cache.putEntryAtIf(generation, epoch, parent, name, 0)
 		}
 		return cachedInode{}, status
 	}
@@ -43,8 +43,8 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 	}
 	ino := fs.ToKernelIno(inode.GetIno())
 	cached := cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
-	fs.cache.putEntryAt(epoch, parent, name, ino)
-	fs.cache.putInodeAt(epoch, ino, inode, cached.entryTimeout, cached.attrTimeout)
+	fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
+	fs.cache.putInodeAtIf(generation, epoch, ino, inode, cached.entryTimeout, cached.attrTimeout)
 	return cached, fuse.OK
 }
 
@@ -59,7 +59,7 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 	if status != fuse.OK {
 		return cachedInode{}, status
 	}
-	epoch := fs.cache.version()
+	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: serverIno, SessionId: fs.currentSession()}))
@@ -74,7 +74,7 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 		return cachedInode{}, fuse.EIO
 	}
 	cached := cachedInode{inode: inode, attrTimeout: resp.Msg.GetAttrTimeoutSeconds()}
-	fs.cache.putInodeAt(epoch, ino, inode, 0, cached.attrTimeout)
+	fs.cache.putInodeAtIf(generation, epoch, ino, inode, 0, cached.attrTimeout)
 	return cached, fuse.OK
 }
 
@@ -83,8 +83,8 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	if _, status := fs.ToServerIno(header.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	cached, status := fs.lookupInode(cancel, header.NodeId, name)
 	if status == fuse.OK {
 		fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
@@ -98,8 +98,8 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 	if _, status := fs.ToServerIno(in.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
 		fs.FillAttrOut(out, inode, 0)
 		return fuse.OK
@@ -113,6 +113,8 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 
 // StatFs 实现文件系统容量与 Inode 配额统计查询，对应 Linux FUSE FUSE_STATFS 协议。
 func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.StatfsOut) fuse.Status {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(in.NodeId)
 	if status != fuse.OK {
 		return status

@@ -32,8 +32,8 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		return st
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	var source, target uint64
 	var targetAttr *storagev1.Inode
 	if fs.handles.AnyOpen() {
@@ -53,6 +53,11 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 	} else {
 		source, _ = fs.cache.entry(input.NodeId, oldName)
 		target, _ = fs.cache.entry(input.Newdir, newName)
+	}
+	if target != 0 {
+		// 与并发 Release 按 Inode 串行，避免目标节点孤儿标记与最后句柄关闭互相错过。
+		unlock := fs.inodeLocks.lock(target)
+		defer unlock()
 	}
 	targetOpen := target != 0 && fs.handles.IsOpen(target)
 	sid := fs.currentSession()

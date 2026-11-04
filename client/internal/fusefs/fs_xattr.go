@@ -21,8 +21,8 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -43,6 +43,8 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 
 // GetXAttr 实现读取扩展属性请求，支持零长度探测与 ERANGE 缓冲区过小语义。
 func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (uint32, fuse.Status) {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
 		return 0, status
@@ -76,6 +78,8 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 
 // ListXAttr 实现列出扩展属性名称请求，组装以 '\x00' 结尾的连续字节序列。
 func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest []byte) (uint32, fuse.Status) {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
 		return 0, status
@@ -129,8 +133,8 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 

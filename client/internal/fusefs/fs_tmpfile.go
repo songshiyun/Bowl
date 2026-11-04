@@ -60,8 +60,8 @@ func (fs *RawFS) Tmpfile(_ <-chan struct{}, input *fuse.CreateIn, out *fuse.Crea
 	if mode != syscall.O_WRONLY && mode != syscall.O_RDWR {
 		return fuse.EINVAL
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino := uint64(1)<<63 | fs.nextTmp.Add(1)
 	now := timestamppb.Now()
 	inode := &storagev1.Inode{Ino: ino, Generation: 1, Attr: &storagev1.InodeAttribute{
@@ -223,7 +223,7 @@ func (fs *RawFS) addTmpLookup(ino uint64) {
 }
 
 // dropTmpIfUnused 移除不再被句柄或内核引用的节点映射。
-// 调用方须持有 namespaceMu。
+// 调用方须持有 lifecycleMu 读锁。
 func (fs *RawFS) dropTmpIfUnused(ino uint64, orphan bool) {
 	if fs.handles.IsOpen(ino) {
 		return
@@ -249,8 +249,8 @@ func (fs *RawFS) dropTmpIfUnused(ino uint64, orphan bool) {
 
 // Forget 释放内核对具名匿名节点的引用。
 func (fs *RawFS) Forget(nodeID, nlookup uint64) {
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	tmp := fs.tmpFile(nodeID)
 	if tmp == nil {
 		return
@@ -266,7 +266,7 @@ func (fs *RawFS) Forget(nodeID, nlookup uint64) {
 }
 
 // uploadTmp 创建目录项并写入数据，失败时撤销新目录项。
-// 调用方须持有 tmp.mu 和 namespaceMu。
+// 调用方须持有 tmp.mu 与 lifecycleMu 读锁。
 func (fs *RawFS) uploadTmp(cancel <-chan struct{}, tmp *tmpFile, parent uint64, filename string) (*storagev1.Inode, float64, float64, fuse.Status) {
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -352,7 +352,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 			return status, true
 		}
 		fs.installTmpAlias(input.Oldnodeid, tmp, inode.GetIno())
-		fs.dirtyInodes[inode.GetIno()] = struct{}{}
+		fs.markDirty(inode.GetIno())
 	} else {
 		ctx, done := fs.RPCContext(cancel)
 		resp, err := fs.client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{Ino: tmp.serverIno, NewParentIno: parent, NewName: []byte(filename), SessionId: fs.currentSession()}))
@@ -365,7 +365,9 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 			return fuse.EIO, true
 		}
 		fs.handles.ClearOrphan(input.Oldnodeid)
+		fs.stateMu.Lock()
 		delete(fs.orphanSessions, input.Oldnodeid)
+		fs.stateMu.Unlock()
 	}
 	tmp.named = true
 	tmp.lookups++
@@ -415,7 +417,7 @@ func (fs *RawFS) syncTmpFile(cancel <-chan struct{}, ino uint64) fuse.Status {
 		return fs.ToStatus(err, cancel)
 	}
 	fs.installTmpAlias(ino, tmp, inode.GetIno())
-	fs.dirtyInodes[inode.GetIno()] = struct{}{}
+	fs.markDirty(inode.GetIno())
 	fs.markOrphan(ino, sid)
 	return fuse.OK
 }

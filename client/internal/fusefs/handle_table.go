@@ -5,7 +5,6 @@ import (
 	"syscall"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -173,7 +172,7 @@ func (t *HandleTable) MarkRemovedDir(ino uint64, inode *storagev1.Inode) {
 	if t.counts[ino] == 0 {
 		return
 	}
-	removed := proto.Clone(inode).(*storagev1.Inode)
+	removed := cloneInode(inode)
 	removed.Attr.Nlink = 0
 	removed.Attr.Ctime = timestamppb.Now()
 	t.removedDirs[ino] = removed

@@ -80,6 +80,8 @@ func (fs *RawFS) prepareLock(input *fuse.LkIn, get bool) (fuse.LkIn, fuse.Status
 
 // GetLk 在本地查询冲突文件锁。
 func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fuse.Status {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, true)
 	if status != fuse.OK {
 		return status
@@ -90,6 +92,8 @@ func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fus
 
 // SetLk 在本地非阻塞设置文件锁。
 func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) fuse.Status {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, false)
 	if status != fuse.OK {
 		return status
@@ -99,6 +103,8 @@ func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) fuse.Status {
 
 // SetLkw 在本地阻塞设置文件锁。
 func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, false)
 	if status != fuse.OK {
 		return status
