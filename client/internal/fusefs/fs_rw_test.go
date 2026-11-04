@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -1030,4 +1031,80 @@ func TestRawFS_Read_SequentialReadAheadAndInvalidation(t *testing.T) {
 		bAfterRelease, _ := resAfterRelease.Bytes(nil)
 		require.Equal(t, byte(6), bAfterRelease[0], "Release 后重绑句柄读取必须不命中旧预读缓存")
 	})
+}
+
+// TestConcurrentReadAheadCoalesces 复刻内核在 MaxBackground=64 下并发下发同一 fh 读请求的行为。
+// 单点 lastReadEnd 无法判定“是否同一股顺序流”，修复前 32×128 KiB 并发读会退化成 32 次小 RPC、
+// 0 次 4 MiB 窗口；修复后同窗口请求共享一次单飞拉取，总 RPC 不超过 4 次且必须包含 4 MiB 窗口。
+func TestConcurrentReadAheadCoalesces(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+		total   = 16 << 20
+		reqSize = 128 << 10
+		readers = 32
+	)
+
+	pattern := make([]byte, total)
+	for i := range pattern {
+		pattern[i] = byte(i % 251)
+	}
+
+	var calls atomic.Int64
+	var windowCalls atomic.Int64
+	mockSrv := &rwMockStorageServer{
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			calls.Add(1)
+			if req.Msg.GetSize() == fusefs.MaxRPCChunkSize {
+				windowCalls.Add(1)
+			}
+			start := int(req.Msg.GetOffset())
+			if start >= len(pattern) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(pattern))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: pattern[start:end]}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	var wg sync.WaitGroup
+	var failuresMu sync.Mutex
+	var failures []string
+	start := make(chan struct{})
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			off := uint64(i) * reqSize
+			buf := make([]byte, reqSize)
+			res, st := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   off,
+				Size:     reqSize,
+			}, buf)
+			got, code := res.Bytes(nil)
+			if st != fuse.OK || code != fuse.OK || !bytes.Equal(got, pattern[off:off+reqSize]) {
+				failuresMu.Lock()
+				failures = append(failures, fmt.Sprintf("offset=%d status=%v bytesStatus=%v len=%d", off, st, code, len(got)))
+				failuresMu.Unlock()
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	require.Empty(t, failures, "并发顺序读必须全部返回与源文件一致的字节流")
+
+	require.LessOrEqual(t, int(calls.Load()), 4, "32 个 128 KiB 并发顺序读必须合并为不超过 4 次 RPC")
+	require.GreaterOrEqual(t, int(windowCalls.Load()), 1, "并发顺序读必须至少触发一次 4 MiB 对齐窗口拉取")
 }

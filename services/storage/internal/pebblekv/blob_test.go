@@ -133,3 +133,46 @@ func TestBlobStoreSyncPersistsDirtyFilesAndDirectories(t *testing.T) {
 	require.NoError(t, store.Remove(1))
 	require.NoError(t, store.Sync())
 }
+
+// TestBlobSyncSkipsTransientShards 锁定「窗口内过渡块不产生分片目录屏障」与
+// 「窗口内尾部原地追加保持热缓存最新」两条契约，对应 SQLite WAL 单事务 40 次 4 KiB CoW。
+func TestBlobSyncSkipsTransientShards(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	data := bytes.Repeat([]byte{0x7f}, 4096)
+
+	// 单事务内 40 次 4 KiB CoW：每块写入后立刻被替换删除，散列到 40 个不同分片目录。
+	for id := uint64(1); id <= 40; id++ {
+		require.NoError(t, store.Write(id, data))
+		require.NoError(t, store.Remove(id))
+	}
+
+	// 窗口内只剩一个存活块。
+	const liveID = 41
+	require.NoError(t, store.Write(liveID, data))
+	require.True(t, store.WindowLocal(liveID), "窗口内新建块必须可原地追加")
+
+	// 窗口内尾部原地追加：块文件与热缓存都必须呈现追加后的完整内容。
+	tail := bytes.Repeat([]byte{0x2a}, 4096)
+	full := append(append([]byte(nil), data...), tail...)
+	require.NoError(t, store.AppendTail(liveID, tail, full))
+	onDisk, err := os.ReadFile(store.Path(liveID))
+	require.NoError(t, err)
+	require.Equal(t, full, onDisk)
+
+	// 独立判据：清空磁盘上的块文件后仍能读到完整内容，证明热缓存已替换为追加后的整块。
+	require.NoError(t, os.Truncate(store.Path(liveID), 0))
+	cached, err := store.Read(liveID, len(full))
+	require.NoError(t, err)
+	require.Equal(t, full, cached, "追加后热缓存必须保存最新的完整块")
+	require.NoError(t, os.WriteFile(store.Path(liveID), full, 0o644))
+
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 1, store.FileSyncOps(), "只应同步 1 个存活块")
+	require.EqualValues(t, 1, store.DirSyncOps(), "40 个已消失过渡块不应产生分片目录 fsync")
+	require.False(t, store.WindowLocal(liveID), "Sync 后块已持久化，不再属于窗口内块")
+
+	// 删除已持久化块仍必须落目录屏障，保证 unlink 先于 WAL 引用删除落盘。
+	require.NoError(t, store.Remove(liveID))
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 2, store.DirSyncOps(), "删除已落盘块必须 fsync 其分片目录")
+}

@@ -71,6 +71,10 @@ type BlobStore struct {
 	hotNext int
 	// readOps 累计块文件读取次数，用于验证 Diff / Merge 的 BlobRef 短路。
 	readOps atomic.Int64
+	// fileSyncs / dirSyncs 累计 Sync 实际发出的块文件与分片目录 fsync 次数，
+	// 用于回归测试锁定“过渡块不产生目录屏障”的契约。
+	fileSyncs atomic.Int64
+	dirSyncs  atomic.Int64
 	// writeHook 仅用于测试观测块写入阶段是否已脱离 Inode 锁。
 	writeHook func()
 }
@@ -134,8 +138,10 @@ func (s *BlobStore) Write(id uint64, data []byte) error {
 		return err
 	}
 	s.markFile(id)
-	s.markDir(dir)
-	s.cacheHot(id, data)
+	// 直接收养调用方缓冲区，不做整块拷贝：块内容一经写入即不可变，
+	// 而所有调用方在 Write 之后都不再改写该切片（整块写是请求体子切片，局部写是刚构造的新块）。
+	// 这样 16 MiB 顺序写不再额外产生 16 MiB 堆垃圾，4 KiB 热读仍 100% 命中内存。
+	s.cacheHotOwned(id, data)
 	return nil
 }
 
@@ -191,6 +197,7 @@ func (s *BlobStore) Remove(id uint64) error {
 	// 块已被逻辑删除，不能继续读到旧内容，Sync 也不应再对已删除块发起 open。
 	s.evictHot(id)
 	s.mu.Lock()
+	_, transient := s.dirtyFile[id]
 	delete(s.dirtyFile, id)
 	s.mu.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
@@ -199,9 +206,44 @@ func (s *BlobStore) Remove(id uint64) error {
 	if err != nil {
 		return err
 	}
-	s.markDir(filepath.Dir(path))
+	// 窗口内新建、尚未被任何 Sync 持久化的过渡块，其目录项从未落盘，
+	// 删除它不需要目录屏障；只有删除“已持久化”的块才必须把 unlink 也刷下去。
+	if !transient {
+		s.markDir(filepath.Dir(path))
+	}
 	return nil
 }
+
+// WindowLocal 报告该块是否仍在本次 Sync 窗口内新建、尚未被任何持久化提交引用。
+// 窗口内的块可以原地追加：它既没有落盘屏障，也没有被 Commit / Fork 固化成共享副本。
+func (s *BlobStore) WindowLocal(id uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.dirtyFile[id]
+	return ok
+}
+
+// AppendTail 在窗口内块的尾部原地追加 chunk，并把热缓存替换为追加后的完整内容。
+// full 必须是追加后的完整块（长度与块文件最终大小一致），供后续局部写 CoW 与热读直接命中内存。
+func (s *BlobStore) AppendTail(id uint64, chunk, full []byte) error {
+	file, err := os.OpenFile(s.Path(id), os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(chunk)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return err
+	}
+	s.cacheHotOwned(id, full)
+	return nil
+}
+
+// FileSyncOps 返回累计块文件 fsync 次数，用于验证 Sync 只刷仍然存活的脏块。
+func (s *BlobStore) FileSyncOps() int64 { return s.fileSyncs.Load() }
+
+// DirSyncOps 返回累计分片目录 fsync 次数，用于验证过渡块不残留目录屏障。
+func (s *BlobStore) DirSyncOps() int64 { return s.dirSyncs.Load() }
 
 // hotBlock 返回指定块的内存副本。写入后的块内容不可变，返回的切片可安全并发读取。
 func (s *BlobStore) hotBlock(id uint64) ([]byte, bool) {
@@ -215,19 +257,18 @@ func (s *BlobStore) hotBlock(id uint64) ([]byte, bool) {
 	return nil, false
 }
 
-// cacheHot 保存最近写入块的不可变副本，供局部写 CoW 与热读直接命中内存。
-func (s *BlobStore) cacheHot(id uint64, data []byte) {
-	buf := make([]byte, len(data))
-	copy(buf, data)
+// cacheHotOwned 收养最近写入块的缓冲区（不拷贝），供局部写 CoW 与热读直接命中内存。
+// 调用方必须在 Write / AppendTail 之后放弃对 data 的写所有权：块内容一经写入即不可变。
+func (s *BlobStore) cacheHotOwned(id uint64, data []byte) {
 	s.hotMu.Lock()
 	defer s.hotMu.Unlock()
 	for i := range s.hot {
 		if s.hot[i].id == id {
-			s.hot[i].data = buf
+			s.hot[i].data = data
 			return
 		}
 	}
-	s.hot[s.hotNext] = hotBlob{id: id, data: buf}
+	s.hot[s.hotNext] = hotBlob{id: id, data: data}
 	s.hotNext = (s.hotNext + 1) % len(s.hot)
 }
 
@@ -268,8 +309,18 @@ func (s *BlobStore) Sync() error {
 	for id := range s.dirtyFile {
 		files = append(files, id)
 	}
-	dirs := make([]string, 0, len(s.dirtyDir))
+	// 只为“确实存在存活脏文件”的分片目录发目录屏障：一次事务里被 CoW 反复替换的
+	// 中间过渡块已经消失，它们的目录项从未落盘，fsync 它们纯属浪费。
+	// 单次 SQLite WAL 事务的分片目录 fsync 因此从 41 次收敛到 1 次。
+	dirSet := make(map[string]struct{}, len(s.dirtyDir)+len(files))
 	for dir := range s.dirtyDir {
+		dirSet[dir] = struct{}{}
+	}
+	for _, id := range files {
+		dirSet[filepath.Dir(s.Path(id))] = struct{}{}
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for dir := range dirSet {
 		dirs = append(dirs, dir)
 	}
 	clear(s.dirtyFile)
@@ -287,6 +338,7 @@ func (s *BlobStore) Sync() error {
 			errs = append(errs, err)
 			continue
 		}
+		s.fileSyncs.Add(1)
 		if err := errors.Join(file.Sync(), file.Close()); err != nil {
 			s.markFile(id)
 			errs = append(errs, err)
@@ -302,6 +354,7 @@ func (s *BlobStore) Sync() error {
 			errs = append(errs, err)
 			continue
 		}
+		s.dirSyncs.Add(1)
 		if err := errors.Join(handle.Sync(), handle.Close()); err != nil {
 			s.markDir(dir)
 			errs = append(errs, err)

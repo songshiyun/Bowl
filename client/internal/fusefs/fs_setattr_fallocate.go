@@ -117,15 +117,15 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	defer fs.invalidateReadAheadByIno(ino)
 
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
-	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
+		fs.cache.invalidateInode(input.NodeId)
 		if req.SessionId != nil {
 			return fs.ToStatusWithSession(err, cancel)
 		}
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+	fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
 	if valid&(fuse.FATTR_SIZE|fuse.FATTR_UID|fuse.FATTR_GID|fuse.FATTR_MODE) != 0 {
 		fs.caps.markAbsent(input.NodeId)
 	}

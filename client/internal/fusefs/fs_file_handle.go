@@ -139,12 +139,12 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 			zero := uint64(0)
 			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Size: &zero, SessionId: fs.currentSession()}))
 			done()
-			fs.cache.invalidateInode(input.NodeId)
 			fs.invalidateReadAheadByIno(ino)
 			if err != nil {
+				fs.cache.invalidateInode(input.NodeId)
 				return fs.ToStatus(err, cancel)
 			}
-			fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+			fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
 			fs.caps.markAbsent(input.NodeId)
 		}
 	}

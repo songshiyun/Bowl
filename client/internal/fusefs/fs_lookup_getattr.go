@@ -74,7 +74,7 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 		return cachedInode{}, fuse.EIO
 	}
 	cached := cachedInode{inode: inode, attrTimeout: resp.Msg.GetAttrTimeoutSeconds()}
-	fs.cache.putInodeAtIf(generation, epoch, ino, inode, 0, cached.attrTimeout)
+	fs.cache.refreshInodeAtIf(generation, epoch, ino, inode, cached.attrTimeout)
 	return cached, fuse.OK
 }
 

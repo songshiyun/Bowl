@@ -25,6 +25,14 @@ type prefetchFuture struct {
 	cancel context.CancelFunc
 }
 
+// windowFetch 是一次单飞的对齐窗口拉取；同窗口内的并发读共享同一个 future。
+type windowFetch struct {
+	offset uint64
+	done   chan struct{}
+	data   []byte
+	err    error
+}
+
 type handleReadAhead struct {
 	mu          sync.Mutex
 	ino         uint64
@@ -33,18 +41,34 @@ type handleReadAhead struct {
 	lastReadEnd uint64
 	hasLastRead bool
 	seqCount    int
-	winOffset   uint64
-	winData     []byte
-	winValid    bool
-	winEOF      bool
-	prefetch    *prefetchFuture
+	// streamEnd 是该句柄已观测到的顺序读高水位（单调递增）。
+	// 内核 readahead 线程与用户线程会并发下发读请求，到达顺序与偏移顺序无关，
+	// 单靠 lastReadEnd 无法判定“是否同一股顺序流”，必须用单调高水位。
+	streamEnd uint64
+	// reads 是该句柄已收到的读请求数；首个请求一律直通，避免一次性大读被放大。
+	reads     int
+	winOffset uint64
+	winData   []byte
+	winValid  bool
+	winEOF    bool
+	prefetch  *prefetchFuture
+	// fetch 是当前在途的 4 MiB 对齐窗口拉取，用于把并发读合并成一次 RPC。
+	fetch *windowFetch
 }
+
+// readAheadMinWant 是触发对齐窗口拉取的最小请求尺寸。
+// 内核 FUSE 的 readahead 请求按 128 KiB 起步（MaxReadAhead=1 MiB），
+// 随机小读通常为 4~64 KiB；用尺寸阈值把“预读流量”和“随机小读”分开，
+// 保持既有契约：非连续随机读严格按请求尺寸直通，绝不放大成 4 MiB。
+const readAheadMinWant = 128 * 1024
 
 func (hra *handleReadAhead) resetLocked() {
 	hra.gen++
 	hra.lastReadEnd = 0
 	hra.hasLastRead = false
 	hra.seqCount = 0
+	hra.streamEnd = 0
+	hra.fetch = nil
 	hra.winOffset = 0
 	hra.winData = nil
 	hra.winValid = false
@@ -59,6 +83,7 @@ func (hra *handleReadAhead) resetLocked() {
 
 func (hra *handleReadAhead) clearWindowAndPrefetchLocked() {
 	hra.gen++
+	hra.fetch = nil
 	hra.winOffset = 0
 	hra.winData = nil
 	hra.winValid = false
@@ -139,6 +164,48 @@ func (fs *RawFS) clearAllReadAhead() {
 		hra.resetLocked()
 		hra.mu.Unlock()
 	}
+}
+
+// fetchAlignedWindow 单飞拉取覆盖 offset 的 4 MiB 对齐窗口，调用期间会临时释放 hra.mu，
+// 返回时重新持有。同窗口内并发的读请求共享同一次 RPC，避免内核并发预读退化成 N 次小 RPC。
+func (fs *RawFS) fetchAlignedWindow(ctx context.Context, hra *handleReadAhead, ino, sid, offset uint64) ([]byte, error) {
+	aligned := offset &^ uint64(MaxRPCChunkSize-1)
+	if hra.fetch != nil && hra.fetch.offset == aligned {
+		f := hra.fetch
+		hra.mu.Unlock()
+		select {
+		case <-f.done:
+		case <-ctx.Done():
+			hra.mu.Lock()
+			return nil, ctx.Err()
+		}
+		hra.mu.Lock()
+		return f.data, f.err
+	}
+	f := &windowFetch{offset: aligned, done: make(chan struct{})}
+	hra.fetch = f
+	hra.mu.Unlock()
+	resp, err := fs.client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		Ino:       ino,
+		Fh:        0,
+		Offset:    aligned,
+		Size:      MaxRPCChunkSize,
+		SessionId: optionalSession(sid),
+	}))
+	if err != nil {
+		if isServerEBADF(err) && fs.sessions != nil {
+			fs.sessions.TriggerRenew()
+		}
+		f.err = err
+	} else {
+		f.data = resp.Msg.GetData()
+	}
+	close(f.done)
+	hra.mu.Lock()
+	if hra.fetch == f {
+		hra.fetch = nil
+	}
+	return f.data, f.err
 }
 
 func (fs *RawFS) startPrefetchLocked(hra *handleReadAhead, fh uint64, nextOffset uint64) {
@@ -244,7 +311,8 @@ func (fs *RawFS) fetchReadWindow(ctx context.Context, hra *handleReadAhead, ino,
 //  1. 映射内核 Inode 为服务端 Inode，并校验句柄所属活跃会话；
 //  2. 目标读取长度以 input.Size 与传入非空 buf 长度二者较小值为准；长度为 0 时立即返回空数据；
 //  3. 在同一文件句柄上维护顺序读检测与 4 MiB 对齐预读缓冲：当检测到连续顺序读取时，按 4 MiB 窗口向服务端拉取并异步预取下一 4 MiB 窗口，
-//     使后续落入窗口内的读取直接命中客户端内存；非连续随机读保持按请求尺寸直通读取，不产生额外放大；
+//     使后续落入窗口内的读取直接命中客户端内存，内核并发下发的同窗口读请求共享一次单飞 RPC；
+//     非连续随机读保持按请求尺寸直通读取，不产生额外放大；
 //  4. 当 want > MaxRPCChunkSize 时按 4 MiB 顺序循环分片读取；
 //  5. 遇到 EOF 或短读立即停止分片循环并返回已读数据；中途分片报错但已有数据读取成功时按短读返回 fuse.OK，首片失败返回对应 errno。
 func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
@@ -281,6 +349,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 
 	if want <= MaxRPCChunkSize {
 		hra.mu.Lock()
+		hra.reads++
 
 		// 1. 若当前请求起始偏移位于异步预取窗口内，等待预取完成并提升为活跃窗口
 		if (!hra.winValid || input.Offset < hra.winOffset || input.Offset >= hra.winOffset+uint64(len(hra.winData))) &&
@@ -322,6 +391,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 				hra.lastReadEnd = input.Offset + uint64(n)
 				hra.hasLastRead = true
 				hra.seqCount++
+				hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 				hra.mu.Unlock()
 				return makeReadResult(chunk, buf), fuse.OK
 			}
@@ -377,6 +447,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 				hra.lastReadEnd = input.Offset + uint64(n)
 				hra.hasLastRead = true
 				hra.seqCount++
+				hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 				if !hra.winEOF {
 					fs.startPrefetchLocked(hra, input.Fh, input.Offset+MaxRPCChunkSize)
 				}
@@ -385,7 +456,41 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 			return makeReadResult(winData[:n], buf), fuse.OK
 		}
 
-		// 4. 首次读取或非连续随机读取：清空旧窗口并按请求尺寸直通读取，不产生多余读放大
+		// 4. 预读流量按 4 MiB 对齐窗口单飞拉取。
+		// 内核在 MaxBackground=64 下会并发下发同一 fh 的多个读请求，此时 lastReadEnd
+		// 尚未推进，任何“连续读”判定都会失败；若逐个直通，就会退化成 N 次小 RPC
+		// 且反复清空窗口（实测并发 32×128 KiB = 32 次 128 KiB 直通 RPC、0 次 4 MiB 窗口）。
+		// 这里对 >= readAheadMinWant 的请求按 4 MiB 对齐窗口单飞拉取，同窗口并发请求共享一次 RPC；
+		// 随机小读（< 128 KiB）仍走下面的直通分支，不引入任何读放大。
+		if want >= readAheadMinWant && hra.reads > 1 && !hra.winEOF &&
+			input.Offset+uint64(want) > hra.streamEnd &&
+			input.Offset < hra.streamEnd+MaxRPCChunkSize {
+			data, err := fs.fetchAlignedWindow(ctx, hra, ino, sid, input.Offset)
+			if err != nil {
+				hra.mu.Unlock()
+				return nil, fs.ToStatusWithSession(err, cancel)
+			}
+			winOffset := input.Offset &^ uint64(MaxRPCChunkSize-1)
+			hra.winOffset = winOffset
+			hra.winData = data
+			hra.winValid = len(data) > 0
+			hra.winEOF = len(data) < MaxRPCChunkSize
+			if rel := input.Offset - winOffset; rel < uint64(len(data)) {
+				n := min(want, len(data)-int(rel))
+				hra.lastReadEnd = input.Offset + uint64(n)
+				hra.hasLastRead = true
+				hra.seqCount++
+				hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
+				if !hra.winEOF {
+					fs.startPrefetchLocked(hra, input.Fh, winOffset+MaxRPCChunkSize)
+				}
+				chunk := data[rel : rel+uint64(n)]
+				hra.mu.Unlock()
+				return makeReadResult(chunk, buf), fuse.OK
+			}
+		}
+
+		// 5. 首次读取或非连续随机读取：清空旧窗口并按请求尺寸直通读取，不产生多余读放大
 		hra.clearWindowAndPrefetchLocked()
 		startGen := hra.gen
 		hra.mu.Unlock()
@@ -548,8 +653,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
 		fs.markDirty(ino)
-		fs.cache.invalidateInode(input.NodeId)
-		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, DefaultWriteAttrTimeoutSeconds)
+		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)
 		fs.caps.markAbsent(input.NodeId)
 		return resp.Msg.GetSize(), fuse.OK
 	}
@@ -592,8 +696,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
 
-		fs.cache.invalidateInode(input.NodeId)
-		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, DefaultWriteAttrTimeoutSeconds)
+		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)
 		fs.caps.markAbsent(input.NodeId)
 		n := resp.Msg.GetSize()
 		fs.markDirty(ino)
