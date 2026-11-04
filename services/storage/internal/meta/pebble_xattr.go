@@ -12,6 +12,15 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
+// securityCapabilityXattr 是 Linux killpriv 语义要求清除的扩展属性名。
+var securityCapabilityXattr = []byte("security.capability")
+
+// deleteSecurityCapability 在同一 Pebble 批次内原子删除 security.capability，
+// 使单次 Write / SetAttr / Fallocate RPC 即满足 Linux killpriv 语义。
+func deleteSecurityCapability(batch *pebble.Batch, ino uint64) error {
+	return batch.Delete(pebblekv.XattrKey(ino, securityCapabilityXattr), nil)
+}
+
 func pebbleXattrExists(store pebbleReader, ino uint64, name []byte) (bool, error) {
 	_, closer, err := store.Get(pebblekv.XattrKey(ino, name))
 	if errors.Is(err, pebble.ErrNotFound) {

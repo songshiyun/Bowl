@@ -193,6 +193,9 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
 		var oldIDs, newIDs []uint64
 		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, true, func(batch *pebble.Batch) error {
+			if err := deleteSecurityCapability(batch, req.Ino); err != nil {
+				return err
+			}
 			for pos, consumed := req.Offset, 0; consumed < len(req.Data); {
 				block := pos / pebblekv.BlobSize
 				start := int(pos % pebblekv.BlobSize)
@@ -300,6 +303,11 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 		}
 		var oldIDs, newIDs []uint64
 		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
+			if input.Size != nil || input.UID != nil || input.GID != nil || input.Mode != nil {
+				if err := deleteSecurityCapability(batch, ino); err != nil {
+					return err
+				}
+			}
 			if inode.Size >= oldSize {
 				return nil
 			}
@@ -477,6 +485,9 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 		}
 		var oldIDs, newIDs []uint64
 		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
+			if err := deleteSecurityCapability(batch, params.Ino); err != nil {
+				return err
+			}
 			if !zero {
 				return nil
 			}

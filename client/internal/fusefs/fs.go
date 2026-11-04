@@ -25,6 +25,10 @@ const DefaultReleaseRetryInterval = 200 * time.Millisecond
 // DefaultRPCTimeout 是 FUSE 常规请求（不含阻塞锁 SetLkw）的默认单请求超时预算。
 const DefaultRPCTimeout = 30 * time.Second
 
+// DefaultWriteAttrTimeoutSeconds 是写操作成功后回填内核属性缓存的有效期。
+// 严禁置 0：置 0 会使内核在连续 write() 前重新发起 GetAttr RPC 核对文件尺寸。
+const DefaultWriteAttrTimeoutSeconds = 1.0
+
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
 
@@ -57,6 +61,7 @@ type RawFS struct {
 	locks   *LockTable
 	handles *HandleTable
 	cache   *NamespaceCache
+	caps    *capabilityCache
 	// lifecycleMu 保证 OnUnmount 等待所有在途 FUSE 请求排空；常规请求只持读锁。
 	lifecycleMu sync.RWMutex
 	// stateMu 仅保护本地内存态的微秒级读写，绝不包裹跨机 RPC。
@@ -99,6 +104,7 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 		client:           client,
 		locks:            NewLockTable(),
 		cache:            NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		caps:             newCapabilityCache(),
 		dirtyInodes:      make(map[uint64]struct{}),
 		tmpFiles:         make(map[uint64]*tmpFile),
 		serverToLocal:    make(map[uint64]uint64),
@@ -123,6 +129,7 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 	}
 
 	fs.cache.clear()
+	fs.caps.reset()
 	fs.readAheadMu.Lock()
 	var targets []*handleReadAhead
 	for fh, hra := range fs.readAheadHandles {
@@ -324,6 +331,7 @@ func (fs *RawFS) OnUnmount() {
 	}
 	fs.handles.clear()
 	fs.cache.clear()
+	fs.caps.reset()
 	fs.tmpMu.Lock()
 	clear(fs.tmpFiles)
 	clear(fs.serverToLocal)
@@ -554,7 +562,14 @@ func BuildMountOptions(cfg Config) *fuse.MountOptions {
 		DisableXAttrs: false,
 		MaxWrite:      1 << 20,
 		MaxReadAhead:  1 << 20,
-		DirectMount:   true,
-		Debug:         cfg.Debug,
+		// 64 个后台异步请求配合 3/4 拥塞阈值，释放多线程大块顺序写与小文件并发吞吐。
+		MaxBackground:       64,
+		CongestionThreshold: 48,
+		// 由文件系统自身在写批次中清除 security.capability，避免内核写前 GetXattr 探测。
+		ExtraCapabilities: fuse.CAP_HANDLE_KILLPRIV,
+		// 关闭内核 writeback 缓存，保持 1 MiB 直通写，避免 4 KiB 脏页回写与写前尺寸核对。
+		DisabledCapabilities: fuse.CAP_WRITEBACK_CACHE,
+		DirectMount:          true,
+		Debug:                cfg.Debug,
 	}
 }

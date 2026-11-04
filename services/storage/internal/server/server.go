@@ -87,7 +87,7 @@ func New(p Params) (*Server, error) {
 	}
 
 	interceptors, err := serverx.NewInterceptorsWithValidator(
-		p.Logger,
+		quietExpectedNotFound(p.Logger),
 		obsCfg,
 		valInterceptor,
 		extra...,
@@ -99,7 +99,7 @@ func New(p Params) (*Server, error) {
 	srv := &Server{
 		metaManager: p.MetaManager,
 		config:      p.Config,
-		logger:      p.Logger,
+		logger:      quietExpectedNotFound(p.Logger),
 	}
 
 	mux := http.NewServeMux()

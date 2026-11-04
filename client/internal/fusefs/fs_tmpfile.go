@@ -75,6 +75,7 @@ func (fs *RawFS) Tmpfile(_ <-chan struct{}, input *fuse.CreateIn, out *fuse.Crea
 	fs.tmpMu.Lock()
 	fs.tmpFiles[ino] = &tmpFile{inode: inode, pages: make(map[uint64][]byte), exclusive: input.Flags&syscall.O_EXCL != 0, parent: input.NodeId, lookups: 1}
 	fs.tmpMu.Unlock()
+	fs.caps.markAbsent(ino)
 	fs.FillEntryOut(&out.EntryOut, inode, 0, 0)
 	out.Fh = fh
 	if fs.cfg.DirectIO {
@@ -251,6 +252,7 @@ func (fs *RawFS) dropTmpIfUnused(ino uint64, orphan bool) {
 func (fs *RawFS) Forget(nodeID, nlookup uint64) {
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	fs.caps.forget(nodeID)
 	tmp := fs.tmpFile(nodeID)
 	if tmp == nil {
 		return

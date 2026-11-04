@@ -549,7 +549,8 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		}
 		fs.markDirty(ino)
 		fs.cache.invalidateInode(input.NodeId)
-		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
+		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, DefaultWriteAttrTimeoutSeconds)
+		fs.caps.markAbsent(input.NodeId)
 		return resp.Msg.GetSize(), fuse.OK
 	}
 
@@ -592,7 +593,8 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		}
 
 		fs.cache.invalidateInode(input.NodeId)
-		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
+		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, DefaultWriteAttrTimeoutSeconds)
+		fs.caps.markAbsent(input.NodeId)
 		n := resp.Msg.GetSize()
 		fs.markDirty(ino)
 		totalWritten += n
