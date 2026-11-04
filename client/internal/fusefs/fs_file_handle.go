@@ -80,6 +80,7 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	fs.cache.invalidateDir(input.NodeId)
 	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
 	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.caps.markAbsent(ino)
 	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.addTmpLookup(ino)
 	out.Fh = fh
@@ -144,6 +145,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 				return fs.ToStatus(err, cancel)
 			}
 			fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+			fs.caps.markAbsent(input.NodeId)
 		}
 	}
 	fh, status := fs.openHandle(input.NodeId, input.Flags, false)

@@ -37,6 +37,9 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 	if err != nil {
 		return fs.ToStatusWithSession(err, cancel)
 	}
+	if attr == securityCapabilityXattr {
+		fs.caps.markPresent(input.NodeId)
+	}
 
 	return fuse.OK
 }
@@ -49,6 +52,9 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 	if status != fuse.OK {
 		return 0, status
 	}
+	if attr == securityCapabilityXattr && fs.caps.knownAbsent(header.NodeId) {
+		return 0, fuse.Status(syscall.ENODATA)
+	}
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -59,7 +65,14 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 		SessionId: fs.currentSession(),
 	}))
 	if err != nil {
-		return 0, fs.ToStatusWithSession(err, cancel)
+		status := fs.ToStatusWithSession(err, cancel)
+		if attr == securityCapabilityXattr && status == fuse.Status(syscall.ENODATA) {
+			fs.caps.markAbsent(header.NodeId)
+		}
+		return 0, status
+	}
+	if attr == securityCapabilityXattr {
+		fs.caps.markPresent(header.NodeId)
 	}
 
 	val := resp.Msg.GetValue()
@@ -146,6 +159,9 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 	fs.cache.invalidateInode(header.NodeId)
 	if err != nil {
 		return fs.ToStatusWithSession(err, cancel)
+	}
+	if attr == securityCapabilityXattr {
+		fs.caps.markAbsent(header.NodeId)
 	}
 
 	return fuse.OK
