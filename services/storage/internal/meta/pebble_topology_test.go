@@ -332,6 +332,7 @@ func TestPebbleTopologyValidationAndReclaimSessions(t *testing.T) {
 	require.ErrorIs(t, e.mgr.Rmdir(ctx, dir.Ino, nil), meta.ErrNotFound)
 	_, err = e.pool.Exec(e.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() WHERE session_id = $1`, int64(e.sid))
 	require.NoError(t, err)
+	awaitSessionRejected(t, e.mgr, e.ctx, e.sid)
 	require.ErrorIs(t, e.mgr.ReclaimOrphan(e.ctx, params), meta.ErrBadFileHandle)
 	require.ErrorIs(t, e.mgr.Unlink(ctx, 1, []byte("file")), meta.ErrBadFileHandle)
 }

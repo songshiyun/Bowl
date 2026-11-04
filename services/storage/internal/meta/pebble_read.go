@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"time"
 
@@ -26,6 +27,12 @@ type pebbleReadSession struct {
 	createdAt time.Time
 }
 
+// pebbleReader 是只读访问 Pebble 的最小接口，*pebble.DB 与 *pebble.Snapshot 都满足。
+type pebbleReader interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+	NewIter(opts *pebble.IterOptions) (*pebble.Iterator, error)
+}
+
 type pebbleDirCursorKey struct {
 	sessionID uint64
 	createdAt time.Time
@@ -33,6 +40,7 @@ type pebbleDirCursorKey struct {
 	offset    uint64
 }
 
+// findPebbleSession 从控制面读取会话权威状态，调用方通常应使用带缓存的 loadPebbleSession。
 func (m *manager) findPebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return pebbleReadSession{}, ErrInvalidArgument
@@ -53,8 +61,83 @@ func (m *manager) findPebbleSession(ctx context.Context, sid *uint64) (pebbleRea
 	return session, err
 }
 
-func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
+// loadPebbleSession 命中内存缓存时直接返回，避免每次数据面 RPC 查询 PostgreSQL。
+func (m *manager) loadPebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
+	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
+		return pebbleReadSession{}, ErrInvalidArgument
+	}
+	m.sessionCacheMu.Lock()
+	entry, cached := m.sessionCache[*sid]
+	m.sessionCacheMu.Unlock()
+	if cached && time.Now().Before(entry.fresh) {
+		return entry.session, nil
+	}
 	session, err := m.findPebbleSession(ctx, sid)
+	if err != nil {
+		return pebbleReadSession{}, err
+	}
+	m.cachePebbleSession(session)
+	return session, nil
+}
+
+// peekPebbleSession 只读取缓存，不触发数据库查询；用于锁内复查会话是否已被注销。
+func (m *manager) peekPebbleSession(id uint64) (pebbleReadSession, bool) {
+	m.sessionCacheMu.Lock()
+	defer m.sessionCacheMu.Unlock()
+	entry, ok := m.sessionCache[id]
+	return entry.session, ok
+}
+
+func (m *manager) cachePebbleSession(session pebbleReadSession) {
+	m.sessionCacheMu.Lock()
+	defer m.sessionCacheMu.Unlock()
+	if m.sessionCache == nil {
+		m.sessionCache = make(map[uint64]pebbleSessionCacheEntry)
+	}
+	now := time.Now()
+	if len(m.sessionCache) >= maxCachedSessions {
+		for id, entry := range m.sessionCache {
+			if now.After(entry.fresh) {
+				delete(m.sessionCache, id)
+			}
+		}
+	}
+	m.sessionCache[session.id] = pebbleSessionCacheEntry{session: session, fresh: now.Add(m.sessionCacheTTL)}
+}
+
+func (m *manager) invalidatePebbleSession(id uint64) {
+	m.sessionCacheMu.Lock()
+	defer m.sessionCacheMu.Unlock()
+	delete(m.sessionCache, id)
+}
+
+func (m *manager) invalidatePebbleBranchSessions(disk, branch string) {
+	m.sessionCacheMu.Lock()
+	defer m.sessionCacheMu.Unlock()
+	for id, entry := range m.sessionCache {
+		if entry.session.diskID.String() == disk && entry.session.branch == branch {
+			delete(m.sessionCache, id)
+		}
+	}
+}
+
+func (m *manager) invalidatePebbleDiskSessions(disk string) {
+	m.sessionCacheMu.Lock()
+	defer m.sessionCacheMu.Unlock()
+	for id, entry := range m.sessionCache {
+		if entry.session.diskID.String() == disk {
+			delete(m.sessionCache, id)
+		}
+	}
+}
+
+func samePebbleSession(a, b pebbleReadSession) bool {
+	return a.id == b.id && a.diskID == b.diskID && a.branch == b.branch && a.readOnly == b.readOnly &&
+		a.commitID == b.commitID && a.createdAt.Equal(b.createdAt)
+}
+
+func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
+	session, err := m.loadPebbleSession(ctx, sid)
 	if err != nil {
 		return pebbleReadSession{}, err
 	}
@@ -64,7 +147,8 @@ func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebble
 	return session, nil
 }
 
-func (m *manager) withPebbleSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
+// withPebbleReadSession 在分支读锁内用短命快照执行多键读取，保证 Inode 与 Blob 视图一致。
+func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
 		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
@@ -74,13 +158,35 @@ func (m *manager) withPebbleSession(ctx context.Context, session pebbleReadSessi
 		defer func() { err = errors.Join(err, commit.Close()) }()
 		return fn(commit.DB())
 	}
-	unlock := m.lockBranch(disk, session.branch)
+	unlock := m.lockBranchRead(disk, session.branch)
 	defer unlock()
-	current, err := m.requirePebbleSession(ctx, &session.id)
+	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
+		return ErrBadFileHandle
+	}
+	branch, err := m.pebble.OpenBranch(disk, session.branch)
 	if err != nil {
 		return err
 	}
-	if current.diskID != session.diskID || current.branch != session.branch || current.readOnly || !current.createdAt.Equal(session.createdAt) {
+	defer func() { err = errors.Join(err, branch.Close()) }()
+	snapshot := branch.DB().NewSnapshot()
+	defer func() { err = errors.Join(err, snapshot.Close()) }()
+	return fn(snapshot)
+}
+
+// withPebbleWriteSession 在分支写锁内执行显式持久化屏障。
+func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
+	disk := session.diskID.String()
+	if session.readOnly {
+		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, commit.Close()) }()
+		return fn(commit.DB())
+	}
+	unlock := m.lockBranchWrite(disk, session.branch)
+	defer unlock()
+	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
 	}
 	branch, err := m.pebble.OpenBranch(disk, session.branch)
@@ -91,7 +197,7 @@ func (m *manager) withPebbleSession(ctx context.Context, session pebbleReadSessi
 	return fn(branch.DB())
 }
 
-func readPebbleInode(store *pebble.DB, ino uint64) (pebblekv.Inode, error) {
+func readPebbleInode(store pebbleReader, ino uint64) (pebblekv.Inode, error) {
 	value, closer, err := store.Get(pebblekv.InodeKey(ino))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return pebblekv.Inode{}, ErrNotFound
@@ -109,7 +215,7 @@ func readPebbleInode(store *pebble.DB, ino uint64) (pebblekv.Inode, error) {
 	return inode, nil
 }
 
-func checkPebbleInodeLive(store *pebble.DB, inode pebblekv.Inode) error {
+func checkPebbleInodeLive(store pebbleReader, inode pebblekv.Inode) error {
 	if inode.Nlink != 0 {
 		return nil
 	}
@@ -123,7 +229,7 @@ func checkPebbleInodeLive(store *pebble.DB, inode pebblekv.Inode) error {
 	return closer.Close()
 }
 
-func checkPebbleSessionInodeLive(session pebbleReadSession, store *pebble.DB, inode pebblekv.Inode) error {
+func checkPebbleSessionInodeLive(session pebbleReadSession, store pebbleReader, inode pebblekv.Inode) error {
 	if session.readOnly && inode.Nlink == 0 {
 		return ErrNotFound
 	}
@@ -139,7 +245,7 @@ func writePebbleAtime(store *pebble.DB, ino uint64, value []byte) (err error) {
 	if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	return batch.Commit(pebble.NoSync)
 }
 
 func (m *manager) newPebbleInode(target pebblekv.Inode) *Inode {
@@ -195,7 +301,7 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		parent, err := readPebbleInode(store, parentIno)
 		if err != nil {
 			return err
@@ -264,7 +370,7 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -284,7 +390,8 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	touch := false
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -299,25 +406,61 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 			return fmt.Errorf("%w: 符号链接节点 %d 的目标为空", ErrIO, ino)
 		}
 		if !session.readOnly && m.atimeMode != AtimeModeNoAtime {
-			now := time.Now().UTC()
 			atime := time.Unix(inode.AtimeSec, int64(inode.AtimeNsec)).UTC()
 			mtime := time.Unix(inode.MtimeSec, int64(inode.MtimeNsec)).UTC()
 			ctime := time.Unix(inode.CtimeSec, int64(inode.CtimeNsec)).UTC()
-			if m.shouldTouchAtime(atime, mtime, ctime, now) {
-				inode.AtimeSec, inode.AtimeNsec = now.Unix(), uint32(now.Nanosecond())
-				value, err := pebblekv.EncodeInode(inode)
-				if err != nil {
-					return err
-				}
-				if err := writePebbleAtime(store, ino, value); err != nil {
-					return err
-				}
-			}
+			touch = m.shouldTouchAtime(atime, mtime, ctime, time.Now().UTC())
 		}
 		result = append([]byte(nil), inode.SymlinkTarget...)
 		return nil
 	})
-	return result, err
+	if err != nil || !touch {
+		return result, err
+	}
+	// atime 更新不占用读锁：读取完成后用短写锁单独提交，避免阻塞并发读。
+	if err := m.touchPebbleAtime(ctx, session, ino); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// touchPebbleAtime 在短写锁内刷新访问时间，并复核节点在读取期间未被替换。
+func (m *manager) touchPebbleAtime(ctx context.Context, session pebbleReadSession, ino uint64) (err error) {
+	disk := session.diskID.String()
+	unlock := m.lockBranchWrite(disk, session.branch)
+	defer unlock()
+	if _, ok := m.peekPebbleSession(session.id); !ok {
+		return nil
+	}
+	branch, err := m.pebble.OpenBranch(disk, session.branch)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, branch.Close()) }()
+	inode, err := readPebbleInode(branch.DB(), ino)
+	if err != nil {
+		return err
+	}
+	if inode.Mode&S_IFMT != S_IFLNK {
+		return nil
+	}
+	now := time.Now().UTC()
+	atime := time.Unix(inode.AtimeSec, int64(inode.AtimeNsec)).UTC()
+	mtime := time.Unix(inode.MtimeSec, int64(inode.MtimeNsec)).UTC()
+	ctime := time.Unix(inode.CtimeSec, int64(inode.CtimeNsec)).UTC()
+	if !m.shouldTouchAtime(atime, mtime, ctime, now) {
+		return nil
+	}
+	inode.AtimeSec, inode.AtimeNsec = now.Unix(), uint32(now.Nanosecond())
+	value, err := pebblekv.EncodeInode(inode)
+	if err != nil {
+		return err
+	}
+	if err := writePebbleAtime(branch.DB(), ino, value); err != nil {
+		return err
+	}
+	m.pebble.MarkBranchDirty(disk, session.branch)
+	return nil
 }
 
 func (m *manager) pebbleReadDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntry, error) {
@@ -339,7 +482,7 @@ func (m *manager) pebbleReadDirPlus(ctx context.Context, session pebbleReadSessi
 func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntryPlus, error) {
 	entries := make([]DirEntryPlus, 0, min(int(limit), 16))
 	anchors := make(map[pebbleDirCursorKey][]byte)
-	err := m.withPebbleSession(ctx, session, func(store *pebble.DB) (err error) {
+	err := m.withPebbleReadSession(ctx, session, func(store pebbleReader) (err error) {
 		dir, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -452,7 +595,7 @@ func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*S
 	if err != nil {
 		return nil, err
 	}
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -461,6 +604,10 @@ func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*S
 	})
 	if err != nil {
 		return nil, err
+	}
+	if quota, ok := m.lookupTreeQuota(session.diskID.String()); ok {
+		maxBytes, usage := quota.Snapshot()
+		return statFSForDisk(&Disk{MaxBytes: maxBytes, UsedBytes: usage.Bytes, UsedInodes: usage.Inodes}), nil
 	}
 	disk, err := m.GetDisk(ctx, session.diskID.String())
 	if err != nil {

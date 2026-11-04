@@ -12,7 +12,7 @@ import (
 )
 
 func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req *ReadRequest) (result *ReadResponse, err error) {
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, req.Ino)
 		if err != nil {
 			return err
@@ -56,7 +56,7 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 	return result, err
 }
 
-// commitPebbleData 在配额锁内原子提交数据、节点与分支统计。
+// commitPebbleData 在配额锁外构建批次，锁内仅做配额记账与异步 WAL 提交。
 func commitPebbleData(store *pebble.DB, quota *TreeQuota, branch string, inode *pebblekv.Inode, stat pebblekv.BranchStat, oldSize uint64, enforce bool, edit func(*pebble.Batch) error) (err error) {
 	if stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
@@ -72,11 +72,6 @@ func commitPebbleData(store *pebble.DB, quota *TreeQuota, branch string, inode *
 	}
 	inode.WriteSeq = stat.NextWriteSeq
 	stat.NextWriteSeq++
-	quota.mu.Lock()
-	defer quota.mu.Unlock()
-	if quota.closed {
-		return ErrNotFound
-	}
 	batch := store.NewBatch()
 	defer func() { err = errors.Join(err, batch.Close()) }()
 	if edit != nil {
@@ -93,7 +88,12 @@ func commitPebbleData(store *pebble.DB, quota *TreeQuota, branch string, inode *
 	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
 		return err
 	}
-	return quota.applyLocked(branch, inode.Ino, inode.Size, true, func() error { return batch.Commit(pebble.Sync) }, enforce)
+	quota.mu.Lock()
+	defer quota.mu.Unlock()
+	if err := quota.applyLocked(branch, inode.Ino, inode.Size, true, func() error { return batch.Commit(pebble.NoSync) }, enforce); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteRequest) (result *WriteResponse, err error) {
@@ -354,7 +354,7 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 	if err != nil {
 		return err
 	}
-	return m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	return m.withPebbleWriteSession(ctx, session, func(store *pebble.DB) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -371,6 +371,10 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 		if session.readOnly {
 			return nil
 		}
-		return store.LogData(nil, pebble.Sync)
+		if err := store.LogData(nil, pebble.Sync); err != nil {
+			return err
+		}
+		m.pebble.MarkBranchClean(session.diskID.String(), session.branch)
+		return nil
 	})
 }

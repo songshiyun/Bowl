@@ -101,8 +101,8 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if err != nil {
 			return err
 		}
-		unlockSource = m.lockBranch(disk, params.SourceBranch)
-		unlockTarget = m.lockBranch(disk, params.TargetBranch)
+		unlockSource = m.lockBranchWrite(disk, params.SourceBranch)
+		unlockTarget = m.lockBranchWrite(disk, params.TargetBranch)
 		source, err = m.pebble.OpenBranch(disk, params.SourceBranch)
 		if err != nil {
 			return err

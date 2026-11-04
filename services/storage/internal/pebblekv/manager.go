@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -40,6 +42,10 @@ const (
 	sharedCacheSize = 64 << 20
 	// allocatorMemTableSize 是编号分配器小型数据库的内存表上限。
 	allocatorMemTableSize = 256 << 10
+	// walBytesPerSync 控制单个 WAL 累计写入多少字节后强制同步一次。
+	walBytesPerSync = 1 << 20
+	// defaultWALFlushInterval 是后台兜底刷盘周期，决定断电时的最大丢失窗口。
+	defaultWALFlushInterval = time.Second
 )
 
 // 暂存目录使用不入池的短命句柄，关闭句柄即释放底层实例。
@@ -52,6 +58,11 @@ type pooledDB struct {
 	db       *pebble.DB
 	refs     int
 	lastUsed uint64
+	// mu 串行化底层实例的关闭与后台 WAL 刷盘，避免对已关闭实例发起写入。
+	mu     sync.Mutex
+	closed bool
+	// dirty 表示该分支自上次兜底刷盘后仍有未同步的写入。
+	dirty bool
 }
 
 // Stats 是句柄池的累计打开与复用次数，用于诊断与测试。
@@ -62,6 +73,8 @@ type Stats struct {
 	CommitReuses     int64
 	ResidentBranches int
 	ResidentCommits  int
+	// WALFlushes 是后台兜底刷盘的累计次数。
+	WALFlushes int64
 }
 
 // Manager 管理本进程内的分支和快照实例。同一存储根目录必须共用一个 Manager。
@@ -76,14 +89,113 @@ type Manager struct {
 	branches   map[instanceID]*pooledDB
 	commits    map[instanceID]*pooledDB
 	allocators map[string]*inodeAllocator
+
+	flushInterval time.Duration
+	stopFlush     chan struct{}
+	flushDone     chan struct{}
+	stopOnce      sync.Once
 }
 
-// NewManager 创建存储实例管理器。
-func NewManager(root string) *Manager {
-	return &Manager{
+// Option 配置句柄池管理器。
+type Option func(*Manager)
+
+// WithWALFlushInterval 覆盖后台兜底刷盘周期，主要用于测试缩短等待时间。
+func WithWALFlushInterval(interval time.Duration) Option {
+	return func(m *Manager) {
+		if interval > 0 {
+			m.flushInterval = interval
+		}
+	}
+}
+
+// NewManager 创建存储实例管理器，并启动后台异步 WAL 兜底刷盘协程。
+func NewManager(root string, opts ...Option) *Manager {
+	m := &Manager{
 		root: root, cache: pebble.NewCache(sharedCacheSize),
 		branches: make(map[instanceID]*pooledDB), commits: make(map[instanceID]*pooledDB),
-		allocators: make(map[string]*inodeAllocator),
+		allocators:    make(map[string]*inodeAllocator),
+		flushInterval: defaultWALFlushInterval, stopFlush: make(chan struct{}), flushDone: make(chan struct{}),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	go m.walFlushLoop()
+	return m
+}
+
+// walFlushLoop 周期把有脏写的分支 WAL 同步到磁盘，收敛机器断电的丢失窗口。
+func (m *Manager) walFlushLoop() {
+	defer close(m.flushDone)
+	ticker := time.NewTicker(m.flushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.stopFlush:
+			return
+		case <-ticker.C:
+			m.FlushWAL()
+		}
+	}
+}
+
+// FlushWAL 对池内有新写入的可写分支执行一次同步 WAL 刷盘。
+// 显式持久化屏障（Fsync / FsyncDir / Commit）不依赖本方法。
+func (m *Manager) FlushWAL() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	var targets []*pooledDB
+	for _, entry := range m.branches {
+		if !entry.dirty {
+			continue
+		}
+		// 先清除标记：刷盘期间的新写入会重新置脏，下一周期继续兜底。
+		entry.dirty = false
+		targets = append(targets, entry)
+	}
+	m.mu.Unlock()
+	for _, entry := range targets {
+		entry.mu.Lock()
+		if entry.closed {
+			entry.mu.Unlock()
+			continue
+		}
+		err := entry.db.LogData(nil, pebble.Sync)
+		entry.mu.Unlock()
+		if err != nil {
+			if !errors.Is(err, ErrClosed) {
+				slog.Error("后台同步分支 WAL 失败", "error", err)
+			}
+			m.mu.Lock()
+			entry.dirty = true
+			m.mu.Unlock()
+			continue
+		}
+		m.mu.Lock()
+		m.stats.WALFlushes++
+		m.mu.Unlock()
+	}
+}
+
+// MarkBranchDirty 标记常驻分支自上次兜底刷盘后仍有未同步写入。
+func (m *Manager) MarkBranchDirty(disk, branch string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry := m.branches[instanceID{disk, branch}]; entry != nil {
+		entry.dirty = true
+	}
+}
+
+// MarkBranchClean 在显式持久化屏障完成后清除脏写标记，避免重复同步。
+func (m *Manager) MarkBranchClean(disk, branch string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry := m.branches[instanceID{disk, branch}]; entry != nil {
+		entry.dirty = false
 	}
 }
 
@@ -92,6 +204,7 @@ func (m *Manager) options(readOnly bool) *pebble.Options {
 		Merger: Merger, ReadOnly: readOnly, ErrorIfNotExists: readOnly,
 		FormatMajorVersion: pebble.FormatValueSeparation,
 		Cache:              m.cache, MemTableSize: memTableSize, MaxOpenFiles: maxOpenFiles,
+		WALBytesPerSync: walBytesPerSync,
 	}
 	opts.Experimental.ValueSeparationPolicy = func() pebble.ValueSeparationPolicy {
 		return pebble.ValueSeparationPolicy{Enabled: true, MinimumSize: BlobSize, MaxBlobReferenceDepth: 5, TargetGarbageRatio: 0.2}
@@ -140,12 +253,39 @@ func (m *Manager) Stats() Stats {
 	return stats
 }
 
+// close 关闭底层实例并与后台 WAL 刷盘互斥，重复关闭是幂等的。
+func (entry *pooledDB) close() error {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.closed {
+		return nil
+	}
+	entry.closed = true
+	return entry.db.Close()
+}
+
+// busyLocked 报告是否仍有未释放的句柄引用。
+func (m *Manager) busyLocked() error {
+	for _, entry := range m.branches {
+		if entry.refs != 0 {
+			return ErrBusy
+		}
+	}
+	for _, entry := range m.commits {
+		if entry.refs != 0 {
+			return ErrBusy
+		}
+	}
+	return nil
+}
+
 // evictIdleLocked 按最近使用时间关闭超出上限的空闲实例。
 func (m *Manager) evictIdleLocked() {
 	for {
 		idle, oldest, key, branch := 0, (*pooledDB)(nil), instanceID{}, false
 		consider := func(candidate instanceID, entry *pooledDB, isBranch bool) {
-			if entry.refs != 0 {
+			// 脏写分支等待后台兜底刷盘后再驱逐，避免关闭实例时丢失未同步的 WAL。
+			if entry.refs != 0 || entry.dirty {
 				return
 			}
 			idle++
@@ -162,7 +302,7 @@ func (m *Manager) evictIdleLocked() {
 		if idle <= maxIdleHandles || oldest == nil {
 			return
 		}
-		_ = oldest.db.Close()
+		_ = oldest.close()
 		if branch {
 			delete(m.branches, key)
 		} else {
@@ -186,13 +326,13 @@ func (m *Manager) evictDiskLocked(disk string) error {
 	var errs []error
 	for key, entry := range m.branches {
 		if key.disk == disk {
-			errs = append(errs, entry.db.Close())
+			errs = append(errs, entry.close())
 			delete(m.branches, key)
 		}
 	}
 	for key, entry := range m.commits {
 		if key.disk == disk {
-			errs = append(errs, entry.db.Close())
+			errs = append(errs, entry.close())
 			delete(m.commits, key)
 		}
 	}
@@ -366,7 +506,7 @@ func (m *Manager) EvictBranch(disk, branch string) error {
 		return ErrBusy
 	}
 	delete(m.branches, key)
-	return entry.db.Close()
+	return entry.close()
 }
 
 // EvictCommit 在没有活动引用时关闭常驻快照实例。
@@ -385,7 +525,7 @@ func (m *Manager) EvictCommit(disk, commit string) error {
 		return ErrBusy
 	}
 	delete(m.commits, key)
-	return entry.db.Close()
+	return entry.close()
 }
 
 // EvictDisk 关闭指定 Disk 的全部常驻实例并清理内存分配器状态。
@@ -646,28 +786,35 @@ func (m *Manager) RemoveDisk(disk string) error {
 // Close 在所有分支及快照句柄关闭后释放管理器。
 func (m *Manager) Close() error {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil
+	}
+	if err := m.busyLocked(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	m.mu.Unlock()
+	m.stopOnce.Do(func() { close(m.stopFlush) })
+	<-m.flushDone
+	// 停机前同步所有脏写分支，避免关闭实例时丢失未刷盘的 WAL。
+	m.FlushWAL()
+	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil
 	}
-	for _, entry := range m.branches {
-		if entry.refs != 0 {
-			return ErrBusy
-		}
-	}
-	for _, entry := range m.commits {
-		if entry.refs != 0 {
-			return ErrBusy
-		}
+	if err := m.busyLocked(); err != nil {
+		return err
 	}
 	m.closed = true
 	var errs []error
 	for key, entry := range m.branches {
-		errs = append(errs, entry.db.Close())
+		errs = append(errs, entry.close())
 		delete(m.branches, key)
 	}
 	for key, entry := range m.commits {
-		errs = append(errs, entry.db.Close())
+		errs = append(errs, entry.close())
 		delete(m.commits, key)
 	}
 	for disk, allocator := range m.allocators {

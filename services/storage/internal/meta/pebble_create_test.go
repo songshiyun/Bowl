@@ -329,6 +329,7 @@ func TestPebbleCreateValidationAndSessions(t *testing.T) {
 	require.ErrorIs(t, mkdir(ctx, 1, "full"), meta.ErrTooManyLinks)
 	_, err = e.pool.Exec(e.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() WHERE session_id = $1`, int64(e.sid))
 	require.NoError(t, err)
+	awaitSessionRejected(t, e.mgr, e.ctx, e.sid)
 	for _, op := range ops {
 		require.ErrorIs(t, op(ctx, 1, "expired"), meta.ErrBadFileHandle)
 	}

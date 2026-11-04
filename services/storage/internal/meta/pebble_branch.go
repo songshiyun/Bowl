@@ -44,9 +44,21 @@ func SessionIDFromContext(ctx context.Context) (*uint64, bool) {
 
 type branchLockKey struct{ disk, branch string }
 
-func (m *manager) lockBranch(disk, branch string) func() {
-	value, _ := m.branchLocks.LoadOrStore(branchLockKey{disk, branch}, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
+func (m *manager) branchLock(disk, branch string) *sync.RWMutex {
+	value, _ := m.branchLocks.LoadOrStore(branchLockKey{disk, branch}, &sync.RWMutex{})
+	return value.(*sync.RWMutex)
+}
+
+// lockBranchRead 取得分支共享读锁，允许同分支无限并发读取。
+func (m *manager) lockBranchRead(disk, branch string) func() {
+	mu := m.branchLock(disk, branch)
+	mu.RLock()
+	return mu.RUnlock
+}
+
+// lockBranchWrite 取得分支独占写锁，排他所有读写与后台清扫。
+func (m *manager) lockBranchWrite(disk, branch string) func() {
+	mu := m.branchLock(disk, branch)
 	mu.Lock()
 	return mu.Unlock
 }
@@ -60,19 +72,21 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 	} else if err != nil {
 		return err
 	}
-	row, err := q.GetDisk(ctx, diskID)
-	if err != nil {
-		return err
+	quota, ok := m.lookupTreeQuota(disk)
+	if !ok {
+		row, err := q.GetDisk(ctx, diskID)
+		if err != nil {
+			return err
+		}
+		control, err := q.GetDiskControlPlane(ctx, diskID)
+		if err != nil {
+			return err
+		}
+		if quota, err = m.loadTreeQuota(ctx, row, control); err != nil {
+			return err
+		}
 	}
-	control, err := q.GetDiskControlPlane(ctx, diskID)
-	if err != nil {
-		return err
-	}
-	quota, err := m.loadTreeQuota(ctx, row, control)
-	if err != nil {
-		return err
-	}
-	unlock := m.lockBranch(disk, branchName)
+	unlock := m.lockBranchWrite(disk, branchName)
 	defer unlock()
 	branch, err := m.pebble.OpenBranch(disk, branchName)
 	if err != nil {
@@ -97,7 +111,11 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 			return fmt.Errorf("回收分支 %s 的孤儿节点 %d: %w", branchName, ino, err)
 		}
 	}
-	return iter.Error()
+	if err := iter.Error(); err != nil {
+		return err
+	}
+	m.pebble.MarkBranchDirty(disk, branchName)
+	return nil
 }
 
 func reclaimBranchOrphan(store *pebble.DB, quota *TreeQuota, branch string, ino uint64) (err error) {
@@ -149,7 +167,7 @@ func reclaimBranchOrphan(store *pebble.DB, quota *TreeQuota, branch string, ino 
 			return err
 		}
 	}
-	return quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.Sync) })
+	return quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.NoSync) })
 }
 
 func lockSession(ctx context.Context, conn db.DBTX, sessionID uint64) error {
@@ -276,6 +294,7 @@ func (m *manager) sweepExpiredBranchSession(ctx context.Context, sessionID uint6
 		return m.sweepBranchOrphans(ctx, q, diskID, branch)
 	})
 	if err == nil && deleted {
+		m.invalidatePebbleSession(sessionID)
 		m.clearSessionCursors(sessionID)
 	}
 	return err

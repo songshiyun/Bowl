@@ -178,7 +178,7 @@ func TestPebbleXattrBranchesAndSQL(t *testing.T) {
 	require.Equal(t, []byte("快照"), value)
 
 	queries := strings.ToLower(strings.Join(f.tracer.take(), "\n"))
-	require.Contains(t, queries, "client_sessions")
+	require.NotContains(t, queries, "client_sessions", "会话缓存命中时数据面不得查询控制面")
 	require.NotContains(t, queries, "inode_xattrs")
 }
 
@@ -307,6 +307,7 @@ func TestPebbleXattrValidationAndSessions(t *testing.T) {
 
 	_, err := f.pool.Exec(f.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, f.feature)
 	require.NoError(t, err)
+	awaitSessionRejected(t, f.mgr, f.ctx, f.feature)
 	zero, tooLarge := uint64(0), uint64(math.MaxInt64)+1
 	for _, tc := range []struct {
 		sid uint64

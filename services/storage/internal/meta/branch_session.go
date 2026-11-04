@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -36,13 +37,10 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 	if !params.ReadOnly && params.CommitID != nil && *params.CommitID != "" {
 		return RenewSessionResult{}, ErrInvalidArgument
 	}
-	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
-		return RenewSessionResult{}, err
-	}
-	m.writeQuotaMu.Lock()
-	defer m.writeQuotaMu.Unlock()
 	var result RenewSessionResult
 	var checkpointDir string
+	var cachedCommitID pgtype.UUID
+	var cachedCreatedAt time.Time
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
 		raw, ok := q.(interface{ RawDBTX() db.DBTX })
 		if !ok || raw.RawDBTX() == nil {
@@ -197,6 +195,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 			}
 		}
 		result = RenewSessionResult{ExpiresAt: session.ExpiresAt.Time, SessionRecreated: recreated}
+		cachedCommitID, cachedCreatedAt = commitID, session.CreatedAt.Time
 		return nil
 	})
 	if err != nil {
@@ -205,12 +204,16 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 		}
 		return RenewSessionResult{}, err
 	}
+	m.cachePebbleSession(pebbleReadSession{
+		id: params.SessionID, diskID: diskID, branch: branchName, commitID: cachedCommitID,
+		readOnly: params.ReadOnly, managed: true, active: true, createdAt: cachedCreatedAt,
+	})
 	return result, nil
 }
 
 // snapshotBranchSession 为新只读会话固定工作区，且不推进分支头。
 func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskID pgtype.UUID, target *storedBranch) (id pgtype.UUID, checkpointDir string, err error) {
-	unlock := m.lockBranch(diskID.String(), target.Name)
+	unlock := m.lockBranchWrite(diskID.String(), target.Name)
 	defer unlock()
 	branch, err := m.pebble.OpenBranch(diskID.String(), target.Name)
 	if err != nil {
