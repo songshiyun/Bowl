@@ -1,7 +1,7 @@
 {
   "env_metadata": {
-    "test_started_at": "2026-11-02T15:56:47Z",
-    "test_completed_at": "2026-11-02T16:19:07Z",
+    "test_started_at": "2026-11-03T23:43:05Z",
+    "test_completed_at": "2026-11-04T00:49:32Z",
     "cloud": {
       "provider": "Alibaba Cloud (阿里云)",
       "region_id": "us-west-1",
@@ -24,13 +24,13 @@
       "kernel": "6.8.0-147-generic",
       "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
       "redis_version": "Redis server v=7.0.15",
-      "minio_version": "rclone v1.68.2",
-      "instance_id": "i-rj93ymmufo05cjc13acy",
-      "private_ip": "172.16.1.223"
+      "rclone_version": "rclone v1.68.2",
+      "instance_id": "i-rj920xxtjyecqzjas9gm",
+      "private_ip": "172.16.1.196"
     },
     "server_disk_baseline": {
-      "local_seq_write_mib_s": "164.09",
-      "local_seq_read_mib_s": "184.29"
+      "local_seq_write_mib_s": "169.41",
+      "local_seq_read_mib_s": "170.45"
     },
     "client_node": {
       "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -42,17 +42,19 @@
       "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
       "fio_version": "fio-3.36",
       "mdtest_version": "mdtest-3.3.0",
-      "instance_id": "i-rj93ymmufo05cjc13acz",
-      "private_ip": "172.16.1.222"
+      "instance_id": "i-rj920xxtjyecqzjas9gn",
+      "private_ip": "172.16.1.197"
     },
     "network_baseline": {
-      "ping_rtt_ms": "0.035/0.064/0.269/0.051",
+      "ping_rtt_ms": "0.033/0.069/0.350/0.069",
       "iperf3_gbps": "15.71"
     },
     "bowl_config": {
-      "bowl_git_commit": "0655a17",
-      "disk_id": "01a19cfa-4a0f-7913-835a-310e661f60f7",
-      "root_ino": 2,
+      "bowl_git_commit": "0ab26a7",
+      "storage_engine": "Pebble per branch",
+      "kernel_writeback_cache": false,
+      "disk_id": "01a1a3cb-92a5-75e4-9132-2f07f159e435",
+      "root_ino": 1,
       "disk_size": "2PiB",
       "atime_mode": "noatime",
       "entry_timeout": "1.0s",
@@ -66,106 +68,109 @@
       "chunk_size": "64MiB (default)"
     },
     "cleanup_audit": {
-      "key_pair_name": "bowl-jfsbench-kp-20261102-155330",
-      "instances_created_at": "2026-11-02T15:53:38Z",
-      "instances_deleted_at": "2026-11-02T16:19:51Z",
+      "key_pair_name": "bowl-jfsbench-kp-20261103-233947",
+      "instances_created_at": "2026-11-03T23:39:56Z",
+      "instances_deleted_at": "2026-11-04T00:50:18Z",
       "remaining_benchmark_instances": 0
-    }
+    },
+    "execution_notes": [
+      "首次尝试的随机直接写因 PostgreSQL 连接中断而失败，原因未确定；本报告仅统计完整重跑结果。失败原始数据见 [首次运行记录](attempts/20261104-first/README.md)。"
+    ]
   },
   "juicefs_bench": {
     "bowl": {
       "Write big file": {
-        "value": 340.02,
+        "value": 27.2,
         "value_unit": "MiB/s",
-        "cost": 12.05,
+        "cost": 150.6,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 1782.86,
+        "value": 88.85,
         "value_unit": "MiB/s",
-        "cost": 2.3,
+        "cost": 46.1,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 343.5,
+        "value": 13.1,
         "value_unit": "files/s",
-        "cost": 11.64,
+        "cost": 304.81,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 1873.5,
+        "value": 44.9,
         "value_unit": "files/s",
-        "cost": 2.14,
+        "cost": 89.12,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 6851.0,
+        "value": 18201.4,
         "value_unit": "files/s",
-        "cost": 0.58,
+        "cost": 0.22,
         "cost_unit": "ms/file"
       }
     },
     "jfs_pg": {
       "Write big file": {
-        "value": 303.92,
+        "value": 305.9,
         "value_unit": "MiB/s",
-        "cost": 13.48,
+        "cost": 13.39,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 454.98,
+        "value": 451.96,
         "value_unit": "MiB/s",
-        "cost": 9.0,
+        "cost": 9.06,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 520.9,
+        "value": 473.0,
         "value_unit": "files/s",
-        "cost": 7.68,
+        "cost": 8.46,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 2705.1,
+        "value": 3316.7,
         "value_unit": "files/s",
-        "cost": 1.48,
+        "cost": 1.21,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 13524.9,
+        "value": 13620.8,
         "value_unit": "files/s",
-        "cost": 0.3,
+        "cost": 0.29,
         "cost_unit": "ms/file"
       }
     },
     "jfs_redis": {
       "Write big file": {
-        "value": 303.74,
+        "value": 305.51,
         "value_unit": "MiB/s",
-        "cost": 13.49,
+        "cost": 13.41,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 459.94,
+        "value": 447.56,
         "value_unit": "MiB/s",
-        "cost": 8.91,
+        "cost": 9.15,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 682.6,
+        "value": 928.8,
         "value_unit": "files/s",
-        "cost": 5.86,
+        "cost": 4.31,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 3188.8,
+        "value": 2020.5,
         "value_unit": "files/s",
-        "cost": 1.25,
+        "cost": 1.98,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 16577.3,
+        "value": 46891.5,
         "value_unit": "files/s",
-        "cost": 0.24,
+        "cost": 0.09,
         "cost_unit": "ms/file"
       }
     }
@@ -173,81 +178,81 @@
   "fio": {
     "bowl": {
       "seq_write_1job": {
-        "bw_mib_s": 313.61,
-        "bw_mb_s": 328.84,
-        "iops": 78.4,
+        "bw_mib_s": 37.39,
+        "bw_mb_s": 39.21,
+        "iops": 9.35,
         "io_gib": 4.0,
-        "runtime_ms": 13061,
-        "lat_mean_ms": 12.023,
-        "lat_p95_ms": 20.578,
-        "lat_p99_ms": 116.916
+        "runtime_ms": 109544,
+        "lat_mean_ms": 106.596,
+        "lat_p95_ms": 110.625,
+        "lat_p99_ms": 115.868
       },
       "seq_read_1job": {
-        "bw_mib_s": 182.56,
-        "bw_mb_s": 191.42,
-        "iops": 45.64,
+        "bw_mib_s": 18.46,
+        "bw_mb_s": 19.36,
+        "iops": 4.62,
         "io_gib": 4.0,
-        "runtime_ms": 22437,
-        "lat_mean_ms": 21.906,
-        "lat_p95_ms": 33.161,
-        "lat_p99_ms": 40.632
+        "runtime_ms": 221882,
+        "lat_mean_ms": 216.678,
+        "lat_p95_ms": 263.193,
+        "lat_p99_ms": 270.533
       },
       "seq_write_16jobs": {
-        "bw_mib_s": 196.28,
-        "bw_mb_s": 205.82,
-        "iops": 49.07,
+        "bw_mib_s": 22.39,
+        "bw_mb_s": 23.48,
+        "iops": 5.6,
         "io_gib": 16.0,
-        "runtime_ms": 83472,
-        "lat_mean_ms": 317.379,
-        "lat_p95_ms": 591.397,
-        "lat_p99_ms": 734.003
+        "runtime_ms": 731704,
+        "lat_mean_ms": 2853.798,
+        "lat_p95_ms": 3539.993,
+        "lat_p99_ms": 3707.765
       },
       "seq_read_16jobs": {
-        "bw_mib_s": 181.35,
-        "bw_mb_s": 190.16,
-        "iops": 45.34,
+        "bw_mib_s": 99.21,
+        "bw_mb_s": 104.02,
+        "iops": 24.8,
         "io_gib": 16.0,
-        "runtime_ms": 90346,
-        "lat_mean_ms": 350.519,
-        "lat_p95_ms": 492.831,
-        "lat_p99_ms": 583.008
+        "runtime_ms": 165152,
+        "lat_mean_ms": 640.327,
+        "lat_p95_ms": 742.392,
+        "lat_p99_ms": 809.501
       },
       "direct_write_4jobs": {
-        "bw_mib_s": 285.24,
-        "bw_mb_s": 299.09,
-        "iops": 285.24,
+        "bw_mib_s": 26.09,
+        "bw_mb_s": 27.36,
+        "iops": 26.09,
         "io_gib": 4.0,
-        "runtime_ms": 14360,
-        "lat_mean_ms": 0.002,
-        "lat_p95_ms": 0.003,
-        "lat_p99_ms": 0.006
+        "runtime_ms": 157002,
+        "lat_mean_ms": 0.003,
+        "lat_p95_ms": 0.004,
+        "lat_p99_ms": 0.008
       },
       "direct_read_4jobs": {
-        "bw_mib_s": 183.71,
-        "bw_mb_s": 192.63,
-        "iops": 183.71,
+        "bw_mib_s": 156.22,
+        "bw_mb_s": 163.81,
+        "iops": 156.22,
         "io_gib": 4.0,
-        "runtime_ms": 22296,
+        "runtime_ms": 26220,
         "lat_mean_ms": 0.002,
         "lat_p95_ms": 0.004,
         "lat_p99_ms": 0.006
       },
       "direct_randwrite_4jobs": {
-        "bw_mib_s": 288.39,
-        "bw_mb_s": 302.4,
-        "iops": 288.39,
+        "bw_mib_s": 16.15,
+        "bw_mb_s": 16.93,
+        "iops": 16.15,
         "io_gib": 4.0,
-        "runtime_ms": 14203,
-        "lat_mean_ms": 0.002,
-        "lat_p95_ms": 0.003,
-        "lat_p99_ms": 0.005
+        "runtime_ms": 253669,
+        "lat_mean_ms": 0.004,
+        "lat_p95_ms": 0.007,
+        "lat_p99_ms": 0.01
       },
       "direct_randread_4jobs": {
-        "bw_mib_s": 184.61,
-        "bw_mb_s": 193.58,
-        "iops": 184.61,
+        "bw_mib_s": 61.74,
+        "bw_mb_s": 64.73,
+        "iops": 61.74,
         "io_gib": 4.0,
-        "runtime_ms": 22187,
+        "runtime_ms": 66347,
         "lat_mean_ms": 0.003,
         "lat_p95_ms": 0.004,
         "lat_p99_ms": 0.008
@@ -255,166 +260,166 @@
     },
     "jfs_pg": {
       "seq_write_1job": {
-        "bw_mib_s": 300.65,
-        "bw_mb_s": 315.25,
-        "iops": 75.16,
+        "bw_mib_s": 290.46,
+        "bw_mb_s": 304.56,
+        "iops": 72.61,
         "io_gib": 4.0,
-        "runtime_ms": 13624,
-        "lat_mean_ms": 11.319,
+        "runtime_ms": 14102,
+        "lat_mean_ms": 11.164,
         "lat_p95_ms": 43.254,
-        "lat_p99_ms": 63.701
+        "lat_p99_ms": 74.973
       },
       "seq_read_1job": {
-        "bw_mib_s": 182.74,
-        "bw_mb_s": 191.62,
-        "iops": 45.69,
+        "bw_mib_s": 184.57,
+        "bw_mb_s": 193.54,
+        "iops": 46.14,
         "io_gib": 4.0,
-        "runtime_ms": 22414,
-        "lat_mean_ms": 21.885,
-        "lat_p95_ms": 114.819,
-        "lat_p99_ms": 173.015
+        "runtime_ms": 22192,
+        "lat_mean_ms": 21.668,
+        "lat_p95_ms": 117.965,
+        "lat_p99_ms": 168.821
       },
       "seq_write_16jobs": {
-        "bw_mib_s": 198.58,
-        "bw_mb_s": 208.23,
-        "iops": 49.65,
+        "bw_mib_s": 198.97,
+        "bw_mb_s": 208.63,
+        "iops": 49.74,
         "io_gib": 16.0,
-        "runtime_ms": 82505,
-        "lat_mean_ms": 309.301,
+        "runtime_ms": 82345,
+        "lat_mean_ms": 308.23,
         "lat_p95_ms": 358.613,
         "lat_p99_ms": 446.693
       },
       "seq_read_16jobs": {
-        "bw_mib_s": 176.37,
-        "bw_mb_s": 184.93,
-        "iops": 44.09,
+        "bw_mib_s": 176.25,
+        "bw_mb_s": 184.81,
+        "iops": 44.06,
         "io_gib": 16.0,
-        "runtime_ms": 92897,
-        "lat_mean_ms": 348.949,
-        "lat_p95_ms": 1035.993,
-        "lat_p99_ms": 1317.011
-      },
-      "direct_write_4jobs": {
-        "bw_mib_s": 332.01,
-        "bw_mb_s": 348.14,
-        "iops": 332.01,
-        "io_gib": 4.0,
-        "runtime_ms": 12337,
-        "lat_mean_ms": 0.002,
-        "lat_p95_ms": 0.004,
-        "lat_p99_ms": 0.008
-      },
-      "direct_read_4jobs": {
-        "bw_mib_s": 184.75,
-        "bw_mb_s": 193.72,
-        "iops": 184.75,
-        "io_gib": 4.0,
-        "runtime_ms": 22171,
-        "lat_mean_ms": 0.002,
-        "lat_p95_ms": 0.005,
-        "lat_p99_ms": 0.011
-      },
-      "direct_randwrite_4jobs": {
-        "bw_mib_s": 299.11,
-        "bw_mb_s": 313.64,
-        "iops": 299.11,
-        "io_gib": 4.0,
-        "runtime_ms": 13694,
-        "lat_mean_ms": 0.003,
-        "lat_p95_ms": 0.004,
-        "lat_p99_ms": 0.009
-      },
-      "direct_randread_4jobs": {
-        "bw_mib_s": 120.94,
-        "bw_mb_s": 126.81,
-        "iops": 120.94,
-        "io_gib": 4.0,
-        "runtime_ms": 33869,
-        "lat_mean_ms": 0.004,
-        "lat_p95_ms": 0.005,
-        "lat_p99_ms": 0.011
-      }
-    },
-    "jfs_redis": {
-      "seq_write_1job": {
-        "bw_mib_s": 304.11,
-        "bw_mb_s": 318.88,
-        "iops": 76.03,
-        "io_gib": 4.0,
-        "runtime_ms": 13469,
-        "lat_mean_ms": 11.135,
-        "lat_p95_ms": 43.254,
-        "lat_p99_ms": 73.925
-      },
-      "seq_read_1job": {
-        "bw_mib_s": 184.32,
-        "bw_mb_s": 193.28,
-        "iops": 46.08,
-        "io_gib": 4.0,
-        "runtime_ms": 22222,
-        "lat_mean_ms": 21.697,
-        "lat_p95_ms": 120.062,
-        "lat_p99_ms": 170.918
-      },
-      "seq_write_16jobs": {
-        "bw_mib_s": 198.98,
-        "bw_mb_s": 208.64,
-        "iops": 49.74,
-        "io_gib": 16.0,
-        "runtime_ms": 82342,
-        "lat_mean_ms": 309.432,
-        "lat_p95_ms": 362.807,
-        "lat_p99_ms": 446.693
-      },
-      "seq_read_16jobs": {
-        "bw_mib_s": 176.54,
-        "bw_mb_s": 185.12,
-        "iops": 44.14,
-        "io_gib": 16.0,
-        "runtime_ms": 92805,
-        "lat_mean_ms": 343.369,
-        "lat_p95_ms": 1044.382,
+        "runtime_ms": 92958,
+        "lat_mean_ms": 347.376,
+        "lat_p95_ms": 1027.604,
         "lat_p99_ms": 1350.566
       },
       "direct_write_4jobs": {
-        "bw_mib_s": 336.32,
-        "bw_mb_s": 352.65,
-        "iops": 336.32,
+        "bw_mib_s": 332.33,
+        "bw_mb_s": 348.48,
+        "iops": 332.33,
         "io_gib": 4.0,
-        "runtime_ms": 12179,
+        "runtime_ms": 12325,
         "lat_mean_ms": 0.002,
         "lat_p95_ms": 0.004,
         "lat_p99_ms": 0.008
       },
       "direct_read_4jobs": {
-        "bw_mib_s": 184.63,
-        "bw_mb_s": 193.6,
-        "iops": 184.63,
+        "bw_mib_s": 184.7,
+        "bw_mb_s": 193.68,
+        "iops": 184.7,
         "io_gib": 4.0,
-        "runtime_ms": 22185,
+        "runtime_ms": 22176,
         "lat_mean_ms": 0.002,
         "lat_p95_ms": 0.005,
         "lat_p99_ms": 0.01
       },
       "direct_randwrite_4jobs": {
-        "bw_mib_s": 310.92,
-        "bw_mb_s": 326.02,
-        "iops": 310.92,
+        "bw_mib_s": 306.47,
+        "bw_mb_s": 321.36,
+        "iops": 306.47,
         "io_gib": 4.0,
-        "runtime_ms": 13174,
-        "lat_mean_ms": 0.002,
+        "runtime_ms": 13365,
+        "lat_mean_ms": 0.003,
         "lat_p95_ms": 0.004,
-        "lat_p99_ms": 0.009
+        "lat_p99_ms": 0.01
       },
       "direct_randread_4jobs": {
-        "bw_mib_s": 120.34,
-        "bw_mb_s": 126.19,
-        "iops": 120.34,
+        "bw_mib_s": 122.36,
+        "bw_mb_s": 128.3,
+        "iops": 122.36,
         "io_gib": 4.0,
-        "runtime_ms": 34036,
-        "lat_mean_ms": 0.003,
+        "runtime_ms": 33476,
+        "lat_mean_ms": 0.004,
+        "lat_p95_ms": 0.006,
+        "lat_p99_ms": 0.012
+      }
+    },
+    "jfs_redis": {
+      "seq_write_1job": {
+        "bw_mib_s": 302.89,
+        "bw_mb_s": 317.6,
+        "iops": 75.72,
+        "io_gib": 4.0,
+        "runtime_ms": 13523,
+        "lat_mean_ms": 11.12,
+        "lat_p95_ms": 43.254,
+        "lat_p99_ms": 73.925
+      },
+      "seq_read_1job": {
+        "bw_mib_s": 184.48,
+        "bw_mb_s": 193.44,
+        "iops": 46.12,
+        "io_gib": 4.0,
+        "runtime_ms": 22203,
+        "lat_mean_ms": 21.679,
+        "lat_p95_ms": 112.722,
+        "lat_p99_ms": 158.335
+      },
+      "seq_write_16jobs": {
+        "bw_mib_s": 199.05,
+        "bw_mb_s": 208.72,
+        "iops": 49.76,
+        "io_gib": 16.0,
+        "runtime_ms": 82311,
+        "lat_mean_ms": 308.548,
+        "lat_p95_ms": 354.419,
+        "lat_p99_ms": 450.888
+      },
+      "seq_read_16jobs": {
+        "bw_mib_s": 178.79,
+        "bw_mb_s": 187.47,
+        "iops": 44.7,
+        "io_gib": 16.0,
+        "runtime_ms": 91640,
+        "lat_mean_ms": 349.26,
+        "lat_p95_ms": 968.884,
+        "lat_p99_ms": 1166.017
+      },
+      "direct_write_4jobs": {
+        "bw_mib_s": 330.78,
+        "bw_mb_s": 346.84,
+        "iops": 330.78,
+        "io_gib": 4.0,
+        "runtime_ms": 12383,
+        "lat_mean_ms": 0.002,
+        "lat_p95_ms": 0.004,
+        "lat_p99_ms": 0.01
+      },
+      "direct_read_4jobs": {
+        "bw_mib_s": 184.5,
+        "bw_mb_s": 193.47,
+        "iops": 184.5,
+        "io_gib": 4.0,
+        "runtime_ms": 22200,
+        "lat_mean_ms": 0.002,
         "lat_p95_ms": 0.005,
         "lat_p99_ms": 0.011
+      },
+      "direct_randwrite_4jobs": {
+        "bw_mib_s": 299.52,
+        "bw_mb_s": 314.07,
+        "iops": 299.52,
+        "io_gib": 4.0,
+        "runtime_ms": 13675,
+        "lat_mean_ms": 0.003,
+        "lat_p95_ms": 0.004,
+        "lat_p99_ms": 0.01
+      },
+      "direct_randread_4jobs": {
+        "bw_mib_s": 120.05,
+        "bw_mb_s": 125.88,
+        "iops": 120.05,
+        "io_gib": 4.0,
+        "runtime_ms": 34120,
+        "lat_mean_ms": 0.004,
+        "lat_p95_ms": 0.006,
+        "lat_p99_ms": 0.013
       }
     }
   },
@@ -424,57 +429,57 @@
       "scale": "1 tasks, 12440 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 512.721,
-          "min": 512.721,
-          "mean": 512.721,
+          "max": 53.589,
+          "min": 53.589,
+          "mean": 53.589,
           "stddev": 0.0
         },
         "Directory stat": {
-          "max": 2883.826,
-          "min": 2883.826,
-          "mean": 2883.826,
+          "max": 210.768,
+          "min": 210.768,
+          "mean": 210.768,
           "stddev": 0.0
         },
         "Directory removal": {
-          "max": 593.843,
-          "min": 593.843,
-          "mean": 593.843,
+          "max": 60.931,
+          "min": 60.931,
+          "mean": 60.931,
           "stddev": 0.0
         },
         "File creation": {
-          "max": 686.044,
-          "min": 686.044,
-          "mean": 686.044,
+          "max": 58.218,
+          "min": 58.218,
+          "mean": 58.218,
           "stddev": 0.0
         },
         "File stat": {
-          "max": 2863.764,
-          "min": 2863.764,
-          "mean": 2863.764,
+          "max": 227.042,
+          "min": 227.042,
+          "mean": 227.042,
           "stddev": 0.0
         },
         "File read": {
-          "max": 870.383,
-          "min": 870.383,
-          "mean": 870.383,
+          "max": 218.06,
+          "min": 218.06,
+          "mean": 218.06,
           "stddev": 0.0
         },
         "File removal": {
-          "max": 589.159,
-          "min": 589.159,
-          "mean": 589.159,
+          "max": 62.415,
+          "min": 62.415,
+          "mean": 62.415,
           "stddev": 0.0
         },
         "Tree creation": {
-          "max": 595.629,
-          "min": 595.629,
-          "mean": 595.629,
+          "max": 75.257,
+          "min": 75.257,
+          "mean": 75.257,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 613.293,
-          "min": 613.293,
-          "mean": 613.293,
+          "max": 88.274,
+          "min": 88.274,
+          "mean": 88.274,
           "stddev": 0.0
         }
       }
@@ -484,57 +489,57 @@
       "scale": "1 tasks, 12440 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 506.417,
-          "min": 506.417,
-          "mean": 506.417,
+          "max": 503.88,
+          "min": 503.88,
+          "mean": 503.88,
           "stddev": 0.0
         },
         "Directory stat": {
-          "max": 1162.7,
-          "min": 1162.7,
-          "mean": 1162.7,
+          "max": 1182.568,
+          "min": 1182.568,
+          "mean": 1182.568,
           "stddev": 0.0
         },
         "Directory removal": {
-          "max": 538.461,
-          "min": 538.461,
-          "mean": 538.461,
+          "max": 534.603,
+          "min": 534.603,
+          "mean": 534.603,
           "stddev": 0.0
         },
         "File creation": {
-          "max": 1129.713,
-          "min": 1129.713,
-          "mean": 1129.713,
+          "max": 1136.052,
+          "min": 1136.052,
+          "mean": 1136.052,
           "stddev": 0.0
         },
         "File stat": {
-          "max": 4647.792,
-          "min": 4647.792,
-          "mean": 4647.792,
+          "max": 4602.639,
+          "min": 4602.639,
+          "mean": 4602.639,
           "stddev": 0.0
         },
         "File read": {
-          "max": 2444.656,
-          "min": 2444.656,
-          "mean": 2444.656,
+          "max": 2406.542,
+          "min": 2406.542,
+          "mean": 2406.542,
           "stddev": 0.0
         },
         "File removal": {
-          "max": 934.645,
-          "min": 934.645,
-          "mean": 934.645,
+          "max": 954.721,
+          "min": 954.721,
+          "mean": 954.721,
           "stddev": 0.0
         },
         "Tree creation": {
-          "max": 913.377,
-          "min": 913.377,
-          "mean": 913.377,
+          "max": 894.929,
+          "min": 894.929,
+          "mean": 894.929,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 778.425,
-          "min": 778.425,
-          "mean": 778.425,
+          "max": 733.489,
+          "min": 733.489,
+          "mean": 733.489,
           "stddev": 0.0
         }
       }
@@ -544,57 +549,57 @@
       "scale": "1 tasks, 12440 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 2418.552,
-          "min": 2418.552,
-          "mean": 2418.552,
+          "max": 2259.367,
+          "min": 2259.367,
+          "mean": 2259.367,
           "stddev": 0.0
         },
         "Directory stat": {
-          "max": 14796.435,
-          "min": 14796.435,
-          "mean": 14796.435,
+          "max": 16471.765,
+          "min": 16471.765,
+          "mean": 16471.765,
           "stddev": 0.0
         },
         "Directory removal": {
-          "max": 1954.886,
-          "min": 1954.886,
-          "mean": 1954.886,
+          "max": 1958.369,
+          "min": 1958.369,
+          "mean": 1958.369,
           "stddev": 0.0
         },
         "File creation": {
-          "max": 2252.597,
-          "min": 2252.597,
-          "mean": 2252.597,
+          "max": 2273.726,
+          "min": 2273.726,
+          "mean": 2273.726,
           "stddev": 0.0
         },
         "File stat": {
-          "max": 16351.861,
-          "min": 16351.861,
-          "mean": 16351.861,
+          "max": 16592.102,
+          "min": 16592.102,
+          "mean": 16592.102,
           "stddev": 0.0
         },
         "File read": {
-          "max": 4842.695,
-          "min": 4842.695,
-          "mean": 4842.695,
+          "max": 4899.763,
+          "min": 4899.763,
+          "mean": 4899.763,
           "stddev": 0.0
         },
         "File removal": {
-          "max": 2101.462,
-          "min": 2101.462,
-          "mean": 2101.462,
+          "max": 2143.768,
+          "min": 2143.768,
+          "mean": 2143.768,
           "stddev": 0.0
         },
         "Tree creation": {
-          "max": 2431.773,
-          "min": 2431.773,
-          "mean": 2431.773,
+          "max": 2361.842,
+          "min": 2361.842,
+          "mean": 2361.842,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 1972.288,
-          "min": 1972.288,
-          "mean": 1972.288,
+          "max": 1981.472,
+          "min": 1981.472,
+          "mean": 1981.472,
           "stddev": 0.0
         }
       }
@@ -606,57 +611,57 @@
       "scale": "4 tasks, 1040 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 1963.777,
-          "min": 1963.763,
-          "mean": 1963.772,
-          "stddev": 0.006
+          "max": 80.12,
+          "min": 80.12,
+          "mean": 80.12,
+          "stddev": 0.0
         },
         "Directory stat": {
-          "max": 273354.962,
-          "min": 273105.156,
-          "mean": 273263.346,
-          "stddev": 94.742
+          "max": 322.245,
+          "min": 322.245,
+          "mean": 322.245,
+          "stddev": 0.0
         },
         "Directory removal": {
-          "max": 2353.678,
-          "min": 2353.673,
-          "mean": 2353.677,
-          "stddev": 0.002
+          "max": 77.369,
+          "min": 77.369,
+          "mean": 77.369,
+          "stddev": 0.0
         },
         "File creation": {
-          "max": 1931.278,
-          "min": 1931.256,
-          "mean": 1931.266,
-          "stddev": 0.008
+          "max": 72.995,
+          "min": 72.995,
+          "mean": 72.995,
+          "stddev": 0.0
         },
         "File stat": {
-          "max": 240798.488,
-          "min": 240709.872,
-          "mean": 240750.889,
-          "stddev": 35.052
+          "max": 320.959,
+          "min": 320.958,
+          "mean": 320.958,
+          "stddev": 0.0
         },
         "File read": {
-          "max": 5017.802,
-          "min": 5017.746,
-          "mean": 5017.773,
-          "stddev": 0.025
+          "max": 14694.444,
+          "min": 14691.867,
+          "mean": 14693.349,
+          "stddev": 0.934
         },
         "File removal": {
-          "max": 2316.711,
-          "min": 2316.702,
-          "mean": 2316.706,
-          "stddev": 0.003
+          "max": 80.871,
+          "min": 80.871,
+          "mean": 80.871,
+          "stddev": 0.0
         },
         "Tree creation": {
-          "max": 267.245,
-          "min": 267.245,
-          "mean": 267.245,
+          "max": 21.285,
+          "min": 21.285,
+          "mean": 21.285,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 334.185,
-          "min": 334.185,
-          "mean": 334.185,
+          "max": 22.053,
+          "min": 22.053,
+          "mean": 22.053,
           "stddev": 0.0
         }
       }
@@ -666,57 +671,57 @@
       "scale": "4 tasks, 1040 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 3091.398,
-          "min": 3091.341,
-          "mean": 3091.38,
-          "stddev": 0.023
+          "max": 2694.013,
+          "min": 2693.99,
+          "mean": 2694.005,
+          "stddev": 0.009
         },
         "Directory stat": {
-          "max": 61010.747,
-          "min": 60991.712,
-          "mean": 61003.949,
-          "stddev": 7.788
+          "max": 356451.987,
+          "min": 356242.586,
+          "mean": 356347.548,
+          "stddev": 79.052
         },
         "Directory removal": {
-          "max": 3079.434,
-          "min": 3079.294,
-          "mean": 3079.354,
-          "stddev": 0.051
+          "max": 2993.177,
+          "min": 2993.163,
+          "mean": 2993.173,
+          "stddev": 0.006
         },
         "File creation": {
-          "max": 3484.398,
-          "min": 3483.771,
-          "mean": 3484.175,
-          "stddev": 0.239
+          "max": 3402.274,
+          "min": 3401.532,
+          "mean": 3402.079,
+          "stddev": 0.316
         },
         "File stat": {
-          "max": 289650.912,
-          "min": 286193.581,
-          "mean": 287137.165,
-          "stddev": 1454.519
+          "max": 312513.428,
+          "min": 305271.092,
+          "mean": 307659.689,
+          "stddev": 2841.773
         },
         "File read": {
-          "max": 14019.636,
-          "min": 14017.419,
-          "mean": 14018.996,
-          "stddev": 0.913
+          "max": 14087.319,
+          "min": 14084.224,
+          "mean": 14085.412,
+          "stddev": 1.154
         },
         "File removal": {
-          "max": 3207.739,
-          "min": 3207.63,
-          "mean": 3207.662,
-          "stddev": 0.045
+          "max": 3256.977,
+          "min": 3256.602,
+          "mean": 3256.863,
+          "stddev": 0.151
         },
         "Tree creation": {
-          "max": 454.226,
-          "min": 454.226,
-          "mean": 454.226,
+          "max": 374.739,
+          "min": 374.739,
+          "mean": 374.739,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 603.405,
-          "min": 603.405,
-          "mean": 603.405,
+          "max": 573.118,
+          "min": 573.118,
+          "mean": 573.118,
           "stddev": 0.0
         }
       }
@@ -726,142 +731,59 @@
       "scale": "4 tasks, 1040 files/directories",
       "operations": {
         "Directory creation": {
-          "max": 5943.512,
-          "min": 5943.399,
-          "mean": 5943.469,
-          "stddev": 0.045
+          "max": 6460.0,
+          "min": 6458.77,
+          "mean": 6459.672,
+          "stddev": 0.521
         },
         "Directory stat": {
-          "max": 463900.718,
-          "min": 463332.573,
-          "mean": 463568.213,
-          "stddev": 213.634
+          "max": 64577.678,
+          "min": 64444.085,
+          "mean": 64485.649,
+          "stddev": 53.554
         },
         "Directory removal": {
-          "max": 7568.275,
-          "min": 7567.952,
-          "mean": 7568.178,
-          "stddev": 0.131
+          "max": 6318.773,
+          "min": 6318.242,
+          "mean": 6318.468,
+          "stddev": 0.192
         },
         "File creation": {
-          "max": 7063.449,
-          "min": 7057.198,
-          "mean": 7061.822,
-          "stddev": 2.67
+          "max": 7017.004,
+          "min": 7016.933,
+          "mean": 7016.976,
+          "stddev": 0.026
         },
         "File stat": {
-          "max": 64716.872,
-          "min": 64157.06,
-          "mean": 64327.593,
-          "stddev": 226.134
+          "max": 476551.163,
+          "min": 473647.009,
+          "mean": 475808.311,
+          "stddev": 1247.923
         },
         "File read": {
-          "max": 18971.369,
-          "min": 18956.783,
-          "mean": 18965.219,
-          "stddev": 5.285
+          "max": 18797.64,
+          "min": 18789.495,
+          "mean": 18793.218,
+          "stddev": 2.904
         },
         "File removal": {
-          "max": 8080.484,
-          "min": 8078.779,
-          "mean": 8079.223,
-          "stddev": 0.728
+          "max": 8003.327,
+          "min": 8002.046,
+          "mean": 8002.706,
+          "stddev": 0.453
         },
         "Tree creation": {
-          "max": 369.21,
-          "min": 369.21,
-          "mean": 369.21,
+          "max": 363.257,
+          "min": 363.257,
+          "mean": 363.257,
           "stddev": 0.0
         },
         "Tree removal": {
-          "max": 594.458,
-          "min": 594.458,
-          "mean": 594.458,
+          "max": 1612.569,
+          "min": 1612.569,
+          "mean": 1612.569,
           "stddev": 0.0
         }
-      }
-    }
-  },
-  "official_docs_reference": {
-    "juicefs_bench": {
-      "jfs_pg_aws": {
-        "Write big file": {
-          "value": 744.47,
-          "unit": "MiB/s"
-        },
-        "Read big file": {
-          "value": 895.88,
-          "unit": "MiB/s"
-        },
-        "Write small file": {
-          "value": 86.4,
-          "unit": "files/s"
-        },
-        "Read small file": {
-          "value": 1857.9,
-          "unit": "files/s"
-        },
-        "Stat file": {
-          "value": 7845.8,
-          "unit": "files/s"
-        }
-      },
-      "jfs_redis_aws": {
-        "Write big file": {
-          "value": 731.93,
-          "unit": "MiB/s"
-        },
-        "Read big file": {
-          "value": 892.99,
-          "unit": "MiB/s"
-        },
-        "Write small file": {
-          "value": 109.1,
-          "unit": "files/s"
-        },
-        "Read small file": {
-          "value": 937.3,
-          "unit": "files/s"
-        },
-        "Stat file": {
-          "value": 11989.5,
-          "unit": "files/s"
-        }
-      }
-    },
-    "mdtest": {
-      "JuiceFS (Redis, AWS c5.large)": {
-        "Directory creation": 1416.582,
-        "Directory stat": 3810.083,
-        "Directory removal": 1115.108,
-        "File creation": 1410.288,
-        "File stat": 5023.227,
-        "File read": 3487.947,
-        "File removal": 1163.371,
-        "Tree creation": 1503.004,
-        "Tree removal": 1119.806
-      },
-      "Amazon EFS (AWS c5.large)": {
-        "Directory creation": 192.301,
-        "Directory stat": 1311.166,
-        "Directory removal": 213.132,
-        "File creation": 179.293,
-        "File stat": 915.23,
-        "File read": 371.012,
-        "File removal": 217.498,
-        "Tree creation": 187.906,
-        "Tree removal": 218.357
-      },
-      "S3FS (AWS c5.large)": {
-        "Directory creation": 5.977,
-        "Directory stat": 435.898,
-        "Directory removal": 8.969,
-        "File creation": 5.696,
-        "File stat": 68.692,
-        "File read": 33.931,
-        "File removal": 23.658,
-        "Tree creation": 5.951,
-        "Tree removal": 9.889
       }
     }
   },
@@ -869,47 +791,47 @@
     {
       "target": "bowl",
       "suite": "juicefs_bench",
-      "duration_sec": 17.249
+      "duration_sec": 245.572
     },
     {
       "target": "bowl",
       "suite": "fio",
-      "duration_sec": 331.822
+      "duration_sec": 1746.238
     },
     {
       "target": "bowl",
       "suite": "mdtest",
-      "duration_sec": 116.8
+      "duration_sec": 1122.247
     },
     {
       "target": "jfs_pg",
       "suite": "juicefs_bench",
-      "duration_sec": 25.618
+      "duration_sec": 25.32
     },
     {
       "target": "jfs_pg",
       "suite": "fio",
-      "duration_sec": 344.413
+      "duration_sec": 343.805
     },
     {
       "target": "jfs_pg",
       "suite": "mdtest",
-      "duration_sec": 97.622
+      "duration_sec": 97.727
     },
     {
       "target": "jfs_redis",
       "suite": "juicefs_bench",
-      "duration_sec": 25.012
+      "duration_sec": 24.803
     },
     {
       "target": "jfs_redis",
       "suite": "fio",
-      "duration_sec": 342.692
+      "duration_sec": 341.45
     },
     {
       "target": "jfs_redis",
       "suite": "mdtest",
-      "duration_sec": 31.021
+      "duration_sec": 31.191
     }
   ]
 }

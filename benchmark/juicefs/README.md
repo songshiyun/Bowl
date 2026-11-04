@@ -1,14 +1,16 @@
 # Bowl vs JuiceFS 阿里云硅谷双机内网存储性能基准测试套件
 
-> 最新复跑：2026-11-03，Bowl `0655a17`。Bowl 已完整完成基础测试、8 项 fio 和两项 mdtest，随机写错误码为 0。完整对照结果与环境见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `0ab26a7`。三组均已完成基础测试、8 项 fio 和两项 mdtest，24 份 fio 错误码均为 0。首次尝试失败记录见 [attempts/20261104-first](attempts/20261104-first/README.md)。完整对照结果与环境见 [REPORT.md](REPORT.md)。
 
 本目录包含对标 [JuiceFS 官方常规测试](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 [`juicefs bench`](https://juicefs.com/docs/zh/community/performance_evaluation_guide/#juicefs-bench)、[`fio` 吞吐量测试](https://juicefs.com/docs/zh/community/fio/)、[`mdtest` 元数据 IOPS 测试](https://juicefs.com/docs/zh/community/mdtest/)）的端到端自动化评测脚本、实测原始数据及完整对比报告。
 
-默认测试在与 [`benchmark/pjdfstest`](../pjdfstest) 完全相同的**阿里云硅谷地域（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比，同时保留 JuiceFS 官方文档历史参考数据：
+默认测试在与 [`benchmark/pjdfstest`](../pjdfstest) 相同地域的**阿里云硅谷（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比：
 
-1. **Bowl (PostgreSQL 16 + Server BlockStore)**：Bowl 生产默认配置（`noatime` + `1.0s` FUSE 属性/目录项缓存，ConnectRPC 跨机直通）。
-2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：与 Bowl 同款的 PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
+1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块。整块写入与局部更新分别使用 Set 和 ValueMerger，Checkpoint 与 Fork 通过硬链接共享文件。客户端在内存中维护 FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache。
+2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
 3. **JuiceFS (Redis 7 + Server rclone S3)**：JuiceFS 官方常规测试默认的 Redis 元数据引擎（`appendonly yes`, `appendfsync everysec`）+ Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
+
+Bowl 指定提交实际禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 释放本地句柄。这与 ADR-0029 计划启用 `writeback_cache` 的设计不同；不同存储栈的缓存与写入确认条件也不同。
 
 ## 目录结构
 

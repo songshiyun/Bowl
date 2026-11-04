@@ -1,6 +1,9 @@
 {
-  "bowl_commit": "0655a176e5d6b68b955f647914857cd20e518597",
-  "date_local": "2026-11-03",
+  "bowl_commit": "0ab26a74a8947d45c5d80f52534e5d8b16b50dd8",
+  "previous_bowl_commit": "0655a176e5d6b68b955f647914857cd20e518597",
+  "date_local": "2026-11-04",
+  "started_at_local": "2026-11-04T06:53:58+08:00",
+  "completed_at_local": "2026-11-04T08:50:38+08:00",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
   "zone": "us-west-1a",
@@ -9,19 +12,13 @@
   "suites": {
     "pjdfstest": {
       "status": "passed",
+      "directories": 17,
       "scripts": 238,
       "passed_tests": 8798,
       "failed_tests": 0,
+      "todo_tests": 28,
+      "todo_expected_failures": 9,
       "report": "pjdfstest/REPORT.md"
-    },
-    "drive9": {
-      "status": "completed",
-      "reference_commit": "b529a36f",
-      "cold_cases": 45,
-      "hot_cases": 45,
-      "samples_per_case": 3,
-      "integrity_fingerprints_match": true,
-      "report": "drive9/REPORT.md"
     },
     "juicefs": {
       "status": "completed",
@@ -34,96 +31,108 @@
       "fio_errors": 0,
       "mdtest_cases": 6,
       "same_instance_pair": true,
+      "attempts": 2,
+      "failed_attempt": "juicefs/attempts/20261104-first/README.md",
       "report": "juicefs/REPORT.md"
+    },
+    "drive9": {
+      "status": "completed",
+      "reference_commit": "b529a36f",
+      "cold_cases": 45,
+      "hot_cases": 45,
+      "samples_per_case": 3,
+      "integrity_fingerprints_match": true,
+      "report": "drive9/REPORT.md"
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-02T16:21:03.462030+00:00",
+    "verified_at_utc": "2026-11-04T00:50:38+00:00",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
-    "created_instances_total": 6
+    "created_instances_total": 8,
+    "created_instances_for_failed_attempt": 2,
+    "describe_instances_request_id": "01A1A409-53D4-8DBB-BBEB-4439115C49DF",
+    "describe_keypairs_request_id": "01A1A409-573E-8579-82AE-4A315225D701"
   },
   "validation": [
-    "pjdfstest 17 个目录退出码均为 0，238 个脚本、8798 项通过",
-    "24 份 fio 错误码均为 0，读写字节数符合配置",
-    "三组各完成单进程和四进程 mdtest",
-    "Drive9 冷热各 45 项且每项 3 次样本，三组完整性指纹一致",
-    "性能报告与汇总从已替换原始数据重新生成一致，pjdfstest 原始日志重解析计数一致"
+    "pjdfstest 17 个目录退出码均为 0，238 个脚本及 8798 项按 prove 规则通过；28 项 TODO 中有 9 项预期失败",
+    "完整重跑的 24 份 fio 错误码均为 0，读写字节数符合配置",
+    "三组均完成单进程和四进程 mdtest，各含 9 类操作",
+    "Drive9 冷热各 45 项、每项 3 次样本且无错误，三组 4 项完整性指纹一致",
+    "报告与结构化汇总从当轮原始数据重新解析，测试实例和密钥对已在地域范围核验为 0",
+    "GOWORK=off task lint 通过"
   ],
   "limitations": [
-    "单轮运行不能证明长期稳定性或消除全部超时场景",
-    "ADR-0028 同时调整数据库交互、WAL 提交与内核缓存保留；本轮未隔离单项优化收益",
-    "ADR-0026 使用服务端页缓存，未测试整机断电恢复",
-    "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读",
-    "原始日志保留原始尾随空格",
-    "前后两轮使用同规格的新建云主机；未进行多轮统计或单项优化隔离，前后变化不能直接归因于某一处代码修改"
+    "评测提交显式禁用 FUSE 内核 writeback_cache，未覆盖 ADR-0029 设计中的 writeback_cache 脏页屏障；Flush 与 Fsync 请求服务端同步",
+    "首次 JuiceFS 尝试的随机直接写因 PostgreSQL 连接被终止和拒绝而失败，数据库停止原因未确定；完整重跑结果与失败记录分别保留",
+    "单轮测试和新建云主机存在波动；前后版本同时改变存储与缓存路径，差异不能归因于单项改动",
+    "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读；每项 3 次样本不足以评估稳定尾延迟",
+    "本轮未测试整机断电恢复，吞吐和完整性基准不证明断电后的数据完整性",
+    "原始日志保留工具输出的尾随空格"
   ],
-  "previous_bowl_commit": "ee8d11385a12642a8ef4ea307ecdb25745b82562",
-  "started_at_local": "2026-11-02T23:53:30+08:00",
-  "completed_at_local": "2026-11-03T00:19:52+08:00",
   "comparison_to_previous_run": {
     "juicefs": {
       "Write big file": {
-        "previous": 324.2,
-        "current": 340.02,
+        "previous": 340.02,
+        "current": 27.2,
         "unit": "MiB/s",
-        "current_over_previous": 1.0488
+        "current_over_previous": 0.08
       },
       "Read big file": {
-        "previous": 1598.78,
-        "current": 1782.86,
+        "previous": 1782.86,
+        "current": 88.85,
         "unit": "MiB/s",
-        "current_over_previous": 1.1151
+        "current_over_previous": 0.0498
       },
       "Write small file": {
-        "previous": 444.4,
-        "current": 343.5,
+        "previous": 343.5,
+        "current": 13.1,
         "unit": "files/s",
-        "current_over_previous": 0.773
+        "current_over_previous": 0.0381
       },
       "Read small file": {
-        "previous": 125.8,
-        "current": 1873.5,
+        "previous": 1873.5,
+        "current": 44.9,
         "unit": "files/s",
-        "current_over_previous": 14.8927
+        "current_over_previous": 0.024
       },
       "Stat file": {
-        "previous": 6415.9,
-        "current": 6851.0,
+        "previous": 6851.0,
+        "current": 18201.4,
         "unit": "files/s",
-        "current_over_previous": 1.0678
+        "current_over_previous": 2.6568
       }
     },
     "drive9": {
       "Write big file": {
-        "previous": 282.5,
-        "current": 284.83,
+        "previous": 284.83,
+        "current": 26.51,
         "unit": "MiB/s",
-        "current_over_previous": 1.0082
+        "current_over_previous": 0.0931
       },
       "Read big file": {
-        "previous": 951.07,
-        "current": 1202.87,
+        "previous": 1202.87,
+        "current": 7.69,
         "unit": "MiB/s",
-        "current_over_previous": 1.2648
+        "current_over_previous": 0.0064
       },
       "Write small file": {
-        "previous": 268.3,
-        "current": 326.8,
+        "previous": 326.8,
+        "current": 12.9,
         "unit": "files/s",
-        "current_over_previous": 1.218
+        "current_over_previous": 0.0395
       },
       "Read small file": {
-        "previous": 661.0,
-        "current": 1722.5,
+        "previous": 1722.5,
+        "current": 43.5,
         "unit": "files/s",
-        "current_over_previous": 2.6059
+        "current_over_previous": 0.0253
       },
       "Stat file": {
-        "previous": 6574.9,
-        "current": 6956.6,
+        "previous": 6956.6,
+        "current": 110803.9,
         "unit": "files/s",
-        "current_over_previous": 1.0581
+        "current_over_previous": 15.9279
       }
     }
   }

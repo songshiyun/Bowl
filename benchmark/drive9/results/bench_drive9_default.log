@@ -1,12 +1,12 @@
-2026/11/02 23:57:50.900942 juicefs[8709] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
+2026/11/04 07:16:07.971715 juicefs[9397] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
 +------------------+-----------------+--------------+
 |       ITEM       |      VALUE      |     COST     |
 +------------------+-----------------+--------------+
-|   Write big file |    199.10 MiB/s | 20.57 s/file |
-|    Read big file |    182.03 MiB/s | 22.50 s/file |
-| Write small file |  2184.7 files/s | 1.83 ms/file |
-|  Read small file |  6506.2 files/s | 0.61 ms/file |
-|        Stat file | 64870.3 files/s | 0.06 ms/file |
+|   Write big file |    199.70 MiB/s | 20.51 s/file |
+|    Read big file |    231.08 MiB/s | 17.73 s/file |
+| Write small file |  2212.2 files/s | 1.81 ms/file |
+|  Read small file |  6752.7 files/s | 0.59 ms/file |
+|        Stat file | 14078.9 files/s | 0.28 ms/file |
 +------------------+-----------------+--------------+

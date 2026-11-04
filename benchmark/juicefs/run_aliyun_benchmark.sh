@@ -2,7 +2,14 @@
 # ==============================================================================
 # Bowl vs JuiceFS - Aliyun Silicon Valley (us-west-1) Dual-ECS Benchmark Suite
 # ==============================================================================
+# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
+# 每个 (disk_id, branch_name) 使用独立 Pebble 存储 Inode、Entry、Xattr、
+# Orphan 和 4 MiB 数据块；整块用 Set，局部更新用 ValueMerger，Checkpoint
+# 和 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的
+# NamespaceCache 在客户端本地维护。
+# 当前被测提交禁用内核 writeback_cache；Flush/Fsync 向服务端请求持久化。
 set -euo pipefail
+export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -47,6 +54,9 @@ cleanup() {
     scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
     ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
     ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u postgresql -u postgresql@16-main --no-pager -n 200" > "${RESULTS_DIR}/postgresql.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -k --no-pager | grep -Ei 'out of memory|oom-kill|killed process' || true" > "${RESULTS_DIR}/kernel-oom.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "free -m; df -h /var/lib/bowl/data; systemctl is-active postgresql@16-main || true" > "${RESULTS_DIR}/server-state.log" 2>/dev/null
   fi
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
@@ -258,7 +268,7 @@ scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ss
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
 
 # ==============================================================================
-# Step 3: Deploy Storage Service + PostgreSQL + Redis + MinIO on Server Node
+# 第 3 步：在服务端部署 Storage、PostgreSQL、Redis 与 rclone S3。
 # ==============================================================================
 log "Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (${SERVER_PRIV_IP})..."
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis"
@@ -400,7 +410,7 @@ fi
 pkill -f "iperf3 -s" || true
 iperf3 -s -D
 EOF
-log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy."
+log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, rclone S3:9001, PG:5432, Redis:6379) are up and healthy."
 
 # Measure Server local cloud_essd disk baseline + Server system info
 log "Measuring Server local cloud_essd disk baseline..."
@@ -420,7 +430,7 @@ OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
 KERNEL="$(uname -r)"
 PG_VER="$(psql --version | head -n1)"
 REDIS_VER="$(redis-server --version | awk '{print $1, $2, $3}')"
-MINIO_VER="$(rclone --version | head -n1)"
+RCLONE_VER="$(rclone --version | head -n1)"
 
 jq -n \
   --arg cpu "${CPU_MODEL}" \
@@ -430,11 +440,11 @@ jq -n \
   --arg kernel "${KERNEL}" \
   --arg pg "${PG_VER}" \
   --arg redis "${REDIS_VER}" \
-  --arg minio "${MINIO_VER}" \
+  --arg rclone "${RCLONE_VER}" \
   --arg disk_w "${WRITE_MIB}" \
   --arg disk_r "${READ_MIB}" \
   '{
-    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, minio_version: $minio},
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, rclone_version: $rclone},
     disk_baseline: {local_seq_write_mib_s: $disk_w, local_seq_read_mib_s: $disk_r}
   }'
 EOF
@@ -660,7 +670,7 @@ has_target() {
 }
 
 # ------------------------------------------------------------------------------
-# Target 1: Bowl (PostgreSQL 16 + Server BlockStore)
+# 对象 1：Bowl（PostgreSQL 控制面 + Pebble 分支存储）
 # ------------------------------------------------------------------------------
 if has_target "bowl"; then
   ENDPOINT="http://${SERVER_PRIV_IP}:9000"
@@ -760,8 +770,11 @@ if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
 fi
 if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
   BOWL_DISK_JSON="$(cat "${RESULTS_DIR}/bowl_disk.json")"
+elif [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  log "ERROR: Bowl 磁盘信息缺失，无法生成本轮报告。"
+  exit 1
 else
-  BOWL_DISK_JSON='{"disk_id":"01a18c0e-61ab-7afb-ab0c-67ffb1f51473","root_ino":2}'
+  BOWL_DISK_JSON='{}'
 fi
 
 # ==============================================================================
@@ -786,9 +799,13 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
     REMAINING_INSTANCES="${COUNT}"
     sleep 5
   done
+  if [[ "${REMAINING_INSTANCES}" != "0" ]]; then
+    log "ERROR: 仍有 ${REMAINING_INSTANCES} 台测试实例，清理钩子将继续尝试。"
+    exit 1
+  fi
   rm -f "${CREATED_INSTANCES_FILE}"
 
-  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
   KEY_CREATED=0
 fi
 
@@ -841,6 +858,8 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: {
       bowl_git_commit: $bowl_commit,
+      storage_engine: "Pebble per branch",
+      kernel_writeback_cache: false,
       disk_id: $bowl_disk.disk_id,
       root_ino: $bowl_disk.root_ino,
       disk_size: "2PiB",
