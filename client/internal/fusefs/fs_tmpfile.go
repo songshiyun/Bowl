@@ -344,7 +344,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	if tmp.exclusive || tmp.named || !fs.handles.IsOpen(input.Oldnodeid) {
 		return fuse.ENOENT, true
 	}
-	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.invalidateDirListing(input.NodeId)
 	epoch := fs.cache.version()
 	var inode *storagev1.Inode
 	var entryTimeout, attrTimeout float64
@@ -373,7 +373,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	}
 	tmp.named = true
 	tmp.lookups++
-	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.invalidateDirListing(input.NodeId)
 	fs.cache.putEntryAt(epoch, input.NodeId, filename, input.Oldnodeid)
 	fs.cache.putInodeAt(epoch, input.Oldnodeid, inode, entryTimeout, attrTimeout)
 	fs.FillEntryOut(out, inode, entryTimeout, attrTimeout)
@@ -400,7 +400,7 @@ func (fs *RawFS) syncTmpFile(cancel <-chan struct{}, ino uint64) fuse.Status {
 		return fuse.EIO
 	}
 	name := ".bowl-tmp-" + hex.EncodeToString(random[:])
-	fs.cache.invalidateDir(tmp.parent)
+	fs.cache.invalidateDirListing(tmp.parent)
 	inode, _, _, status := fs.uploadTmp(cancel, tmp, parent, name)
 	if status != fuse.OK {
 		return status
@@ -410,7 +410,8 @@ func (fs *RawFS) syncTmpFile(cancel <-chan struct{}, ino uint64) fuse.Status {
 	sid := fs.currentSession()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: parent, Name: []byte(name), OpenInClient: &open, SessionId: sid}))
 	done()
-	fs.cache.invalidateDir(tmp.parent)
+	fs.cache.invalidateDirListing(tmp.parent)
+	fs.cache.removeEntry(tmp.parent, name)
 	if err != nil {
 		cleanupCtx, cleanupDone := fs.RPCContext(nil)
 		closed := false

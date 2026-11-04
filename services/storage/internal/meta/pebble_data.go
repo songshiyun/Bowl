@@ -687,9 +687,16 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 		if err := m.flushPebbleAtimeInodeLocked(disk, branch, store, ino); err != nil {
 			return err
 		}
+		// 先取脏标记：blobs.Sync 期间的新写入会重新置脏，不能被本次屏障吞掉。
+		dirty := m.pebble.BranchDirty(disk, branch)
 		// 先确认块文件落盘，再同步指向它们的元数据 WAL。
 		if err := blobs.Sync(); err != nil {
 			return err
+		}
+		// 分支已干净时跳过 WAL 屏障：file fsync + dir fsync 连发时，
+		// 第二次屏障没有任何未同步写入，却要付一次完整 fsync。
+		if !dirty {
+			return nil
 		}
 		if err := store.LogData(nil, pebble.Sync); err != nil {
 			return err

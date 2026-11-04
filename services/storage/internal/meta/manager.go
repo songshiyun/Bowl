@@ -73,7 +73,8 @@ type manager struct {
 	sessionLeaseTTL                            time.Duration
 	branchLocks                                sync.Map
 	branchMetaLocks                            sync.Map
-	inodeLocks                                 sync.Map
+	inodeLocksMu                               sync.Mutex
+	inodeLocks                                 map[inodeLockKey]*inodeLockEntry
 	writeQuotaMu                               sync.Mutex
 	treeQuotaMu                                sync.Mutex
 	treeQuotas                                 map[string]*TreeQuota
@@ -156,6 +157,7 @@ func New(store db.Store, opts ...Option) Manager {
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
 		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
+		inodeLocks:  make(map[inodeLockKey]*inodeLockEntry),
 		dirtyAtimes: make(map[pebbleAtimeKey]time.Time)}
 	for _, opt := range opts {
 		if opt != nil {

@@ -9,7 +9,9 @@ import (
 )
 
 // DefaultNamespaceCacheCapacity 限制缓存的节点、目录项和目录流所占条目数。
-const DefaultNamespaceCacheCapacity = 16384
+// mdtest 1proc 会创建约 1.2 万个节点，16K 容量会在创建阶段持续 LRU 抖动，
+// 64K 可容纳整棵工作集，同时常驻内存增量仍在数十 MB 量级。
+const DefaultNamespaceCacheCapacity = 65536
 
 type cacheKey struct {
 	kind byte
@@ -360,6 +362,28 @@ func (c *NamespaceCache) invalidateDir(parent uint64) {
 	for dir := range copyInoSet(c.dirsByChild[parent]) {
 		c.removeKey(cacheKey{kind: 'd', ino: dir})
 	}
+	c.mutations++
+}
+
+// invalidateDirListing 只失效父目录的目录流、父目录属性以及引用了父目录的祖先目录流，
+// 保留父目录下未变动的兄弟目录项。单写者约束保证命名空间变化只来自本客户端，
+// 因此无需为一次增删清空整个父目录的兄弟项。
+func (c *NamespaceCache) invalidateDirListing(parent uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeKey(cacheKey{kind: 'd', ino: parent})
+	c.removeKey(cacheKey{kind: 'i', ino: parent})
+	for dir := range copyInoSet(c.dirsByChild[parent]) {
+		c.removeKey(cacheKey{kind: 'd', ino: dir})
+	}
+	c.mutations++
+}
+
+// removeEntry 定向删除单个目录项，用于 Unlink/Rmdir/Rename 的旧名。
+func (c *NamespaceCache) removeEntry(parent uint64, name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.removeKey(cacheKey{kind: 'e', ino: parent, name: name})
 	c.mutations++
 }
 

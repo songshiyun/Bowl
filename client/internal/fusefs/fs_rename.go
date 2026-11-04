@@ -80,6 +80,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
+	epoch := fs.cache.version()
 	_, err := fs.client.Rename(ctx, connect.NewRequest(&storagev1.RenameRequest{
 		OldParentIno:       oldParentIno,
 		OldName:            []byte(oldName),
@@ -93,8 +94,31 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDir(input.NodeId)
-	fs.cache.invalidateDir(input.Newdir)
+	fs.cache.invalidateDirListing(input.NodeId)
+	if input.Newdir != input.NodeId {
+		fs.cache.invalidateDirListing(input.Newdir)
+	}
+	if input.Flags&renameExchange != 0 {
+		// 交换后旧名指向原目标节点，新名指向原源节点。
+		if target != 0 {
+			fs.cache.putEntryAt(epoch, input.NodeId, oldName, target)
+		} else {
+			fs.cache.removeEntry(input.NodeId, oldName)
+		}
+		if source != 0 {
+			fs.cache.putEntryAt(epoch, input.Newdir, newName, source)
+		} else {
+			fs.cache.removeEntry(input.Newdir, newName)
+		}
+	} else {
+		// 旧名消失；WHITEOUT 会在旧名留下特殊节点，保守地按未命中处理。
+		fs.cache.removeEntry(input.NodeId, oldName)
+		if source != 0 {
+			fs.cache.putEntryAt(epoch, input.Newdir, newName, source)
+		} else {
+			fs.cache.removeEntry(input.Newdir, newName)
+		}
+	}
 	if source != 0 {
 		fs.cache.invalidateInode(source)
 	}

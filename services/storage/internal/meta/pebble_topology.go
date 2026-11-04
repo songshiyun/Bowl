@@ -159,13 +159,80 @@ func (m *manager) lockRenameInodes(disk, branch string, params RenameParams, sto
 	}
 }
 
-// removeTopologyInode 在目录变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
-func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
-	ids, err := pebbleDataBlobIDs(store, inode.Ino, 0)
+// pointDeleteLimit 是逐键点删的键数上限；超过上限才回退范围墓碑。
+// 范围墓碑会常驻 memtable，使后续每次读都要重建 range-del 迭代器；
+// 对空文件、目录、符号链接和小文件改走点删可消除该退化。
+const pointDeleteLimit = 64
+
+// deletePebbleRangePointwise 删除 [lower, upper) 内的全部键：
+// 0 键时零写入，不超过 pointDeleteLimit 时逐键点删，超过上限回退范围墓碑。
+func deletePebbleRangePointwise(store *pebble.DB, batch *pebble.Batch, lower, upper []byte) error {
+	keys := make([][]byte, 0, pointDeleteLimit)
+	iter, err := store.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
 		return err
 	}
-	*removed = append(*removed, ids...)
+	overflow := false
+	for iter.First(); iter.Valid(); iter.Next() {
+		if len(keys) == pointDeleteLimit {
+			overflow = true
+			break
+		}
+		// batch 会持有该键，必须拷贝迭代器复用的字节切片。
+		keys = append(keys, append([]byte(nil), iter.Key()...))
+	}
+	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+		return err
+	}
+	if overflow {
+		return batch.DeleteRange(lower, upper, nil)
+	}
+	for _, key := range keys {
+		if err := batch.Delete(key, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deletePebbleDataKeys 删除 Inode 的全部数据键，并登记需即时回收的块编号。
+func deletePebbleDataKeys(store *pebble.DB, batch *pebble.Batch, ino uint64, removed *[]uint64) error {
+	lower, upper := pebblekv.DataRange(ino, 0)
+	keys := make([][]byte, 0, pointDeleteLimit)
+	iter, err := store.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return err
+	}
+	overflow := false
+	for iter.First(); iter.Valid(); iter.Next() {
+		ref, decodeErr := pebblekv.DecodeBlobRef(iter.Value())
+		if decodeErr != nil {
+			_ = iter.Close()
+			return decodeErr
+		}
+		*removed = append(*removed, ref.ID)
+		if len(keys) == pointDeleteLimit {
+			overflow = true
+			continue
+		}
+		keys = append(keys, append([]byte(nil), iter.Key()...))
+	}
+	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
+		return err
+	}
+	if overflow {
+		return batch.DeleteRange(lower, upper, nil)
+	}
+	for _, key := range keys {
+		if err := batch.Delete(key, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeTopologyInode 在目录变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
+func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
 	if err := batch.Delete(pebblekv.InodeKey(inode.Ino), nil); err != nil {
 		return err
 	}
@@ -173,11 +240,10 @@ func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.B
 		return err
 	}
 	lower, upper := pebblekv.XattrRange(inode.Ino)
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
+	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
 		return err
 	}
-	lower, upper = pebblekv.DataRange(inode.Ino, 0)
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
+	if err := deletePebbleDataKeys(store, batch, inode.Ino, removed); err != nil {
 		return err
 	}
 	stat.Inodes -= min(stat.Inodes, 1)

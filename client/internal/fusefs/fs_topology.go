@@ -37,7 +37,7 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.invalidateDirListing(input.NodeId)
 	inode := resp.Msg.GetInode()
 	if inode != nil {
 		child := fs.ToKernelIno(inode.GetIno())
@@ -79,7 +79,7 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDir(input.NodeId)
+	fs.cache.invalidateDirListing(input.NodeId)
 	inode := resp.Msg.GetInode()
 	if inode != nil {
 		child := fs.ToKernelIno(inode.GetIno())
@@ -127,7 +127,8 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDir(header.NodeId)
+	fs.cache.invalidateDirListing(header.NodeId)
+	fs.cache.removeEntry(header.NodeId, name)
 	if child != 0 {
 		fs.handles.MarkRemovedDir(child, inode)
 		fs.cache.invalidateInode(child)
@@ -180,7 +181,8 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDir(header.NodeId)
+	fs.cache.invalidateDirListing(header.NodeId)
+	fs.cache.removeEntry(header.NodeId, name)
 	if child != 0 {
 		fs.cache.invalidateInode(child)
 	}

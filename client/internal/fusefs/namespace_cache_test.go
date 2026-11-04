@@ -139,3 +139,82 @@ func TestNamespaceCache目录流替换清除独立目录项(t *testing.T) {
 	_, ok = cache.dir(10)
 	require.False(t, ok)
 }
+
+// 目录内新建/删除单个名字时，未变动的兄弟目录项必须保持命中，避免冷查询全部穿透到服务端。
+func TestNamespaceCache定向失效保留兄弟目录项(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	cache.putEntry(10, "a", 11)
+	cache.putEntry(10, "b", 12)
+	cache.putEntry(20, "c", 13)
+
+	// 模拟 Create：只失效目录流与父属性，再回填新名字。
+	cache.invalidateDirListing(10)
+	cache.putEntryAt(^uint64(0), 10, "d", 14)
+	for name, want := range map[string]uint64{"a": 11, "b": 12, "d": 14} {
+		ino, ok := cache.entry(10, name)
+		require.True(t, ok, "兄弟目录项 %s 不应被清除", name)
+		require.Equal(t, want, ino)
+	}
+
+	// 模拟 Unlink：只定向删除被删名字。
+	cache.invalidateDirListing(10)
+	cache.removeEntry(10, "a")
+	_, ok := cache.entry(10, "a")
+	require.False(t, ok, "被删除的目录项必须失效")
+	for name, want := range map[string]uint64{"b": 12, "d": 14} {
+		ino, ok := cache.entry(10, name)
+		require.True(t, ok, "未变动的兄弟目录项 %s 应保持命中", name)
+		require.Equal(t, want, ino)
+	}
+
+	// 模拟 Rename：旧名精确失效，新名回填，兄弟项保留。
+	cache.invalidateDirListing(10)
+	cache.removeEntry(10, "b")
+	cache.putEntryAt(^uint64(0), 10, "e", 12)
+	_, ok = cache.entry(10, "b")
+	require.False(t, ok, "改名后的旧名必须失效")
+	ino, ok := cache.entry(10, "e")
+	require.True(t, ok)
+	require.Equal(t, uint64(12), ino)
+	ino, ok = cache.entry(10, "d")
+	require.True(t, ok)
+	require.Equal(t, uint64(14), ino)
+
+	// 其它父目录不受影响。
+	ino, ok = cache.entry(20, "c")
+	require.True(t, ok)
+	require.Equal(t, uint64(13), ino)
+}
+
+// 父目录属性变化必须失效引用它的祖先目录流，但不影响其它目录的目录项。
+func TestNamespaceCache定向失效清除父属性与祖先目录流(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	cache.putInode(10, testInode(10, syscall.S_IFDIR|0o755, 2), 1, 1)
+	cache.putDir(1, []*storagev1.DirEntryPlus{
+		{Ino: 10, Name: []byte("dir"), NextOffset: 1, Inode: testInode(10, syscall.S_IFDIR|0o755, 2)},
+	})
+	cache.putEntry(10, "a", 11)
+
+	cache.invalidateDirListing(10)
+	_, ok := cache.inode(10)
+	require.False(t, ok, "父目录属性必须失效")
+	_, ok = cache.dir(1)
+	require.False(t, ok, "引用父目录的祖先目录流必须失效")
+	ino, ok := cache.entry(10, "a")
+	require.True(t, ok, "父目录下的兄弟目录项应保留")
+	require.Equal(t, uint64(11), ino)
+}
+
+// 默认容量必须覆盖 mdtest 1proc 的约 1.2 万节点工作集（含目录项与目录流）。
+func TestNamespaceCache默认容量覆盖大规模工作集(t *testing.T) {
+	require.GreaterOrEqual(t, DefaultNamespaceCacheCapacity, 65536)
+	cache := NewNamespaceCache(0)
+	for i := uint64(1); i <= 20000; i++ {
+		cache.putInode(i, testInode(i, syscall.S_IFREG|0o644, 1), 0, 0)
+	}
+	// 超出旧容量 16384 后，最早写入的节点仍应留在缓存中。
+	_, ok := cache.inode(1)
+	require.True(t, ok)
+	_, ok = cache.inode(20000)
+	require.True(t, ok)
+}

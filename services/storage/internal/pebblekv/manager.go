@@ -215,6 +215,16 @@ func (m *Manager) FlushWAL() {
 	}
 }
 
+// BranchDirty 报告常驻分支自上次同步后是否仍有未落盘的写入。
+func (m *Manager) BranchDirty(disk, branch string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry := m.branches[instanceID{disk, branch}]; entry != nil {
+		return entry.dirty
+	}
+	return false
+}
+
 // MarkBranchDirty 标记常驻分支自上次兜底刷盘后仍有未同步写入。
 func (m *Manager) MarkBranchDirty(disk, branch string) {
 	m.mu.Lock()

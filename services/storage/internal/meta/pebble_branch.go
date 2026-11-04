@@ -77,24 +77,54 @@ type inodeLockKey struct {
 	ino          uint64
 }
 
-// inodeLock 返回 (disk_id, branch_id, ino) 粒度的读写锁。
-func (m *manager) inodeLock(disk, branch string, ino uint64) *sync.RWMutex {
-	value, _ := m.inodeLocks.LoadOrStore(inodeLockKey{disk, branch, ino}, &sync.RWMutex{})
-	return value.(*sync.RWMutex)
+// inodeLockEntry 是带引用计数的 Inode 锁，refs 归零后从锁表移除，避免海量 Inode 场景无界增长。
+type inodeLockEntry struct {
+	mu   sync.RWMutex
+	refs int
+}
+
+// acquireInodeLock 取得锁条目并增加引用计数；调用方解锁后必须调用 releaseInodeLock。
+func (m *manager) acquireInodeLock(disk, branch string, ino uint64) (inodeLockKey, *inodeLockEntry) {
+	key := inodeLockKey{disk, branch, ino}
+	m.inodeLocksMu.Lock()
+	entry := m.inodeLocks[key]
+	if entry == nil {
+		entry = &inodeLockEntry{}
+		m.inodeLocks[key] = entry
+	}
+	entry.refs++
+	m.inodeLocksMu.Unlock()
+	return key, entry
+}
+
+// releaseInodeLock 减少引用计数，归零时回收锁条目；此时已无人持有底层互斥量。
+func (m *manager) releaseInodeLock(key inodeLockKey, entry *inodeLockEntry) {
+	m.inodeLocksMu.Lock()
+	entry.refs--
+	if entry.refs == 0 {
+		delete(m.inodeLocks, key)
+	}
+	m.inodeLocksMu.Unlock()
 }
 
 // lockInodeRead 取得单个 Inode 的共享读锁，防止并发覆写删除正在读取的块文件。
 func (m *manager) lockInodeRead(disk, branch string, ino uint64) func() {
-	mu := m.inodeLock(disk, branch, ino)
-	mu.RLock()
-	return mu.RUnlock
+	key, entry := m.acquireInodeLock(disk, branch, ino)
+	entry.mu.RLock()
+	return func() {
+		entry.mu.RUnlock()
+		m.releaseInodeLock(key, entry)
+	}
 }
 
 // lockInodeWrite 取得单个 Inode 的独占写锁。
 func (m *manager) lockInodeWrite(disk, branch string, ino uint64) func() {
-	mu := m.inodeLock(disk, branch, ino)
-	mu.Lock()
-	return mu.Unlock
+	key, entry := m.acquireInodeLock(disk, branch, ino)
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		m.releaseInodeLock(key, entry)
+	}
 }
 
 // lockInodesWrite 按固定 ino 升序对多个 Inode 加独占锁，避免目录操作死锁。
@@ -112,15 +142,20 @@ func (m *manager) lockInodesWrite(disk, branch string, inos ...uint64) func() {
 		ordered = append(ordered, ino)
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-	locks := make([]*sync.RWMutex, 0, len(ordered))
+	type heldLock struct {
+		key   inodeLockKey
+		entry *inodeLockEntry
+	}
+	locks := make([]heldLock, 0, len(ordered))
 	for _, ino := range ordered {
-		mu := m.inodeLock(disk, branch, ino)
-		mu.Lock()
-		locks = append(locks, mu)
+		key, entry := m.acquireInodeLock(disk, branch, ino)
+		entry.mu.Lock()
+		locks = append(locks, heldLock{key: key, entry: entry})
 	}
 	return func() {
 		for i := len(locks) - 1; i >= 0; i-- {
-			locks[i].Unlock()
+			locks[i].entry.mu.Unlock()
+			m.releaseInodeLock(locks[i].key, locks[i].entry)
 		}
 	}
 }
@@ -199,21 +234,17 @@ func reclaimBranchOrphan(store *pebble.DB, blobs *pebblekv.BlobStore, quota *Tre
 	} else if !errors.Is(err, pebble.ErrNotFound) {
 		return err
 	}
-	ids, err := pebbleDataBlobIDs(store, ino, 0)
-	if err != nil {
-		return err
-	}
+	var ids []uint64
 	batch := store.NewBatch()
 	defer func() { err = errors.Join(err, batch.Close()) }()
 	if err := batch.Delete(pebblekv.InodeKey(ino), nil); err != nil {
 		return err
 	}
 	lower, upper := pebblekv.XattrRange(ino)
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
+	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
 		return err
 	}
-	lower, upper = pebblekv.DataRange(ino, 0)
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
+	if err := deletePebbleDataKeys(store, batch, ino, &ids); err != nil {
 		return err
 	}
 	if err := batch.Delete(pebblekv.OrphanKey(ino), nil); err != nil {
