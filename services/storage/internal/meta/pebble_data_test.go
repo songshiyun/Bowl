@@ -73,16 +73,18 @@ func readDataWAL(t *testing.T, e *pebbleCreateEnv) []dataWALRecord {
 	return records
 }
 
-func requireWALData(t *testing.T, records []dataWALRecord, kind pebble.InternalKeyKind, key []byte, frame byte) {
+func requireWALBlobRef(t *testing.T, records []dataWALRecord, kind pebble.InternalKeyKind, key []byte) pebblekv.BlobRef {
 	t.Helper()
 	for _, item := range records {
 		if item.kind == kind && bytes.Equal(item.key, key) {
-			require.GreaterOrEqual(t, len(item.value), 2)
-			require.Equal(t, frame, item.value[1])
-			return
+			require.Len(t, item.value, 12)
+			ref, err := pebblekv.DecodeBlobRef(item.value)
+			require.NoError(t, err)
+			return ref
 		}
 	}
 	t.Fatalf("WAL 中未找到 %s 记录，键 %x", kind, key)
+	return pebblekv.BlobRef{}
 }
 
 func assertPebbleData(t *testing.T, e *pebbleCreateEnv, ino uint64, expected []byte) {
@@ -112,7 +114,8 @@ func TestPebbleDataWriteTruncateAndCompact(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(blob), written.Size)
 	require.Zero(t, written.Inode.Attr.Mode&(meta.S_ISUID|meta.S_ISGID))
-	requireWALData(t, readDataWAL(t, e), pebble.InternalKeyKindSet, pebblekv.DataKey(ino, 0), pebblekv.BaseFrame)
+	firstRef := requireWALBlobRef(t, readDataWAL(t, e), pebble.InternalKeyKindSet, pebblekv.DataKey(ino, 0))
+	require.Equal(t, uint32(blob), firstRef.Length)
 
 	patch := bytes.Repeat([]byte{0xe1}, 31)
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: blob - 11, Data: patch, SessionID: &e.sid})
@@ -120,8 +123,8 @@ func TestPebbleDataWriteTruncateAndCompact(t *testing.T) {
 	model = append(model, make([]byte, 20)...)
 	copy(model[blob-11:], patch)
 	walRecords := readDataWAL(t, e)
-	requireWALData(t, walRecords, pebble.InternalKeyKindMerge, pebblekv.DataKey(ino, 0), pebblekv.PatchListFrame)
-	requireWALData(t, walRecords, pebble.InternalKeyKindMerge, pebblekv.DataKey(ino, 1), pebblekv.PatchListFrame)
+	require.Equal(t, uint32(blob), requireWALBlobRef(t, walRecords, pebble.InternalKeyKindSet, pebblekv.DataKey(ino, 0)).Length)
+	require.Equal(t, uint32(20), requireWALBlobRef(t, walRecords, pebble.InternalKeyKindSet, pebblekv.DataKey(ino, 1)).Length)
 
 	sparseOffset := 2*blob + 17
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: uint64(sparseOffset), Data: []byte("sparse"), SessionID: &e.sid})

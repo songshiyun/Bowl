@@ -32,9 +32,15 @@ const (
 	inodeSegment = 4096
 	// inodeKey 保存已持久化的 Inode 分配上界。
 	inodeKey = "last-inode"
+	// blobIDKey 保存已持久化的 Blob 编号分配上界。
+	blobIDKey = "last-blob-id"
+	// inodeAllocatorKind 与 blobAllocatorKind 是盘级分配器数据库目录名。
+	inodeAllocatorKind = "inode-allocator"
+	blobAllocatorKind  = "blob-allocator"
 
 	// 常驻实例的内存表与文件句柄上限，兼顾多分支并发与进程内存占用。
-	memTableSize = 2 << 20
+	// Pebble 仅承载纯元数据与 12 字节 BlobRef 索引，1 MiB 数据块写入独立 .blob 文件。
+	memTableSize = 16 << 20
 	maxOpenFiles = 128
 	// maxIdleHandles 是句柄池保留的空闲实例上限，超出后按 LRU 关闭。
 	maxIdleHandles = 32
@@ -43,7 +49,7 @@ const (
 	// allocatorMemTableSize 是编号分配器小型数据库的内存表上限。
 	allocatorMemTableSize = 256 << 10
 	// walBytesPerSync 控制单个 WAL 累计写入多少字节后强制同步一次。
-	walBytesPerSync = 1 << 20
+	walBytesPerSync = 4 << 20
 	// defaultWALFlushInterval 是后台兜底刷盘周期，决定断电时的最大丢失窗口。
 	defaultWALFlushInterval = time.Second
 )
@@ -53,9 +59,13 @@ var stagingPrefixes = []string{".fork-", ".merge-", ".restore-"}
 
 type instanceID struct{ disk, id string }
 
+type allocatorID struct{ disk, kind string }
+
 // pooledDB 是句柄池中的一个常驻实例。
 type pooledDB struct {
-	db       *pebble.DB
+	db *pebble.DB
+	// blobs 管理该分支或快照目录下的不可变块文件。
+	blobs    *BlobStore
 	refs     int
 	lastUsed uint64
 	// mu 串行化底层实例的关闭与后台 WAL 刷盘，避免对已关闭实例发起写入。
@@ -88,7 +98,7 @@ type Manager struct {
 	stats      Stats
 	branches   map[instanceID]*pooledDB
 	commits    map[instanceID]*pooledDB
-	allocators map[string]*inodeAllocator
+	allocators map[allocatorID]*inodeAllocator
 
 	flushInterval time.Duration
 	stopFlush     chan struct{}
@@ -113,7 +123,7 @@ func NewManager(root string, opts ...Option) *Manager {
 	m := &Manager{
 		root: root, cache: pebble.NewCache(sharedCacheSize),
 		branches: make(map[instanceID]*pooledDB), commits: make(map[instanceID]*pooledDB),
-		allocators:    make(map[string]*inodeAllocator),
+		allocators:    make(map[allocatorID]*inodeAllocator),
 		flushInterval: defaultWALFlushInterval, stopFlush: make(chan struct{}), flushDone: make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -164,9 +174,14 @@ func (m *Manager) FlushWAL() {
 			entry.mu.Unlock()
 			continue
 		}
-		err := entry.db.LogData(nil, pebble.Sync)
+		// 先确认块文件落盘，再同步指向它们的元数据 WAL。
+		blobErr := entry.blobs.Sync()
+		var err error
+		if blobErr == nil {
+			err = entry.db.LogData(nil, pebble.Sync)
+		}
 		entry.mu.Unlock()
-		if err != nil {
+		if err := errors.Join(blobErr, err); err != nil {
 			if !errors.Is(err, ErrClosed) {
 				slog.Error("后台同步分支 WAL 失败", "error", err)
 			}
@@ -200,16 +215,12 @@ func (m *Manager) MarkBranchClean(disk, branch string) {
 }
 
 func (m *Manager) options(readOnly bool) *pebble.Options {
-	opts := &pebble.Options{
-		Merger: Merger, ReadOnly: readOnly, ErrorIfNotExists: readOnly,
-		FormatMajorVersion: pebble.FormatValueSeparation,
+	return &pebble.Options{
+		ReadOnly: readOnly, ErrorIfNotExists: readOnly,
+		FormatMajorVersion: pebble.FormatNewest,
 		Cache:              m.cache, MemTableSize: memTableSize, MaxOpenFiles: maxOpenFiles,
 		WALBytesPerSync: walBytesPerSync,
 	}
-	opts.Experimental.ValueSeparationPolicy = func() pebble.ValueSeparationPolicy {
-		return pebble.ValueSeparationPolicy{Enabled: true, MinimumSize: BlobSize, MaxBlobReferenceDepth: 5, TargetGarbageRatio: 0.2}
-	}
-	return opts
 }
 
 func isStaging(id string) bool {
@@ -345,12 +356,16 @@ type Branch struct {
 	key       instanceID
 	entry     *pooledDB
 	db        *pebble.DB
+	blobs     *BlobStore
 	ephemeral bool
 	closed    bool
 }
 
 // DB 返回分支的 Pebble 实例。调用方不得直接关闭实例，也不得在句柄关闭后使用它。
 func (b *Branch) DB() *pebble.DB { return b.db }
+
+// Blobs 返回分支目录下的不可变块文件存储。
+func (b *Branch) Blobs() *BlobStore { return b.blobs }
 
 // OpenBranch 打开或创建分支；真实分支复用常驻实例，暂存目录使用短命句柄。
 func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
@@ -372,13 +387,13 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Branch{manager: m, key: key, db: db, ephemeral: true}, nil
+		return &Branch{manager: m, key: key, db: db, blobs: NewBlobStore(path), ephemeral: true}, nil
 	}
 	if entry := m.branches[key]; entry != nil {
 		entry.refs++
 		entry.lastUsed = m.tick()
 		m.stats.BranchReuses++
-		return &Branch{manager: m, key: key, entry: entry, db: entry.db}, nil
+		return &Branch{manager: m, key: key, entry: entry, db: entry.db, blobs: entry.blobs}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -387,11 +402,11 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	entry := &pooledDB{db: db, refs: 1, lastUsed: m.tick()}
+	entry := &pooledDB{db: db, blobs: NewBlobStore(path), refs: 1, lastUsed: m.tick()}
 	m.branches[key] = entry
 	m.stats.BranchOpens++
 	m.evictIdleLocked()
-	return &Branch{manager: m, key: key, entry: entry, db: db}, nil
+	return &Branch{manager: m, key: key, entry: entry, db: db, blobs: entry.blobs}, nil
 }
 
 // Checkpoint 刷新分支并以硬链接生成不可覆盖的 Commit 快照。
@@ -406,10 +421,17 @@ func (b *Branch) Checkpoint(commit string) error {
 	if m.closed || b.closed {
 		return ErrClosed
 	}
+	if err := b.blobs.Sync(); err != nil {
+		return err
+	}
 	if err := b.db.Flush(); err != nil {
 		return err
 	}
-	return b.db.Checkpoint(path, pebble.WithFlushedWAL())
+	if err := b.db.Checkpoint(path, pebble.WithFlushedWAL()); err != nil {
+		return err
+	}
+	// 快照目录与分支工作区共享同一批不可变块文件，未修改块零拷贝。
+	return b.blobs.LinkAllTo(NewBlobStore(path))
 }
 
 // Close 释放分支句柄；常驻实例只递减引用计数。
@@ -437,11 +459,15 @@ type Commit struct {
 	manager *Manager
 	key     instanceID
 	entry   *pooledDB
+	blobs   *BlobStore
 	closed  bool
 }
 
 // DB 返回只读 Pebble 实例。调用方不得直接关闭实例，也不得在句柄关闭后使用它。
 func (c *Commit) DB() *pebble.DB { return c.entry.db }
+
+// Blobs 返回快照目录下的不可变块文件存储。
+func (c *Commit) Blobs() *BlobStore { return c.blobs }
 
 // OpenCommit 共享同一 Disk 和 Commit 的只读实例。
 func (m *Manager) OpenCommit(disk, commit string) (*Commit, error) {
@@ -461,7 +487,7 @@ func (m *Manager) OpenCommit(disk, commit string) (*Commit, error) {
 		if err != nil {
 			return nil, err
 		}
-		entry = &pooledDB{db: db}
+		entry = &pooledDB{db: db, blobs: NewBlobStore(path)}
 		m.commits[key] = entry
 		m.stats.CommitOpens++
 	} else {
@@ -470,7 +496,7 @@ func (m *Manager) OpenCommit(disk, commit string) (*Commit, error) {
 	entry.refs++
 	entry.lastUsed = m.tick()
 	m.evictIdleLocked()
-	return &Commit{manager: m, key: key, entry: entry}, nil
+	return &Commit{manager: m, key: key, entry: entry, blobs: entry.blobs}, nil
 }
 
 // Close 释放快照引用；常驻实例只递减引用计数。
@@ -539,13 +565,19 @@ func (m *Manager) EvictDisk(disk string) error {
 		m.mu.Unlock()
 		return err
 	}
-	allocator := m.allocators[disk]
-	delete(m.allocators, disk)
-	m.mu.Unlock()
-	if allocator != nil {
-		return allocator.close()
+	var allocators []*inodeAllocator
+	for id, allocator := range m.allocators {
+		if id.disk == disk {
+			allocators = append(allocators, allocator)
+			delete(m.allocators, id)
+		}
 	}
-	return nil
+	m.mu.Unlock()
+	var errs []error
+	for _, allocator := range allocators {
+		errs = append(errs, allocator.close())
+	}
+	return errors.Join(errs...)
 }
 
 // Fork 从不可变快照生成新的分支工作区。
@@ -590,17 +622,23 @@ func (m *Manager) Fork(disk, commit, branch string) (err error) {
 	if err := db.Flush(); err != nil {
 		return errors.Join(err, db.Close())
 	}
-	return errors.Join(db.Checkpoint(path, pebble.WithFlushedWAL()), db.Close())
+	checkpointErr := db.Checkpoint(path, pebble.WithFlushedWAL())
+	if err := errors.Join(checkpointErr, db.Close()); err != nil {
+		return err
+	}
+	// 快照内未修改的块通过硬链接共享到新分支，保持零数据复制。
+	return NewBlobStore(source).LinkAllTo(NewBlobStore(path))
 }
 
 // 只读 Pebble 实例无法调用 Checkpoint；先复制控制文件并硬链接不可变表。
+// blobs 目录由 Fork 在检查点完成后单独硬链接，避免与 Pebble 表混在一起复制。
 func stageCheckpoint(source, destination string) error {
 	entries, err := os.ReadDir(source)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name() == "LOCK" {
+		if entry.Name() == "LOCK" || entry.Name() == "blobs" {
 			continue
 		}
 		info, err := entry.Info()
@@ -611,7 +649,7 @@ func stageCheckpoint(source, destination string) error {
 			return fmt.Errorf("快照包含非普通文件 %s", entry.Name())
 		}
 		from, to := filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())
-		if strings.HasSuffix(entry.Name(), ".sst") || strings.HasSuffix(entry.Name(), ".blob") {
+		if strings.HasSuffix(entry.Name(), ".sst") {
 			if err := os.Link(from, to); err != nil {
 				return err
 			}
@@ -634,10 +672,12 @@ func stageCheckpoint(source, destination string) error {
 	return nil
 }
 
-// inodeAllocator 是按 Disk 独立的 Inode 号段分配器，段内发号不产生 I/O。
+// inodeAllocator 是按 Disk 独立的编号号段分配器，段内发号不产生 I/O。
 type inodeAllocator struct {
 	mu       sync.Mutex
 	db       *pebble.DB
+	key      string
+	initial  uint64
 	next     uint64
 	reserved uint64
 	closed   bool
@@ -655,7 +695,7 @@ func (a *inodeAllocator) close() error {
 
 // readLastLocked 返回已持久化的分配上界。
 func (a *inodeAllocator) readLastLocked() (uint64, bool, error) {
-	value, closer, err := a.db.Get([]byte(inodeKey))
+	value, closer, err := a.db.Get([]byte(a.key))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return 0, false, nil
 	}
@@ -676,7 +716,7 @@ func (a *inodeAllocator) reserveLocked() error {
 		return err
 	}
 	if !exists {
-		last = 1
+		last = a.initial
 	}
 	if last == math.MaxUint64 {
 		return ErrInodeExhausted
@@ -685,7 +725,7 @@ func (a *inodeAllocator) reserveLocked() error {
 	if reserved < last {
 		reserved = math.MaxUint64
 	}
-	if err := a.db.Set([]byte(inodeKey), binary.BigEndian.AppendUint64(nil, reserved), pebble.Sync); err != nil {
+	if err := a.db.Set([]byte(a.key), binary.BigEndian.AppendUint64(nil, reserved), pebble.Sync); err != nil {
 		return err
 	}
 	a.next, a.reserved = last+1, reserved
@@ -719,17 +759,17 @@ func (a *inodeAllocator) init() error {
 		return err
 	}
 	if !exists {
-		return a.db.Set([]byte(inodeKey), binary.BigEndian.AppendUint64(nil, 1), pebble.Sync)
+		return a.db.Set([]byte(a.key), binary.BigEndian.AppendUint64(nil, a.initial), pebble.Sync)
 	}
-	if last < 1 {
+	if last < a.initial {
 		return ErrInvalidValue
 	}
 	return nil
 }
 
-// allocator 返回 Disk 的常驻分配器，首次使用时打开其小型数据库。
-func (m *Manager) allocator(disk string) (*inodeAllocator, error) {
-	path, err := m.path(disk, "", "inode-allocator")
+// allocator 返回 Disk 指定用途的常驻号段分配器，首次使用时打开其小型数据库。
+func (m *Manager) allocator(disk, kind string, initial uint64) (*inodeAllocator, error) {
+	path, err := m.path(disk, "", kind)
 	if err != nil {
 		return nil, err
 	}
@@ -738,7 +778,7 @@ func (m *Manager) allocator(disk string) (*inodeAllocator, error) {
 	if m.closed {
 		return nil, ErrClosed
 	}
-	if allocator := m.allocators[disk]; allocator != nil {
+	if allocator := m.allocators[allocatorID{disk, kind}]; allocator != nil {
 		return allocator, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -748,14 +788,27 @@ func (m *Manager) allocator(disk string) (*inodeAllocator, error) {
 	if err != nil {
 		return nil, err
 	}
-	allocator := &inodeAllocator{db: db}
-	m.allocators[disk] = allocator
+	key := inodeKey
+	if kind == blobAllocatorKind {
+		key = blobIDKey
+	}
+	allocator := &inodeAllocator{db: db, key: key, initial: initial}
+	m.allocators[allocatorID{disk, kind}] = allocator
 	return allocator, nil
 }
 
 // AllocateInode 在 Disk 级数据库按号段持久化上界，段内发号不随分支和快照回退。
 func (m *Manager) AllocateInode(disk string) (uint64, error) {
-	allocator, err := m.allocator(disk)
+	allocator, err := m.allocator(disk, inodeAllocatorKind, 1)
+	if err != nil {
+		return 0, err
+	}
+	return allocator.allocate()
+}
+
+// AllocateBlobID 在 Disk 级数据库按号段持久化上界，保证块编号在整棵树内单调唯一。
+func (m *Manager) AllocateBlobID(disk string) (uint64, error) {
+	allocator, err := m.allocator(disk, blobAllocatorKind, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -764,7 +817,7 @@ func (m *Manager) AllocateInode(disk string) (uint64, error) {
 
 // InitInodeAllocator 持久化根节点编号，已有分配器不会被重置。
 func (m *Manager) InitInodeAllocator(disk string) error {
-	allocator, err := m.allocator(disk)
+	allocator, err := m.allocator(disk, inodeAllocatorKind, 1)
 	if err != nil {
 		return err
 	}
@@ -817,11 +870,11 @@ func (m *Manager) Close() error {
 		errs = append(errs, entry.close())
 		delete(m.commits, key)
 	}
-	for disk, allocator := range m.allocators {
+	for id, allocator := range m.allocators {
 		if err := allocator.close(); err != nil {
-			errs = append(errs, fmt.Errorf("关闭磁盘 %s 的编号分配器: %w", disk, err))
+			errs = append(errs, fmt.Errorf("关闭磁盘 %s 的编号分配器: %w", id.disk, err))
 		}
-		delete(m.allocators, disk)
+		delete(m.allocators, id)
 	}
 	m.cache.Unref()
 	return errors.Join(errs...)

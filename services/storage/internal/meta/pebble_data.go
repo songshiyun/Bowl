@@ -11,8 +11,23 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
+// readPebbleBlock 读取块引用指向的完整块内容。
+func readPebbleBlock(blobs *pebblekv.BlobStore, ref pebblekv.BlobRef) ([]byte, error) {
+	return blobs.Read(ref.ID, int(ref.Length))
+}
+
+// allZeroBytes 报告整块是否可视为空洞。
+func allZeroBytes(data []byte) bool {
+	for _, value := range data {
+		if value != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req *ReadRequest) (result *ReadResponse, err error) {
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, req.Ino)
 		if err != nil {
 			return err
@@ -37,14 +52,14 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 			block := pos / pebblekv.BlobSize
 			start := pos % pebblekv.BlobSize
 			length := min(end-pos, uint64(pebblekv.BlobSize)-start)
-			value, closer, err := store.Get(pebblekv.DataKey(req.Ino, block))
-			if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+			ref, ok, err := readPebbleBlobRef(store, pebblekv.DataKey(req.Ino, block))
+			if err != nil {
 				return err
 			}
-			if err == nil {
+			if ok && start < uint64(ref.Length) {
+				n := min(length, uint64(ref.Length)-start)
 				relative := pos - req.Offset
-				_, decodeErr := pebblekv.DecodeBlobRange(value, int(start), int(length), out[relative:relative+length])
-				if err := errors.Join(decodeErr, closer.Close()); err != nil {
+				if err := blobs.ReadAt(ref.ID, int64(start), out[relative:relative+n]); err != nil {
 					return err
 				}
 			}
@@ -96,8 +111,55 @@ func commitPebbleData(store *pebble.DB, quota *TreeQuota, branch string, inode *
 	return nil
 }
 
+// buildWriteBlock 通过写时复制生成新的不可变块；整块为零时返回不保留实体。
+func (m *manager) buildWriteBlock(disk string, store pebbleReader, blobs *pebblekv.BlobStore, ino, block uint64, start int, chunk []byte) (ref pebblekv.BlobRef, keep bool, oldID, newID uint64, err error) {
+	key := pebblekv.DataKey(ino, block)
+	oldRef, oldOK, err := readPebbleBlobRef(store, key)
+	if err != nil {
+		return pebblekv.BlobRef{}, false, 0, 0, err
+	}
+	if oldOK {
+		oldID = oldRef.ID
+	}
+	// 满 1 MiB 整块写无需读取旧块，直接落新块文件。
+	if start == 0 && len(chunk) == pebblekv.BlobSize {
+		id, err := m.pebble.AllocateBlobID(disk)
+		if err != nil {
+			return pebblekv.BlobRef{}, false, 0, 0, err
+		}
+		if err := blobs.Write(id, chunk); err != nil {
+			return pebblekv.BlobRef{}, false, 0, 0, err
+		}
+		return pebblekv.BlobRef{ID: id, Length: pebblekv.BlobSize}, true, oldID, id, nil
+	}
+	length := start + len(chunk)
+	if oldOK && int(oldRef.Length) > length {
+		length = int(oldRef.Length)
+	}
+	data := make([]byte, length)
+	if oldOK {
+		oldData, err := readPebbleBlock(blobs, oldRef)
+		if err != nil {
+			return pebblekv.BlobRef{}, false, 0, 0, err
+		}
+		copy(data, oldData)
+	}
+	copy(data[start:], chunk)
+	if allZeroBytes(data) {
+		return pebblekv.BlobRef{}, false, oldID, 0, nil
+	}
+	id, err := m.pebble.AllocateBlobID(disk)
+	if err != nil {
+		return pebblekv.BlobRef{}, false, 0, 0, err
+	}
+	if err := blobs.Write(id, data); err != nil {
+		return pebblekv.BlobRef{}, false, 0, 0, err
+	}
+	return pebblekv.BlobRef{ID: id, Length: uint32(length)}, true, oldID, id, nil
+}
+
 func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteRequest) (result *WriteResponse, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(_ string, branch string, quota *TreeQuota, store *pebble.DB) error {
+	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, req.Ino)
 		if err != nil {
 			return err
@@ -129,27 +191,30 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 		now := time.Now().UTC()
 		inode.MtimeSec, inode.MtimeNsec = now.Unix(), uint32(now.Nanosecond())
 		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
+		var oldIDs, newIDs []uint64
 		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, true, func(batch *pebble.Batch) error {
 			for pos, consumed := req.Offset, 0; consumed < len(req.Data); {
 				block := pos / pebblekv.BlobSize
-				start := uint32(pos % pebblekv.BlobSize)
-				length := min(len(req.Data)-consumed, pebblekv.BlobSize-int(start))
+				start := int(pos % pebblekv.BlobSize)
+				length := min(len(req.Data)-consumed, pebblekv.BlobSize-start)
 				chunk := req.Data[consumed : consumed+length]
-				var frame []byte
-				var err error
-				if start == 0 && length == pebblekv.BlobSize {
-					frame, err = pebblekv.EncodeBase(chunk)
-					if err == nil {
-						err = batch.Set(pebblekv.DataKey(req.Ino, block), frame, nil)
-					}
-				} else {
-					frame, err = pebblekv.EncodePatches(pebblekv.WritePatch(start, chunk))
-					if err == nil {
-						err = batch.Merge(pebblekv.DataKey(req.Ino, block), frame, nil)
-					}
-				}
+				ref, keep, oldID, newID, err := m.buildWriteBlock(disk, store, blobs, req.Ino, block, start, chunk)
 				if err != nil {
 					return err
+				}
+				key := pebblekv.DataKey(req.Ino, block)
+				if keep {
+					if err := batch.Set(key, pebblekv.EncodeBlobRef(ref), nil); err != nil {
+						return err
+					}
+				} else if err := batch.Delete(key, nil); err != nil {
+					return err
+				}
+				if oldID != 0 {
+					oldIDs = append(oldIDs, oldID)
+				}
+				if newID != 0 {
+					newIDs = append(newIDs, newID)
 				}
 				pos += uint64(length)
 				consumed += length
@@ -157,6 +222,9 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 			return nil
 		})
 		if err != nil {
+			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
+		}
+		if err := pebbleRemoveBlobs(blobs, oldIDs); err != nil {
 			return err
 		}
 		result = &WriteResponse{Size: uint32(len(req.Data)), Inode: m.newPebbleInode(inode)}
@@ -166,7 +234,7 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 }
 
 func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, input SetAttrInput) (result *Inode, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(_ string, branch string, quota *TreeQuota, store *pebble.DB) error {
+	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -230,30 +298,62 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 		if err != nil {
 			return err
 		}
+		var oldIDs, newIDs []uint64
 		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
 			if inode.Size >= oldSize {
 				return nil
 			}
 			if inode.Size == 0 {
+				ids, err := pebbleDataBlobIDs(store, ino, 0)
+				if err != nil {
+					return err
+				}
+				oldIDs = append(oldIDs, ids...)
 				lower, upper := pebblekv.DataRange(ino, 0)
 				return batch.DeleteRange(lower, upper, nil)
 			}
 			tail := (inode.Size - 1) / pebblekv.BlobSize
 			length := uint32(inode.Size - tail*pebblekv.BlobSize)
+			ids, err := pebbleDataBlobIDs(store, ino, tail+1)
+			if err != nil {
+				return err
+			}
+			oldIDs = append(oldIDs, ids...)
 			lower, upper := pebblekv.DataRange(ino, tail+1)
 			if err := batch.DeleteRange(lower, upper, nil); err != nil {
 				return err
 			}
-			if length < pebblekv.BlobSize {
-				patch, err := pebblekv.EncodePatches(pebblekv.TruncatePatch(length))
-				if err != nil {
-					return err
-				}
-				return batch.Merge(pebblekv.DataKey(ino, tail), patch, nil)
+			if length == pebblekv.BlobSize {
+				return nil
 			}
-			return nil
+			key := pebblekv.DataKey(ino, tail)
+			ref, ok, err := readPebbleBlobRef(store, key)
+			if err != nil || !ok || ref.Length <= length {
+				return err
+			}
+			data, err := readPebbleBlock(blobs, ref)
+			if err != nil {
+				return err
+			}
+			data = data[:length]
+			oldIDs = append(oldIDs, ref.ID)
+			if allZeroBytes(data) {
+				return batch.Delete(key, nil)
+			}
+			id, err := m.pebble.AllocateBlobID(disk)
+			if err != nil {
+				return err
+			}
+			if err := blobs.Write(id, data); err != nil {
+				return err
+			}
+			newIDs = append(newIDs, id)
+			return batch.Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: length}), nil)
 		})
 		if err != nil {
+			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
+		}
+		if err := pebbleRemoveBlobs(blobs, oldIDs); err != nil {
 			return err
 		}
 		result = m.newPebbleInode(inode)
@@ -262,33 +362,68 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 	return result, err
 }
 
-// zeroPebbleRange 用局部补丁和整块删除清除区间。
-func zeroPebbleRange(batch *pebble.Batch, ino, start, end uint64) error {
+// zeroPebbleRange 用局部补丁和整块删除清除区间，并登记需回收的块编号。
+func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv.BlobStore, batch *pebble.Batch, ino, start, end uint64, oldIDs, newIDs *[]uint64) error {
 	for pos := start; pos < end; {
 		block := pos / pebblekv.BlobSize
-		inBlock := uint32(pos % pebblekv.BlobSize)
-		length := uint32(min(end-pos, uint64(pebblekv.BlobSize)-uint64(inBlock)))
+		inBlock := int(pos % pebblekv.BlobSize)
+		length := int(min(end-pos, uint64(pebblekv.BlobSize)-uint64(inBlock)))
+		key := pebblekv.DataKey(ino, block)
+		ref, ok, err := readPebbleBlobRef(store, key)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			pos += uint64(length)
+			continue
+		}
 		if inBlock == 0 && length == pebblekv.BlobSize {
-			// 大范围空洞使用范围删除，避免按文件最大大小逐块枚举。
-			fullBlocks := (end - pos) / pebblekv.BlobSize
-			if fullBlocks > 1024 {
-				if err := batch.DeleteRange(pebblekv.DataKey(ino, block), pebblekv.DataKey(ino, block+fullBlocks), nil); err != nil {
-					return err
+			*oldIDs = append(*oldIDs, ref.ID)
+			if err := batch.Delete(key, nil); err != nil {
+				return err
+			}
+			pos += uint64(length)
+			continue
+		}
+		data, err := readPebbleBlock(blobs, ref)
+		if err != nil {
+			return err
+		}
+		changed := false
+		if inBlock < len(data) {
+			clearEnd := min(inBlock+length, len(data))
+			for _, value := range data[inBlock:clearEnd] {
+				if value != 0 {
+					changed = true
+					break
 				}
-				pos += fullBlocks * pebblekv.BlobSize
-				continue
 			}
-			if err := batch.Delete(pebblekv.DataKey(ino, block), nil); err != nil {
+			if changed {
+				clear(data[inBlock:clearEnd])
+			}
+		}
+		if !changed {
+			pos += uint64(length)
+			continue
+		}
+		*oldIDs = append(*oldIDs, ref.ID)
+		if allZeroBytes(data) {
+			if err := batch.Delete(key, nil); err != nil {
 				return err
 			}
-		} else {
-			patch, err := pebblekv.EncodePatches(pebblekv.ZeroPatch(inBlock, length))
-			if err != nil {
-				return err
-			}
-			if err := batch.Merge(pebblekv.DataKey(ino, block), patch, nil); err != nil {
-				return err
-			}
+			pos += uint64(length)
+			continue
+		}
+		id, err := m.pebble.AllocateBlobID(disk)
+		if err != nil {
+			return err
+		}
+		if err := blobs.Write(id, data); err != nil {
+			return err
+		}
+		*newIDs = append(*newIDs, id)
+		if err := batch.Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: uint32(len(data))}), nil); err != nil {
+			return err
 		}
 		pos += uint64(length)
 	}
@@ -304,7 +439,7 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 	default:
 		return ErrNotSupported
 	}
-	return m.withWritablePebbleBranch(ctx, sid, func(_ string, branch string, quota *TreeQuota, store *pebble.DB) error {
+	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil {
 			return err
@@ -340,12 +475,17 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 		if err != nil {
 			return err
 		}
-		return commitPebbleData(store, quota, branch, &inode, stat, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
+		var oldIDs, newIDs []uint64
+		err = commitPebbleData(store, quota, branch, &inode, stat, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
 			if !zero {
 				return nil
 			}
-			return zeroPebbleRange(batch, params.Ino, params.Offset, min(end, inode.Size))
+			return m.zeroPebbleRange(disk, store, blobs, batch, params.Ino, params.Offset, min(end, inode.Size), &oldIDs, &newIDs)
 		})
+		if err != nil {
+			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
+		}
+		return pebbleRemoveBlobs(blobs, oldIDs)
 	})
 }
 
@@ -354,7 +494,7 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 	if err != nil {
 		return err
 	}
-	return m.withPebbleWriteSession(ctx, session, func(store *pebble.DB) error {
+	return m.withPebbleWriteSession(ctx, session, func(store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -370,6 +510,10 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 		}
 		if session.readOnly {
 			return nil
+		}
+		// 先确认块文件落盘，再同步指向它们的元数据 WAL。
+		if err := blobs.Sync(); err != nil {
+			return err
 		}
 		if err := store.LogData(nil, pebble.Sync); err != nil {
 			return err

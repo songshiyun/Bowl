@@ -86,7 +86,7 @@ func branchHasDirty(store *pebble.DB) (dirty bool, err error) {
 }
 
 // 新工作区没有旧写端的打开句柄，快照中的孤儿不能继承到新工作区。
-func prepareBranch(store *pebble.DB, name string) (err error) {
+func prepareBranch(store *pebble.DB, blobs *pebblekv.BlobStore, name string) (err error) {
 	lower, upper := pebblekv.OrphanRange()
 	iter, err := store.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -99,7 +99,7 @@ func prepareBranch(store *pebble.DB, name string) (err error) {
 		if err != nil {
 			return err
 		}
-		if err := reclaimBranchOrphan(store, quota, name, ino); err != nil {
+		if err := reclaimBranchOrphan(store, blobs, quota, name, ino); err != nil {
 			return err
 		}
 	}
@@ -369,7 +369,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 		if err != nil {
 			return err
 		}
-		err = prepareBranch(workspace.DB(), params.Name)
+		err = prepareBranch(workspace.DB(), workspace.Blobs(), params.Name)
 		var sizes map[uint64]uint64
 		if err == nil {
 			sizes, err = readBranchSizesFromDB(workspace.DB())
@@ -621,7 +621,7 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 		if err != nil {
 			return err
 		}
-		err = prepareBranch(workspace.DB(), staging)
+		err = prepareBranch(workspace.DB(), workspace.Blobs(), staging)
 		var sizes map[uint64]uint64
 		if err == nil {
 			sizes, err = readBranchSizesFromDB(workspace.DB())

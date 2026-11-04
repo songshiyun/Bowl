@@ -90,8 +90,13 @@ func touchTopologyInode(inode *pebblekv.Inode, now time.Time, seq uint64) {
 	inode.WriteSeq = seq
 }
 
-// removeTopologyInode 在目录变更批次中删除节点及其关联数据。
-func removeTopologyInode(batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode) error {
+// removeTopologyInode 在目录变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
+func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
+	ids, err := pebbleDataBlobIDs(store, inode.Ino, 0)
+	if err != nil {
+		return err
+	}
+	*removed = append(*removed, ids...)
 	if err := batch.Delete(pebblekv.InodeKey(inode.Ino), nil); err != nil {
 		return err
 	}
@@ -111,12 +116,12 @@ func removeTopologyInode(batch *pebble.Batch, stat *pebblekv.BranchStat, inode p
 	return nil
 }
 
-func saveTopologyInode(batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, open bool) (bool, error) {
+func saveTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, open bool, removed *[]uint64) (bool, error) {
 	if inode.Nlink > 0 {
 		return false, setCreateInode(batch, inode)
 	}
 	if !open {
-		return true, removeTopologyInode(batch, stat, inode)
+		return true, removeTopologyInode(store, batch, stat, inode, removed)
 	}
 	if err := setCreateInode(batch, inode); err != nil {
 		return false, err
@@ -155,7 +160,7 @@ func (m *manager) rmdirPebbleNode(ctx context.Context, sid *uint64, parentIno ui
 }
 
 func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno uint64, name []byte, directory bool) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB) (err error) {
+	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		parent, err := readTopologyParent(store, parentIno)
 		if err != nil {
 			return err
@@ -214,7 +219,8 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 			return err
 		}
 		open, _ := OpenInClientFromContext(ctx)
-		removed, err := saveTopologyInode(batch, &stat, child, open)
+		var removedBlobs []uint64
+		removed, err := saveTopologyInode(store, batch, &stat, child, open, &removedBlobs)
 		if err != nil {
 			return err
 		}
@@ -228,13 +234,12 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
 			return err
 		}
-
-		return nil
+		return pebbleRemoveBlobs(blobs, removedBlobs)
 	})
 }
 
 func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params RenameParams) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB) (err error) {
+	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		oldParent, err := readTopologyParent(store, params.OldParentIno)
 		if err != nil {
 			return err
@@ -354,6 +359,7 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 		if err := setCreateInode(batch, oldInode); err != nil {
 			return err
 		}
+		var removedBlobs []uint64
 		var removedIno uint64
 		if params.Flags == RenameExchange {
 			if newIsDir && crossParent {
@@ -391,7 +397,7 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 				}
 				touchTopologyInode(&newInode, now, seq)
 				open, _ := OpenInClientFromContext(ctx)
-				removed, err := saveTopologyInode(batch, &stat, newInode, open)
+				removed, err := saveTopologyInode(store, batch, &stat, newInode, open, &removedBlobs)
 				if err != nil {
 					return err
 				}
@@ -420,17 +426,7 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
 			return err
 		}
-
-		if crossParent {
-
-		}
-		if params.Flags != RenameExchange {
-
-			if hasNew {
-
-			}
-		}
-		return nil
+		return pebbleRemoveBlobs(blobs, removedBlobs)
 	})
 }
 
@@ -459,7 +455,7 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 			return ErrInvalidArgument
 		}
 		return nil
-	}, func(_, branch string, quota *TreeQuota, store *pebble.DB) error {
+	}, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return err
@@ -467,6 +463,6 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 		if err == nil && inode.Nlink > 0 {
 			return ErrInvalidArgument
 		}
-		return reclaimBranchOrphan(store, quota, branch, params.Ino)
+		return reclaimBranchOrphan(store, blobs, quota, branch, params.Ino)
 	})
 }

@@ -94,7 +94,7 @@ func (m *manager) Diff(ctx context.Context, params DiffParams) (entries []DiffEn
 		branchNames = append(branchNames, to.name)
 	}
 	slices.Sort(branchNames)
-	stores := make(map[string]*pebble.DB, len(branchNames))
+	stores := make(map[string]pebbleDiffStore, len(branchNames))
 	for _, name := range branchNames {
 		unlock := m.lockBranchRead(diskID.String(), name)
 		defer unlock()
@@ -103,24 +103,24 @@ func (m *manager) Diff(ctx context.Context, params DiffParams) (entries []DiffEn
 			return nil, openErr
 		}
 		defer func() { err = errors.Join(err, branch.Close()) }()
-		stores[name] = branch.DB()
+		stores[name] = pebbleDiffStore{db: branch.DB(), blobs: branch.Blobs()}
 	}
-	open := func(ref diffRef) (*pebble.DB, func() error, error) {
+	open := func(ref diffRef) (pebbleDiffStore, func() error, error) {
 		if ref.isBranch {
 			return stores[ref.name], func() error { return nil }, nil
 		}
 		commit, err := m.pebble.OpenCommit(diskID.String(), ref.name)
 		if err != nil {
-			return nil, nil, err
+			return pebbleDiffStore{}, nil, err
 		}
-		return commit.DB(), commit.Close, nil
+		return pebbleDiffStore{db: commit.DB(), blobs: commit.Blobs()}, commit.Close, nil
 	}
-	fromDB, closeFrom, err := open(from)
+	fromStore, closeFrom, err := open(from)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { err = errors.Join(err, closeFrom()) }()
-	toDB, closeTo, err := open(to)
+	toStore, closeTo, err := open(to)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,13 @@ func (m *manager) Diff(ctx context.Context, params DiffParams) (entries []DiffEn
 	if err != nil {
 		return nil, err
 	}
-	return m.diffStores(ctx, fromDB, toDB, dirty)
+	return m.diffStores(ctx, fromStore, toStore, dirty)
+}
+
+// pebbleDiffStore 把 Pebble 实例与所属目录的块文件存储绑定在一起。
+type pebbleDiffStore struct {
+	db    *pebble.DB
+	blobs *pebblekv.BlobStore
 }
 
 func collectDiffDirty(ctx context.Context, store *pebble.DB, dirty map[uint64]bool) (err error) {
@@ -153,11 +159,11 @@ func collectDiffDirty(ctx context.Context, store *pebble.DB, dirty map[uint64]bo
 }
 
 // 快照的标记属于它相对父版本的修改，共同祖先的标记不能用于本次比较。
-func (m *manager) diffDirtyInodes(ctx context.Context, diskID pgtype.UUID, from, to diffRef, stores map[string]*pebble.DB) (map[uint64]bool, error) {
+func (m *manager) diffDirtyInodes(ctx context.Context, diskID pgtype.UUID, from, to diffRef, stores map[string]pebbleDiffStore) (map[uint64]bool, error) {
 	dirty := make(map[uint64]bool)
 	for _, ref := range []diffRef{from, to} {
 		if ref.isBranch {
-			if err := collectDiffDirty(ctx, stores[ref.name], dirty); err != nil {
+			if err := collectDiffDirty(ctx, stores[ref.name].db, dirty); err != nil {
 				return nil, err
 			}
 		}
@@ -295,11 +301,11 @@ func diffXattrs(ctx context.Context, oldDB, newDB *pebble.DB, oldIno, newIno uin
 	return oldValid != newValid, errors.Join(oldIter.Error(), newIter.Error())
 }
 
-func diffBlocks(ctx context.Context, oldDB, newDB *pebble.DB, oldIno, newIno uint64) (blocks []uint64, err error) {
+func diffBlocks(ctx context.Context, old, new pebbleDiffStore, oldIno, newIno uint64) (blocks []uint64, err error) {
 	var oldIter, newIter *pebble.Iterator
 	if oldIno != 0 {
 		lower, upper := pebblekv.DataRange(oldIno, 0)
-		oldIter, err = oldDB.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		oldIter, err = old.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +313,7 @@ func diffBlocks(ctx context.Context, oldDB, newDB *pebble.DB, oldIno, newIno uin
 	}
 	if newIno != 0 {
 		lower, upper := pebblekv.DataRange(newIno, 0)
-		newIter, err = newDB.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
+		newIter, err = new.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 		if err != nil {
 			return nil, err
 		}
@@ -340,12 +346,19 @@ func diffBlocks(ctx context.Context, oldDB, newDB *pebble.DB, oldIno, newIno uin
 			newValid = newIter.Next()
 		default:
 			if !bytes.Equal(oldIter.Value(), newIter.Value()) {
-				oldData, oldErr := pebblekv.DecodeBlob(oldIter.Value())
-				newData, newErr := pebblekv.DecodeBlob(newIter.Value())
-				if err := errors.Join(oldErr, newErr); err != nil {
+				oldRef, err := pebblekv.DecodeBlobRef(oldIter.Value())
+				if err != nil {
 					return nil, err
 				}
-				if !bytes.Equal(oldData, newData) {
+				newRef, err := pebblekv.DecodeBlobRef(newIter.Value())
+				if err != nil {
+					return nil, err
+				}
+				equal, err := pebbleBlobEqual(old.blobs, oldRef, new.blobs, newRef)
+				if err != nil {
+					return nil, err
+				}
+				if !equal {
 					blocks = append(blocks, oldIdx)
 				}
 			}
@@ -368,12 +381,12 @@ func diffMetadata(old, new pebblekv.Inode) bool {
 	return old.Mode&S_IFMT != S_IFDIR && (old.WriteSeq != new.WriteSeq || old.Size != new.Size)
 }
 
-func (m *manager) diffStores(ctx context.Context, oldDB, newDB *pebble.DB, dirty map[uint64]bool) ([]DiffEntry, error) {
-	oldTree, err := diffTree(ctx, oldDB)
+func (m *manager) diffStores(ctx context.Context, oldStore, newStore pebbleDiffStore, dirty map[uint64]bool) ([]DiffEntry, error) {
+	oldTree, err := diffTree(ctx, oldStore.db)
 	if err != nil {
 		return nil, err
 	}
-	newTree, err := diffTree(ctx, newDB)
+	newTree, err := diffTree(ctx, newStore.db)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +419,7 @@ func (m *manager) diffStores(ctx context.Context, oldDB, newDB *pebble.DB, dirty
 			newIno = new.Ino
 		}
 		if newIno != 0 && (old == nil || oldIno == 0 || old.Ino != new.Ino || old.WriteSeq != new.WriteSeq || old.Size != new.Size || dirty[oldIno] || old.MtimeSec != new.MtimeSec || old.MtimeNsec != new.MtimeNsec || old.CtimeSec != new.CtimeSec || old.CtimeNsec != new.CtimeNsec) || oldIno != 0 && newIno == 0 {
-			blocks, err := diffBlocks(ctx, oldDB, newDB, oldIno, newIno)
+			blocks, err := diffBlocks(ctx, oldStore, newStore, oldIno, newIno)
 			if err != nil {
 				return DiffEntry{}, err
 			}
@@ -443,7 +456,7 @@ func (m *manager) diffStores(ctx context.Context, oldDB, newDB *pebble.DB, dirty
 		}
 		changed := diffMetadata(oldNode.inode, newNode.inode)
 		if !changed {
-			changed, err = diffXattrs(ctx, oldDB, newDB, oldNode.inode.Ino, newNode.inode.Ino)
+			changed, err = diffXattrs(ctx, oldStore.db, newStore.db, oldNode.inode.Ino, newNode.inode.Ino)
 			if err != nil {
 				return nil, err
 			}

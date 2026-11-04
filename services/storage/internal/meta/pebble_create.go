@@ -51,11 +51,11 @@ func (m *manager) pebbleCreateResult(ctx context.Context, sid *uint64, params Cr
 }
 
 // withWritablePebbleBranch 在分支锁内使用已验证的可写会话。
-func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn func(string, string, *TreeQuota, *pebble.DB) error) (err error) {
+func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) (err error) {
 	return m.withWritablePebbleBranchFor(ctx, sid, nil, fn)
 }
 
-func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, check func(pgtype.UUID, string) error, fn func(string, string, *TreeQuota, *pebble.DB) error) (err error) {
+func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, check func(pgtype.UUID, string) error, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) (err error) {
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
@@ -87,7 +87,7 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	if err := fn(disk, session.branch, quota, branch.DB()); err != nil {
+	if err := fn(disk, session.branch, quota, branch.DB(), branch.Blobs()); err != nil {
 		return err
 	}
 	m.pebble.MarkBranchDirty(disk, session.branch)
@@ -209,7 +209,7 @@ func (m *manager) createdPebbleInode(inode pebblekv.Inode) *Inode {
 }
 
 func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebbleNodeParams) (result *Inode, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB) (err error) {
+	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) (err error) {
 		parent, err := readCreateParent(store, params.parent, params.name)
 		if err != nil {
 			return err
@@ -308,7 +308,7 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 }
 
 func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkParams) (result *Inode, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(_, _ string, quota *TreeQuota, store *pebble.DB) (err error) {
+	err = m.withWritablePebbleBranch(ctx, sid, func(_, _ string, quota *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) (err error) {
 		parent, err := readCreateParent(store, params.NewParentIno, params.NewName)
 		if err != nil {
 			return err

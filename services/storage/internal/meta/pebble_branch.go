@@ -107,7 +107,7 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		if err != nil {
 			return err
 		}
-		if err := reclaimBranchOrphan(branch.DB(), quota, branchName, ino); err != nil {
+		if err := reclaimBranchOrphan(branch.DB(), branch.Blobs(), quota, branchName, ino); err != nil {
 			return fmt.Errorf("回收分支 %s 的孤儿节点 %d: %w", branchName, ino, err)
 		}
 	}
@@ -118,7 +118,7 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 	return nil
 }
 
-func reclaimBranchOrphan(store *pebble.DB, quota *TreeQuota, branch string, ino uint64) (err error) {
+func reclaimBranchOrphan(store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, branch string, ino uint64) (err error) {
 	var size uint64
 	value, closer, err := store.Get(pebblekv.InodeKey(ino))
 	exists := err == nil
@@ -133,6 +133,10 @@ func reclaimBranchOrphan(store *pebble.DB, quota *TreeQuota, branch string, ino 
 		}
 		size = inode.Size
 	} else if !errors.Is(err, pebble.ErrNotFound) {
+		return err
+	}
+	ids, err := pebbleDataBlobIDs(store, ino, 0)
+	if err != nil {
 		return err
 	}
 	batch := store.NewBatch()
@@ -167,7 +171,10 @@ func reclaimBranchOrphan(store *pebble.DB, quota *TreeQuota, branch string, ino 
 			return err
 		}
 	}
-	return quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.NoSync) })
+	if err := quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.NoSync) }); err != nil {
+		return err
+	}
+	return pebbleRemoveBlobs(blobs, ids)
 }
 
 func lockSession(ctx context.Context, conn db.DBTX, sessionID uint64) error {

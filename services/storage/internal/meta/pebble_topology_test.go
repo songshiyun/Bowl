@@ -59,9 +59,10 @@ func TestPebbleUnlinkAndReclaim(t *testing.T) {
 	require.NoError(t, err)
 	xattr := pebblekv.XattrKey(inode.Ino, []byte("user.test"))
 	data := pebblekv.DataKey(inode.Ino, 0)
+	dataValue := pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: 1, Length: 4})
 	e.withBranch(t, "main", func(store *pebble.DB) {
 		require.NoError(t, store.Set(xattr, []byte("attr"), pebble.Sync))
-		require.NoError(t, store.Set(data, []byte("data"), pebble.Sync))
+		require.NoError(t, store.Set(data, dataValue, pebble.Sync))
 	})
 	require.NoError(t, e.mgr.Unlink(ctx, 1, []byte("alias")))
 	require.Equal(t, meta.TreeQuotaUsage{Bytes: 6, Inodes: 2}, quota.Usage())
@@ -85,7 +86,7 @@ func TestPebbleUnlinkAndReclaim(t *testing.T) {
 		require.Zero(t, readPebbleCreateInode(t, store, inode.Ino).Nlink)
 		require.Equal(t, []byte{1}, getPebbleValue(t, store, pebblekv.OrphanKey(inode.Ino)))
 		require.Equal(t, []byte("attr"), getPebbleValue(t, store, xattr))
-		require.Equal(t, []byte("data"), getPebbleValue(t, store, data))
+		require.Equal(t, dataValue, getPebbleValue(t, store, data))
 		require.Equal(t, uint64(6), topologyStat(t, store).LogicalBytes)
 	})
 	got, err := e.mgr.GetAttr(ctx, inode.Ino)
@@ -107,7 +108,7 @@ func TestPebbleUnlinkAndReclaim(t *testing.T) {
 	immediate := topologySymlink(t, e, 1, "immediate", "abc")
 	e.withBranch(t, "main", func(store *pebble.DB) {
 		require.NoError(t, store.Set(pebblekv.XattrKey(immediate.Ino, []byte("x")), []byte("v"), pebble.Sync))
-		require.NoError(t, store.Set(pebblekv.DataKey(immediate.Ino, 3), []byte("v"), pebble.Sync))
+		require.NoError(t, store.Set(pebblekv.DataKey(immediate.Ino, 3), pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: 2, Length: 1}), pebble.Sync))
 	})
 	require.NoError(t, e.mgr.Unlink(meta.WithOpenInClient(ctx, false), 1, []byte("immediate")))
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
@@ -175,7 +176,7 @@ func TestPebbleRenameFiles(t *testing.T) {
 	require.ErrorIs(t, e.mgr.Rename(ctx, topologyRename(1, "source", 1, "target", meta.RenameNoReplace)), meta.ErrAlreadyExists)
 	e.withBranch(t, "main", func(store *pebble.DB) {
 		require.NoError(t, store.Set(pebblekv.XattrKey(target.Ino, []byte("x")), []byte("v"), pebble.Sync))
-		require.NoError(t, store.Set(pebblekv.DataKey(target.Ino, 0), []byte("v"), pebble.Sync))
+		require.NoError(t, store.Set(pebblekv.DataKey(target.Ino, 0), pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: 3, Length: 1}), pebble.Sync))
 	})
 	require.NoError(t, e.mgr.Rename(meta.WithOpenInClient(ctx, true), topologyRename(1, "source", 1, "target", 0)))
 	quota, err := e.mgr.TreeQuota(e.ctx, e.disk.DiskID)
@@ -197,7 +198,7 @@ func TestPebbleRenameFiles(t *testing.T) {
 	e.withBranch(t, "main", func(store *pebble.DB) {
 		for _, ino := range []uint64{source.Ino, second.Ino} {
 			require.NoError(t, store.Set(pebblekv.XattrKey(ino, []byte("x")), []byte("v"), pebble.Sync))
-			require.NoError(t, store.Set(pebblekv.DataKey(ino, 3), []byte("v"), pebble.Sync))
+			require.NoError(t, store.Set(pebblekv.DataKey(ino, 3), pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: 4, Length: 1}), pebble.Sync))
 		}
 	})
 	require.NoError(t, e.mgr.Rename(ctx, topologyRename(1, "target", 1, "second", 0)))
