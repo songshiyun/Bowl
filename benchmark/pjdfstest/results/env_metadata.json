@@ -1,6 +1,6 @@
 {
-  "test_started_at": "2026-11-03T22:57:05Z",
-  "test_completed_at": "2026-11-03T23:01:08Z",
+  "test_started_at": "2026-11-04T09:20:17Z",
+  "test_completed_at": "2026-11-04T09:23:12Z",
   "cloud": {
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
@@ -22,8 +22,8 @@
     "os_release": "Ubuntu 24.04.5 LTS",
     "kernel": "6.8.0-147-generic",
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
-    "instance_id": "i-rj95onsvg763oxc2f0ut",
-    "private_ip": "172.16.1.191"
+    "instance_id": "i-rj91n7p8m56c4bop2m6v",
+    "private_ip": "172.16.1.199"
   },
   "client_node": {
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -32,20 +32,24 @@
     "os_release": "Ubuntu 24.04.5 LTS",
     "kernel": "6.8.0-147-generic",
     "fusermount_version": "fusermount3 version: 3.14.0",
-    "instance_id": "i-rj95onsvg763oxc2f0uu",
-    "private_ip": "172.16.1.190"
+    "instance_id": "i-rj91n7p8m56c4bop2m6w",
+    "private_ip": "172.16.1.198"
   },
   "network_baseline": {
-    "ping_rtt_ms": "0.066/0.097/0.311/0.053",
+    "ping_rtt_ms": "0.062/0.090/0.289/0.050",
     "iperf3_gbps": "15.71"
   },
   "bowl_config": {
-    "disk_id": "01a1a3a1-64df-7895-8d46-e764e01e7ec6",
+    "disk_id": "01a1a5db-f468-721b-9643-c1fc70852cf5",
     "root_ino": 1,
     "pjdfstest_git_commit": "85a8aea",
-    "bowl_git_commit": "0ab26a7",
-    "storage_engine": "Pebble per branch",
-    "kernel_writeback_cache": false,
+    "bowl_git_commit": "626dd03",
+    "storage_engine": "Pebble per branch (常驻句柄池)",
+    "blob_size_bytes": 1048576,
+    "kernel_writeback_cache": true,
+    "open_keep_cache": true,
+    "flush_issues_fsync_rpc": false,
+    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘",
     "disk_size": "2PiB",
     "atime_mode": "strictatime",
     "entry_timeout": "0",
@@ -53,9 +57,9 @@
     "dir_entry_timeout": "0"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-pjdfstest-kp-20261103-225358",
-    "instances_created_at": "2026-11-03T22:54:09Z",
-    "instances_deleted_at": "2026-11-03T23:01:22Z",
+    "key_pair_name": "bowl-pjdfstest-kp-20261104-091738",
+    "instances_created_at": "2026-11-04T09:17:45Z",
+    "instances_deleted_at": "2026-11-04T09:23:23Z",
     "remaining_benchmark_instances": 0
   }
 }

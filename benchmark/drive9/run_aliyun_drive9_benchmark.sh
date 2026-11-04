@@ -16,11 +16,13 @@
 #         - Suite 2: `drive9_fuse_bench.py` (Cold & Hot cache, 10 micro + 5 macro)
 #         - Suite 3: `fuse_perf_baseline.py` (SHA-256 I/O + SQLite DELETE & WAL)
 # ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
-# 每个 (disk_id, branch_name) 使用独立 Pebble 存储 Inode、Entry、Xattr、
-# Orphan 和 4 MiB 数据块；整块用 Set，局部更新用 ValueMerger，Checkpoint
-# 和 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的
-# NamespaceCache 在客户端本地维护。当前提交禁用内核 writeback_cache；
-# Flush/Fsync 向服务端请求持久化。
+# 每个 (disk_id, branch_name) 使用常驻 Pebble 句柄池存储 Inode、Entry、Xattr、
+# Orphan 和 1 MiB 数据块；整块用 Set，局部更新用 ValueMerger 并按区间解码，
+# Checkpoint 和 Fork 通过硬链接共享文件。常规写批次以 pebble.NoSync 提交异步
+# WAL，并由后台 1 秒刷盘与 WALBytesPerSync 兜底。FileHandle、FileLock、
+# O_TMPFILE 和 O(1) 索引的 NamespaceCache 在客户端本地维护。
+# 客户端默认开启内核 CAP_WRITEBACK_CACHE 与 FOPEN_KEEP_CACHE；Flush 不再触发
+# 跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。
 # ==============================================================================
 
 set -euo pipefail
@@ -871,8 +873,12 @@ jq -n \
     },
     bowl_config: {
       git_commit: $bowl_commit,
-      storage_engine: "Pebble per branch",
-      kernel_writeback_cache: false,
+      storage_engine: "Pebble per branch (常驻句柄池)",
+      blob_size_bytes: 1048576,
+      kernel_writeback_cache: true,
+      open_keep_cache: true,
+      flush_issues_fsync_rpc: false,
+      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘",
       atime_mode: "noatime",
       fuse_cache_timeout: "1.0s (entry=1s, attr=1s, direntry=1s)"
     },
