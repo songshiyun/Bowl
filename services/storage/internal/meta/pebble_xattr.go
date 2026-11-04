@@ -53,7 +53,9 @@ func pebbleXattrNames(ctx context.Context, store pebbleReader, ino uint64) (name
 	return names, iter.Error()
 }
 
-func writePebbleXattr(store *pebble.DB, inode pebblekv.Inode, name, value []byte, remove bool) (err error) {
+func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode pebblekv.Inode, name, value []byte, remove bool) (err error) {
+	unlockMeta := m.branchMetaLock(disk, branch)
+	defer unlockMeta()
 	stat, err := readCreateStat(store)
 	if err != nil {
 		return err
@@ -93,7 +95,9 @@ func writePebbleXattr(store *pebble.DB, inode pebblekv.Inode, name, value []byte
 }
 
 func (m *manager) pebbleSetXattr(ctx context.Context, sid *uint64, params SetXattrParams) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, _ string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
+	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
+		unlock := m.lockInodeWrite(disk, branch, params.Ino)
+		defer unlock()
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil {
 			return err
@@ -128,7 +132,7 @@ func (m *manager) pebbleSetXattr(ctx context.Context, sid *uint64, params SetXat
 				return ErrNoSpace
 			}
 		}
-		return writePebbleXattr(store, inode, params.Name, params.Value, false)
+		return m.writePebbleXattr(disk, branch, store, inode, params.Name, params.Value, false)
 	})
 }
 
@@ -138,7 +142,7 @@ func (m *manager) pebbleGetXattr(ctx context.Context, sid *uint64, ino uint64, n
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+	err = m.withPebblePointReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -183,7 +187,9 @@ func (m *manager) pebbleListXattr(ctx context.Context, sid *uint64, ino uint64) 
 }
 
 func (m *manager) pebbleRemoveXattr(ctx context.Context, sid *uint64, ino uint64, name []byte) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, _ string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
+	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
+		unlock := m.lockInodeWrite(disk, branch, ino)
+		defer unlock()
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -201,6 +207,6 @@ func (m *manager) pebbleRemoveXattr(ctx context.Context, sid *uint64, ino uint64
 		if !exists {
 			return ErrNoData
 		}
-		return writePebbleXattr(store, inode, name, nil, true)
+		return m.writePebbleXattr(disk, branch, store, inode, name, nil, true)
 	})
 }

@@ -2,8 +2,10 @@ package pebblekv_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
@@ -78,6 +80,49 @@ func TestBlobStoreLinksAndSharesImmutableFiles(t *testing.T) {
 	got, err := target.Read(7, len(data))
 	require.NoError(t, err)
 	require.Equal(t, data, got)
+}
+
+// 模拟宿主文件系统硬链接上限 EMLINK，验证 Commit / Fork 会回退为流式拷贝并生成独立 Inode。
+func TestBlobStoreLinkAllToFallsBackOnEMLINK(t *testing.T) {
+	root := t.TempDir()
+	storage := pebblekv.NewManager(root, pebblekv.WithLinkFunc(func(string, string) error {
+		return syscall.EMLINK
+	}))
+	t.Cleanup(func() { require.NoError(t, storage.Close()) })
+
+	data := bytes.Repeat([]byte{0x5a}, 4096)
+	branch, err := storage.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.NoError(t, branch.Blobs().Write(7, data))
+	require.NoError(t, branch.Checkpoint("c1"))
+	require.NoError(t, branch.Close())
+
+	commit, err := storage.OpenCommit("disk", "c1")
+	require.NoError(t, err)
+	got, err := commit.Blobs().Read(7, len(data))
+	require.NoError(t, err)
+	require.Equal(t, data, got)
+	sourceInfo, err := os.Stat(branchBlobPath(root, "main", 7))
+	require.NoError(t, err)
+	commitInfo, err := os.Stat(filepath.Join(root, "disks", "disk", "commits", "c1", "blobs", "07", "0000000000000007.blob"))
+	require.NoError(t, err)
+	require.False(t, os.SameFile(sourceInfo, commitInfo), "EMLINK 回退必须复制出新的物理 Inode")
+	require.NoError(t, commit.Close())
+
+	require.NoError(t, storage.Fork("disk", "c1", "dev"))
+	fork, err := storage.OpenBranch("disk", "dev")
+	require.NoError(t, err)
+	got, err = fork.Blobs().Read(7, len(data))
+	require.NoError(t, err)
+	require.Equal(t, data, got)
+	forkInfo, err := os.Stat(branchBlobPath(root, "dev", 7))
+	require.NoError(t, err)
+	require.False(t, os.SameFile(commitInfo, forkInfo), "Fork 在 EMLINK 时也必须回退拷贝")
+	require.NoError(t, fork.Close())
+}
+
+func branchBlobPath(root, branch string, id uint64) string {
+	return filepath.Join(root, "disks", "disk", "branches", branch, "blobs", fmt.Sprintf("%02x", id&0xff), fmt.Sprintf("%016x.blob", id))
 }
 
 func TestBlobStoreSyncPersistsDirtyFilesAndDirectories(t *testing.T) {

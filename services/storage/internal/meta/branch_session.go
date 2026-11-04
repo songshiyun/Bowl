@@ -220,6 +220,9 @@ func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskI
 		return id, "", err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
+	if err := m.flushPebbleAtimeEntriesLocked(diskID.String(), target.Name, branch.DB()); err != nil {
+		return id, "", err
+	}
 	dirty, err := branchHasDirty(branch.DB())
 	if err != nil {
 		return id, "", err

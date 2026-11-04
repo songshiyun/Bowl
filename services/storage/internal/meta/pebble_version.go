@@ -85,6 +85,14 @@ func branchHasDirty(store *pebble.DB) (dirty bool, err error) {
 	return dirty, iter.Error()
 }
 
+// branchHasDirtyOrAtime 把内存中待合并的访问时间视为脏写，确保 Fork/Merge 生成快照。
+func (m *manager) branchHasDirtyOrAtime(disk, branch string, store *pebble.DB) (bool, error) {
+	if m.hasPendingAtime(disk, branch) {
+		return true, nil
+	}
+	return branchHasDirty(store)
+}
+
 // 新工作区没有旧写端的打开句柄，快照中的孤儿不能继承到新工作区。
 func prepareBranch(store *pebble.DB, blobs *pebblekv.BlobStore, name string) (err error) {
 	lower, upper := pebblekv.OrphanRange()
@@ -158,6 +166,9 @@ func (m *manager) createVersion(ctx context.Context, q db.Querier, diskID pgtype
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := m.flushPebbleAtimeEntriesLocked(diskID.String(), b.Name, branch.DB()); err != nil {
+		return nil, err
 	}
 	if err := branch.Checkpoint(id.String()); err != nil {
 		return nil, err
@@ -341,7 +352,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			if err != nil {
 				return err
 			}
-			dirty, err := branchHasDirty(source.DB())
+			dirty, err := m.branchHasDirtyOrAtime(disk, parent, source.DB())
 			if err != nil {
 				return err
 			}

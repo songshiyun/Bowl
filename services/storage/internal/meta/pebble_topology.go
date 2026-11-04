@@ -90,6 +90,75 @@ func touchTopologyInode(inode *pebblekv.Inode, now time.Time, seq uint64) {
 	inode.WriteSeq = seq
 }
 
+// lockEntryInodes 先窥探目标节点，再按 ino 升序锁定父目录与目标节点，并复核未发生替换。
+func (m *manager) lockEntryInodes(disk, branch string, parentIno uint64, name []byte, store *pebble.DB) (func(), error) {
+	for {
+		child, err := readTopologyTarget(store, parentIno, name)
+		if err != nil {
+			return nil, err
+		}
+		unlock := m.lockInodesWrite(disk, branch, parentIno, child.Ino)
+		current, err := readTopologyTarget(store, parentIno, name)
+		if err != nil {
+			unlock()
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if current.Ino != child.Ino {
+			unlock()
+			continue
+		}
+		return unlock, nil
+	}
+}
+
+// lockRenameInodes 按 ino 升序锁定源/目标父目录与节点，避免并发目录操作死锁。
+func (m *manager) lockRenameInodes(disk, branch string, params RenameParams, store *pebble.DB) (func(), error) {
+	for {
+		oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
+		if err != nil {
+			return nil, err
+		}
+		var newIno uint64
+		newInode, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
+		if err == nil {
+			newIno = newInode.Ino
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		unlock := m.lockInodesWrite(disk, branch, params.OldParentIno, params.NewParentIno, oldInode.Ino, newIno)
+		current, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
+		if err != nil {
+			unlock()
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		if current.Ino != oldInode.Ino {
+			unlock()
+			continue
+		}
+		if newIno != 0 {
+			currentNew, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
+			if err != nil {
+				unlock()
+				if errors.Is(err, ErrNotFound) {
+					continue
+				}
+				return nil, err
+			}
+			if currentNew.Ino != newIno {
+				unlock()
+				continue
+			}
+		}
+		return unlock, nil
+	}
+}
+
 // removeTopologyInode 在目录变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
 func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
 	ids, err := pebbleDataBlobIDs(store, inode.Ino, 0)
@@ -160,9 +229,9 @@ func (m *manager) rmdirPebbleNode(ctx context.Context, sid *uint64, parentIno ui
 }
 
 func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno uint64, name []byte, directory bool) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
-		parent, err := readTopologyParent(store, parentIno)
-		if err != nil {
+	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
+		// 先校验父节点类型，保持与 POSIX 一致：非目录优先于名称错误返回。
+		if _, err := readTopologyParent(store, parentIno); err != nil {
 			return err
 		}
 		if len(name) == 0 {
@@ -173,6 +242,17 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 				return ErrNotEmpty
 			}
 			return ErrInvalidArgument
+		}
+		unlockInodes, err := m.lockEntryInodes(disk, branch, parentIno, name, store)
+		if err != nil {
+			return err
+		}
+		defer unlockInodes()
+		unlockMeta := m.branchMetaLock(disk, branch)
+		defer unlockMeta()
+		parent, err := readTopologyParent(store, parentIno)
+		if err != nil {
+			return err
 		}
 		child, err := readTopologyTarget(store, parentIno, name)
 		if err != nil {
@@ -239,7 +319,29 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 }
 
 func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params RenameParams) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
+	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
+		// 先校验两个父节点类型，保持与 POSIX 一致：非目录优先于名称错误返回。
+		if _, err := readTopologyParent(store, params.OldParentIno); err != nil {
+			return err
+		}
+		if params.OldParentIno != params.NewParentIno {
+			if _, err := readTopologyParent(store, params.NewParentIno); err != nil {
+				return err
+			}
+		}
+		if len(params.OldName) == 0 {
+			return ErrNotFound
+		}
+		if isDotOrDotDot(params.OldName) || isDotOrDotDot(params.NewName) {
+			return ErrInvalidArgument
+		}
+		unlockInodes, err := m.lockRenameInodes(disk, branch, params, store)
+		if err != nil {
+			return err
+		}
+		defer unlockInodes()
+		unlockMeta := m.branchMetaLock(disk, branch)
+		defer unlockMeta()
 		oldParent, err := readTopologyParent(store, params.OldParentIno)
 		if err != nil {
 			return err
@@ -251,12 +353,6 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 				return err
 			}
 			newParent = &parent
-		}
-		if len(params.OldName) == 0 {
-			return ErrNotFound
-		}
-		if isDotOrDotDot(params.OldName) || isDotOrDotDot(params.NewName) {
-			return ErrInvalidArgument
 		}
 		oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
 		if err != nil {
@@ -455,7 +551,11 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 			return ErrInvalidArgument
 		}
 		return nil
-	}, func(_, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
+	}, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
+		unlockInode := m.lockInodeWrite(disk, branch, params.Ino)
+		defer unlockInode()
+		unlockMeta := m.branchMetaLock(disk, branch)
+		defer unlockMeta()
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return err

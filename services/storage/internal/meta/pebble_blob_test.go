@@ -3,6 +3,7 @@ package meta_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -134,4 +135,67 @@ func TestPebbleBlobPartialWritesTruncateAndPunchHole(t *testing.T) {
 	_, err = e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{Size: &zero, SessionID: &e.sid})
 	require.NoError(t, err)
 	require.Empty(t, blobFiles(t, e.root, e.disk.DiskID))
+}
+
+// Commit / Fork / Rollback 通过硬链接共享未修改块，子分支覆写或删除不影响父快照。
+func TestPebbleBlobCommitForkRollbackIsolation(t *testing.T) {
+	const size = pebblekv.BlobSize
+	e := setupPebbleCreate(t, 8*size)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("f"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+	original := bytes.Repeat([]byte{0x21}, size)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: original, SessionID: &e.sid})
+	require.NoError(t, err)
+	commit, err := e.mgr.Commit(e.ctx, meta.CommitParams{DiskID: e.disk.DiskID, BranchName: "main"})
+	require.NoError(t, err)
+
+	refOf := func(branch string) pebblekv.BlobRef {
+		t.Helper()
+		handle, err := e.storage.OpenBranch(e.disk.DiskID, branch)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, handle.Close()) }()
+		value, closer, err := handle.DB().Get(pebblekv.DataKey(ino, 0))
+		require.NoError(t, err)
+		ref, err := pebblekv.DecodeBlobRef(value)
+		require.NoError(t, err)
+		require.NoError(t, closer.Close())
+		return ref
+	}
+	mainRef := refOf("main")
+	commitHandle, err := e.storage.OpenCommit(e.disk.DiskID, commit.CommitID)
+	require.NoError(t, err)
+	commitValue, closer, err := commitHandle.DB().Get(pebblekv.DataKey(ino, 0))
+	require.NoError(t, err)
+	commitRef, err := pebblekv.DecodeBlobRef(commitValue)
+	require.NoError(t, err)
+	require.NoError(t, closer.Close())
+	require.NoError(t, commitHandle.Close())
+	mainInfo, err := os.Stat(metaBlobPath(e.root, e.disk.DiskID, "branches", "main", mainRef.ID))
+	require.NoError(t, err)
+	commitInfo, err := os.Stat(metaBlobPath(e.root, e.disk.DiskID, "commits", commit.CommitID, commitRef.ID))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(mainInfo, commitInfo), "Commit 必须硬链接未修改块")
+
+	_, err = e.mgr.CreateBranch(e.ctx, meta.CreateBranchParams{DiskID: e.disk.DiskID, Name: "dev"})
+	require.NoError(t, err)
+	versionSession(t, e, "dev", 102, false, nil)
+	devCtx := meta.WithSessionID(e.ctx, ptrVersionSID(102))
+	devRef := refOf("dev")
+	devInfo, err := os.Stat(metaBlobPath(e.root, e.disk.DiskID, "branches", "dev", devRef.ID))
+	require.NoError(t, err)
+	require.True(t, os.SameFile(commitInfo, devInfo), "Fork 必须硬链接未修改块")
+
+	overwritten := bytes.Repeat([]byte{0x22}, size)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: overwritten, SessionID: ptrVersionSID(102)})
+	require.NoError(t, err)
+	versionRead(t, e, e.sid, ino, original)
+	versionRead(t, e, 102, ino, overwritten)
+	require.NoError(t, e.mgr.Unlink(devCtx, 1, []byte("f")))
+	versionRead(t, e, e.sid, ino, original)
+
+	require.NoError(t, e.mgr.CloseSession(e.ctx, e.sid))
+	require.NoError(t, e.mgr.Rollback(e.ctx, meta.RollbackParams{DiskID: e.disk.DiskID, BranchName: "main", CommitID: commit.CommitID}))
+	versionSession(t, e, "main", 103, false, nil)
+	versionRead(t, e, 103, ino, original)
 }

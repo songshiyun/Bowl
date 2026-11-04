@@ -112,7 +112,7 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			return err
 		}
 		pin := func(branch *pebblekv.Branch, stored *storedBranch) (bool, error) {
-			dirty, err := branchHasDirty(branch.DB())
+			dirty, err := m.branchHasDirtyOrAtime(disk, stored.Name, branch.DB())
 			if err != nil {
 				return false, err
 			}

@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // BlobSize 是文件数据块的固定上限，与 Linux FUSE MaxWrite (1 MiB) 1:1 对齐。
@@ -43,20 +45,40 @@ func DecodeBlobRef(b []byte) (BlobRef, error) {
 // BlobStore 管理一个分支或快照目录下不可变的 blobs/<shard>/<blob_id>.blob 文件。
 type BlobStore struct {
 	dir string
+	// link 是硬链接实现，测试可注入 EMLINK 等失败以验证自动回退拷贝。
+	link func(string, string) error
 
 	mu        sync.Mutex
 	dirtyFile map[uint64]struct{}
 	dirtyDir  map[string]struct{}
+	// readOps 累计块文件读取次数，用于验证 Diff / Merge 的 BlobRef 短路。
+	readOps atomic.Int64
+	// writeHook 仅用于测试观测块写入阶段是否已脱离 Inode 锁。
+	writeHook func()
 }
 
 // NewBlobStore 返回以 base 目录（分支或快照目录）为根的块文件存储。
 func NewBlobStore(base string) *BlobStore {
+	return newBlobStore(base, os.Link)
+}
+
+func newBlobStore(base string, link func(string, string) error) *BlobStore {
+	if link == nil {
+		link = os.Link
+	}
 	return &BlobStore{
 		dir:       filepath.Join(base, "blobs"),
+		link:      link,
 		dirtyFile: make(map[uint64]struct{}),
 		dirtyDir:  make(map[string]struct{}),
 	}
 }
+
+// ReadOps 返回累计块文件读取次数。
+func (s *BlobStore) ReadOps() int64 { return s.readOps.Load() }
+
+// SetWriteHook 设置块写入阶段的测试观测钩子，必须在并发写入前调用。
+func (s *BlobStore) SetWriteHook(fn func()) { s.writeHook = fn }
 
 // Root 返回 blobs 目录路径。
 func (s *BlobStore) Root() string { return s.dir }
@@ -70,6 +92,9 @@ func (s *BlobStore) Path(id uint64) string {
 func (s *BlobStore) Write(id uint64, data []byte) error {
 	if id == 0 || len(data) == 0 || len(data) > BlobSize {
 		return ErrInvalidValue
+	}
+	if s.writeHook != nil {
+		s.writeHook()
 	}
 	path := s.Path(id)
 	dir := filepath.Dir(path)
@@ -113,6 +138,7 @@ func (s *BlobStore) ReadAt(id uint64, offset int64, dst []byte) error {
 	if len(dst) == 0 {
 		return nil
 	}
+	s.readOps.Add(1)
 	file, err := os.Open(s.Path(id))
 	if err != nil {
 		return err
@@ -242,9 +268,14 @@ func (s *BlobStore) LinkAllTo(dst *BlobStore) error {
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			if err := os.Link(from, to); err != nil {
+			if err := s.link(from, to); err != nil {
+				// 达到宿主文件系统硬链接上限（EMLINK）等情况回退为流式拷贝，
+				// 生成新的物理 Inode 以重新获得独立硬链接配额。
 				if copyErr := copyBlobFile(from, to); copyErr != nil {
 					return errors.Join(err, copyErr)
+				}
+				if id, parseErr := parseBlobID(file.Name()); parseErr == nil {
+					dst.markFile(id)
 				}
 			}
 			dst.markDir(targetDir)
@@ -265,4 +296,9 @@ func copyBlobFile(from, to string) error {
 	}
 	_, copyErr := io.Copy(out, in)
 	return errors.Join(copyErr, out.Close())
+}
+
+// parseBlobID 从 <blob_id>.blob 文件名解析块编号。
+func parseBlobID(name string) (uint64, error) {
+	return strconv.ParseUint(strings.TrimSuffix(name, ".blob"), 16, 64)
 }
