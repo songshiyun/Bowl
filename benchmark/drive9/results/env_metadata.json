@@ -12,9 +12,9 @@
     "system_disk_size_gib": 120
   },
   "server_node": {
-    "instance_id": "i-rj901hvcvkdw6txxqwdu",
-    "public_ip": "47.77.180.176",
-    "private_ip": "172.16.1.203",
+    "instance_id": "i-rj9irkcbex24zbqogdao",
+    "public_ip": "198.11.180.165",
+    "private_ip": "172.16.1.209",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -23,12 +23,12 @@
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "tidb_version": "v8.5.5",
     "disk_seq_write_mib_s": 192.75,
-    "disk_seq_read_mib_s": 177.33
+    "disk_seq_read_mib_s": 184.16
   },
   "client_node": {
-    "instance_id": "i-rj901hvcvkdw6txxqwdv",
-    "public_ip": "43.110.151.110",
-    "private_ip": "172.16.1.202",
+    "instance_id": "i-rj9irkcbex24zbqogdap",
+    "public_ip": "47.251.88.161",
+    "private_ip": "172.16.1.208",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -40,22 +40,31 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.061/0.086/0.172/0.030 ms",
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.074/0.097/0.192/0.031 ms",
     "iperf3_gbps": 15.71
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 192.75,
-    "local_seq_read_mib_s": 177.33
+    "local_seq_read_mib_s": 184.16
   },
   "bowl_config": {
-    "git_commit": "626dd03",
-    "storage_engine": "Pebble per branch (常驻句柄池)",
+    "git_commit": "1f7cde9",
+    "storage_engine": "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
+    "blob_layout": "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
     "blob_size_bytes": 1048576,
-    "kernel_writeback_cache": true,
+    "blob_ref_bytes": 12,
+    "kernel_writeback_cache": false,
     "open_keep_cache": true,
+    "handle_killpriv": true,
+    "max_background": 64,
+    "congestion_threshold": 48,
     "flush_issues_fsync_rpc": false,
-    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘",
+    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
+    "branch_lock": "拓扑生命周期 RLock + 按 inode 细粒度锁",
+    "parallel_blob_write": "1 MiB 块在 Inode 锁外并行落盘",
+    "point_lookup_snapshot_free": true,
     "atime_mode": "noatime",
+    "atime_writeback": "内存延迟登记 + 1s 周期合并",
     "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)"
   },
   "drive9_config": {
@@ -64,11 +73,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9-bench-kp-20261104171737",
-    "server_instance_ids": "i-rj901hvcvkdw6txxqwdu",
-    "client_instance_ids": "i-rj901hvcvkdw6txxqwdv",
-    "instances_created_at": "2026-11-04T09:17:55Z",
-    "instances_deleted_at": "2026-11-04T09:47:24Z",
+    "key_pair_name": "bowl-d9-bench-kp-20261104222150",
+    "server_instance_ids": "i-rj9irkcbex24zbqogdao",
+    "client_instance_ids": "i-rj9irkcbex24zbqogdap",
+    "instances_created_at": "2026-11-04T14:22:05Z",
+    "instances_deleted_at": "2026-11-04T14:45:56Z",
     "remaining_benchmark_instances": 0
   }
 }

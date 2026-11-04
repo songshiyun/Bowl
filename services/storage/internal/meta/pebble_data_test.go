@@ -626,3 +626,31 @@ func TestPebbleDataKillPrivRemovesSecurityCapability(t *testing.T) {
 		requireNoCapability(t)
 	})
 }
+
+// TestPebbleSetAttrChownClearsSetIDBits 验证客户端声明 CAP_HANDLE_KILLPRIV 后，
+// 服务端在 chown 时按 Linux 语义清除非目录节点的 SUID/SGID，目录保留 setgid。
+func TestPebbleSetAttrChownClearsSetIDBits(t *testing.T) {
+	e := setupPebbleCreate(t, 1<<20)
+
+	fifo, err := e.mgr.Mknod(e.branchContext(), meta.MknodParams{
+		ParentIno: 1, Name: []byte("fifo"), Mode: meta.S_IFIFO | 0o755,
+	})
+	require.NoError(t, err)
+	setIDMode := uint32(0o6555)
+	_, err = e.mgr.SetAttr(e.ctx, fifo.Ino, meta.SetAttrInput{Mode: &setIDMode, SessionID: &e.sid})
+	require.NoError(t, err)
+
+	uid, gid := uint32(1234), uint32(5678)
+	chowned, err := e.mgr.SetAttr(e.ctx, fifo.Ino, meta.SetAttrInput{UID: &uid, GID: &gid, SessionID: &e.sid})
+	require.NoError(t, err)
+	require.Zero(t, chowned.Attr.Mode&(meta.S_ISUID|meta.S_ISGID), "非目录节点 chown 必须清除 SUID/SGID")
+	require.Equal(t, meta.S_IFIFO|uint32(0o555), chowned.Attr.Mode)
+
+	dir, err := e.mgr.Mkdir(e.branchContext(), meta.MkdirParams{ParentIno: 1, Name: []byte("dir"), Mode: 0o755})
+	require.NoError(t, err)
+	_, err = e.mgr.SetAttr(e.ctx, dir.Ino, meta.SetAttrInput{Mode: &setIDMode, SessionID: &e.sid})
+	require.NoError(t, err)
+	chownedDir, err := e.mgr.SetAttr(e.ctx, dir.Ino, meta.SetAttrInput{UID: &uid, GID: &gid, SessionID: &e.sid})
+	require.NoError(t, err)
+	require.NotZero(t, chownedDir.Attr.Mode&meta.S_ISGID, "Linux 对目录 chown 保留 setgid")
+}

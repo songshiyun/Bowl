@@ -263,8 +263,8 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘，依次运行以下三组目标：")
     lines.append("")
-    lines.append("1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块，使用 Set 和 ValueMerger 处理整块与局部写入并按区间解码，以硬链接 Checkpoint 支持快照和 Fork；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘兜底。FileHandle、FileLock、O_TMPFILE 与 O(1) 索引的 NamespaceCache 由客户端维护。")
-    lines.append("   客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规写由内核页缓存聚合回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。")
+    lines.append("1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。")
+    lines.append("   客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。")
     lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
     lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 rclone S3 存储（`--trash-days 0`）。")
     lines.append("")
@@ -467,16 +467,16 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / Pebble 分支存储 | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
     )
     lines.append(
-        f"| **数据块存储 (Server 节点)** | 每分支 Pebble (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
+        f"| **数据块存储 (Server 节点)** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
     )
     lines.append(
         f"| **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |"
     )
     lines.append(
-        f"| **回写缓存与持久化路径** | 内核 `writeback_cache` + `FOPEN_KEEP_CACHE`；`pebble.NoSync` 异步 WAL + 后台 1 秒刷盘，Flush 不触发 Fsync RPC | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |"
+        f"| **回写缓存与持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存；`pebble.NoSync` 异步 WAL + 后台 1 秒刷盘，Flush 不触发 Fsync RPC | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |"
     )
     lines.append(
-        f"| **数据分片** | `1 MiB`（对齐 FUSE `MaxWrite`），整片 Set、局部 ValueMerger 补丁 | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |"
+        f"| **数据分片** | `1 MiB`（对齐 FUSE `MaxWrite`）不可变块文件 `blobs/<shard>/<blob_id>.blob`，整块直写、局部 CoW、删除即时 `os.Remove` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |"
     )
     lines.append(
         f"| **访问时间策略 / 回收站** | `STORAGE_ATIME_MODE=noatime` | `--trash-days 0` (关闭回收站) | `--trash-days 0` (关闭回收站) |"
@@ -627,9 +627,13 @@ def render_report(summary: dict[str, Any]) -> str:
     bench_write = get_bench_val(b_bench, "Write big file")
     fio_write = get_fio_bw(b_fio, "seq_write_1job")
     if bench_write is not None and fio_write is not None:
+        if bench_write < fio_write:
+            verdict = "4 并发聚合吞吐低于单流，说明并发写路径存在额外开销，需单独剖析；不能把 `juicefs bench` 数值当作 Bowl 的单流写上限。"
+        else:
+            verdict = "4 并发聚合吞吐高于单流，说明当前写入路径可从并发中获益；该对照只描述本轮实测，仍需结合缓存与持久化条件解读。"
         lines.append(
             f"Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `{bench_write:.2f} MiB/s`，同轮 `fio` 单流 4 GiB 顺序写为 `{fio_write:.2f} MiB/s`。"
-            "4 并发聚合吞吐低于单流，说明并发写路径存在额外开销，需单独剖析；不能把 `juicefs bench` 数值当作 Bowl 的单流写上限。"
+            + verdict
         )
         lines.append("")
     lines.append("Bowl 的写入和同步路径使用 Pebble；本套件未测试整机断电恢复，吞吐结果不能证明断电后的数据完整性。各存储栈的缓存与持久化路径不同，性能数值应结合各自配置解读。")
