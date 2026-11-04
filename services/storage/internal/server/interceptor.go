@@ -59,7 +59,7 @@ func BuildInterceptors(
 	}
 
 	return serverx.NewInterceptorsWithValidator(
-		logger,
+		quietExpectedNotFound(logger),
 		toObservabilityConfig(telemetryCfg),
 		valInterceptor,
 		extra...,
