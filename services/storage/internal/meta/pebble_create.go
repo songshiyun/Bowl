@@ -235,20 +235,22 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 			return ErrNoSpace
 		}
 
-		// 分配编号和提交批次期间持有配额锁，避免其他分支同时占满磁盘。
+		// 号段分配在配额锁之外完成，避免持久化预留阻塞其他分支的写入。
+		ino, err := m.pebble.AllocateInode(disk)
+		if err != nil {
+			return err
+		}
+		if ino > math.MaxInt64 {
+			return ErrNoSpace
+		}
+
+		// 提交批次期间持有配额锁，避免其他分支同时占满磁盘。
 		quota.mu.Lock()
 		defer quota.mu.Unlock()
 		if quota.closed {
 			return ErrNotFound
 		}
 		if quota.usage.Bytes >= quota.maxBytes || size > quota.maxBytes-quota.usage.Bytes {
-			return ErrNoSpace
-		}
-		ino, err := m.pebble.AllocateInode(disk)
-		if err != nil {
-			return err
-		}
-		if ino > math.MaxInt64 {
 			return ErrNoSpace
 		}
 		gid, mode := params.gid, params.mode

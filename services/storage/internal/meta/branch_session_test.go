@@ -19,7 +19,7 @@ import (
 
 func TestBranchSessionWriterLease(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_session")
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(t.TempDir()))
+	mgr := newTestManager(t, db.NewStore(pool), t.TempDir())
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "lease", MaxBytes: 1024})
 	require.NoError(t, err)
 	params := meta.RenewBranchSessionParams{SessionID: 101, DiskID: disk.DiskID}
@@ -41,7 +41,9 @@ func TestBranchSessionWriterLease(t *testing.T) {
 func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_orphan")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "orphan", MaxBytes: 1024})
 	require.NoError(t, err)
 	params := meta.RenewBranchSessionParams{SessionID: 201, DiskID: disk.DiskID}
@@ -49,7 +51,6 @@ func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG | 0o644, Size: 100})
@@ -103,7 +104,6 @@ func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 	require.NoError(t, closer.Close())
 	require.Equal(t, pebblekv.BranchStat{Inodes: 1, NextWriteSeq: 4}, stat)
 	require.NoError(t, branch.Close())
-	require.NoError(t, storage.Close())
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 }
 
@@ -112,14 +112,15 @@ func TestBranchSessionExpiredSweep(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			pool, ctx := setupIsolatedMetaTestDB(t, "branch_expired")
 			root := t.TempDir()
-			mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+			storage := pebblekv.NewManager(root)
+			t.Cleanup(func() { _ = storage.Close() })
+			mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 			disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "expired", MaxBytes: 1024})
 			require.NoError(t, err)
 			_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 301, DiskID: disk.DiskID})
 			require.NoError(t, err)
 			quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 			require.NoError(t, err)
-			storage := pebblekv.NewManager(root)
 			branch, err := storage.OpenBranch(disk.DiskID, "main")
 			require.NoError(t, err)
 			inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG | 0o644, Size: 80})
@@ -145,7 +146,6 @@ func TestBranchSessionExpiredSweep(t *testing.T) {
 			_, _, err = branch.DB().Get(pebblekv.OrphanKey(2))
 			require.ErrorIs(t, err, pebble.ErrNotFound)
 			require.NoError(t, branch.Close())
-			require.NoError(t, storage.Close())
 			require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 		})
 	}
@@ -154,13 +154,13 @@ func TestBranchSessionExpiredSweep(t *testing.T) {
 func TestBranchSessionsIndependentWritersAndReaders(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_readers")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "readers", MaxBytes: 1024})
 	require.NoError(t, err)
 	commit := *disk.Branches[0].HeadCommitID
-	storage := pebblekv.NewManager(root)
 	require.NoError(t, storage.Fork(disk.DiskID, commit, "feature"))
-	require.NoError(t, storage.Close())
 	_, err = pool.Exec(ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', $2::text, 'head_commit_id', $2::text, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, disk.DiskID, commit)
@@ -214,7 +214,9 @@ func TestBranchSessionsIndependentWritersAndReaders(t *testing.T) {
 func TestBranchSessionsConcurrentWriterTakeover(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_race")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "race", MaxBytes: 1024})
 	require.NoError(t, err)
 	const writers = 8
@@ -247,14 +249,15 @@ func TestBranchSessionsConcurrentWriterTakeover(t *testing.T) {
 func TestBranchSessionSweepFailureKeepsExpiredSessionForRetry(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_retry")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "retry", MaxBytes: 1024})
 	require.NoError(t, err)
 	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 601, DiskID: disk.DiskID})
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG, Size: 50})
@@ -282,16 +285,16 @@ func TestBranchSessionSweepFailureKeepsExpiredSessionForRetry(t *testing.T) {
 	require.NoError(t, branch.Close())
 	require.NoError(t, mgr.CloseSession(ctx, 601))
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
-	require.NoError(t, storage.Close())
 }
 
 func TestBranchSessionSweepPreservesSharedInodeQuota(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_shared")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "shared", MaxBytes: 1024})
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	require.NoError(t, storage.Fork(disk.DiskID, *disk.Branches[0].HeadCommitID, "feature"))
 	_, err = pool.Exec(ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
@@ -328,7 +331,6 @@ func TestBranchSessionSweepPreservesSharedInodeQuota(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, closer.Close())
 	require.NoError(t, branch.Close())
-	require.NoError(t, storage.Close())
 }
 
 type pauseBranchRenewTracer struct {
@@ -360,7 +362,9 @@ func TestBranchSessionExpiryDuringRenew(t *testing.T) {
 	}()
 	pool, observed, ctx := setupIsolatedMetaTestDBWithTracer(t, "branch_expire_renew", tracer)
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(observed), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(observed), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "expiry", MaxBytes: 1024})
 	require.NoError(t, err)
 	params := meta.RenewBranchSessionParams{SessionID: 801, DiskID: disk.DiskID}
@@ -368,7 +372,6 @@ func TestBranchSessionExpiryDuringRenew(t *testing.T) {
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG, Size: 40})
@@ -407,14 +410,15 @@ func TestBranchSessionExpiryDuringRenew(t *testing.T) {
 	_, _, err = branch.DB().Get(pebblekv.OrphanKey(2))
 	require.ErrorIs(t, err, pebble.ErrNotFound)
 	require.NoError(t, branch.Close())
-	require.NoError(t, storage.Close())
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 }
 
 func TestBranchSessionExpiresInsideDatabaseRenew(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_expire_sql")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "expiry", MaxBytes: 1024})
 	require.NoError(t, err)
 	params := meta.RenewBranchSessionParams{SessionID: 901, DiskID: disk.DiskID}
@@ -422,7 +426,6 @@ func TestBranchSessionExpiresInsideDatabaseRenew(t *testing.T) {
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG, Size: 25})
@@ -470,21 +473,21 @@ func TestBranchSessionExpiresInsideDatabaseRenew(t *testing.T) {
 	_, _, err = branch.DB().Get(pebblekv.OrphanKey(2))
 	require.ErrorIs(t, err, pebble.ErrNotFound)
 	require.NoError(t, branch.Close())
-	require.NoError(t, storage.Close())
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 }
 
 func TestBranchSessionCloseCommitFailureDoesNotLeaveActiveWriter(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "branch_close_rollback")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "rollback", MaxBytes: 1024})
 	require.NoError(t, err)
 	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 1001, DiskID: disk.DiskID})
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG, Size: 25})
@@ -513,5 +516,4 @@ func TestBranchSessionCloseCommitFailureDoesNotLeaveActiveWriter(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE session_id = $1`, 1001).Scan(&count))
 	require.Zero(t, count)
-	require.NoError(t, storage.Close())
 }

@@ -396,7 +396,9 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 	committed = err == nil
 	if err != nil {
 		if forkCreated {
-			err = errors.Join(err, os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)))
+			// 删除工作区前先驱逐刚打开的常驻句柄，避免残留指向已删目录的实例。
+			err = errors.Join(err, m.pebble.EvictBranch(disk, params.Name),
+				os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)))
 		}
 		if checkpointCreated {
 			err = errors.Join(err, os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "commits", checkpointID)))
@@ -480,6 +482,9 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 			return err
 		}
 		unlock = m.lockBranch(disk, params.Name)
+		if err := m.pebble.EvictBranch(disk, params.Name); err != nil {
+			return err
+		}
 		if err := os.Rename(path, backup); err != nil {
 			return err
 		}
@@ -603,6 +608,9 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 			return err
 		}
 		unlock = m.lockBranch(disk, params.BranchName)
+		if err := m.pebble.EvictBranch(disk, params.BranchName); err != nil {
+			return err
+		}
 		if err := m.pebble.Fork(disk, commitID.String(), staging); err != nil {
 			return err
 		}

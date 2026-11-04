@@ -245,6 +245,9 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			return err
 		}
 		target = nil
+		if err := m.pebble.EvictBranch(disk, params.TargetBranch); err != nil {
+			return err
+		}
 		if err := os.Rename(targetPath, backupPath); err != nil {
 			return err
 		}

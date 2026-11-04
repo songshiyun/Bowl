@@ -121,6 +121,15 @@ func WithDirEntryTimeout(d float64) Option {
 func WithOpenKeepCache(enable bool) Option { return func(m *manager) { m.openKeepCache = enable } }
 func WithAtimeMode(mode AtimeMode) Option  { return func(m *manager) { m.atimeMode = mode } }
 
+// WithPebbleManager 复用外部创建的 Pebble 句柄池；同一存储根目录必须共用一个句柄池。
+func WithPebbleManager(pool *pebblekv.Manager) Option {
+	return func(m *manager) {
+		if pool != nil {
+			m.pebble = pool
+		}
+	}
+}
+
 // New 创建存储管理器。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
@@ -131,7 +140,9 @@ func New(store db.Store, opts ...Option) Manager {
 			opt(m)
 		}
 	}
-	m.pebble = pebblekv.NewManager(m.storageRoot)
+	if m.pebble == nil {
+		m.pebble = pebblekv.NewManager(m.storageRoot)
+	}
 	return m
 }
 

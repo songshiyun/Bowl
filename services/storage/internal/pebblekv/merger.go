@@ -8,8 +8,8 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// BlobSize 是文件数据块的固定上限。
-const BlobSize = 4 << 20
+// BlobSize 是文件数据块的固定上限，与 Linux FUSE MaxWrite (1 MiB) 1:1 对齐。
+const BlobSize = 1 << 20
 
 // 帧类型同时是持久化格式的一部分。
 const (
@@ -164,6 +164,130 @@ func DecodeBlob(b []byte) ([]byte, error) {
 		return f.base, nil
 	}
 	return applyPatches(nil, f.patches), nil
+}
+
+// patchHeader 是补丁的零拷贝视图，Data 直接指向原始帧。
+type patchHeader struct {
+	kind   PatchKind
+	offset uint32
+	length uint32
+	data   []byte
+}
+
+// scanPatch 解析一个补丁头并返回剩余字节，不复制补丁数据。
+func scanPatch(b []byte) (patchHeader, []byte, error) {
+	if len(b) < 9 {
+		return patchHeader{}, nil, ErrInvalidValue
+	}
+	p := patchHeader{kind: PatchKind(b[0]), offset: binary.BigEndian.Uint32(b[1:5]), length: binary.BigEndian.Uint32(b[5:9])}
+	b = b[9:]
+	if p.kind == PatchWrite {
+		if uint64(p.length) > uint64(len(b)) {
+			return patchHeader{}, nil, ErrInvalidValue
+		}
+		p.data = b[:p.length]
+		b = b[p.length:]
+	}
+	if err := validatePatch(Patch{Kind: p.kind, Offset: p.offset, Length: p.length, Data: p.data}); err != nil {
+		return patchHeader{}, nil, err
+	}
+	return p, b, nil
+}
+
+// patchBlockLength 返回补丁序列求值后的块长度。
+func patchBlockLength(b []byte) (int, error) {
+	length := 0
+	for len(b) > 0 {
+		p, rest, err := scanPatch(b)
+		if err != nil {
+			return 0, err
+		}
+		b = rest
+		if p.kind == PatchTruncate {
+			length = int(p.length)
+			continue
+		}
+		if end := int(p.offset) + int(p.length); end > length {
+			length = end
+		}
+	}
+	return length, nil
+}
+
+// DecodeBlobRange 把块内 [offsetInBlob, offsetInBlob+length) 区间解码到 dst，
+// 返回实际写入的字节数。基准帧直接切片拷贝，补丁帧只叠加与请求区间相交的补丁，
+// 不会分配整块临时缓冲区。
+func DecodeBlobRange(raw []byte, offsetInBlob, length int, dst []byte) (int, error) {
+	if offsetInBlob < 0 || length < 0 || length > len(dst) || len(raw) < 2 || raw[0] != 1 {
+		return 0, ErrInvalidValue
+	}
+	switch raw[1] {
+	case BaseFrame:
+		base := raw[2:]
+		if len(base) > BlobSize {
+			return 0, ErrInvalidValue
+		}
+		if length == 0 || offsetInBlob >= len(base) {
+			return 0, nil
+		}
+		n := min(length, len(base)-offsetInBlob)
+		copy(dst[:n], base[offsetInBlob:offsetInBlob+n])
+		return n, nil
+	case PatchListFrame:
+		return decodePatchRange(raw[2:], offsetInBlob, length, dst)
+	default:
+		return 0, ErrInvalidValue
+	}
+}
+
+func decodePatchRange(b []byte, offsetInBlob, length int, dst []byte) (int, error) {
+	blockLength, err := patchBlockLength(b)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	if length != 0 && offsetInBlob < blockLength {
+		n = min(length, blockLength-offsetInBlob)
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	// 空洞与扩展区域按零值返回。
+	clear(dst[:n])
+	applied := 0
+	for len(b) > 0 {
+		p, rest, err := scanPatch(b)
+		if err != nil {
+			return 0, err
+		}
+		b = rest
+		switch p.kind {
+		case PatchTruncate:
+			if target := int(p.length); target < applied {
+				if from, to := max(offsetInBlob, target), min(offsetInBlob+n, applied); from < to {
+					clear(dst[from-offsetInBlob : to-offsetInBlob])
+				}
+				applied = target
+			} else {
+				applied = target
+			}
+		default:
+			start, end := int(p.offset), int(p.offset)+int(p.length)
+			if end > applied {
+				applied = end
+			}
+			from, to := max(offsetInBlob, start), min(offsetInBlob+n, end)
+			if from >= to {
+				continue
+			}
+			if p.kind == PatchWrite {
+				copy(dst[from-offsetInBlob:to-offsetInBlob], p.data[from-start:to-start])
+			} else {
+				clear(dst[from-offsetInBlob : to-offsetInBlob])
+			}
+		}
+	}
+	return n, nil
 }
 
 type blobMerger struct{ frames []blobFrame }

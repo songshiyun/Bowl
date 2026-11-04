@@ -20,12 +20,27 @@ import (
 )
 
 type pebbleCreateEnv struct {
-	pool *pgxpool.Pool
-	ctx  context.Context
-	mgr  meta.Manager
-	disk *meta.Disk
-	root string
-	sid  uint64
+	pool    *pgxpool.Pool
+	ctx     context.Context
+	mgr     meta.Manager
+	storage *pebblekv.Manager
+	disk    *meta.Disk
+	root    string
+	sid     uint64
+}
+
+// newTestStorage 创建测试专用的 Pebble 句柄池，并在测试结束时释放。
+func newTestStorage(t *testing.T, root string) *pebblekv.Manager {
+	t.Helper()
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	return storage
+}
+
+// newTestManager 创建与测试句柄池共用的元数据管理器。
+func newTestManager(t *testing.T, store db.Store, root string, opts ...meta.Option) meta.Manager {
+	t.Helper()
+	return meta.New(store, append(opts, meta.WithStorageRoot(root), meta.WithPebbleManager(newTestStorage(t, root)))...)
 }
 
 func setupPebbleCreate(t *testing.T, maxBytes uint64) *pebbleCreateEnv {
@@ -34,13 +49,14 @@ func setupPebbleCreate(t *testing.T, maxBytes uint64) *pebbleCreateEnv {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithSessionLeaseTTL(time.Minute))
+	storage := newTestStorage(t, root)
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithSessionLeaseTTL(time.Minute), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "创建测试", MaxBytes: maxBytes})
 	require.NoError(t, err)
 	sid := uint64(101)
 	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: disk.DiskID})
 	require.NoError(t, err)
-	return &pebbleCreateEnv{pool: pool, ctx: ctx, mgr: mgr, disk: disk, root: root, sid: sid}
+	return &pebbleCreateEnv{pool: pool, ctx: ctx, mgr: mgr, storage: storage, disk: disk, root: root, sid: sid}
 }
 
 func (e *pebbleCreateEnv) branchContext() context.Context {
@@ -49,12 +65,10 @@ func (e *pebbleCreateEnv) branchContext() context.Context {
 
 func (e *pebbleCreateEnv) withBranch(t *testing.T, name string, fn func(*pebble.DB)) {
 	t.Helper()
-	storage := pebblekv.NewManager(e.root)
-	branch, err := storage.OpenBranch(e.disk.DiskID, name)
+	branch, err := e.storage.OpenBranch(e.disk.DiskID, name)
 	require.NoError(t, err)
+	defer func() { require.NoError(t, branch.Close()) }()
 	fn(branch.DB())
-	require.NoError(t, branch.Close())
-	require.NoError(t, storage.Close())
 }
 
 func getPebbleValue(t *testing.T, store *pebble.DB, key []byte) []byte {
@@ -87,9 +101,7 @@ func changePebbleCreateInode(t *testing.T, e *pebbleCreateEnv, ino uint64, mutat
 func TestPebbleCreateBranchesAndRecords(t *testing.T) {
 	e := setupPebbleCreate(t, 1000)
 	feature := "feature"
-	storage := pebblekv.NewManager(e.root)
-	require.NoError(t, storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
-	require.NoError(t, storage.Close())
+	require.NoError(t, e.storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
 	_, err := e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, e.disk.DiskID)
@@ -172,7 +184,7 @@ func TestPebbleCreateBranchesAndRecords(t *testing.T) {
 			}
 		})
 	}
-	restarted := meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root))
+	restarted := meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	recoveredQuota, err := restarted.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, meta.TreeQuotaUsage{Bytes: 13, Inodes: 9}, recoveredQuota.Usage())
@@ -186,9 +198,7 @@ func TestPebbleCreateBranchesAndRecords(t *testing.T) {
 func TestPebbleCreateConcurrentBranches(t *testing.T) {
 	e := setupPebbleCreate(t, 1000)
 	feature := "feature"
-	storage := pebblekv.NewManager(e.root)
-	require.NoError(t, storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
-	require.NoError(t, storage.Close())
+	require.NoError(t, e.storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
 	_, err := e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, e.disk.DiskID)
@@ -354,7 +364,8 @@ func TestPebbleCreateSetgidAndQuota(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(2000), sym.Attr.GID)
 	require.Equal(t, meta.S_IFLNK|uint32(0o777), sym.Attr.Mode)
-	require.Equal(t, uint64(6), sym.Ino)
+	// 配额不足的符号链接已提前领号，编号按单调递增跳过该号。
+	require.Equal(t, uint64(7), sym.Ino)
 	quota, err := e.mgr.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
 	before := quota.Usage()
@@ -387,17 +398,15 @@ func TestPebbleCreateSetgidAndQuota(t *testing.T) {
 			_, _, err := store.Get(pebblekv.EntryKey(1, []byte(name)))
 			require.ErrorIs(t, err, pebble.ErrNotFound)
 		}
-		_, _, err = store.Get(pebblekv.InodeKey(7))
-		require.ErrorIs(t, err, pebble.ErrNotFound)
+		_, _, err = store.Get(pebblekv.InodeKey(6))
+		require.ErrorIs(t, err, pebble.ErrNotFound, "配额失败不得写入节点")
 	})
 }
 
 func TestPebbleCreateConcurrentQuota(t *testing.T) {
 	e := setupPebbleCreate(t, 10)
 	feature := "feature"
-	storage := pebblekv.NewManager(e.root)
-	require.NoError(t, storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
-	require.NoError(t, storage.Close())
+	require.NoError(t, e.storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, feature))
 	_, err := e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, e.disk.DiskID)

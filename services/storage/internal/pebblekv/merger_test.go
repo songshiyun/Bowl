@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math/rand/v2"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,6 +177,129 @@ func TestBlobFramesRejectInvalidInput(t *testing.T) {
 		_, err := pebblekv.DecodeBlob(encoded)
 		require.ErrorIs(t, err, pebblekv.ErrInvalidValue)
 	}
+}
+
+func TestBlobSizeMatchesFUSEMaxWrite(t *testing.T) {
+	require.Equal(t, 1<<20, pebblekv.BlobSize, "BlobSize 必须与 FUSE MaxWrite 1 MiB 对齐")
+}
+
+func TestDecodeBlobRangeReadsRequestedWindow(t *testing.T) {
+	base := bytes.Repeat([]byte("0123456789abcdef"), pebblekv.BlobSize/16)
+	encoded, err := pebblekv.EncodeBase(base)
+	require.NoError(t, err)
+
+	dst := make([]byte, 4096)
+	n, err := pebblekv.DecodeBlobRange(encoded, 4096, len(dst), dst)
+	require.NoError(t, err)
+	require.Equal(t, 4096, n)
+	require.Equal(t, base[4096:8192], dst)
+
+	n, err = pebblekv.DecodeBlobRange(encoded, pebblekv.BlobSize-10, len(dst), dst)
+	require.NoError(t, err)
+	require.Equal(t, 10, n)
+	require.Equal(t, base[pebblekv.BlobSize-10:], dst[:n])
+
+	n, err = pebblekv.DecodeBlobRange(encoded, pebblekv.BlobSize, len(dst), dst)
+	require.NoError(t, err)
+	require.Zero(t, n)
+
+	_, err = pebblekv.DecodeBlobRange(encoded, 0, len(dst)+1, dst)
+	require.ErrorIs(t, err, pebblekv.ErrInvalidValue)
+}
+
+func TestDecodeBlobRangeAppliesOnlyIntersectingPatches(t *testing.T) {
+	encoded, err := pebblekv.EncodePatches(
+		pebblekv.WritePatch(100, []byte("hello")),
+		pebblekv.ZeroPatch(200, 10),
+		pebblekv.TruncatePatch(300),
+		pebblekv.WritePatch(280, []byte("tail")),
+	)
+	require.NoError(t, err)
+	full, err := pebblekv.DecodeBlob(encoded)
+	require.NoError(t, err)
+	require.Len(t, full, 300)
+
+	for _, window := range []struct{ offset, length int }{{0, 512}, {90, 30}, {190, 120}, {270, 40}, {299, 64}} {
+		dst := make([]byte, window.length)
+		n, err := pebblekv.DecodeBlobRange(encoded, window.offset, window.length, dst)
+		require.NoError(t, err)
+		require.Equal(t, min(window.length, len(full)-window.offset), n)
+		require.Equal(t, full[window.offset:window.offset+n], dst[:n], "窗口 %d+%d", window.offset, window.length)
+	}
+}
+
+func TestDecodeBlobRangeDropsBytesCutByTruncate(t *testing.T) {
+	encoded, err := pebblekv.EncodePatches(
+		pebblekv.WritePatch(40, []byte("abcdef")),
+		pebblekv.TruncatePatch(42),
+		pebblekv.WritePatch(50, []byte("zz")),
+	)
+	require.NoError(t, err)
+	full, err := pebblekv.DecodeBlob(encoded)
+	require.NoError(t, err)
+	require.Len(t, full, 52)
+	require.Equal(t, []byte("ab"), full[40:42])
+	require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0}, full[42:50], "截断后的尾部必须归零")
+	require.Equal(t, []byte("zz"), full[50:52])
+
+	dst := make([]byte, 12)
+	n, err := pebblekv.DecodeBlobRange(encoded, 40, len(dst), dst)
+	require.NoError(t, err)
+	require.Equal(t, 12, n)
+	require.Equal(t, full[40:52], dst)
+}
+
+func TestDecodeBlobRangeMatchesFullDecode(t *testing.T) {
+	random := rand.New(rand.NewPCG(7, 11))
+	for iteration := range 50 {
+		var patches []pebblekv.Patch
+		for range random.IntN(6) {
+			offset := random.IntN(200)
+			switch random.IntN(3) {
+			case 0:
+				data := make([]byte, random.IntN(20)+1)
+				for i := range data {
+					data[i] = byte(random.IntN(256))
+				}
+				patches = append(patches, pebblekv.WritePatch(uint32(offset), data))
+			case 1:
+				patches = append(patches, pebblekv.ZeroPatch(uint32(offset), uint32(random.IntN(20)+1)))
+			case 2:
+				patches = append(patches, pebblekv.TruncatePatch(uint32(random.IntN(200))))
+			}
+		}
+		encoded, err := pebblekv.EncodePatches(patches...)
+		require.NoError(t, err)
+		full, err := pebblekv.DecodeBlob(encoded)
+		require.NoError(t, err)
+		for range 20 {
+			offset, length := random.IntN(260), random.IntN(80)+1
+			dst := make([]byte, length)
+			n, err := pebblekv.DecodeBlobRange(encoded, offset, length, dst)
+			require.NoError(t, err)
+			want := 0
+			if offset < len(full) {
+				want = min(length, len(full)-offset)
+			}
+			require.Equal(t, want, n, "第 %d 轮补丁 %+v 区间 %d+%d", iteration, patches, offset, length)
+			if n > 0 {
+				require.Equal(t, full[offset:offset+n], dst[:n])
+			}
+		}
+	}
+}
+
+func TestDecodeBlobRangeDoesNotAllocateBlockBuffer(t *testing.T) {
+	base := bytes.Repeat([]byte("x"), pebblekv.BlobSize)
+	encoded, err := pebblekv.EncodeBase(base)
+	require.NoError(t, err)
+	dst := make([]byte, 4096)
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := pebblekv.DecodeBlobRange(encoded, 4096, len(dst), dst); err != nil {
+			panic(err)
+		}
+	})
+	require.Zero(t, allocs, "按区间解码不得分配整块临时切片")
 }
 
 func TestPebbleReadsPatchOnlyBlobAndFullSetOverridesPatches(t *testing.T) {

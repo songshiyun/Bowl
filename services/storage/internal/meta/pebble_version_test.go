@@ -50,12 +50,11 @@ func TestVersionSnapshotForkAndCompaction(t *testing.T) {
 		require.ErrorIs(t, err, pebble.ErrNotFound)
 		require.Nil(t, closer)
 	})
-	storage := pebblekv.NewManager(e.root)
+	storage := e.storage
 	snapshot, err := storage.OpenCommit(e.disk.DiskID, first.CommitID)
 	require.NoError(t, err)
 	getPebbleValue(t, snapshot.DB(), pebblekv.DirtyKey(file.Inode.Ino))
 	require.NoError(t, snapshot.Close())
-	require.NoError(t, storage.Close())
 
 	dev, err := e.mgr.CreateBranch(e.ctx, meta.CreateBranchParams{DiskID: e.disk.DiskID, Name: "dev"})
 	require.NoError(t, err)
@@ -243,7 +242,7 @@ func TestVersionTransactionFailureRestoresState(t *testing.T) {
 	require.NoError(t, err)
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: file.Inode.Ino, Data: []byte("变更"), SessionID: &e.sid})
 	require.NoError(t, err)
-	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root))
+	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	commitDir := filepath.Join(e.root, "disks", e.disk.DiskID, "commits")
 	before, err := os.ReadDir(commitDir)
 	require.NoError(t, err)
@@ -279,7 +278,7 @@ func TestVersionTransactionFailureRestoresState(t *testing.T) {
 
 func TestVersionForkIncludesReadlinkAtime(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
-	e.mgr = meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root), meta.WithAtimeMode(meta.AtimeModeStrictAtime))
+	e.mgr = meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root), meta.WithAtimeMode(meta.AtimeModeStrictAtime), meta.WithPebbleManager(e.storage))
 	link, err := e.mgr.Symlink(e.branchContext(), meta.SymlinkParams{ParentIno: 1, Name: []byte("链接"), Target: []byte("目标")})
 	require.NoError(t, err)
 	oldAtime := time.Unix(1, 0).UTC()
@@ -384,7 +383,7 @@ func (q *versionLockQueries) GetDiskForUpdate(ctx context.Context, id pgtype.UUI
 func TestVersionConcurrentDiskUpdate(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
 	store := &versionLockStore{Store: db.NewStore(e.pool), pool: e.pool, rowLocked: make(chan struct{}), continueVersion: make(chan struct{}), updateStarted: make(chan struct{})}
-	mgr := meta.New(store, meta.WithStorageRoot(e.root))
+	mgr := meta.New(store, meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	_, err := mgr.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(e.ctx, 4*time.Second)

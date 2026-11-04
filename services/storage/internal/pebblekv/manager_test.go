@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,6 +13,9 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/cockroachdb/pebble/v2/record"
+	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/cockroachdb/pebble/v2/wal"
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 	"github.com/stretchr/testify/require"
 )
@@ -212,8 +217,10 @@ func TestManagerRejectsInvalidIdentifiersAndExistingTargets(t *testing.T) {
 	}
 	branch, err := manager.OpenBranch("disk", "main")
 	require.NoError(t, err)
-	_, err = manager.OpenBranch("disk", "main")
-	require.ErrorIs(t, err, pebblekv.ErrBusy)
+	shared, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.Same(t, branch.DB(), shared.DB())
+	require.NoError(t, shared.Close())
 	require.NoError(t, branch.Checkpoint("one"))
 	require.Error(t, branch.Checkpoint("one"))
 	require.NoError(t, manager.Fork("disk", "one", "child"))
@@ -249,9 +256,11 @@ func TestDiskInodeAllocatorConcurrentAndPersistent(t *testing.T) {
 		require.NoError(t, err)
 	}
 	seen := make(map[uint64]bool)
+	var maxID uint64
 	for id := range ids {
 		require.False(t, seen[id])
 		seen[id] = true
+		maxID = max(maxID, id)
 	}
 	require.Len(t, seen, count)
 	for id := uint64(2); id < 2+count; id++ {
@@ -265,6 +274,194 @@ func TestDiskInodeAllocatorConcurrentAndPersistent(t *testing.T) {
 	reopened := pebblekv.NewManager(root)
 	next, err := reopened.AllocateInode("disk")
 	require.NoError(t, err)
-	require.Equal(t, uint64(2+count), next)
+	require.Greater(t, next, maxID, "重启后新编号必须严格大于已发出的最大编号")
 	require.NoError(t, reopened.Close())
+}
+
+func TestInodeAllocatorPersistsOneSegmentReservation(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	const count = 4096
+	for i := range count {
+		id, err := manager.AllocateInode("disk")
+		require.NoError(t, err)
+		require.Equal(t, uint64(i+2), id)
+	}
+	require.Equal(t, 1, countAllocatorReservations(t, root, "disk"))
+	require.NoError(t, manager.Close())
+
+	reopened := pebblekv.NewManager(root)
+	next, err := reopened.AllocateInode("disk")
+	require.NoError(t, err)
+	require.Equal(t, uint64(count+2), next)
+	require.NoError(t, reopened.Close())
+}
+
+// countAllocatorReservations 统计分配器 WAL 中持久化上界的写入次数。
+func countAllocatorReservations(t *testing.T, root, disk string) int {
+	t.Helper()
+	dirname := filepath.Join(root, "disks", disk, "inode-allocator")
+	logs, err := wal.Scan(wal.Dir{FS: vfs.Default, Dirname: dirname})
+	require.NoError(t, err)
+	count := 0
+	for _, log := range logs {
+		var info pebble.BlobFileInfo
+		_, err := fmt.Sscanf(log.Num.String(), "%d", &info.DiskFileNum)
+		require.NoError(t, err)
+		for i := 0; i < log.NumSegments(); i++ {
+			_, filename := log.SegmentLocation(i)
+			file, err := os.Open(filename)
+			require.NoError(t, err)
+			reader := record.NewReader(file, info.DiskFileNum)
+			for {
+				entry, err := reader.Next()
+				if err == io.EOF || err != nil && record.IsInvalidRecord(err) {
+					break
+				}
+				require.NoError(t, err)
+				repr, err := io.ReadAll(entry)
+				require.NoError(t, err)
+				var batch pebble.Batch
+				require.NoError(t, batch.SetRepr(repr))
+				batchReader := batch.Reader()
+				for {
+					kind, key, _, ok, err := batchReader.Next()
+					require.NoError(t, err)
+					if !ok {
+						break
+					}
+					if kind == pebble.InternalKeyKindSet && string(key) == "last-inode" {
+						count++
+					}
+				}
+			}
+			require.NoError(t, file.Close())
+		}
+	}
+	return count
+}
+
+func TestBranchAndCommitHandlesShareResidentInstances(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	first, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.NoError(t, first.DB().Set([]byte("k"), []byte("v"), pebble.Sync))
+	second, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.Same(t, first.DB(), second.DB())
+	require.NoError(t, second.Close())
+	require.NoError(t, first.Close())
+
+	// 句柄关闭后实例常驻，下一次打开仍复用同一个实例。
+	third, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.Same(t, first.DB(), third.DB())
+	require.NoError(t, third.Checkpoint("c1"))
+	require.NoError(t, third.Close())
+
+	commitFirst, err := manager.OpenCommit("disk", "c1")
+	require.NoError(t, err)
+	commitSecond, err := manager.OpenCommit("disk", "c1")
+	require.NoError(t, err)
+	require.Same(t, commitFirst.DB(), commitSecond.DB())
+	require.NoError(t, commitSecond.Close())
+	require.NoError(t, commitFirst.Close())
+	commitThird, err := manager.OpenCommit("disk", "c1")
+	require.NoError(t, err)
+	require.Same(t, commitFirst.DB(), commitThird.DB())
+	require.NoError(t, commitThird.Close())
+
+	stats := manager.Stats()
+	require.Equal(t, int64(1), stats.BranchOpens)
+	require.Equal(t, int64(2), stats.BranchReuses)
+	require.Equal(t, int64(1), stats.CommitOpens)
+	require.Equal(t, int64(2), stats.CommitReuses)
+	require.Equal(t, 1, stats.ResidentBranches)
+	require.Equal(t, 1, stats.ResidentCommits)
+	require.NoError(t, manager.Close())
+}
+
+func TestEvictBranchReleasesUnderlyingInstance(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	branch, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.ErrorIs(t, manager.EvictBranch("disk", "main"), pebblekv.ErrBusy)
+	require.NoError(t, branch.Close())
+	require.NoError(t, manager.EvictBranch("disk", "main"))
+
+	// 驱逐后目录锁已释放，另一个管理器可以打开同一分支目录。
+	other := pebblekv.NewManager(root)
+	reopened, err := other.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.NotSame(t, branch.DB(), reopened.DB())
+	require.NoError(t, reopened.Close())
+	require.NoError(t, other.Close())
+
+	require.NoError(t, manager.EvictBranch("disk", "main"))
+	require.NoError(t, manager.Close())
+}
+
+func TestStagingBranchesUseEphemeralHandles(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	for _, name := range []string{".fork-1", ".merge-2", ".restore-3"} {
+		ephemeral, err := manager.OpenBranch("disk", name)
+		require.NoError(t, err)
+		require.NoError(t, ephemeral.Close())
+
+		// 关闭即释放，不进入常驻池。
+		other := pebblekv.NewManager(root)
+		probe, err := other.OpenBranch("disk", name)
+		require.NoError(t, err)
+		require.NoError(t, probe.Close())
+		require.NoError(t, other.Close())
+	}
+	require.Zero(t, manager.Stats().ResidentBranches)
+	require.Zero(t, manager.Stats().ResidentCommits)
+	require.NoError(t, manager.Close())
+}
+
+func TestEvictDiskClosesResidentHandlesAndAllocator(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	branch, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.NoError(t, branch.Checkpoint("c1"))
+	require.NoError(t, branch.Close())
+	commit, err := manager.OpenCommit("disk", "c1")
+	require.NoError(t, err)
+	require.NoError(t, commit.Close())
+	allocated, err := manager.AllocateInode("disk")
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), allocated)
+
+	live, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.ErrorIs(t, manager.EvictDisk("disk"), pebblekv.ErrBusy)
+	require.NoError(t, live.Close())
+	require.NoError(t, manager.EvictDisk("disk"))
+	stats := manager.Stats()
+	require.Zero(t, stats.ResidentBranches)
+	require.Zero(t, stats.ResidentCommits)
+
+	// 内存分配器状态被清理后，重新分配仍从已持久化的上界继续。
+	next, err := manager.AllocateInode("disk")
+	require.NoError(t, err)
+	require.Greater(t, next, allocated)
+	require.NoError(t, manager.Close())
+}
+
+func TestRemoveDiskEvictsHandlesAndRemovesDirectory(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	branch, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.ErrorIs(t, manager.RemoveDisk("disk"), pebblekv.ErrBusy)
+	require.NoError(t, branch.Close())
+	require.NoError(t, manager.RemoveDisk("disk"))
+	_, err = os.Stat(filepath.Join(root, "disks", "disk"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, manager.Close())
 }

@@ -370,14 +370,13 @@ func TestPebbleTopologySharedQuotaAcrossBranches(t *testing.T) {
 	inode := topologySymlink(t, e, 1, "shared", "123456")
 	quota, err := e.mgr.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(e.root)
+	storage := e.storage
 	branch, err := storage.OpenBranch(e.disk.DiskID, "main")
 	require.NoError(t, err)
 	commit := uuid.NewString()
 	require.NoError(t, branch.Checkpoint(commit))
 	require.NoError(t, branch.Close())
 	require.NoError(t, storage.Fork(e.disk.DiskID, commit, "feature"))
-	require.NoError(t, storage.Close())
 	_, err = e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, e.disk.DiskID)

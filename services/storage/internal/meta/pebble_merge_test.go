@@ -191,12 +191,11 @@ func TestMergeNonConflictingChangesAndQuota(t *testing.T) {
 		require.Equal(t, wantBytes, stat.LogicalBytes)
 		assertPebbleMissing(t, store, pebblekv.DirtyKey(b))
 	})
-	storage := pebblekv.NewManager(e.root)
+	storage := e.storage
 	snapshot, err := storage.OpenCommit(e.disk.DiskID, *result.MergeCommitID)
 	require.NoError(t, err)
 	getPebbleValue(t, snapshot.DB(), pebblekv.DirtyKey(b))
 	require.NoError(t, snapshot.Close())
-	require.NoError(t, storage.Close())
 }
 
 func TestMergeConflictAndTransactionFailure(t *testing.T) {
@@ -223,7 +222,7 @@ func TestMergeConflictAndTransactionFailure(t *testing.T) {
 	require.NoError(t, err)
 	base := *branches[1].ForkCommitID
 	require.NoError(t, e.mgr.Rollback(e.ctx, meta.RollbackParams{DiskID: e.disk.DiskID, BranchName: "main", CommitID: base}))
-	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root))
+	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	commitDir := filepath.Join(e.root, "disks", e.disk.DiskID, "commits")
 	before, err := os.ReadDir(commitDir)
 	require.NoError(t, err)
@@ -1077,7 +1076,7 @@ func (s *switchableVersionStore) ExecTx(ctx context.Context, fn func(db.Querier)
 func TestMaterializedMergeTransactionFailureRestoresWorkspace(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
 	store := &switchableVersionStore{rollbackVersionStore: &rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}}
-	e.mgr = meta.New(store, meta.WithStorageRoot(e.root), meta.WithSessionLeaseTTL(time.Minute))
+	e.mgr = meta.New(store, meta.WithStorageRoot(e.root), meta.WithSessionLeaseTTL(time.Minute), meta.WithPebbleManager(e.storage))
 	ino := mergeCreate(t, e, e.sid, 1, "文件", []byte("base"))
 	mergeBranch(t, e, "dev", "main")
 	versionSession(t, e, "dev", 102, false, nil)

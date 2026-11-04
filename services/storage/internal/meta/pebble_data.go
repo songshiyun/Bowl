@@ -42,12 +42,10 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 				return err
 			}
 			if err == nil {
-				data, decodeErr := pebblekv.DecodeBlob(value)
+				relative := pos - req.Offset
+				_, decodeErr := pebblekv.DecodeBlobRange(value, int(start), int(length), out[relative:relative+length])
 				if err := errors.Join(decodeErr, closer.Close()); err != nil {
 					return err
-				}
-				if start < uint64(len(data)) {
-					copy(out[pos-req.Offset:], data[start:min(start+length, uint64(len(data)))])
 				}
 			}
 			pos += length
