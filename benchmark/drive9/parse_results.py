@@ -174,7 +174,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("三组目标的客户端缓存和写入确认条件不同；本次在同台机器上依次测试默认与同步模式：")
     lines.append("")
-    lines.append("1. **Bowl (`bowl`)**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个分支独立的 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块，以 Set 和 ValueMerger 处理整块与局部写入，并以硬链接 Checkpoint 支持快照和 Fork。FileHandle、FileLock、O_TMPFILE 与按需加载的 NamespaceCache 由客户端维护。当前提交禁用内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 负责释放本地句柄。该配置与 ADR-0029 的 writeback_cache 设计不同。")
+    lines.append("1. **Bowl (`bowl`)**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块，以 Set 和 ValueMerger 处理整块与局部写入并按区间解码，以硬链接 Checkpoint 支持快照和 Fork；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘兜底。FileHandle、FileLock、O_TMPFILE 与 O(1) 索引的 NamespaceCache 由客户端维护。客户端默认开启内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规写由内核页缓存聚合回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。")
     lines.append("2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3，客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。")
     lines.append("3. **Drive9 远端同步模式 (`drive9_sync`)**：与 `drive9_default` 连接同台 Drive9 Server，但客户端挂载参数设为 `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`（禁用本地 Overlay，对齐 `1.0s` 内核缓存，并在每次 `close`/`fsync` 时同步提交至远端服务器）。")
     lines.append("")
@@ -378,7 +378,7 @@ def render_report(summary: dict[str, Any]) -> str:
         "| **客户端挂载参数** | `bowl mount` (生产默认 `noatime`) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |"
     )
     lines.append(
-        "| **写入持久化路径** | 禁用内核 `writeback_cache`；Flush/Fsync 请求服务端同步 Pebble | 客户端本地 SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
+        "| **写入持久化路径** | 内核 `writeback_cache` 聚合回写 + `pebble.NoSync` 异步 WAL（后台 1 秒刷盘）；仅 Fsync/Sync 写入持久化屏障 | 客户端本地 SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
     )
     lines.append(
         "| **客户端读缓存与预读** | 无本地磁盘缓存；文件级顺序预读窗口（Sequential Read-Ahead） | 128 MiB 内存读缓存 + 1024 MiB 本地 SSD 读缓存 + 小文件整文件预取 | 128 MiB 内存读缓存 + 1024 MiB 本地 SSD 读缓存 + 小文件整文件预取 |"
@@ -662,6 +662,14 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("Drive9 Default 使用 `interactive`，Drive9 Sync 使用 `close-sync`，两者的写入确认条件不同。表内数值保留各自配置，吞吐比较不等于持久化契约相同。")
     lines.append("")
+    bench_write = get_bench_val(b_bench, "Write big file")
+    seq_write = get_d9_median(d9_cold, "bowl", "sequential_write")
+    if bench_write is not None and seq_write is not None:
+        lines.append(
+            f"Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `{bench_write:.2f} MiB/s`，同轮冷缓存单流 256 MiB 顺序写（含 `fsync`）为 `{seq_write:.2f} MiB/s`。"
+            "4 并发聚合吞吐低于单流，说明并发写路径存在额外开销，需单独剖析；不能把 `juicefs bench` 数值当作 Bowl 的单流写上限。"
+        )
+        lines.append("")
     lines.append("冷缓存准备命令仅清理客户端内核页缓存；未重启 FUSE 进程、清理 Drive9 用户态或磁盘读缓存，也未清理服务端页缓存。因此本报告的 cold 表示该命令下的缓存状态，不能解释为完整远端冷读。")
     lines.append("")
     lines.append("微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。")

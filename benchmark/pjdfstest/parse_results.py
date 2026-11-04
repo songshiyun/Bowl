@@ -253,9 +253,9 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
     lines.append("")
-    lines.append("被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块，整块写入与局部补丁分别使用 Set 和 ValueMerger。Checkpoint 和 Fork 通过硬链接共享文件。客户端在本地维护 FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache。")
+    lines.append("被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块，整块写入与局部补丁分别使用 Set 和 ValueMerger，读取按请求区间解码（DecodeBlobRange）；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘与 `WALBytesPerSync` 兜底。Checkpoint 和 Fork 通过硬链接共享文件。客户端在本地维护 FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache。")
     lines.append("")
-    lines.append("当前提交禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 负责释放本地句柄。此处记录实际配置，与 ADR-0029 的 writeback_cache 设计不同。")
+    lines.append("客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规 `write()` 由内核页缓存聚合为最大 1 MiB 块回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，以覆盖真实元数据路径。")
     lines.append("")
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
@@ -321,6 +321,8 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '-')}` |")
     lines.append(f"| **服务端 `STORAGE_ATIME_MODE`** | `{bowl_cfg.get('atime_mode', 'strictatime')}` | 开启严格访问时间更新，验证 `atime` 刷新语义 |")
     lines.append(f"| **FUSE 缓存超时配置** | `entry={bowl_cfg.get('entry_timeout', '0')}s, attr={bowl_cfg.get('attr_timeout', '0')}s, direntry={bowl_cfg.get('dir_entry_timeout', '0')}s` | 内核属性与目录项缓存超时；客户端 NamespaceCache 仍可命中 |")
+    lines.append(f"| **内核回写缓存与数据分片** | `writeback_cache={bowl_cfg.get('kernel_writeback_cache')}`, `keep_cache={bowl_cfg.get('open_keep_cache')}`, `blob={bowl_cfg.get('blob_size_bytes')}` 字节 | 内核页缓存聚合回写；Flush 不触发 Fsync RPC，服务端按 1 MiB 分片写入 |")
+    lines.append(f"| **服务端 WAL 同步策略** | `{bowl_cfg.get('wal_sync_mode', '-')}` | 常规写批次异步提交，显式 Fsync/Sync 才写入持久化屏障 |")
     lines.append(f"| **客户端挂载命令** | `bowl mount <disk_id> /mnt/bowl --endpoint http://{server.get('private_ip', '<server_ip>')}:9000 --allow-other` | 启用 `default_permissions` 与 `--allow-other` 支持多 UID/GID 权限切换测试 |")
     lines.append("")
 

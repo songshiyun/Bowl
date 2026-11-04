@@ -1,6 +1,6 @@
 {
-  "test_started_at": "2026-11-03T23:43:05Z",
-  "test_completed_at": "2026-11-04T00:49:32Z",
+  "test_started_at": "2026-11-04T09:21:05Z",
+  "test_completed_at": "2026-11-04T10:23:29Z",
   "cloud": {
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
@@ -24,12 +24,12 @@
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "redis_version": "Redis server v=7.0.15",
     "rclone_version": "rclone v1.68.2",
-    "instance_id": "i-rj920xxtjyecqzjas9gm",
-    "private_ip": "172.16.1.196"
+    "instance_id": "i-rj9ffoqaxu0flnrleyb0",
+    "private_ip": "172.16.1.201"
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": "169.41",
-    "local_seq_read_mib_s": "170.45"
+    "local_seq_write_mib_s": "172.81",
+    "local_seq_read_mib_s": "179.16"
   },
   "client_node": {
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -41,18 +41,22 @@
     "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
     "fio_version": "fio-3.36",
     "mdtest_version": "mdtest-3.3.0",
-    "instance_id": "i-rj920xxtjyecqzjas9gn",
-    "private_ip": "172.16.1.197"
+    "instance_id": "i-rj9ffoqaxu0flnrleyb1",
+    "private_ip": "172.16.1.200"
   },
   "network_baseline": {
-    "ping_rtt_ms": "0.033/0.069/0.350/0.069",
+    "ping_rtt_ms": "0.067/0.098/0.314/0.054",
     "iperf3_gbps": "15.71"
   },
   "bowl_config": {
-    "bowl_git_commit": "0ab26a7",
-    "storage_engine": "Pebble per branch",
-    "kernel_writeback_cache": false,
-    "disk_id": "01a1a3cb-92a5-75e4-9132-2f07f159e435",
+    "bowl_git_commit": "626dd03",
+    "storage_engine": "Pebble per branch (常驻句柄池)",
+    "blob_size_bytes": 1048576,
+    "kernel_writeback_cache": true,
+    "open_keep_cache": true,
+    "flush_issues_fsync_rpc": false,
+    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘",
+    "disk_id": "01a1a5dc-bbe3-7773-8dbf-508c77d5f656",
     "root_ino": 1,
     "disk_size": "2PiB",
     "atime_mode": "noatime",
@@ -67,12 +71,9 @@
     "chunk_size": "64MiB (default)"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-jfsbench-kp-20261103-233947",
-    "instances_created_at": "2026-11-03T23:39:56Z",
-    "instances_deleted_at": "2026-11-04T00:50:18Z",
+    "key_pair_name": "bowl-jfsbench-kp-20261104-091737",
+    "instances_created_at": "2026-11-04T09:17:46Z",
+    "instances_deleted_at": "2026-11-04T10:24:19Z",
     "remaining_benchmark_instances": 0
-  },
-  "execution_notes": [
-    "首次尝试的随机直接写因 PostgreSQL 连接中断而失败，原因未确定；本报告仅统计完整重跑结果。失败原始数据见 [首次运行记录](attempts/20261104-first/README.md)。"
-  ]
+  }
 }

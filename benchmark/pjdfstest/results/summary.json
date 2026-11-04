@@ -1,6 +1,6 @@
 {
   "schema": "bowl-pjdfstest-report/v1",
-  "generated_at": "2026-11-03T23:03:57Z",
+  "generated_at": "2026-11-04T10:30:03Z",
   "total_directories": 17,
   "total_files": 238,
   "total_tests": 8798,
@@ -9,8 +9,8 @@
   "todo_tests": 28,
   "todo_expected_failures": 9,
   "pass_rate": 1.0,
-  "total_duration_sec": 240.777,
-  "overall_throughput_tests_per_sec": 36.54,
+  "total_duration_sec": 172.854,
+  "overall_throughput_tests_per_sec": 50.9,
   "directories": [
     {
       "directory": "chflags",
@@ -18,7 +18,7 @@
       "tests": 14,
       "passed": 14,
       "failed": 0,
-      "duration_sec": 0.199,
+      "duration_sec": 0.143,
       "rc": 0
     },
     {
@@ -27,7 +27,7 @@
       "tests": 327,
       "passed": 327,
       "failed": 0,
-      "duration_sec": 16.911,
+      "duration_sec": 13.602,
       "rc": 0
     },
     {
@@ -36,7 +36,7 @@
       "tests": 1497,
       "passed": 1497,
       "failed": 0,
-      "duration_sec": 89.602,
+      "duration_sec": 80.153,
       "rc": 0
     },
     {
@@ -45,7 +45,7 @@
       "tests": 89,
       "passed": 89,
       "failed": 0,
-      "duration_sec": 4.646,
+      "duration_sec": 3.008,
       "rc": 0
     },
     {
@@ -54,7 +54,7 @@
       "tests": 7,
       "passed": 7,
       "failed": 0,
-      "duration_sec": 0.121,
+      "duration_sec": 0.089,
       "rc": 0
     },
     {
@@ -63,7 +63,7 @@
       "tests": 359,
       "passed": 359,
       "failed": 0,
-      "duration_sec": 15.019,
+      "duration_sec": 11.712,
       "rc": 0
     },
     {
@@ -72,7 +72,7 @@
       "tests": 118,
       "passed": 118,
       "failed": 0,
-      "duration_sec": 3.862,
+      "duration_sec": 2.068,
       "rc": 0
     },
     {
@@ -81,7 +81,7 @@
       "tests": 120,
       "passed": 120,
       "failed": 0,
-      "duration_sec": 3.89,
+      "duration_sec": 2.078,
       "rc": 0
     },
     {
@@ -90,7 +90,7 @@
       "tests": 186,
       "passed": 186,
       "failed": 0,
-      "duration_sec": 6.187,
+      "duration_sec": 4.186,
       "rc": 0
     },
     {
@@ -99,7 +99,7 @@
       "tests": 337,
       "passed": 337,
       "failed": 0,
-      "duration_sec": 7.008,
+      "duration_sec": 4.577,
       "rc": 0
     },
     {
@@ -108,7 +108,7 @@
       "tests": 1,
       "passed": 1,
       "failed": 0,
-      "duration_sec": 0.07,
+      "duration_sec": 0.051,
       "rc": 0
     },
     {
@@ -117,7 +117,7 @@
       "tests": 4857,
       "passed": 4857,
       "failed": 0,
-      "duration_sec": 56.025,
+      "duration_sec": 23.804,
       "rc": 0
     },
     {
@@ -126,7 +126,7 @@
       "tests": 145,
       "passed": 145,
       "failed": 0,
-      "duration_sec": 4.151,
+      "duration_sec": 2.124,
       "rc": 0
     },
     {
@@ -135,7 +135,7 @@
       "tests": 95,
       "passed": 95,
       "failed": 0,
-      "duration_sec": 3.745,
+      "duration_sec": 2.003,
       "rc": 0
     },
     {
@@ -144,7 +144,7 @@
       "tests": 84,
       "passed": 84,
       "failed": 0,
-      "duration_sec": 4.627,
+      "duration_sec": 3.012,
       "rc": 0
     },
     {
@@ -153,7 +153,7 @@
       "tests": 440,
       "passed": 440,
       "failed": 0,
-      "duration_sec": 22.547,
+      "duration_sec": 18.816,
       "rc": 0
     },
     {
@@ -162,7 +162,7 @@
       "tests": 122,
       "passed": 122,
       "failed": 0,
-      "duration_sec": 2.167,
+      "duration_sec": 1.428,
       "rc": 0
     }
   ],
@@ -176,7 +176,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 9,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -188,7 +188,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -200,7 +200,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -212,7 +212,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -224,7 +224,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -236,7 +236,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 6,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -248,7 +248,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -260,7 +260,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -272,7 +272,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -284,7 +284,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -296,7 +296,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -308,7 +308,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -320,7 +320,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -332,7 +332,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -344,7 +344,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12981,
+      "duration_ms": 12292,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -356,7 +356,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 169,
+      "duration_ms": 49,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -368,7 +368,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 78,
+      "duration_ms": 43,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -380,7 +380,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1351,
+      "duration_ms": 584,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -392,7 +392,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 74,
+      "duration_ms": 28,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -404,7 +404,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 127,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -416,7 +416,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 608,
+      "duration_ms": 99,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -428,7 +428,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 218,
+      "duration_ms": 68,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -440,7 +440,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -452,7 +452,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -464,7 +464,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -476,7 +476,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1026,
+      "duration_ms": 258,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -488,7 +488,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 175,
+      "duration_ms": 47,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -500,7 +500,7 @@
       "failed": 0,
       "todo": 27,
       "todo_expected_failures": 8,
-      "duration_ms": 85577,
+      "duration_ms": 78845,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -512,7 +512,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 178,
+      "duration_ms": 57,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -524,7 +524,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 122,
+      "duration_ms": 55,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -536,7 +536,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1394,
+      "duration_ms": 592,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -548,7 +548,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 79,
+      "duration_ms": 31,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -560,7 +560,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 149,
+      "duration_ms": 49,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -572,7 +572,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 855,
+      "duration_ms": 114,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -584,7 +584,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1126,
+      "duration_ms": 316,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -596,7 +596,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -608,7 +608,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -620,7 +620,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 10,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -632,7 +632,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 2283,
+      "duration_ms": 2074,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -644,7 +644,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 62,
+      "duration_ms": 21,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -656,7 +656,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 81,
+      "duration_ms": 45,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -668,7 +668,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1348,
+      "duration_ms": 579,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -680,7 +680,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 44,
+      "duration_ms": 19,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -692,7 +692,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 135,
+      "duration_ms": 43,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -704,7 +704,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 83,
+      "duration_ms": 27,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -716,7 +716,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 362,
+      "duration_ms": 55,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -728,7 +728,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -740,7 +740,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 31,
+      "duration_ms": 13,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -752,7 +752,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -764,7 +764,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -776,7 +776,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 39,
+      "duration_ms": 15,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -788,7 +788,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 39,
+      "duration_ms": 15,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -800,7 +800,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 14,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -812,7 +812,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -824,7 +824,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -836,7 +836,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -848,7 +848,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -860,7 +860,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -872,7 +872,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -884,7 +884,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -896,7 +896,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11375,
+      "duration_ms": 10435,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -908,7 +908,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 328,
+      "duration_ms": 88,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -920,7 +920,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 156,
+      "duration_ms": 60,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -932,7 +932,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1407,
+      "duration_ms": 610,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -944,7 +944,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 78,
+      "duration_ms": 26,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -956,7 +956,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -968,7 +968,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 187,
+      "duration_ms": 57,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -980,7 +980,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 192,
+      "duration_ms": 56,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -992,7 +992,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 694,
+      "duration_ms": 132,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1004,7 +1004,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 77,
+      "duration_ms": 22,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1016,7 +1016,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 238,
+      "duration_ms": 62,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1028,7 +1028,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 112,
+      "duration_ms": 33,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1040,7 +1040,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1052,7 +1052,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1064,7 +1064,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1076,7 +1076,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 6,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1088,7 +1088,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1100,7 +1100,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 40,
+      "duration_ms": 21,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1112,7 +1112,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1295,
+      "duration_ms": 1084,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1124,7 +1124,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 165,
+      "duration_ms": 48,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1136,7 +1136,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 70,
+      "duration_ms": 40,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1148,7 +1148,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1336,
+      "duration_ms": 585,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1160,7 +1160,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 46,
+      "duration_ms": 17,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1172,7 +1172,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 134,
+      "duration_ms": 40,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1184,7 +1184,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 138,
+      "duration_ms": 39,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1196,7 +1196,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 360,
+      "duration_ms": 68,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1208,7 +1208,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1220,7 +1220,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1232,7 +1232,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 183,
+      "duration_ms": 51,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1244,7 +1244,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1256,7 +1256,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 10,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1268,7 +1268,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1297,
+      "duration_ms": 1083,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1280,7 +1280,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 166,
+      "duration_ms": 49,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1292,7 +1292,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 69,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1304,7 +1304,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1364,
+      "duration_ms": 591,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1316,7 +1316,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 43,
+      "duration_ms": 17,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1328,7 +1328,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 132,
+      "duration_ms": 39,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1340,7 +1340,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 137,
+      "duration_ms": 39,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1352,7 +1352,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 363,
+      "duration_ms": 73,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1364,7 +1364,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1376,7 +1376,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 190,
+      "duration_ms": 50,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1388,7 +1388,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1400,7 +1400,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1412,7 +1412,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 10,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1424,7 +1424,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1297,
+      "duration_ms": 1082,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1436,7 +1436,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 182,
+      "duration_ms": 65,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1448,7 +1448,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 126,
+      "duration_ms": 60,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1460,7 +1460,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1422,
+      "duration_ms": 599,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1472,7 +1472,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 44,
+      "duration_ms": 16,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1484,7 +1484,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 129,
+      "duration_ms": 40,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1496,7 +1496,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 134,
+      "duration_ms": 40,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1508,7 +1508,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 357,
+      "duration_ms": 62,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1520,7 +1520,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 215,
+      "duration_ms": 73,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1532,7 +1532,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1544,7 +1544,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 10,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1556,7 +1556,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 2173,
+      "duration_ms": 2059,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1568,7 +1568,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 3401,
+      "duration_ms": 3110,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1580,7 +1580,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 176,
+      "duration_ms": 55,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1592,7 +1592,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 72,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1604,7 +1604,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1352,
+      "duration_ms": 582,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1616,7 +1616,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 45,
+      "duration_ms": 19,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1628,7 +1628,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 112,
+      "duration_ms": 38,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1640,7 +1640,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 560,
+      "duration_ms": 268,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1652,7 +1652,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 160,
+      "duration_ms": 59,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1664,7 +1664,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 43,
+      "duration_ms": 17,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1676,7 +1676,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1688,7 +1688,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1700,7 +1700,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1712,7 +1712,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 359,
+      "duration_ms": 66,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1724,7 +1724,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1736,7 +1736,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1748,7 +1748,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1760,7 +1760,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 38,
+      "duration_ms": 21,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1772,7 +1772,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 35,
+      "duration_ms": 13,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1784,7 +1784,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1796,7 +1796,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1808,7 +1808,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1820,7 +1820,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 10,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1832,7 +1832,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 185,
+      "duration_ms": 52,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1844,7 +1844,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 38,
+      "duration_ms": 16,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1856,7 +1856,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 40,
+      "duration_ms": 17,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1868,7 +1868,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 84,
+      "duration_ms": 23,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1880,7 +1880,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 89,
+      "duration_ms": 25,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1892,7 +1892,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1904,7 +1904,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8005,
+      "duration_ms": 7290,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1916,7 +1916,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 139,
+      "duration_ms": 57,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1928,7 +1928,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1419,
+      "duration_ms": 586,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1940,7 +1940,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 83,
+      "duration_ms": 27,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1952,7 +1952,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 207,
+      "duration_ms": 59,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1964,7 +1964,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 209,
+      "duration_ms": 57,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1976,7 +1976,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -1988,7 +1988,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2000,7 +2000,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2012,7 +2012,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 19584,
+      "duration_ms": 5219,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2024,7 +2024,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 18296,
+      "duration_ms": 4679,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2036,7 +2036,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 686,
+      "duration_ms": 93,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2048,7 +2048,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 351,
+      "duration_ms": 86,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2060,7 +2060,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 263,
+      "duration_ms": 74,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2072,7 +2072,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 254,
+      "duration_ms": 76,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2084,7 +2084,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 14,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2096,7 +2096,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2108,7 +2108,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 42,
+      "duration_ms": 21,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2120,7 +2120,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 76,
+      "duration_ms": 26,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2132,7 +2132,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 72,
+      "duration_ms": 25,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2144,7 +2144,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 295,
+      "duration_ms": 72,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2156,7 +2156,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 201,
+      "duration_ms": 54,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2168,7 +2168,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2180,7 +2180,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 5544,
+      "duration_ms": 5127,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2192,7 +2192,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 134,
+      "duration_ms": 46,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2204,7 +2204,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1091,
+      "duration_ms": 1030,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2216,7 +2216,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 148,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2228,7 +2228,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 76,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2240,7 +2240,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1394,
+      "duration_ms": 579,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2252,7 +2252,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 58,
+      "duration_ms": 18,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2264,7 +2264,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 333,
+      "duration_ms": 41,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2276,7 +2276,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 250,
+      "duration_ms": 63,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2288,7 +2288,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 111,
+      "duration_ms": 35,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2300,7 +2300,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 117,
+      "duration_ms": 35,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2312,7 +2312,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2324,7 +2324,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2336,7 +2336,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 352,
+      "duration_ms": 109,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2348,7 +2348,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 69,
+      "duration_ms": 24,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2360,7 +2360,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2372,7 +2372,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2384,7 +2384,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2396,7 +2396,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1137,
+      "duration_ms": 1041,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2408,7 +2408,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 68,
+      "duration_ms": 22,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2420,7 +2420,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 121,
+      "duration_ms": 52,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2432,7 +2432,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1413,
+      "duration_ms": 585,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2444,7 +2444,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 43,
+      "duration_ms": 17,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2456,7 +2456,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 135,
+      "duration_ms": 41,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2468,7 +2468,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 139,
+      "duration_ms": 41,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2480,7 +2480,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 351,
+      "duration_ms": 48,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2492,7 +2492,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 201,
+      "duration_ms": 52,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2504,7 +2504,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2516,7 +2516,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 8,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2528,7 +2528,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2540,7 +2540,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 20,
+      "duration_ms": 16,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2552,7 +2552,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 2216,
+      "duration_ms": 2065,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2564,7 +2564,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 65,
+      "duration_ms": 22,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2576,7 +2576,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 83,
+      "duration_ms": 44,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2588,7 +2588,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1385,
+      "duration_ms": 580,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2600,7 +2600,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 44,
+      "duration_ms": 20,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2612,7 +2612,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 139,
+      "duration_ms": 45,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2624,7 +2624,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 87,
+      "duration_ms": 27,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2636,7 +2636,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 347,
+      "duration_ms": 64,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2648,7 +2648,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2660,7 +2660,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 31,
+      "duration_ms": 13,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2672,7 +2672,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2684,7 +2684,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 9,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2696,7 +2696,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 43,
+      "duration_ms": 15,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2708,7 +2708,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 42,
+      "duration_ms": 15,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2720,7 +2720,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 14,
+      "duration_ms": 8,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2732,7 +2732,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 18065,
+      "duration_ms": 17293,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2744,7 +2744,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 66,
+      "duration_ms": 22,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2756,7 +2756,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 74,
+      "duration_ms": 42,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2768,7 +2768,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1386,
+      "duration_ms": 579,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2780,7 +2780,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 54,
+      "duration_ms": 19,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2792,7 +2792,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 109,
+      "duration_ms": 33,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2804,7 +2804,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 115,
+      "duration_ms": 37,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2816,7 +2816,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 345,
+      "duration_ms": 65,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2828,7 +2828,7 @@
       "failed": 0,
       "todo": 1,
       "todo_expected_failures": 1,
-      "duration_ms": 35,
+      "duration_ms": 13,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2840,7 +2840,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 13,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2852,7 +2852,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 7,
+      "duration_ms": 4,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2864,7 +2864,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 2047,
+      "duration_ms": 581,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2876,7 +2876,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 12,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2888,7 +2888,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 10,
+      "duration_ms": 7,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2900,7 +2900,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 113,
+      "duration_ms": 30,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2912,7 +2912,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 247,
+      "duration_ms": 75,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2924,7 +2924,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 1078,
+      "duration_ms": 1027,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2936,7 +2936,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 86,
+      "duration_ms": 32,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2948,7 +2948,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 11,
+      "duration_ms": 5,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2960,7 +2960,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 83,
+      "duration_ms": 30,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2972,7 +2972,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 134,
+      "duration_ms": 47,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2984,7 +2984,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 124,
+      "duration_ms": 41,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -2996,7 +2996,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 130,
+      "duration_ms": 47,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -3008,7 +3008,7 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 80,
+      "duration_ms": 27,
       "failed_nums": [],
       "status": "PASS"
     },
@@ -3020,14 +3020,14 @@
       "failed": 0,
       "todo": 0,
       "todo_expected_failures": 0,
-      "duration_ms": 103,
+      "duration_ms": 29,
       "failed_nums": [],
       "status": "PASS"
     }
   ],
   "environment": {
-    "test_started_at": "2026-11-03T22:57:05Z",
-    "test_completed_at": "2026-11-03T23:01:08Z",
+    "test_started_at": "2026-11-04T09:20:17Z",
+    "test_completed_at": "2026-11-04T09:23:12Z",
     "cloud": {
       "provider": "Alibaba Cloud (阿里云)",
       "region_id": "us-west-1",
@@ -3049,8 +3049,8 @@
       "os_release": "Ubuntu 24.04.5 LTS",
       "kernel": "6.8.0-147-generic",
       "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
-      "instance_id": "i-rj95onsvg763oxc2f0ut",
-      "private_ip": "172.16.1.191"
+      "instance_id": "i-rj91n7p8m56c4bop2m6v",
+      "private_ip": "172.16.1.199"
     },
     "client_node": {
       "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -3059,20 +3059,24 @@
       "os_release": "Ubuntu 24.04.5 LTS",
       "kernel": "6.8.0-147-generic",
       "fusermount_version": "fusermount3 version: 3.14.0",
-      "instance_id": "i-rj95onsvg763oxc2f0uu",
-      "private_ip": "172.16.1.190"
+      "instance_id": "i-rj91n7p8m56c4bop2m6w",
+      "private_ip": "172.16.1.198"
     },
     "network_baseline": {
-      "ping_rtt_ms": "0.066/0.097/0.311/0.053",
+      "ping_rtt_ms": "0.062/0.090/0.289/0.050",
       "iperf3_gbps": "15.71"
     },
     "bowl_config": {
-      "disk_id": "01a1a3a1-64df-7895-8d46-e764e01e7ec6",
+      "disk_id": "01a1a5db-f468-721b-9643-c1fc70852cf5",
       "root_ino": 1,
       "pjdfstest_git_commit": "85a8aea",
-      "bowl_git_commit": "0ab26a7",
-      "storage_engine": "Pebble per branch",
-      "kernel_writeback_cache": false,
+      "bowl_git_commit": "626dd03",
+      "storage_engine": "Pebble per branch (常驻句柄池)",
+      "blob_size_bytes": 1048576,
+      "kernel_writeback_cache": true,
+      "open_keep_cache": true,
+      "flush_issues_fsync_rpc": false,
+      "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘",
       "disk_size": "2PiB",
       "atime_mode": "strictatime",
       "entry_timeout": "0",
@@ -3080,9 +3084,9 @@
       "dir_entry_timeout": "0"
     },
     "cleanup_audit": {
-      "key_pair_name": "bowl-pjdfstest-kp-20261103-225358",
-      "instances_created_at": "2026-11-03T22:54:09Z",
-      "instances_deleted_at": "2026-11-03T23:01:22Z",
+      "key_pair_name": "bowl-pjdfstest-kp-20261104-091738",
+      "instances_created_at": "2026-11-04T09:17:45Z",
+      "instances_deleted_at": "2026-11-04T09:23:23Z",
       "remaining_benchmark_instances": 0
     }
   }

@@ -1,6 +1,8 @@
 # Bowl vs Drive9 (`mem9-ai/drive9`) 性能基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `0ab26a7`。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `626dd03`（ADR-0029 全量性能优化后），Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹一致。完整结果见 [REPORT.md](REPORT.md)。
+
+本轮相对 Drive9 默认模式：冷缓存 `mkdir` 3.62x、`rename` 8.78x、`unlink` 10.23x、顺序读 2.67x；`juicefs bench` 4 并发大文件写为 0.06x，但同轮冷缓存单流 256 MiB 顺序写达到 162.99 MiB/s，说明瓶颈集中在并发写路径而非单流写上限。
 
 本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机 VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
 
@@ -8,11 +10,11 @@
 
 在相同的 2 台 `ecs.c9i.xlarge`（4 vCPU / 8 GiB / 120 GiB `cloud_essd`）节点上，同时对比三组挂载模式：
 
-1. **`bowl`**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块。整块写入与局部更新分别使用 Set 和 ValueMerger，Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache 由客户端在内存中维护。
+1. **`bowl`**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块。整块写入与局部更新分别使用 Set 和 ValueMerger，读取按请求区间解码；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘兜底。Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
 2. **`drive9_default`**：Drive9 默认模式（TiDB v8.5.5 + Drive9 Server Local S3，`--profile=coding-agent --durability=interactive --write-cache-size-mb=0`，启用本地 Write-Back 暂存、本地磁盘读缓存与 `.git`/构建目录 Local Overlay）。
 3. **`drive9_sync`**：Drive9 远端同步模式（`--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`，禁用 Local Overlay，对齐 `1.0s` 内核缓存与同步 `close`/`fsync` 落盘语义）。
 
-Bowl 指定提交实际禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 释放本地句柄。这与 ADR-0029 计划启用 `writeback_cache` 的设计不同；不同存储栈的缓存与写入确认条件也不同。
+Bowl 客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规写由内核页缓存聚合回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
 
 每组目标依次运行三大基准测试套件：
 

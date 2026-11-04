@@ -1,14 +1,14 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `0ab26a7`。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `626dd03`（ADR-0029 全量性能优化后）。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试通过；其中 28 项标记为 TODO，9 项为预期失败。
+本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试全部通过；其中 28 项标记为 TODO，9 项为预期失败。全量执行 172.85s，内网综合吞吐 50.90 tests/s（上一轮基线 240.78s / 36.54 tests/s）。
 
 本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
 
-被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块；整块写入与局部更新分别使用 Set 和 ValueMerger，Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache 由客户端在内存中维护。
+被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块；整块写入与局部更新分别使用 Set 和 ValueMerger，读取按请求区间解码（`DecodeBlobRange`）；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘与 `WALBytesPerSync` 兜底。Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
 
-指定提交实际禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 释放本地句柄。这与 ADR-0029 计划启用 `writeback_cache` 的设计不同。
+客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规 `write()` 由内核页缓存聚合为最大 1 MiB 块回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。本套件为覆盖真实元数据路径，保持 `strictatime` 与 0 秒属性/目录项超时。
 
 ## 目录结构
 
