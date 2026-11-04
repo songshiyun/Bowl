@@ -1,22 +1,22 @@
 {
-  "disk_id": "01a1a5dc-bbe3-7773-8dbf-508c77d5f656",
+  "disk_id": "01a1a6f3-2fb9-734c-945c-07bc9f2d7b4a",
   "name": "jfs-bench-disk",
   "root_ino": 1,
   "max_bytes": 2251799813685248,
   "used_bytes": 0,
   "used_inodes": 1,
-  "created_at": "2026-11-04T09:21:09Z",
-  "updated_at": "2026-11-04T09:21:09Z",
+  "created_at": "2026-11-04T14:25:17Z",
+  "updated_at": "2026-11-04T14:25:17Z",
   "default_branch": "main",
   "branches": [
     {
-      "branch_id": "2916ae62-8e2a-48d2-8cd6-c24a7e1359f3",
-      "disk_id": "01a1a5dc-bbe3-7773-8dbf-508c77d5f656",
+      "branch_id": "554fc45c-edf1-473c-9e4b-90a82c1dd14f",
+      "disk_id": "01a1a6f3-2fb9-734c-945c-07bc9f2d7b4a",
       "name": "main",
-      "fork_commit_id": "01a1a5dc-bbe3-7775-bbce-854ac69377fe",
-      "head_commit_id": "01a1a5dc-bbe3-7775-bbce-854ac69377fe",
+      "fork_commit_id": "01a1a6f3-2fb9-734e-af8d-eb2487de4e8e",
+      "head_commit_id": "01a1a6f3-2fb9-734e-af8d-eb2487de4e8e",
       "state": "NORMAL",
-      "created_at": "2026-11-04T09:21:09Z"
+      "created_at": "2026-11-04T14:25:17Z"
     }
   ]
 }

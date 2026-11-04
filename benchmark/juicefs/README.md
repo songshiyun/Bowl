@@ -1,16 +1,16 @@
 # Bowl vs JuiceFS 阿里云硅谷双机内网存储性能基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `626dd03`（ADR-0029 全量性能优化后）。三组均已完成基础测试、8 项 fio（24 份，错误码均为 0）和单进程/四进程 mdtest。相对上一轮基线（`0ab26a7`）：大文件读 17.3x、小文件读 63.6x、Stat 6.5x、mdtest 目录创建 20.3x；4 并发大文件写由 27.20 MiB/s 降至 11.78 MiB/s，仍是短板，但同轮单流 fio 顺序写为 59.53 MiB/s（上一轮 37.39 MiB/s）。完整结果见 [REPORT.md](REPORT.md)。上一轮首次尝试的失败记录保留在 [attempts/20261104-first](attempts/20261104-first/README.md)。
+> 最新复跑：2026-11-04，Bowl `1f7cde9`（BlobRef + blobs 块文件解耦、生命周期锁与 1 MiB Write-Through）。三组均已完成基础测试、8 项 fio（24 份，错误码均为 0）和单进程/四进程 mdtest。相对上一轮基线（`626dd03`）：大文件写 28.6x（336.92 vs 11.78 MiB/s）、fio 16 并发顺序写 15.6x（179.01 vs 11.46 MiB/s）、direct 随机写 31.6x（296.40 vs 9.38 MiB/s）；大文件读与小文件读基本持平，mdtest 单进程文件删除降至 0.46x。完整结果见 [REPORT.md](REPORT.md)。
 
 本目录包含对标 [JuiceFS 官方常规测试](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 [`juicefs bench`](https://juicefs.com/docs/zh/community/performance_evaluation_guide/#juicefs-bench)、[`fio` 吞吐量测试](https://juicefs.com/docs/zh/community/fio/)、[`mdtest` 元数据 IOPS 测试](https://juicefs.com/docs/zh/community/mdtest/)）的端到端自动化评测脚本、实测原始数据及完整对比报告。
 
 默认测试在与 [`benchmark/pjdfstest`](../pjdfstest) 相同地域的**阿里云硅谷（`us-west-1a`）按量计费双机 VPC 私网环境**（`ecs.c9i.xlarge` × 2）中自动拉起，并在同一套硬件与内网拓扑下对以下三组存储栈进行同机实测对比：
 
-1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块。整块写入与局部更新分别使用 Set 和 ValueMerger，读取按请求区间解码；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘兜底。Checkpoint 与 Fork 通过硬链接共享文件。客户端在内存中维护 FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache。
+1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。客户端在内存中维护 FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache。
 2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：PostgreSQL 16 元数据引擎 + Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
 3. **JuiceFS (Redis 7 + Server rclone S3)**：JuiceFS 官方常规测试默认的 Redis 元数据引擎（`appendonly yes`, `appendfsync everysec`）+ Server 节点 `cloud_essd` 上的 rclone S3 对象存储（`--trash-days 0`）。
 
-Bowl 客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规写由内核页缓存聚合回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
+Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
 
 ## 目录结构
 

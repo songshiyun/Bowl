@@ -1,14 +1,14 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `626dd03`（ADR-0029 全量性能优化后）。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `8cad512`（`1f7cde9` + chown setid 修复）。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试全部通过；其中 28 项标记为 TODO，9 项为预期失败。全量执行 172.85s，内网综合吞吐 50.90 tests/s（上一轮基线 240.78s / 36.54 tests/s）。
+本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试全部通过；其中 28 项标记为 TODO，9 项为预期失败。全量执行 172.49s，内网综合吞吐 51.01 tests/s（上一轮基线 172.85s / 50.90 tests/s）。首轮在 `1f7cde9` 上发现 `chown/00.t` 32 项失败（声明 `CAP_HANDLE_KILLPRIV` 后服务端未清除非目录节点的 SUID/SGID），修复后重跑全绿。
 
 本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
 
-被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块；整块写入与局部更新分别使用 Set 和 ValueMerger，读取按请求区间解码（`DecodeBlobRange`）；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘与 `WALBytesPerSync` 兜底。Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
+被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引；文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端分支锁降为拓扑生命周期 `RLock`，常规读写按 inode 细粒度加锁，完整 1 MiB 块在 Inode 锁外并行落盘；`GetAttr`/`GetXattr`/`Readlink` 单键点查免 Snapshot；读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
 
-客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规 `write()` 由内核页缓存聚合为最大 1 MiB 块回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。本套件为覆盖真实元数据路径，保持 `strictatime` 与 0 秒属性/目录项超时。
+客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，避免 4 KiB 脏页回写与写前尺寸核对；保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。本套件为覆盖真实元数据路径，保持 `strictatime` 与 0 秒属性/目录项超时。
 
 ## 目录结构
 

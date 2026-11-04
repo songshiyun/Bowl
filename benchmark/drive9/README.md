@@ -1,8 +1,8 @@
 # Bowl vs Drive9 (`mem9-ai/drive9`) 性能基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `626dd03`（ADR-0029 全量性能优化后），Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹一致。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `1f7cde9`（BlobRef + blobs 块文件解耦、生命周期锁与 1 MiB Write-Through），Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹一致。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮相对 Drive9 默认模式：冷缓存 `mkdir` 3.62x、`rename` 8.78x、`unlink` 10.23x、顺序读 2.67x；`juicefs bench` 4 并发大文件写为 0.06x，但同轮冷缓存单流 256 MiB 顺序写达到 162.99 MiB/s，说明瓶颈集中在并发写路径而非单流写上限。
+本轮相对 Drive9 默认模式：冷缓存 `mkdir` 3.60x、`rename` 8.99x、`unlink` 7.33x、顺序读 3.23x；`juicefs bench` 大文件写达到 295.12 MiB/s（上一轮 11.63 MiB/s），冷缓存单流 256 MiB 顺序写 183.19 MiB/s。小文件与 `stat` 低于同轮 juicefs 套件的 Bowl 结果，差异未定位，需单独复跑确认。
 
 本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机 VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
 
@@ -10,11 +10,11 @@
 
 在相同的 2 台 `ecs.c9i.xlarge`（4 vCPU / 8 GiB / 120 GiB `cloud_essd`）节点上，同时对比三组挂载模式：
 
-1. **`bowl`**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个分支通过常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 和 1 MiB 数据块。整块写入与局部更新分别使用 Set 和 ValueMerger，读取按请求区间解码；常规写批次以 `pebble.NoSync` 提交异步 WAL，并由后台 1 秒刷盘兜底。Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
+1. **`bowl`**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，删除即时 `os.Remove` 回收，Checkpoint 与 Fork 以硬链接共享块；服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
 2. **`drive9_default`**：Drive9 默认模式（TiDB v8.5.5 + Drive9 Server Local S3，`--profile=coding-agent --durability=interactive --write-cache-size-mb=0`，启用本地 Write-Back 暂存、本地磁盘读缓存与 `.git`/构建目录 Local Overlay）。
 3. **`drive9_sync`**：Drive9 远端同步模式（`--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`，禁用 Local Overlay，对齐 `1.0s` 内核缓存与同步 `close`/`fsync` 落盘语义）。
 
-Bowl 客户端默认开启 FUSE 内核 `CAP_WRITEBACK_CACHE` 与 `FOPEN_KEEP_CACHE`，常规写由内核页缓存聚合回写；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
+Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
 
 每组目标依次运行三大基准测试套件：
 
