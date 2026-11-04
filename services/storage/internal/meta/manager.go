@@ -77,7 +77,23 @@ type manager struct {
 	treeQuotas                                 map[string]*TreeQuota
 	dirCursorMu                                sync.Mutex
 	pebbleDirCursors                           map[pebbleDirCursorKey][]byte
+	sessionCacheMu                             sync.Mutex
+	sessionCache                               map[uint64]pebbleSessionCacheEntry
+	sessionCacheTTL                            time.Duration
 }
+
+// pebbleSessionCacheEntry 是会话内存写透缓存条目，fresh 之后重新读取控制面。
+type pebbleSessionCacheEntry struct {
+	session pebbleReadSession
+	fresh   time.Time
+}
+
+const (
+	// defaultSessionCacheTTL 是会话缓存软过期时间，决定控制面变更的最长可见延迟。
+	defaultSessionCacheTTL = time.Second
+	// maxCachedSessions 是缓存条目上限，超出时优先清理已过期条目。
+	maxCachedSessions = 4096
+)
 
 type poolProvider interface{ Pool() *pgxpool.Pool }
 
@@ -134,7 +150,8 @@ func WithPebbleManager(pool *pebblekv.Manager) Option {
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
-		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL}
+		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
+		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
@@ -192,10 +209,9 @@ func (m *manager) CloseSession(ctx context.Context, sessionID uint64) error {
 	if sessionID == 0 || sessionID > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
-		return err
-	}
 	_, err := m.closeBranchSession(ctx, sessionID)
+	// 无论清扫是否成功都驱逐缓存：写端租约已在事务内失效，旧缓存必须立即失效。
+	m.invalidatePebbleSession(sessionID)
 	if err != nil {
 		return err
 	}

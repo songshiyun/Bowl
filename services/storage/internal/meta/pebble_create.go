@@ -59,63 +59,58 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return ErrInvalidArgument
 	}
-	if !m.hasPool() {
-		return ErrBadFileHandle
-	}
-	var diskID pgtype.UUID
-	var branchName string
-	var readOnly, managed, active bool
-	var createdAt time.Time
-	err = m.store.(poolProvider).Pool().QueryRow(ctx, `SELECT disk_id, branch_name, read_only, lease_managed, expires_at > clock_timestamp(), created_at
-		FROM client_sessions WHERE session_id = $1`, int64(*sid)).Scan(&diskID, &branchName, &readOnly, &managed, &active, &createdAt)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && !active {
-		return ErrBadFileHandle
-	}
+	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return err
 	}
-	if !managed {
-		return ErrBadFileHandle
-	}
-	if readOnly {
+	if session.readOnly {
 		return ErrPerm
 	}
 	if check != nil {
-		if err := check(diskID, branchName); err != nil {
+		if err := check(session.diskID, session.branch); err != nil {
 			return err
 		}
 	}
-	row, err := m.store.GetDisk(ctx, diskID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
+	disk := session.diskID.String()
+	quota, err := m.sessionTreeQuota(ctx, session.diskID)
 	if err != nil {
 		return err
 	}
-	control, err := m.store.GetDiskControlPlane(ctx, diskID)
-	if err != nil {
-		return err
-	}
-	quota, err := m.loadTreeQuota(ctx, row, control)
-	if err != nil {
-		return err
-	}
-	disk := diskID.String()
-	unlock := m.lockBranch(disk, branchName)
+	unlock := m.lockBranchWrite(disk, session.branch)
 	defer unlock()
-	current, err := m.requirePebbleSession(ctx, sid)
-	if err != nil {
-		return err
-	}
-	if current.diskID != diskID || current.branch != branchName || current.readOnly || !current.createdAt.Equal(createdAt) {
+	// 锁内复查会话缓存：CloseSession 等控制面入口驱逐后立即拒绝后续请求。
+	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
 	}
-	branch, err := m.pebble.OpenBranch(disk, branchName)
+	branch, err := m.pebble.OpenBranch(disk, session.branch)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	return fn(disk, branchName, quota, branch.DB())
+	if err := fn(disk, session.branch, quota, branch.DB()); err != nil {
+		return err
+	}
+	m.pebble.MarkBranchDirty(disk, session.branch)
+	return nil
+}
+
+// sessionTreeQuota 优先复用内存配额协调器，未命中时才读取控制面。
+func (m *manager) sessionTreeQuota(ctx context.Context, diskID pgtype.UUID) (*TreeQuota, error) {
+	if quota, ok := m.lookupTreeQuota(diskID.String()); ok {
+		return quota, nil
+	}
+	row, err := m.store.GetDisk(ctx, diskID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	control, err := m.store.GetDiskControlPlane(ctx, diskID)
+	if err != nil {
+		return nil, err
+	}
+	return m.loadTreeQuota(ctx, row, control)
 }
 
 func readCreateInode(store *pebble.DB, ino uint64) (pebblekv.Inode, error) {
@@ -302,7 +297,7 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 		if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
 			return err
 		}
-		if err := quota.applyLocked(branch, ino, size, true, func() error { return batch.Commit(pebble.Sync) }, true); err != nil {
+		if err := quota.applyLocked(branch, ino, size, true, func() error { return batch.Commit(pebble.NoSync) }, true); err != nil {
 			return err
 		}
 
@@ -375,7 +370,7 @@ func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkPa
 		if quota.usage.Bytes >= quota.maxBytes {
 			return ErrNoSpace
 		}
-		if err := batch.Commit(pebble.Sync); err != nil {
+		if err := batch.Commit(pebble.NoSync); err != nil {
 			return err
 		}
 

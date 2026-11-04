@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -87,6 +88,13 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		return nil, err
 	}
 	disk.UsedInodes = 1
+	// 预热配额协调器，使首个数据面 RPC 无需再查询控制面。
+	control := db.GetDiskControlPlaneRow{
+		DiskID: created.DiskID, StorageDir: filepath.Join(m.storageRoot, "disks", id.String()), Branches: branches,
+	}
+	if _, err := m.loadTreeQuota(ctx, created, control); err != nil {
+		return nil, err
+	}
 	return disk, nil
 }
 
@@ -273,9 +281,11 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil
 	})
 	if err == nil {
-		tree.maxBytes = uint64(updated.MaxBytes)
+		tree.mu.Unlock()
+		err = tree.SetMaxBytes(uint64(updated.MaxBytes))
+	} else {
+		tree.mu.Unlock()
 	}
-	tree.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +361,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	if err := m.pebble.RemoveDisk(diskID); err != nil {
 		return fmt.Errorf("清理磁盘存储目录: %w", err)
 	}
+	m.invalidatePebbleDiskSessions(diskID)
 	return nil
 }
 

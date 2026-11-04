@@ -2,6 +2,7 @@ package meta_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
 // getStorageTestDSN 解析并返回测试 PostgreSQL DSN，供尚未迁移至 setupMetaTestDB 的包内历史测试文件调用。
@@ -241,3 +244,12 @@ func TestExplicitInvalidDSNFailsFast(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// awaitSessionRejected 等待会话缓存软过期后，数据面开始拒绝该会话。
+func awaitSessionRejected(t *testing.T, mgr meta.Manager, ctx context.Context, sid uint64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := mgr.GetAttr(meta.WithSessionID(ctx, &sid), 1)
+		return errors.Is(err, meta.ErrBadFileHandle)
+	}, 5*time.Second, 25*time.Millisecond, "会话失效后数据面必须立即拒绝")
+}

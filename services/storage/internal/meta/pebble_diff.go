@@ -96,7 +96,7 @@ func (m *manager) Diff(ctx context.Context, params DiffParams) (entries []DiffEn
 	slices.Sort(branchNames)
 	stores := make(map[string]*pebble.DB, len(branchNames))
 	for _, name := range branchNames {
-		unlock := m.lockBranch(diskID.String(), name)
+		unlock := m.lockBranchRead(diskID.String(), name)
 		defer unlock()
 		branch, openErr := m.pebble.OpenBranch(diskID.String(), name)
 		if openErr != nil {

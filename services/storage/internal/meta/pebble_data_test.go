@@ -32,6 +32,8 @@ type dataWALRecord struct {
 // 读取实际 WAL，检查整块写入、补丁及同步屏障产生的记录。
 func readDataWAL(t *testing.T, e *pebbleCreateEnv) []dataWALRecord {
 	t.Helper()
+	// 常规写批次使用异步 WAL，读取前先显式同步一次，确保记录已落到日志文件。
+	e.storage.FlushWAL()
 	path := filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main")
 	logs, err := wal.Scan(wal.Dir{FS: vfs.Default, Dirname: path})
 	require.NoError(t, err)

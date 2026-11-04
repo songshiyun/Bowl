@@ -47,6 +47,8 @@ func TestSessionSweeper(t *testing.T) {
 		err := pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE session_id = $1`, reader).Scan(&count)
 		return err == nil && count == 0
 	}, 3*time.Second, 20*time.Millisecond, "清理器应注销过期只读会话")
+	_, err = mgr.GetAttr(meta.WithSessionID(ctx, &reader), file.Inode.Ino)
+	require.ErrorIs(t, err, meta.ErrBadFileHandle, "清理后会话缓存必须立即失效")
 	_, err = mgr.GetAttr(branchCtx, file.Inode.Ino)
 	require.NoError(t, err, "清理只读会话不得影响活跃写端的孤儿节点")
 

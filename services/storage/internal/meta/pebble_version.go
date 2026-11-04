@@ -226,7 +226,7 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 		if requireMerge && (branches[i].State != "MERGING" || len(branches[i].MergeState) == 0) {
 			return ErrInvalidArgument
 		}
-		unlock = m.lockBranch(diskID.String(), params.BranchName)
+		unlock = m.lockBranchWrite(diskID.String(), params.BranchName)
 		branch, err = m.pebble.OpenBranch(diskID.String(), params.BranchName)
 		if err != nil {
 			return err
@@ -336,7 +336,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			if branches[i].State == "MERGING" {
 				return ErrBusy
 			}
-			unlockSource = m.lockBranch(disk, parent)
+			unlockSource = m.lockBranchWrite(disk, parent)
 			source, err = m.pebble.OpenBranch(disk, parent)
 			if err != nil {
 				return err
@@ -354,7 +354,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			}
 			fork = *branches[i].HeadCommitID
 		}
-		unlockTarget = m.lockBranch(disk, params.Name)
+		unlockTarget = m.lockBranchWrite(disk, params.Name)
 		targetPath := filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)
 		if _, err := os.Stat(targetPath); err == nil {
 			return ErrAlreadyExists
@@ -481,7 +481,7 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 		if err != nil {
 			return err
 		}
-		unlock = m.lockBranch(disk, params.Name)
+		unlock = m.lockBranchWrite(disk, params.Name)
 		if err := m.pebble.EvictBranch(disk, params.Name); err != nil {
 			return err
 		}
@@ -509,6 +509,9 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 		} else {
 			err = os.RemoveAll(backup)
 		}
+	}
+	if err == nil {
+		m.invalidatePebbleBranchSessions(disk, params.Name)
 	}
 	return err
 }
@@ -607,7 +610,7 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 		if err != nil {
 			return err
 		}
-		unlock = m.lockBranch(disk, params.BranchName)
+		unlock = m.lockBranchWrite(disk, params.BranchName)
 		if err := m.pebble.EvictBranch(disk, params.BranchName); err != nil {
 			return err
 		}

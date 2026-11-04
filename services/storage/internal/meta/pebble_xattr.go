@@ -12,7 +12,7 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
-func pebbleXattrExists(store *pebble.DB, ino uint64, name []byte) (bool, error) {
+func pebbleXattrExists(store pebbleReader, ino uint64, name []byte) (bool, error) {
 	_, closer, err := store.Get(pebblekv.XattrKey(ino, name))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return false, nil
@@ -23,7 +23,7 @@ func pebbleXattrExists(store *pebble.DB, ino uint64, name []byte) (bool, error) 
 	return true, closer.Close()
 }
 
-func pebbleXattrNames(ctx context.Context, store *pebble.DB, ino uint64) (names [][]byte, err error) {
+func pebbleXattrNames(ctx context.Context, store pebbleReader, ino uint64) (names [][]byte, err error) {
 	lower, upper := pebblekv.XattrRange(ino)
 	iter, err := store.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -80,7 +80,7 @@ func writePebbleXattr(store *pebble.DB, inode pebblekv.Inode, name, value []byte
 	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
 		return err
 	}
-	return batch.Commit(pebble.Sync)
+	return batch.Commit(pebble.NoSync)
 }
 
 func (m *manager) pebbleSetXattr(ctx context.Context, sid *uint64, params SetXattrParams) error {
@@ -129,7 +129,7 @@ func (m *manager) pebbleGetXattr(ctx context.Context, sid *uint64, ino uint64, n
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -159,7 +159,7 @@ func (m *manager) pebbleListXattr(ctx context.Context, sid *uint64, ino uint64) 
 		return nil, err
 	}
 	var names [][]byte
-	err = m.withPebbleSession(ctx, session, func(store *pebble.DB) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err

@@ -107,48 +107,40 @@ func TestBranchSessionOrphanSweepOnClose(t *testing.T) {
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 }
 
+// 过期写端的孤儿由同分支写端接管时的定向清扫回收；全表扫描仅由后台 Sweeper 触发。
 func TestBranchSessionExpiredSweep(t *testing.T) {
-	for _, action := range []string{"其他会话关闭", "写端接管"} {
-		t.Run(action, func(t *testing.T) {
-			pool, ctx := setupIsolatedMetaTestDB(t, "branch_expired")
-			root := t.TempDir()
-			storage := pebblekv.NewManager(root)
-			t.Cleanup(func() { _ = storage.Close() })
-			mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
-			disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "expired", MaxBytes: 1024})
-			require.NoError(t, err)
-			_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 301, DiskID: disk.DiskID})
-			require.NoError(t, err)
-			quota, err := mgr.TreeQuota(ctx, disk.DiskID)
-			require.NoError(t, err)
-			branch, err := storage.OpenBranch(disk.DiskID, "main")
-			require.NoError(t, err)
-			inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG | 0o644, Size: 80})
-			require.NoError(t, err)
-			batch := branch.DB().NewBatch()
-			require.NoError(t, batch.Set(pebblekv.InodeKey(2), inode, nil))
-			require.NoError(t, batch.Set(pebblekv.OrphanKey(2), []byte{1}, nil))
-			require.NoError(t, batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(pebblekv.BranchStat{LogicalBytes: 80, Inodes: 2, NextWriteSeq: 1}), nil))
-			require.NoError(t, quota.Apply("main", 2, 80, true, func() error { return batch.Commit(pebble.Sync) }))
-			require.NoError(t, batch.Close())
-			require.NoError(t, branch.Close())
-			_, err = pool.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, 301)
-			require.NoError(t, err)
-			switch action {
-			case "其他会话关闭":
-				err = mgr.CloseSession(ctx, 302)
-			case "写端接管":
-				_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 302, DiskID: disk.DiskID})
-			}
-			require.NoError(t, err)
-			branch, err = storage.OpenBranch(disk.DiskID, "main")
-			require.NoError(t, err)
-			_, _, err = branch.DB().Get(pebblekv.OrphanKey(2))
-			require.ErrorIs(t, err, pebble.ErrNotFound)
-			require.NoError(t, branch.Close())
-			require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
-		})
-	}
+	pool, ctx := setupIsolatedMetaTestDB(t, "branch_expired")
+	root := t.TempDir()
+	storage := pebblekv.NewManager(root)
+	t.Cleanup(func() { _ = storage.Close() })
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "expired", MaxBytes: 1024})
+	require.NoError(t, err)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 301, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
+	require.NoError(t, err)
+	branch, err := storage.OpenBranch(disk.DiskID, "main")
+	require.NoError(t, err)
+	inode, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG | 0o644, Size: 80})
+	require.NoError(t, err)
+	batch := branch.DB().NewBatch()
+	require.NoError(t, batch.Set(pebblekv.InodeKey(2), inode, nil))
+	require.NoError(t, batch.Set(pebblekv.OrphanKey(2), []byte{1}, nil))
+	require.NoError(t, batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(pebblekv.BranchStat{LogicalBytes: 80, Inodes: 2, NextWriteSeq: 1}), nil))
+	require.NoError(t, quota.Apply("main", 2, 80, true, func() error { return batch.Commit(pebble.Sync) }))
+	require.NoError(t, batch.Close())
+	require.NoError(t, branch.Close())
+	_, err = pool.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, 301)
+	require.NoError(t, err)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: 302, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	branch, err = storage.OpenBranch(disk.DiskID, "main")
+	require.NoError(t, err)
+	_, _, err = branch.DB().Get(pebblekv.OrphanKey(2))
+	require.ErrorIs(t, err, pebble.ErrNotFound)
+	require.NoError(t, branch.Close())
+	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 }
 
 func TestBranchSessionsIndependentWritersAndReaders(t *testing.T) {
@@ -511,8 +503,9 @@ func TestBranchSessionCloseCommitFailureDoesNotLeaveActiveWriter(t *testing.T) {
 	require.Equal(t, meta.TreeQuotaUsage{Inodes: 1}, quota.Usage())
 	_, err = pool.Exec(ctx, `DROP TRIGGER test_reject_delete ON client_sessions`)
 	require.NoError(t, err)
-	err = mgr.CloseSession(ctx, 9999)
-	require.NoError(t, err)
+	require.NoError(t, mgr.CloseSession(ctx, 9999))
+	// 过期写端由同会话的显式关闭回收，不再依赖全表扫描。
+	require.NoError(t, mgr.CloseSession(ctx, 1001))
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE session_id = $1`, 1001).Scan(&count))
 	require.Zero(t, count)

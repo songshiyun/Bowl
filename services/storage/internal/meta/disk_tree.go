@@ -41,7 +41,7 @@ type storedMergeState struct {
 }
 
 func (m *manager) createDiskStorage(diskID, commitID string) (err error) {
-	unlock := m.lockBranch(diskID, "main")
+	unlock := m.lockBranchWrite(diskID, "main")
 	defer unlock()
 	branch, err := m.pebble.OpenBranch(diskID, "main")
 	if err != nil {
@@ -161,6 +161,9 @@ func (m *manager) TreeQuota(ctx context.Context, diskID string) (*TreeQuota, err
 	if err != nil {
 		return nil, err
 	}
+	if quota, ok := m.lookupTreeQuota(id.String()); ok {
+		return quota, nil
+	}
 	row, err := m.store.GetDisk(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -173,6 +176,14 @@ func (m *manager) TreeQuota(ctx context.Context, diskID string) (*TreeQuota, err
 		return nil, err
 	}
 	return m.loadTreeQuota(ctx, row, control)
+}
+
+// lookupTreeQuota 只读取内存配额协调器，未命中时不触达控制面。
+func (m *manager) lookupTreeQuota(diskID string) (*TreeQuota, bool) {
+	m.treeQuotaMu.Lock()
+	defer m.treeQuotaMu.Unlock()
+	quota := m.treeQuotas[diskID]
+	return quota, quota != nil
 }
 
 func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control db.GetDiskControlPlaneRow) (*TreeQuota, error) {
@@ -210,7 +221,7 @@ func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control 
 }
 
 func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]uint64, err error) {
-	unlock := m.lockBranch(diskID, branchName)
+	unlock := m.lockBranchRead(diskID, branchName)
 	defer unlock()
 	path := filepath.Join(m.storageRoot, "disks", diskID, "branches", branchName)
 	if _, err := os.Stat(path); err != nil {

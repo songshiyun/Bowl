@@ -35,6 +35,13 @@ func (q *TreeQuota) Usage() TreeQuotaUsage {
 	return q.committed
 }
 
+// Snapshot 原子返回容量上限与已提交用量，供 StatFS 免查控制面。
+func (q *TreeQuota) Snapshot() (uint64, TreeQuotaUsage) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.maxBytes, q.committed
+}
+
 // Apply 在配额锁内执行持久化；失败时保持原有用量。回调不能重入此协调器。
 func (q *TreeQuota) Apply(branch string, ino, size uint64, live bool, persist func() error) error {
 	q.mu.Lock()

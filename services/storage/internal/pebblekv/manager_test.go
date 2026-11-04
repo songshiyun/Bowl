@@ -465,3 +465,37 @@ func TestRemoveDiskEvictsHandlesAndRemovesDirectory(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, manager.Close())
 }
+
+// 后台兜底刷盘只处理被标记为脏写的常驻分支，空闲分支不产生额外同步。
+func TestManagerFlushesDirtyBranchWALPeriodically(t *testing.T) {
+	manager := pebblekv.NewManager(t.TempDir(), pebblekv.WithWALFlushInterval(10*time.Millisecond))
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	branch, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, branch.Close()) }()
+
+	// 未标记脏写时分枝不触发兜底刷盘。
+	require.Never(t, func() bool { return manager.Stats().WALFlushes > 0 }, 60*time.Millisecond, 10*time.Millisecond)
+
+	require.NoError(t, branch.DB().Set([]byte("key"), []byte("value"), pebble.NoSync))
+	manager.MarkBranchDirty("disk", "main")
+	require.Eventually(t, func() bool { return manager.Stats().WALFlushes == 1 }, 2*time.Second, 10*time.Millisecond)
+	require.Never(t, func() bool { return manager.Stats().WALFlushes > 1 }, 80*time.Millisecond, 10*time.Millisecond)
+
+	require.NoError(t, branch.DB().Set([]byte("key2"), []byte("value2"), pebble.NoSync))
+	manager.MarkBranchDirty("disk", "main")
+	require.Eventually(t, func() bool { return manager.Stats().WALFlushes == 2 }, 2*time.Second, 10*time.Millisecond)
+}
+
+// Manager.Close 必须优雅停止后台刷盘协程，关闭后不再接受新分支。
+func TestManagerCloseStopsWALFlusher(t *testing.T) {
+	manager := pebblekv.NewManager(t.TempDir(), pebblekv.WithWALFlushInterval(5*time.Millisecond))
+	branch, err := manager.OpenBranch("disk", "main")
+	require.NoError(t, err)
+	require.NoError(t, branch.DB().Set([]byte("key"), []byte("value"), pebble.NoSync))
+	manager.MarkBranchDirty("disk", "main")
+	require.NoError(t, branch.Close())
+	require.NoError(t, manager.Close())
+	_, err = manager.OpenBranch("disk", "main")
+	require.ErrorIs(t, err, pebblekv.ErrClosed)
+}

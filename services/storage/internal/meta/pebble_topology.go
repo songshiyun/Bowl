@@ -138,12 +138,12 @@ func commitTopologyBatch(batch *pebble.Batch, quota *TreeQuota, branch string, r
 	quota.mu.Lock()
 	defer quota.mu.Unlock()
 	if removed != 0 {
-		return quota.applyLocked(branch, removed, 0, false, func() error { return batch.Commit(pebble.Sync) }, false)
+		return quota.applyLocked(branch, removed, 0, false, func() error { return batch.Commit(pebble.NoSync) }, false)
 	}
 	if quota.closed {
 		return ErrNotFound
 	}
-	return batch.Commit(pebble.Sync)
+	return batch.Commit(pebble.NoSync)
 }
 
 func (m *manager) unlinkPebbleNode(ctx context.Context, sid *uint64, parentIno uint64, name []byte) error {

@@ -486,6 +486,7 @@ func TestPebbleReadIntegration(t *testing.T) {
 		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 		_, err = f.pool.Exec(f.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, f.feature)
 		require.NoError(t, err)
+		awaitSessionRejected(t, f.mgr, f.ctx, f.feature)
 		_, err = f.mgr.ReadDir(f.ctx, meta.ReadDirParams{Ino: 1, Fh: 7, Limit: 1, SessionID: &f.feature})
 		require.ErrorIs(t, err, meta.ErrBadFileHandle)
 		_, err = f.mgr.ReadDirPlus(f.ctx, meta.ReadDirPlusParams{Ino: 1, Limit: 1, SessionID: &f.feature})
