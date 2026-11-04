@@ -345,15 +345,16 @@ func diffBlocks(ctx context.Context, old, new pebbleDiffStore, oldIno, newIno ui
 			blocks = append(blocks, newIdx)
 			newValid = newIter.Next()
 		default:
-			if !bytes.Equal(oldIter.Value(), newIter.Value()) {
-				oldRef, err := pebblekv.DecodeBlobRef(oldIter.Value())
-				if err != nil {
-					return nil, err
-				}
-				newRef, err := pebblekv.DecodeBlobRef(newIter.Value())
-				if err != nil {
-					return nil, err
-				}
+			oldRef, err := pebblekv.DecodeBlobRef(oldIter.Value())
+			if err != nil {
+				return nil, err
+			}
+			newRef, err := pebblekv.DecodeBlobRef(newIter.Value())
+			if err != nil {
+				return nil, err
+			}
+			// 块编号全局唯一且内容不可变，12B BlobRef 相等即可 O(1) 判定未变更。
+			if oldRef.ID != newRef.ID || oldRef.Length != newRef.Length {
 				equal, err := pebbleBlobEqual(old.blobs, oldRef, new.blobs, newRef)
 				if err != nil {
 					return nil, err

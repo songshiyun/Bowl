@@ -72,6 +72,8 @@ type manager struct {
 	atimeMode                                  AtimeMode
 	sessionLeaseTTL                            time.Duration
 	branchLocks                                sync.Map
+	branchMetaLocks                            sync.Map
+	inodeLocks                                 sync.Map
 	writeQuotaMu                               sync.Mutex
 	treeQuotaMu                                sync.Mutex
 	treeQuotas                                 map[string]*TreeQuota
@@ -80,6 +82,8 @@ type manager struct {
 	sessionCacheMu                             sync.Mutex
 	sessionCache                               map[uint64]pebbleSessionCacheEntry
 	sessionCacheTTL                            time.Duration
+	atimeMu                                    sync.Mutex
+	dirtyAtimes                                map[pebbleAtimeKey]time.Time
 }
 
 // pebbleSessionCacheEntry 是会话内存写透缓存条目，fresh 之后重新读取控制面。
@@ -151,7 +155,8 @@ func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
-		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL}
+		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
+		dirtyAtimes: make(map[pebbleAtimeKey]time.Time)}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
@@ -268,15 +273,22 @@ func newManagerFromParams(params ManagerParams) Manager {
 				done = make(chan struct{})
 				go func() {
 					defer close(done)
-					ticker := time.NewTicker(interval)
-					defer ticker.Stop()
+					sessionTicker := time.NewTicker(interval)
+					defer sessionTicker.Stop()
+					// 访问时间延迟合并：读热路径只登记内存脏项，由 1 秒周期协程刷入 Pebble。
+					atimeTicker := time.NewTicker(defaultAtimeFlushInterval)
+					defer atimeTicker.Stop()
 					for {
 						select {
 						case <-ctx.Done():
 							return
-						case <-ticker.C:
+						case <-sessionTicker.C:
 							if err := m.sweepExpiredBranchSessions(ctx); err != nil && ctx.Err() == nil {
 								slog.Error("清理过期分支会话失败", "error", err)
+							}
+						case <-atimeTicker.C:
+							if err := m.flushAllPebbleAtimes(ctx); err != nil && ctx.Err() == nil {
+								slog.Error("合并访问时间失败", "error", err)
 							}
 						}
 					}
@@ -293,6 +305,10 @@ func newManagerFromParams(params ManagerParams) Manager {
 					case <-ctx.Done():
 						return ctx.Err()
 					}
+				}
+				// 停机前把内存中尚未合并的访问时间刷入 Pebble。
+				if err := m.flushAllPebbleAtimes(context.WithoutCancel(ctx)); err != nil {
+					return err
 				}
 				return m.pebble.Close()
 			},

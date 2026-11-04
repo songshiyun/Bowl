@@ -122,16 +122,16 @@ func mergeRangeEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, aLower, aUpper []
 		}
 		left, right := ai.Value(), bi.Value()
 		if data {
-			// 块编号全局唯一且内容不可变，引用相同即可 O(1) 短路。
-			if !bytes.Equal(left, right) {
-				aRef, err := pebblekv.DecodeBlobRef(left)
-				if err != nil {
-					return false, err
-				}
-				bRef, err := pebblekv.DecodeBlobRef(right)
-				if err != nil {
-					return false, err
-				}
+			// 块编号全局唯一且内容不可变，12B BlobRef 相等即可 O(1) 短路。
+			aRef, err := pebblekv.DecodeBlobRef(left)
+			if err != nil {
+				return false, err
+			}
+			bRef, err := pebblekv.DecodeBlobRef(right)
+			if err != nil {
+				return false, err
+			}
+			if aRef.ID != bRef.ID || aRef.Length != bRef.Length {
 				same, err := pebbleBlobEqual(aBlobs, aRef, bBlobs, bRef)
 				if err != nil || !same {
 					return same, err

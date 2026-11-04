@@ -173,7 +173,31 @@ func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadS
 	return fn(snapshot, branch.Blobs())
 }
 
-// withPebbleWriteSession 在分支写锁内执行显式持久化屏障。
+// withPebblePointReadSession 直接读取分支实例，单键点查不创建 Pebble Snapshot。
+func (m *manager) withPebblePointReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) (err error) {
+	disk := session.diskID.String()
+	if session.readOnly {
+		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, commit.Close()) }()
+		return fn(commit.DB(), commit.Blobs())
+	}
+	unlock := m.lockBranchRead(disk, session.branch)
+	defer unlock()
+	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
+		return ErrBadFileHandle
+	}
+	branch, err := m.pebble.OpenBranch(disk, session.branch)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, branch.Close()) }()
+	return fn(branch.DB(), branch.Blobs())
+}
+
+// withPebbleWriteSession 在分支共享读锁内执行显式持久化屏障。
 func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
@@ -184,7 +208,7 @@ func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleRead
 		defer func() { err = errors.Join(err, commit.Close()) }()
 		return fn(commit.DB(), commit.Blobs())
 	}
-	unlock := m.lockBranchWrite(disk, session.branch)
+	unlock := m.lockBranchRead(disk, session.branch)
 	defer unlock()
 	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
@@ -370,7 +394,7 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+	err = m.withPebblePointReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -378,6 +402,7 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
 			return err
 		}
+		m.applyDirtyPebbleAtime(session, &inode)
 		result = m.newPebbleInode(inode)
 		return nil
 	})
@@ -390,8 +415,7 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 		return nil, err
 	}
 	var result []byte
-	touch := false
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+	err = m.withPebblePointReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -405,62 +429,11 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 		if len(inode.SymlinkTarget) == 0 {
 			return fmt.Errorf("%w: 符号链接节点 %d 的目标为空", ErrIO, ino)
 		}
-		if !session.readOnly && m.atimeMode != AtimeModeNoAtime {
-			atime := time.Unix(inode.AtimeSec, int64(inode.AtimeNsec)).UTC()
-			mtime := time.Unix(inode.MtimeSec, int64(inode.MtimeNsec)).UTC()
-			ctime := time.Unix(inode.CtimeSec, int64(inode.CtimeNsec)).UTC()
-			touch = m.shouldTouchAtime(atime, mtime, ctime, time.Now().UTC())
-		}
+		m.markPebbleAtimeDirty(session, inode, time.Now().UTC())
 		result = append([]byte(nil), inode.SymlinkTarget...)
 		return nil
 	})
-	if err != nil || !touch {
-		return result, err
-	}
-	// atime 更新不占用读锁：读取完成后用短写锁单独提交，避免阻塞并发读。
-	if err := m.touchPebbleAtime(ctx, session, ino); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// touchPebbleAtime 在短写锁内刷新访问时间，并复核节点在读取期间未被替换。
-func (m *manager) touchPebbleAtime(ctx context.Context, session pebbleReadSession, ino uint64) (err error) {
-	disk := session.diskID.String()
-	unlock := m.lockBranchWrite(disk, session.branch)
-	defer unlock()
-	if _, ok := m.peekPebbleSession(session.id); !ok {
-		return nil
-	}
-	branch, err := m.pebble.OpenBranch(disk, session.branch)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, branch.Close()) }()
-	inode, err := readPebbleInode(branch.DB(), ino)
-	if err != nil {
-		return err
-	}
-	if inode.Mode&S_IFMT != S_IFLNK {
-		return nil
-	}
-	now := time.Now().UTC()
-	atime := time.Unix(inode.AtimeSec, int64(inode.AtimeNsec)).UTC()
-	mtime := time.Unix(inode.MtimeSec, int64(inode.MtimeNsec)).UTC()
-	ctime := time.Unix(inode.CtimeSec, int64(inode.CtimeNsec)).UTC()
-	if !m.shouldTouchAtime(atime, mtime, ctime, now) {
-		return nil
-	}
-	inode.AtimeSec, inode.AtimeNsec = now.Unix(), uint32(now.Nanosecond())
-	value, err := pebblekv.EncodeInode(inode)
-	if err != nil {
-		return err
-	}
-	if err := writePebbleAtime(branch.DB(), ino, value); err != nil {
-		return err
-	}
-	m.pebble.MarkBranchDirty(disk, session.branch)
-	return nil
+	return result, err
 }
 
 func (m *manager) pebbleReadDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntry, error) {
@@ -595,7 +568,7 @@ func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*S
 	if err != nil {
 		return nil, err
 	}
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+	err = m.withPebblePointReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err

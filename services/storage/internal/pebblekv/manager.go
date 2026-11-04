@@ -99,6 +99,8 @@ type Manager struct {
 	branches   map[instanceID]*pooledDB
 	commits    map[instanceID]*pooledDB
 	allocators map[allocatorID]*inodeAllocator
+	// link 是块文件硬链接实现，测试可注入 EMLINK 验证回退拷贝。
+	link func(string, string) error
 
 	flushInterval time.Duration
 	stopFlush     chan struct{}
@@ -118,6 +120,15 @@ func WithWALFlushInterval(interval time.Duration) Option {
 	}
 }
 
+// WithLinkFunc 覆盖块文件硬链接实现，主要用于测试注入 EMLINK 验证回退拷贝。
+func WithLinkFunc(link func(string, string) error) Option {
+	return func(m *Manager) {
+		if link != nil {
+			m.link = link
+		}
+	}
+}
+
 // NewManager 创建存储实例管理器，并启动后台异步 WAL 兜底刷盘协程。
 func NewManager(root string, opts ...Option) *Manager {
 	m := &Manager{
@@ -131,8 +142,16 @@ func NewManager(root string, opts ...Option) *Manager {
 			opt(m)
 		}
 	}
+	if m.link == nil {
+		m.link = os.Link
+	}
 	go m.walFlushLoop()
 	return m
+}
+
+// newBlobStore 创建与句柄池共享硬链接实现的块文件存储。
+func (m *Manager) newBlobStore(base string) *BlobStore {
+	return newBlobStore(base, m.link)
 }
 
 // walFlushLoop 周期把有脏写的分支 WAL 同步到磁盘，收敛机器断电的丢失窗口。
@@ -387,7 +406,7 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Branch{manager: m, key: key, db: db, blobs: NewBlobStore(path), ephemeral: true}, nil
+		return &Branch{manager: m, key: key, db: db, blobs: m.newBlobStore(path), ephemeral: true}, nil
 	}
 	if entry := m.branches[key]; entry != nil {
 		entry.refs++
@@ -402,7 +421,7 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 	if err != nil {
 		return nil, err
 	}
-	entry := &pooledDB{db: db, blobs: NewBlobStore(path), refs: 1, lastUsed: m.tick()}
+	entry := &pooledDB{db: db, blobs: m.newBlobStore(path), refs: 1, lastUsed: m.tick()}
 	m.branches[key] = entry
 	m.stats.BranchOpens++
 	m.evictIdleLocked()
@@ -431,7 +450,7 @@ func (b *Branch) Checkpoint(commit string) error {
 		return err
 	}
 	// 快照目录与分支工作区共享同一批不可变块文件，未修改块零拷贝。
-	return b.blobs.LinkAllTo(NewBlobStore(path))
+	return b.blobs.LinkAllTo(m.newBlobStore(path))
 }
 
 // Close 释放分支句柄；常驻实例只递减引用计数。
@@ -487,7 +506,7 @@ func (m *Manager) OpenCommit(disk, commit string) (*Commit, error) {
 		if err != nil {
 			return nil, err
 		}
-		entry = &pooledDB{db: db, blobs: NewBlobStore(path)}
+		entry = &pooledDB{db: db, blobs: m.newBlobStore(path)}
 		m.commits[key] = entry
 		m.stats.CommitOpens++
 	} else {
@@ -627,7 +646,7 @@ func (m *Manager) Fork(disk, commit, branch string) (err error) {
 		return err
 	}
 	// 快照内未修改的块通过硬链接共享到新分支，保持零数据复制。
-	return NewBlobStore(source).LinkAllTo(NewBlobStore(path))
+	return m.newBlobStore(source).LinkAllTo(m.newBlobStore(path))
 }
 
 // 只读 Pebble 实例无法调用 Checkpoint；先复制控制文件并硬链接不可变表。

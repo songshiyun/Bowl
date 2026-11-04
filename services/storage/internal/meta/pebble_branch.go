@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -56,11 +57,72 @@ func (m *manager) lockBranchRead(disk, branch string) func() {
 	return mu.RUnlock
 }
 
-// lockBranchWrite 取得分支独占写锁，排他所有读写与后台清扫。
+// lockBranchWrite 取得分支拓扑生命周期独占锁，仅用于替换或冻结整分支目录。
 func (m *manager) lockBranchWrite(disk, branch string) func() {
 	mu := m.branchLock(disk, branch)
 	mu.Lock()
 	return mu.Unlock
+}
+
+// branchMetaLock 串行化同分支的元数据批次，避免共享 BranchStat 丢失更新。
+func (m *manager) branchMetaLock(disk, branch string) func() {
+	value, _ := m.branchMetaLocks.LoadOrStore(branchLockKey{disk, branch}, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+type inodeLockKey struct {
+	disk, branch string
+	ino          uint64
+}
+
+// inodeLock 返回 (disk_id, branch_id, ino) 粒度的读写锁。
+func (m *manager) inodeLock(disk, branch string, ino uint64) *sync.RWMutex {
+	value, _ := m.inodeLocks.LoadOrStore(inodeLockKey{disk, branch, ino}, &sync.RWMutex{})
+	return value.(*sync.RWMutex)
+}
+
+// lockInodeRead 取得单个 Inode 的共享读锁，防止并发覆写删除正在读取的块文件。
+func (m *manager) lockInodeRead(disk, branch string, ino uint64) func() {
+	mu := m.inodeLock(disk, branch, ino)
+	mu.RLock()
+	return mu.RUnlock
+}
+
+// lockInodeWrite 取得单个 Inode 的独占写锁。
+func (m *manager) lockInodeWrite(disk, branch string, ino uint64) func() {
+	mu := m.inodeLock(disk, branch, ino)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// lockInodesWrite 按固定 ino 升序对多个 Inode 加独占锁，避免目录操作死锁。
+func (m *manager) lockInodesWrite(disk, branch string, inos ...uint64) func() {
+	ordered := make([]uint64, 0, len(inos))
+	seen := make(map[uint64]struct{}, len(inos))
+	for _, ino := range inos {
+		if ino == 0 {
+			continue
+		}
+		if _, ok := seen[ino]; ok {
+			continue
+		}
+		seen[ino] = struct{}{}
+		ordered = append(ordered, ino)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	locks := make([]*sync.RWMutex, 0, len(ordered))
+	for _, ino := range ordered {
+		mu := m.inodeLock(disk, branch, ino)
+		mu.Lock()
+		locks = append(locks, mu)
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].Unlock()
+		}
+	}
 }
 
 // sweepBranchOrphans 必须在数据库事务中持有该分支写端咨询锁，并确认没有活跃写端。
@@ -93,6 +155,8 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
+	unlockMeta := m.branchMetaLock(disk, branchName)
+	defer unlockMeta()
 	lower, upper := pebblekv.OrphanRange()
 	iter, err := branch.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
