@@ -425,7 +425,10 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 				return ErrInvalidArgument
 			}
 			inode.Mode = fileType | (*input.Mode & PermMask)
-		} else if fileType == S_IFREG && (input.UID != nil || input.GID != nil || input.Size != nil) {
+		} else if fileType != S_IFDIR && (input.UID != nil || input.GID != nil || input.Size != nil) {
+			// 客户端声明 CAP_HANDLE_KILLPRIV 后内核不再代为清位，由文件系统负责：
+			// Linux 仅对非目录节点在 chown/truncate 时清除 S_ISUID/S_ISGID，
+			// 目录保留 setgid（与 pjdfstest 对 Linux 的预期一致）。
 			inode.Mode &^= S_ISUID | S_ISGID
 		}
 		if input.UID != nil {
