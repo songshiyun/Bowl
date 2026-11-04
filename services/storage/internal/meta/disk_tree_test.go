@@ -16,7 +16,8 @@ import (
 func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := newTestStorage(t, root)
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 1024})
 	require.NoError(t, err)
 	require.Equal(t, "main", disk.DefaultBranch)
@@ -26,7 +27,6 @@ func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
 	require.Equal(t, uint64(0), disk.UsedBytes)
 	require.Equal(t, uint64(1), disk.UsedInodes)
 
-	storage := pebblekv.NewManager(root)
 	branch, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	value, closer, err := branch.DB().Get(pebblekv.InodeKey(1))
@@ -52,7 +52,6 @@ func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
 	nextIno, err := storage.AllocateInode(disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), nextIno)
-	require.NoError(t, storage.Close())
 	var storageDir, checkpointDir string
 	require.NoError(t, pool.QueryRow(ctx, `SELECT d.storage_dir, c.checkpoint_dir FROM disks d JOIN commits c ON c.disk_id = d.disk_id WHERE d.disk_id = $1 AND c.commit_id = $2`, disk.DiskID, *disk.Branches[0].HeadCommitID).Scan(&storageDir, &checkpointDir))
 	require.Equal(t, filepath.Join(root, "disks", disk.DiskID), storageDir)
@@ -82,11 +81,11 @@ func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
 func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_quota")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	storage := newTestStorage(t, root)
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 400})
 	require.NoError(t, err)
 
-	storage := pebblekv.NewManager(root)
 	main, err := storage.OpenBranch(disk.DiskID, "main")
 	require.NoError(t, err)
 	put := func(branch *pebblekv.Branch, ino, size uint64, nlink uint32) {
@@ -114,7 +113,8 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, disk.DiskID)
 	require.NoError(t, err)
 
-	restarted := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	restartedStorage := newTestStorage(t, root)
+	restarted := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(restartedStorage))
 	got, err := restarted.GetDisk(ctx, disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, uint64(210), got.UsedBytes)
@@ -138,8 +138,7 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 	require.NoError(t, err)
 	quota, err := restarted.TreeQuota(ctx, disk.DiskID)
 	require.NoError(t, err)
-	storage = pebblekv.NewManager(root)
-	feature, err = storage.OpenBranch(disk.DiskID, "feature")
+	feature, err = restartedStorage.OpenBranch(disk.DiskID, "feature")
 	require.NoError(t, err)
 	value, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 4, Mode: meta.S_IFREG | 0o644, Nlink: 1, Size: 40})
 	require.NoError(t, err)
@@ -148,7 +147,6 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 	}))
 	require.ErrorIs(t, quota.Apply("feature", 7, 1, true, nil), meta.ErrNoSpace)
 	require.NoError(t, feature.Close())
-	require.NoError(t, storage.Close())
 	got, err = restarted.GetDisk(ctx, disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, uint64(220), got.UsedBytes)
@@ -159,7 +157,7 @@ func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
 func TestDiskDeleteChecksAllBranchSessions(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_session")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	mgr := newTestManager(t, db.NewStore(pool), root)
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 1024})
 	require.NoError(t, err)
 	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
@@ -192,7 +190,7 @@ func TestDiskDeleteChecksAllBranchSessions(t *testing.T) {
 func TestDiskDeleteDoesNotRequireReadableBranch(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_missing")
 	root := t.TempDir()
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	mgr := newTestManager(t, db.NewStore(pool), root)
 	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
 	require.NoError(t, err)
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "disks", disk.DiskID, "branches", "main")))
@@ -208,7 +206,7 @@ func TestDiskCreateRemovesStorageWhenCommitRegistrationFails(t *testing.T) {
 		BEGIN RAISE EXCEPTION '拒绝登记快照'; END $$;
 		CREATE TRIGGER reject_initial_commit BEFORE INSERT ON commits FOR EACH ROW EXECUTE FUNCTION reject_initial_commit()`)
 	require.NoError(t, err)
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root))
+	mgr := newTestManager(t, db.NewStore(pool), root)
 	_, err = mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
 	require.Error(t, err)
 	var disks int
@@ -221,7 +219,7 @@ func TestDiskCreateRemovesStorageWhenCommitRegistrationFails(t *testing.T) {
 
 func TestDisksUseIndependentRootInodes(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "disk_root_isolation")
-	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(t.TempDir()))
+	mgr := newTestManager(t, db.NewStore(pool), t.TempDir())
 	first, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "first", MaxBytes: 1024})
 	require.NoError(t, err)
 	second, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "second", MaxBytes: 1024})

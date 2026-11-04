@@ -207,13 +207,12 @@ func TestPebbleDataQuotaAcrossBranchesAndSnapshot(t *testing.T) {
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("12345678"), SessionID: &e.sid})
 	require.NoError(t, err)
 	commit := uuid.NewString()
-	storage := pebblekv.NewManager(e.root)
+	storage := e.storage
 	branch, err := storage.OpenBranch(e.disk.DiskID, "main")
 	require.NoError(t, err)
 	require.NoError(t, branch.Checkpoint(commit))
 	require.NoError(t, branch.Close())
 	require.NoError(t, storage.Fork(e.disk.DiskID, commit, "feature"))
-	require.NoError(t, storage.Close())
 	_, err = e.pool.Exec(e.ctx, `INSERT INTO commits (commit_id, disk_id, branch_name, checkpoint_dir) VALUES ($1, $2, 'main', $3)`, commit, e.disk.DiskID, filepath.Join(e.root, "disks", e.disk.DiskID, "commits", commit))
 	require.NoError(t, err)
 	_, err = e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
@@ -267,7 +266,7 @@ func TestPebbleDataQuotaAcrossBranchesAndSnapshot(t *testing.T) {
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 7, Data: []byte("!"), SessionID: &e.sid})
 	require.NoError(t, err)
 	require.Equal(t, uint64(8), quota.Usage().Bytes)
-	restarted := meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root))
+	restarted := meta.New(db.NewStore(e.pool), meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	recovered, err := restarted.TreeQuota(e.ctx, e.disk.DiskID)
 	require.NoError(t, err)
 	require.Equal(t, quota.Usage(), recovered.Usage())
@@ -345,9 +344,8 @@ func TestPebbleDataConcurrentBranchQuota(t *testing.T) {
 	e := setupPebbleCreate(t, 10)
 	mainFile, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("main"), Mode: 0o644})
 	require.NoError(t, err)
-	storage := pebblekv.NewManager(e.root)
+	storage := e.storage
 	require.NoError(t, storage.Fork(e.disk.DiskID, *e.disk.Branches[0].HeadCommitID, "feature"))
-	require.NoError(t, storage.Close())
 	_, err = e.pool.Exec(e.ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
 		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
 		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, e.disk.DiskID)

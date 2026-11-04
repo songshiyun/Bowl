@@ -262,7 +262,7 @@ func TestDiffReadOnlyBranchSnapshotTransactionFailure(t *testing.T) {
 	commitDir := filepath.Join(e.root, "disks", e.disk.DiskID, "commits")
 	before, err := os.ReadDir(commitDir)
 	require.NoError(t, err)
-	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root))
+	failing := meta.New(&rollbackVersionStore{Store: db.NewStore(e.pool), pool: e.pool}, meta.WithStorageRoot(e.root), meta.WithPebbleManager(e.storage))
 	_, err = failing.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: 103, DiskID: e.disk.DiskID, ReadOnly: true})
 	require.ErrorIs(t, err, errVersionTransaction)
 	after, err := os.ReadDir(commitDir)
