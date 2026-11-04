@@ -143,7 +143,7 @@ _Avoid_: Collision, Clash, DiffError
 _Avoid_: Compare, DeltaView, ChangeLog, PatchView
 
 **Blob (文件数据块)**:
-常规文件按 `1 MiB` 固定边界编号切分的数据分片载体（与 Linux FUSE `MaxWrite` 1:1 对齐），支持整片覆盖写入、局部字节补丁追加、区间删除与局部置零打洞，并由存储引擎后台自动合并整理。
+常规文件按 `1 MiB` 固定边界编号切分的数据分片载体（与 Linux FUSE `MaxWrite` 1:1 对齐），以不可变物理块文件（`blobs/<shard>/<blob_id>.blob`）存储于所属 Branch 或 Commit 目录内，并由 Pebble `DataKey` 维护轻量 `BlobRef` 引用索引；整块覆盖写直接写入新块文件并删除当前分支旧块文件，局部修改通过写时复制（CoW）生成新块文件替换旧块文件，跨分支与快照通过硬链接零拷贝共享。
 _Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 
 **Read (文件数据读取)**:
@@ -151,7 +151,7 @@ _Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 _Avoid_: FetchData, GetBytes, ReadFile, PullStream
 
 **Write (文件数据写入)**:
-可写客户端将写入改动提交至目标 Branch 存储引擎、按整棵 Disk 树跨分支同 Inode 最大逻辑体积去重核算配额，并由存储引擎持久化与后台折叠整理的写入操作。
+可写客户端将写入改动提交至目标 Branch 存储引擎（块数据写入分支 `blobs/` 目录下的不可变块文件进入 OS Page Cache，轻量 `BlobRef` 与 Inode 元数据异步提交至 Pebble WAL）、按整棵 Disk 树跨分支同 Inode 最大逻辑体积去重核算配额，并在替换旧块时即时释放当前分支未共享块文件的写入操作。
 _Avoid_: PutData, WriteBytes, AppendFile, PushStream
 
 **CreateDisk (磁盘创建)**:
@@ -209,7 +209,7 @@ _Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
 _Avoid_: OpenFile, AcquireHandle, ConnectFile
 
 **Flush (句柄冲刷)**:
-在单个文件描述符关闭时触发、由内核排空客户端本地页缓存脏页写入服务端 Pebble WAL（`pebble.NoSync`，保证服务进程崩溃安全但不触发物理磁盘 `fsync`）并释放对应 LockOwner 所持本地 POSIX 记录锁的会话操作。
+在单个文件描述符关闭时触发、在客户端本地释放对应 LockOwner 所持本地 POSIX 记录锁的会话操作（常规写入已通过 Write-Through 写入服务端 OS Page Cache 与异步 Pebble WAL，Flush 不触发服务端物理磁盘 `fsync`）。
 _Avoid_: Close, SyncHandle, Drain
 
 **Release (句柄释放)**:
