@@ -2,7 +2,6 @@ package pebblekv_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -84,54 +83,57 @@ func TestBranchCheckpointForkAndSharedCommit(t *testing.T) {
 }
 
 func TestFullBlobStoredSeparatelyAndSharedByCheckpoints(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	root := t.TempDir()
 	manager := pebblekv.NewManager(root)
 	branch, err := manager.OpenBranch("disk", "main")
 	require.NoError(t, err)
 	data := bytes.Repeat([]byte("0123456789abcdef"), pebblekv.BlobSize/16)
-	value, err := pebblekv.EncodeBase(data)
+	id, err := manager.AllocateBlobID("disk")
 	require.NoError(t, err)
-	require.NoError(t, branch.DB().Set(pebblekv.DataKey(2, 0), value, pebble.Sync))
+	require.NoError(t, branch.Blobs().Write(id, data))
+	key := pebblekv.DataKey(2, 0)
+	require.NoError(t, branch.DB().Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: pebblekv.BlobSize}), pebble.Sync))
 	require.NoError(t, branch.Checkpoint("c1"))
 	require.NoError(t, manager.Fork("disk", "c1", "child"))
-	files, err := filepath.Glob(filepath.Join(root, "disks", "disk", "branches", "main", "*.blob"))
+
+	files, err := filepath.Glob(filepath.Join(root, "disks", "disk", "branches", "main", "blobs", "*", "*.blob"))
 	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	for _, source := range files {
-		info, err := os.Stat(source)
+	require.Len(t, files, 1)
+	info, err := os.Stat(files[0])
+	require.NoError(t, err)
+	for _, directory := range []string{"commits/c1", "branches/child"} {
+		linked, err := os.Stat(filepath.Join(root, "disks", "disk", directory, "blobs", filepath.Base(filepath.Dir(files[0])), filepath.Base(files[0])))
 		require.NoError(t, err)
-		for _, directory := range []string{"commits/c1", "branches/child"} {
-			linked, err := os.Stat(filepath.Join(root, "disks", "disk", directory, filepath.Base(source)))
-			require.NoError(t, err)
-			require.True(t, os.SameFile(info, linked))
-		}
+		require.True(t, os.SameFile(info, linked))
 	}
+
 	child, err := manager.OpenBranch("disk", "child")
 	require.NoError(t, err)
 	commit, err := manager.OpenCommit("disk", "c1")
 	require.NoError(t, err)
-	key := pebblekv.DataKey(2, 0)
-	patch, err := pebblekv.EncodePatches(pebblekv.ZeroPatch(2, 2), pebblekv.WritePatch(4, []byte("XY")))
+
+	// 覆写生成全新块并即时删除当前分支旧块，快照与派生分支仍持有旧块。
+	replacement := bytes.Repeat([]byte{0x5a}, pebblekv.BlobSize)
+	newID, err := manager.AllocateBlobID("disk")
 	require.NoError(t, err)
-	require.NoError(t, branch.DB().Merge(key, patch, pebble.Sync))
-	require.NoError(t, branch.DB().Flush())
-	require.NoError(t, branch.DB().Compact(ctx, key, append(bytes.Clone(key), 0), false))
+	require.NoError(t, branch.Blobs().Write(newID, replacement))
+	require.NoError(t, branch.DB().Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: newID, Length: pebblekv.BlobSize}), pebble.Sync))
+	require.NoError(t, branch.Blobs().Remove(id))
+	require.False(t, branch.Blobs().Exists(id))
+
 	for _, item := range []struct {
-		db      *pebble.DB
-		changed bool
-	}{{branch.DB(), true}, {child.DB(), false}, {commit.DB(), false}} {
+		db    *pebble.DB
+		blobs *pebblekv.BlobStore
+		want  []byte
+	}{{branch.DB(), branch.Blobs(), replacement}, {child.DB(), child.Blobs(), data}, {commit.DB(), commit.Blobs(), data}} {
 		encoded, closer, err := item.db.Get(key)
 		require.NoError(t, err)
-		got, err := pebblekv.DecodeBlob(encoded)
+		ref, err := pebblekv.DecodeBlobRef(encoded)
 		require.NoError(t, err)
 		require.NoError(t, closer.Close())
-		want := bytes.Clone(data)
-		if item.changed {
-			want[2], want[3], want[4], want[5] = 0, 0, 'X', 'Y'
-		}
-		require.Equal(t, want, got)
+		got, err := item.blobs.Read(ref.ID, int(ref.Length))
+		require.NoError(t, err)
+		require.Equal(t, item.want, got)
 	}
 	require.NoError(t, commit.Close())
 	require.NoError(t, child.Close())
@@ -339,6 +341,24 @@ func countAllocatorReservations(t *testing.T, root, disk string) int {
 		}
 	}
 	return count
+}
+
+func TestBlobIDAllocatorIsMonotonicAndPersistent(t *testing.T) {
+	root := t.TempDir()
+	manager := pebblekv.NewManager(root)
+	first, err := manager.AllocateBlobID("disk")
+	require.NoError(t, err)
+	second, err := manager.AllocateBlobID("disk")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), first)
+	require.Equal(t, uint64(2), second)
+	require.NoError(t, manager.Close())
+
+	reopened := pebblekv.NewManager(root)
+	next, err := reopened.AllocateBlobID("disk")
+	require.NoError(t, err)
+	require.Greater(t, next, second)
+	require.NoError(t, reopened.Close())
 }
 
 func TestBranchAndCommitHandlesShareResidentInstances(t *testing.T) {

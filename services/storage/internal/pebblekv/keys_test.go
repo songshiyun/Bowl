@@ -25,7 +25,7 @@ func TestDataKeysOrderAndRange(t *testing.T) {
 }
 
 func TestPebbleRangeDeletesDoNotTouchAdjacentKeys(t *testing.T) {
-	db, err := pebble.Open(t.TempDir(), &pebble.Options{Merger: pebblekv.Merger})
+	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	keys := [][]byte{

@@ -29,7 +29,7 @@ func PrefixIterBounds(prefix []byte) (lower, upper []byte) {
 	return lower, nil
 }
 
-// DataKey 编码 Inode 和 4 MiB Blob 的编号。
+// DataKey 编码 Inode 和 1 MiB Blob 的编号，值固定为 12 字节 BlobRef。
 func DataKey(ino, block uint64) []byte {
 	key := numberedPrefix("data:", ino)
 	return binary.BigEndian.AppendUint64(key, block)

@@ -148,7 +148,7 @@ func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebble
 }
 
 // withPebbleReadSession 在分支读锁内用短命快照执行多键读取，保证 Inode 与 Blob 视图一致。
-func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader) error) (err error) {
+func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
 		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
@@ -156,7 +156,7 @@ func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadS
 			return err
 		}
 		defer func() { err = errors.Join(err, commit.Close()) }()
-		return fn(commit.DB())
+		return fn(commit.DB(), commit.Blobs())
 	}
 	unlock := m.lockBranchRead(disk, session.branch)
 	defer unlock()
@@ -170,11 +170,11 @@ func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadS
 	defer func() { err = errors.Join(err, branch.Close()) }()
 	snapshot := branch.DB().NewSnapshot()
 	defer func() { err = errors.Join(err, snapshot.Close()) }()
-	return fn(snapshot)
+	return fn(snapshot, branch.Blobs())
 }
 
 // withPebbleWriteSession 在分支写锁内执行显式持久化屏障。
-func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB) error) (err error) {
+func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
 		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
@@ -182,7 +182,7 @@ func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleRead
 			return err
 		}
 		defer func() { err = errors.Join(err, commit.Close()) }()
-		return fn(commit.DB())
+		return fn(commit.DB(), commit.Blobs())
 	}
 	unlock := m.lockBranchWrite(disk, session.branch)
 	defer unlock()
@@ -194,7 +194,7 @@ func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleRead
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	return fn(branch.DB())
+	return fn(branch.DB(), branch.Blobs())
 }
 
 func readPebbleInode(store pebbleReader, ino uint64) (pebblekv.Inode, error) {
@@ -301,7 +301,7 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		parent, err := readPebbleInode(store, parentIno)
 		if err != nil {
 			return err
@@ -370,7 +370,7 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 		return nil, err
 	}
 	var result *Inode
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -391,7 +391,7 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 	}
 	var result []byte
 	touch := false
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -482,7 +482,7 @@ func (m *manager) pebbleReadDirPlus(ctx context.Context, session pebbleReadSessi
 func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntryPlus, error) {
 	entries := make([]DirEntryPlus, 0, min(int(limit), 16))
 	anchors := make(map[pebbleDirCursorKey][]byte)
-	err := m.withPebbleReadSession(ctx, session, func(store pebbleReader) (err error) {
+	err := m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) (err error) {
 		dir, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err
@@ -595,7 +595,7 @@ func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*S
 	if err != nil {
 		return nil, err
 	}
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader) error {
+	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
 			return err

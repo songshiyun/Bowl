@@ -170,7 +170,7 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 				txErr = errors.Join(txErr, workspaceCloseErr)
 			}
 		}()
-		if err := prepareBranch(workspace.DB(), staging); err != nil {
+		if err := prepareBranch(workspace.DB(), workspace.Blobs(), staging); err != nil {
 			return err
 		}
 		var snapshots [3]*pebblekv.Commit
@@ -183,8 +183,21 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 				return err
 			}
 		}
+		// 合并结果会直接复制源侧 DataKey；先把基准与源快照的块硬链接进暂存目录。
+		for i, snapshot := range snapshots {
+			if i == 1 {
+				continue
+			}
+			if err := snapshot.Blobs().LinkAllTo(workspace.Blobs()); err != nil {
+				for _, opened := range snapshots {
+					err = errors.Join(err, opened.Close())
+				}
+				return err
+			}
+		}
 		stores := [3]*pebble.DB{snapshots[0].DB(), snapshots[1].DB(), snapshots[2].DB()}
-		changedSizes, conflicts, mergeErr := m.mergeWorkspace(workspace.DB(), stores, dirty, params.Strategy)
+		blobStores := [3]*pebblekv.BlobStore{snapshots[0].Blobs(), snapshots[1].Blobs(), snapshots[2].Blobs()}
+		changedSizes, conflicts, mergeErr := m.mergeWorkspace(workspace.DB(), workspace.Blobs(), stores, blobStores, dirty, params.Strategy)
 		var sidecarPaths []string
 		var sidecarInodes []uint64
 		if mergeErr == nil && len(conflicts) != 0 && params.Strategy == ConflictStrategyMaterialize {
