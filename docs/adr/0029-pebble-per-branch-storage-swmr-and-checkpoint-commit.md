@@ -24,16 +24,17 @@ PostgreSQL 彻底退化为轻量逻辑控制面，删除 `inodes`、`entries`、
   - 管理客户端挂载会话租约（`RenewSession` / `CloseSession`），强控**同一个 `(disk_id, branch_name)` 同一时刻最多 1 个独占可写会话挂载该分支实时工作区**，不同逻辑分支（如分支 `C` 与分支 `D`）可同时被不同 Sandbox 独占可写挂载；多个共享只读会话可挂载任意不可变 `Commit` 快照；
   - `DeleteDisk` 时校验该 `Disk` 下所有分支均无活跃挂载会话（否则返回 `ErrBusy`），删除逻辑记录后直接清理该 `Disk` 根目录下的全部分支与快照目录。
 
-#### 1.2 底层基于官方 Pebble + `Checkpoint` 硬链接高效承载分支树与 `4 MiB` 分片存储
-- **1 个 `Disk` 对应 1 个根存储目录（`/data/disks/<disk_id>/`），内部按 `branches/<branch_id>` 与 `commits/<commit_id>` 组织 Pebble 实例**：
+#### 1.2 底层基于官方 Pebble + `Checkpoint` 硬链接高效承载分支树与 `1 MiB` 分片存储
+- **1 个 `Disk` 对应 1 个根存储目录（`/data/disks/<disk_id>/`），内部按 `branches/<branch_id>` 与 `commits/<commit_id>` 组织 Pebble 实例，并由进程内常驻句柄池复用**：
   - 每个活跃逻辑分支（`Branch`）拥有自己独立的 Pebble 工作区子目录（`branches/<branch_id>`），从根本上避免多分支（如 Sandbox C 和 Sandbox D 同时运行）争抢 Pebble 目录文件锁；
+  - **分支与快照 Pebble 句柄常驻池化复用**：服务端按 `(disk_id, branch_id)` 与 `(disk_id, commit_id)` 维护带引用计数与共享 `pebble.Cache` 的常驻 `*pebble.DB` 句柄池（严禁每次 RPC 重复 `pebble.Open` / `Close`），暂存目录（`.fork-` / `.merge-` / `.restore-`）使用独立短命句柄；在 `Rollback`、`Merge`、`DeleteBranch`、`DeleteDisk` 执行底层目录重命名或删除前，必须在分支独占写锁下驱逐并关闭对应池化句柄；
   - **秒级零拷贝 `Commit` 与逻辑 `Fork`**：
-    - 执行 `Commit` 时，先对目标分支 Pebble 执行 `Flush()` 落盘不可变 SST/Blob，再调用 Pebble 原生 **`Checkpoint`** 通过 Linux 硬链接（Hard Link）在毫秒级生成 `commits/<commit_id>` 快照目录（0 字节数据复制）；
+    - 执行 `Commit` 时，直接调用带 `pebble.WithFlushedWAL()` 的 Pebble 原生 **`Checkpoint`** 通过 Linux 硬链接（Hard Link）在毫秒级生成 `commits/<commit_id>` 快照目录（0 字节数据复制）；
     - 执行 `Fork`（如从分支 `B` 派生逻辑分支 `C` 和 `D`）时，直接基于 `B` 的基准 Commit 快照目录通过 Pebble `Checkpoint` 硬链接瞬间派生出 `branches/C` 和 `branches/D` 两个 Pebble 工作区目录——未修改的底层 `.sst` / `.blob` 物理文件在 `A`、`B`、`C`、`D` 之间 100% 零拷贝共享，而各分支写入各自独立演进；
-  - **全量文件系统状态合一与 `4 MiB` 切片双通道更新**：
-    - 分支内的目录项（`Entry`）、节点属性（`Inode`，使用整棵 `Disk` 树内单调唯一的 `ino`）、扩展属性（`Xattr`）、自上次分叉以来的变更节点索引（`dirty:<ino>`）与按 **`4 MiB` 固定边界切分**的文件数据块（`data:<ino>:<block_idx>`，`block_idx = offset / 4 MiB`）全部存入 Pebble；
-    - **满 `4 MiB` 整片写入（`Set` + Pebble 大值分离存储）**：覆盖整块 `4 MiB` 时直接执行 `Set` 写入不可变 `.blob` 文件；
-    - **不足 `4 MiB` 局部修改（`Merge` 局部补丁追加）**：局部修改通过 Pebble `Merge` 追加 `[in_block_offset, data]` 补丁（注意自定义 `ValueMerger.Finish(includesBase)` 在 `includesBase == false` 部分合并时必须原样保留复合补丁序列，仅在 `includesBase == true` 时折叠为定稿块），截断与打洞分别通过 `DeleteRange` 与局部置零补丁完成，消除大文件局部修改的读盘与整块重写放大。
+  - **全量文件系统状态合一与 `1 MiB` 切片双通道更新**：
+    - 分支内的目录项（`Entry`）、节点属性（`Inode`，使用整棵 `Disk` 树内单调唯一的 `ino`，通过内存批量号段预留持久化上界消除逐次分配 I/O）、扩展属性（`Xattr`）、自上次分叉以来的变更节点索引（`dirty:<ino>`）与按 **`1 MiB` 固定边界切分**（对齐 Linux FUSE `MaxWrite = 1 MiB`）的文件数据块（`data:<ino>:<block_idx>`，`block_idx = offset / 1 MiB`）全部存入 Pebble；
+    - **满 `1 MiB` 整片写入（`Set` + Pebble 大值分离存储）**：覆盖整块 `1 MiB` 时直接执行 `Set` 写入不可变 `.blob` 文件；
+    - **不足 `1 MiB` 局部修改（`Merge` 局部补丁追加）与按需区间读取**：局部修改通过 Pebble `Merge` 追加 `[in_block_offset, data]` 补丁（注意自定义 `ValueMerger.Finish(includesBase)` 在 `includesBase == false` 部分合并时必须原样保留复合补丁序列，仅在 `includesBase == true` 时折叠为定稿块），读取时按请求区间直接切片或叠加补丁（避免整块深拷贝放大），截断与打洞分别通过 `DeleteRange` 与局部置零补丁完成，消除大文件局部修改的读盘与整块重写放大。
 
 ---
 
@@ -57,9 +58,10 @@ PostgreSQL 彻底退化为轻量逻辑控制面，删除 `inodes`、`entries`、
   - 服务端彻底裁撤 `Open`、`Flush`、`Release`、`OpenDir`、`ReleaseDir`、`GetLk`、`SetLk`、`SetLkw`、`TmpFile` 等运行期细碎接口；
   - `FileHandle`（打开引用计数）与 `FileLock`（POSIX 记录锁与 BSD `flock`）100% 在客户端本地内存闭环（0 次跨机 RPC）；客户端按需懒加载并长效缓存所挂载分支的权威目录树；
   - **孤儿节点（`Orphan Inode`）闭环治理**：写端本地打开期间被解链（`nlink == 0`）的已上云文件在对应分支 Pebble 内写入 `orphan:<ino>` 标记，最后一个本地句柄 `Release`（`close`）时当场通知服务端物理删除；只要分支存在活跃写端，后台 GC 绝不清理该分支的 `orphan:*`，仅在无活跃写端时（卸载 `CloseSession`、会话超时或新写端挂载前）按 `orphan:*` 扫描清理；`Commit` 快照生成时无需在热路径重写剔除孤儿，读取与 `Diff` 忽略 `nlink == 0` 即可。
-- **标准本地文件系统持久化语义（废除易丢数据的客户端 1 秒全局内存缓冲）**：
-  - 开启客户端内核 `writeback_cache`（或按单文件有界聚合写），常规 `write()` 写入内核页缓存即可返回（可抵御应用进程崩溃）；
-  - **在 `Flush`（即 `close`）、`Fsync`、`FsyncDir`、`Umount` 以及触发 `Commit` 快照时，强制排空对应文件的全部脏页并同步刷入服务端 Pebble 确认落盘**，兼顾 POSIX 标准持久化预期与高吞吐。
+- **标准本地文件系统持久化语义（内核 `writeback_cache` + 异步 WAL + 显式持久化屏障）**：
+  - 开启客户端内核 `CAP_WRITEBACK_CACHE` 并在 `Open`/`Create`（非 `O_TRUNC` 且非 `DirectIO`）时默认启用 `FOPEN_KEEP_CACHE`，常规 `write()` 写入内核页缓存即可返回并由内核自动聚合为最大 `1 MiB`（`MaxWrite`）块回写；
+  - 服务端常规数据与元数据写批次统一采用 `pebble.NoSync` 提交至 Pebble WAL（OS Page Cache，保障服务进程崩溃不丢数据），并由后台 1 秒周期任务与 `WALBytesPerSync` 兜底刷盘；
+  - **客户端 `Flush`（即 `close`）仅由内核排空页缓存脏页写入服务端 WAL 并释放本地 POSIX 锁（不触发服务端物理盘 `fsync`）；仅在显式 `Fsync`、`FsyncDir`、客户端 `Umount` 以及触发 `Commit` 快照时，强制执行服务端 `pebble.Sync` 确认物理落盘**，兼顾 POSIX 标准持久化预期与小文件高吞吐。
 
 ---
 
@@ -69,12 +71,12 @@ PostgreSQL 彻底退化为轻量逻辑控制面，删除 `inodes`、`entries`、
   - 沙盒控制面（Orchestrator）的标准工作流为：**先停止/卸载目标分支的写端会话 $\rightarrow$ 调用服务端控制面接口执行 `Rollback` 或 `Merge`（例如将子分支 `C`、`D` 合并回父分支 `B`，或将 `B` 合并回根分支 `main`） $\rightarrow$ 合并完成后重新挂载启动新的 Sandbox 写端**。
 - **服务端控制面文件级三路合并（3-Way `Merge`）与 Git 风格冲突（`Conflict`）解决**：
   - **求取 LCA 与增量对比**：当控制面调用 `Merge(disk_id, source_branch, target_branch)` 时（要求 `target_branch` 无活跃写端），服务端先为源分支定格最新 `Commit`，通过 `commits` DAG 找到源分支与目标分支的最近共同祖先 Commit（`Base`），直接扫描两边自 `Base` 以来的变更集（`dirty:<ino>`）执行三路对比；
-  - **文件级冲突判定（绝不盲目拼接二进制块）**：只在一边发生修改的文件或目录项自动合入目标分支 Pebble；两边做出完全相同修改的自动幂等合入；若**同一个文件（或同名目录项）在 `Base -> Source` 与 `Base -> Target` 均发生了不兼容修改**，一律按**文件级**判定为 `Conflict`（绝不在存储层自动拼接 4 MiB 数据块以免损坏二进制/ELF/数据库文件）；
+  - **文件级冲突判定（绝不盲目拼接二进制块）**：只在一边发生修改的文件或目录项自动合入目标分支 Pebble；两边做出完全相同修改的自动幂等合入；若**同一个文件（或同名目录项）在 `Base -> Source` 与 `Base -> Target` 均发生了不兼容修改**，一律按**文件级**判定为 `Conflict`（绝不在存储层自动拼接 `1 MiB` 数据块以免损坏二进制/ELF/数据库文件）；
   - **冲突解决双模式**：
     1. **控制面返回冲突清单 + 策略裁决**：默认检测到冲突时先不破坏目标分支原状态，直接向控制面返回结构化冲突文件列表（包含冲突路径及 `Base / Ours / Theirs` 三个版本的属性与标识），支持控制面直接指定 `--strategy=ours|theirs`（或按文件指定采纳哪一方）一键完成合并；
     2. **工作区物化挂载解决（Git Working Tree 模式）**：支持将无冲突变更应用至目标分支工作区，同时将冲突文件在工作区物化为 `<file>`（当前分支版本）与 `<file>.theirs` / `<file>.base` 旁路副本，将目标分支标记为 `MERGING` 状态；控制面可挂载一个临时沙盒进入工作区修改定稿文件并清理冲突副本，随后调用 `Commit`（或 `merge --continue`）生成记录双亲指针（`parent_commit_id` + `merge_parent_commit_id`）的 Merge Commit，或随时调用 `merge --abort` 恢复合并前状态。
 - **服务端元数据/块摘要 `Diff` + 客户端按需渲染行级对比**：
-  - 服务端 `Diff` RPC 对比同一 `Disk` 下任意两个分支/Commit 的变更索引与 `Inode` / `4 MiB` 分片修改序列号，秒级返回**变更文件列表（新增/删除/修改/重命名、大小与模式变化）及变更的 `4 MiB` 分片索引摘要**（0 字节未变更数据读取，不在服务端跑大文件全文对比）；
+  - 服务端 `Diff` RPC 对比同一 `Disk` 下任意两个分支/Commit 的变更索引与 `Inode` / `1 MiB` 分片修改序列号，秒级返回**变更文件列表（新增/删除/修改/重命名、大小与模式变化）及变更的 `1 MiB` 分片索引摘要**（0 字节未变更数据读取，不在服务端跑大文件全文对比）；
   - `bowl diff` CLI 客户端拿到变更摘要后，对小于安全阈值（如 `<= 1 MiB`）的变更文件按需拉取前 `8 KB` 嗅探文本/二进制类型，在客户端本地计算并展示纯文本行级 Unified Diff 或二进制摘要。
 
 ## 结果

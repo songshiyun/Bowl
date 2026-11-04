@@ -143,7 +143,7 @@ _Avoid_: Collision, Clash, DiffError
 _Avoid_: Compare, DeltaView, ChangeLog, PatchView
 
 **Blob (文件数据块)**:
-常规文件按固定边界编号切分的数据分片载体，支持整片覆盖写入、局部字节补丁追加、区间删除与局部置零打洞，并由存储引擎后台自动合并整理。
+常规文件按 `1 MiB` 固定边界编号切分的数据分片载体（与 Linux FUSE `MaxWrite` 1:1 对齐），支持整片覆盖写入、局部字节补丁追加、区间删除与局部置零打洞，并由存储引擎后台自动合并整理。
 _Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 
 **Read (文件数据读取)**:
@@ -209,7 +209,7 @@ _Avoid_: CreateTemp, MakeAnonFile, OpenTmpFile
 _Avoid_: OpenFile, AcquireHandle, ConnectFile
 
 **Flush (句柄冲刷)**:
-在单个文件描述符关闭时触发、在客户端本地将目标文件未同步脏数据刷入服务端并释放对应 LockOwner 所持本地 POSIX 记录锁的会话操作。
+在单个文件描述符关闭时触发、由内核排空客户端本地页缓存脏页写入服务端 Pebble WAL（`pebble.NoSync`，保证服务进程崩溃安全但不触发物理磁盘 `fsync`）并释放对应 LockOwner 所持本地 POSIX 记录锁的会话操作。
 _Avoid_: Close, SyncHandle, Drain
 
 **Release (句柄释放)**:
