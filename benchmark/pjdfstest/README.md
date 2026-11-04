@@ -1,8 +1,14 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
-> 最新复跑：2026-11-02，Bowl `0655a17`。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-04，Bowl `0ab26a7`。完整结果见 [REPORT.md](REPORT.md)。
+
+本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试通过；其中 28 项标记为 TODO，9 项为预期失败。
 
 本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
+
+被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块；整块写入与局部更新分别使用 Set 和 ValueMerger，Checkpoint 与 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache 由客户端在内存中维护。
+
+指定提交实际禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 释放本地句柄。这与 ADR-0029 计划启用 `writeback_cache` 的设计不同。
 
 ## 目录结构
 

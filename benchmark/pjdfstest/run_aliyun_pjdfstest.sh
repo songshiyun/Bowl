@@ -2,7 +2,14 @@
 # ==============================================================================
 # Bowl - Aliyun Silicon Valley (us-west-1) Dual-ECS Internal Network pjdfstest
 # ==============================================================================
+# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
+# 每个 (disk_id, branch_name) 使用独立 Pebble 存储 Inode、Entry、Xattr、
+# Orphan 和 4 MiB 数据块；整块用 Set，局部更新用 ValueMerger，Checkpoint
+# 和 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的
+# NamespaceCache 在客户端本地维护。
+# 当前被测提交禁用内核 writeback_cache；Flush/Fsync 向服务端请求持久化。
 set -euo pipefail
+export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -366,17 +373,10 @@ PING_RTT="$(echo "${PING_OUT}" | awk -F'=' '{gsub(/ ms/, "", $2); gsub(/^[ \t]+/
 IPERF_BPS="$(iperf3 -c "${SERVER_PRIV_IP}" -t 5 -J | jq -r '.end.sum_received.bits_per_second // 0')"
 IPERF_GBPS="$(awk -v bps="${IPERF_BPS}" 'BEGIN {printf "%.2f", bps / 1e9}')"
 
-# Create disk with root_ino > 1 to test non-identity root inode mapping
-DISK_ID=""
-ROOT_INO=0
-for i in {1..5}; do
-  CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "pjdfstest-disk-${i}" --endpoint "${ENDPOINT}" --json)"
-  DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
-  ROOT_INO="$(echo "${CREATE_JSON}" | jq -r '.root_ino')"
-  if [[ "${ROOT_INO}" -gt 1 ]]; then
-    break
-  fi
-done
+# ADR-0029 中每个磁盘的根 Inode 固定为 1。
+CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "pjdfstest-disk" --endpoint "${ENDPOINT}" --json)"
+DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
+ROOT_INO="$(echo "${CREATE_JSON}" | jq -r '.root_ino')"
 
 mkdir -p /mnt/bowl
 if grep -q " /mnt/bowl " /proc/self/mountinfo; then
@@ -508,9 +508,13 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
     REMAINING_INSTANCES="${COUNT}"
     sleep 5
   done
+  if [[ "${REMAINING_INSTANCES}" != "0" ]]; then
+    log "ERROR: 仍有 ${REMAINING_INSTANCES} 台测试实例，清理钩子将继续尝试。"
+    exit 1
+  fi
   rm -f "${CREATED_INSTANCES_FILE}"
 
-  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
   KEY_CREATED=0
 fi
 
@@ -561,6 +565,8 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
+      storage_engine: "Pebble per branch",
+      kernel_writeback_cache: false,
       disk_size: "2PiB",
       atime_mode: "strictatime",
       entry_timeout: "0",

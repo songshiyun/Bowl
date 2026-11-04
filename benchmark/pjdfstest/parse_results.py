@@ -66,6 +66,7 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
                 "ok_count": 0,
                 "not_ok_count": 0,
                 "todo_count": 0,
+                "todo_expected_failures": 0,
                 "duration_ms": None,
                 "failed_nums": [],
                 "dubious_rc": 0,
@@ -105,6 +106,7 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
             if "# TODO" in rest:
                 entry["ok_count"] += 1
                 entry["todo_count"] += 1
+                entry["todo_expected_failures"] += 1
             else:
                 entry["not_ok_count"] += 1
                 entry["failed_nums"].append(int(m_not_ok.group("num")))
@@ -147,6 +149,7 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
             "passed": passed,
             "failed": failed,
             "todo": c["todo_count"],
+            "todo_expected_failures": c["todo_expected_failures"],
             "duration_ms": c["duration_ms"],
             "failed_nums": c["failed_nums"],
             "status": "PASS" if failed == 0 and total > 0 else "FAIL",
@@ -176,6 +179,18 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
         dirs_map[d]["passed"] += c["passed"]
         dirs_map[d]["failed"] += c["failed"]
 
+    # 即使目录没有输出任何 TAP 用例，也要保留其退出码，避免报告漏掉失败目录。
+    for d in timing_by_dir:
+        dirs_map.setdefault(d, {
+            "directory": d,
+            "files": 0,
+            "tests": 0,
+            "passed": 0,
+            "failed": 0,
+            "duration_sec": 0.0,
+            "rc": 0,
+        })
+
     for d, info in dirs_map.items():
         if d in timing_by_dir:
             info["duration_sec"] = round(float(timing_by_dir[d].get("duration_sec", 0.0)), 3)
@@ -201,6 +216,8 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
         "total_tests": total_tests,
         "passed_tests": total_passed,
         "failed_tests": total_failed,
+        "todo_tests": sum(c["todo"] for c in case_list),
+        "todo_expected_failures": sum(c["todo_expected_failures"] for c in case_list),
         "pass_rate": round(total_passed / total_tests, 6) if total_tests > 0 else 0.0,
         "total_duration_sec": total_duration_sec,
         "overall_throughput_tests_per_sec": round(total_tests / total_duration_sec, 2)
@@ -230,10 +247,15 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     bowl_cfg = env_meta.get("bowl_config", {})
     audit = env_meta.get("cleanup_audit", {})
 
-    status_badge = "100% PASS (全量通过)" if failed_tests == 0 and total_tests > 0 else f"PASS {passed_tests}/{total_tests} ({pass_rate_pct:.2f}%)"
+    directories_ok = all(d["rc"] == 0 and d["files"] > 0 for d in summary["directories"])
+    status_badge = "100% PASS (全量通过)" if failed_tests == 0 and total_tests > 0 and directories_ok else f"PASS {passed_tests}/{total_tests} ({pass_rate_pct:.2f}%)；目录退出码见明细"
 
     lines: list[str] = []
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
+    lines.append("")
+    lines.append("被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；每个分支独立使用 Pebble 保存 Inode、Entry、Xattr、Orphan 和 4 MiB 数据块，整块写入与局部补丁分别使用 Set 和 ValueMerger。Checkpoint 和 Fork 通过硬链接共享文件。客户端在本地维护 FileHandle、FileLock、O_TMPFILE 和按需加载的 NamespaceCache。")
+    lines.append("")
+    lines.append("当前提交禁用 FUSE 内核 `writeback_cache`；Flush 和 Fsync 请求服务端同步，Release 负责释放本地句柄。此处记录实际配置，与 ADR-0029 的 writeback_cache 设计不同。")
     lines.append("")
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
@@ -249,6 +271,7 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append(f"| **测试脚本文件数 (`.t`)** | `{total_files}` 个测试脚本 |")
     lines.append(f"| **总测试断言数 (Subtests)** | `{total_tests:,}` 项 POSIX 断言 |")
     lines.append(f"| **通过 / 失败断言数** | `{passed_tests:,}` 通过 / `{failed_tests}` 失败（通过率 **{pass_rate_pct:.2f}%**） |")
+    lines.append(f"| **TAP TODO** | `{summary['todo_tests']}` 项，其中 `{summary['todo_expected_failures']}` 项为预期失败；按 `prove` 规则不计入失败 |")
     lines.append(f"| **全量执行总耗时** | `{total_dur:.2f} s`（约 `{total_dur / 60.0:.2f} min`） |")
     lines.append(f"| **内网综合执行吞吐率** | `{throughput:.2f} tests/s`（平均单断言耗时 `{1000.0 / throughput if throughput else 0:.2f} ms`） |")
     lines.append(f"| **云端地域与网络拓扑** | 阿里云 `{cloud.get('region_id', 'us-west-1')}` (`{cloud.get('zone_id', 'us-west-1a')}`) 同可用区 VPC 私网直连 |")
@@ -293,11 +316,11 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("| :--- | :--- | :--- |")
     lines.append(f"| **Bowl Git Commit** | `{bowl_cfg.get('bowl_git_commit', '-')}` | 仓库当前评测版本 |")
     lines.append(f"| **pjdfstest Git Commit** | `{bowl_cfg.get('pjdfstest_git_commit', '-')}` | 上游 `https://github.com/pjd/pjdfstest` |")
-    lines.append(f"| **PostgreSQL 版本** | `{server.get('pg_version', '-')}` | Server 节点本地持久化元数据库（已完成 13 个 Goose 迁移） |")
+    lines.append(f"| **PostgreSQL 版本** | `{server.get('pg_version', '-')}` | Server 节点控制面数据库 |")
     lines.append(f"| **FUSE 用户态版本** | `{client.get('fusermount_version', '-')}` | Linux 内核 FUSE 协议 + `github.com/hanwen/go-fuse/v2` |")
-    lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '50GiB')}`，验证 `1 <-> root_ino` 非恒等根映射 |")
+    lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '-')}` |")
     lines.append(f"| **服务端 `STORAGE_ATIME_MODE`** | `{bowl_cfg.get('atime_mode', 'strictatime')}` | 开启严格访问时间更新，验证 `atime` 刷新语义 |")
-    lines.append(f"| **服务端 FUSE 缓存超时配置** | `entry={bowl_cfg.get('entry_timeout', '0')}s, attr={bowl_cfg.get('attr_timeout', '0')}s, direntry={bowl_cfg.get('dir_entry_timeout', '0')}s` | 设为 `0s` 强制每次 `stat`/`lookup` 穿透内网 RPC 校验服务端真实状态 |")
+    lines.append(f"| **FUSE 缓存超时配置** | `entry={bowl_cfg.get('entry_timeout', '0')}s, attr={bowl_cfg.get('attr_timeout', '0')}s, direntry={bowl_cfg.get('dir_entry_timeout', '0')}s` | 内核属性与目录项缓存超时；客户端 NamespaceCache 仍可命中 |")
     lines.append(f"| **客户端挂载命令** | `bowl mount <disk_id> /mnt/bowl --endpoint http://{server.get('private_ip', '<server_ip>')}:9000 --allow-other` | 启用 `default_permissions` 与 `--allow-other` 支持多 UID/GID 权限切换测试 |")
     lines.append("")
 
@@ -306,8 +329,8 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("")
     lines.append("## 3. 17 个系统调用目录兼容性与耗时汇总")
     lines.append("")
-    lines.append("| 系统调用目录 | 脚本数 (Files) | 断言数 (Tests) | PASS / ALL | 通过率 | 耗时 (s) | 吞吐率 (Tests/s) | 耗时占比 | 核心覆盖语义 |")
-    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |")
+    lines.append("| 系统调用目录 | 脚本数 (Files) | 断言数 (Tests) | PASS / ALL | 退出码 | 通过率 | 耗时 (s) | 吞吐率 (Tests/s) | 耗时占比 | 核心覆盖语义 |")
+    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- |")
 
     for d in summary["directories"]:
         dname = d["directory"]
@@ -320,11 +343,11 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
         share = (dur / total_dur * 100.0) if total_dur > 0 else 0.0
         desc = SYSCALL_DIR_DESCRIPTIONS.get(dname, "-")
         lines.append(
-            f"| `{dname}/` | {files} | {tests:,} | {passed}/{tests} | {rate:.2f}% | {dur:.2f}s | {tput:.1f} | {share:.1f}% | {desc} |"
+            f"| `{dname}/` | {files} | {tests:,} | {passed}/{tests} | {d['rc']} | {rate:.2f}% | {dur:.2f}s | {tput:.1f} | {share:.1f}% | {desc} |"
         )
 
     lines.append(
-        f"| **Total (合计)** | **{total_files}** | **{total_tests:,}** | **{passed_tests}/{total_tests}** | **{pass_rate_pct:.2f}%** | **{total_dur:.2f}s** | **{throughput:.1f}** | **100.0%** | **全量 17 个 POSIX 系统调用测试集** |"
+        f"| **Total (合计)** | **{total_files}** | **{total_tests:,}** | **{passed_tests}/{total_tests}** | **{'全部为 0' if directories_ok else '见各目录'}** | **{pass_rate_pct:.2f}%** | **{total_dur:.2f}s** | **{throughput:.1f}** | **100.0%** | **{total_dirs} 个系统调用目录** |"
     )
     lines.append("")
 
@@ -341,10 +364,7 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append(
         f"- **内网通信底座**：Client 与 Server 位于阿里云硅谷 `us-west-1a` 同一交换机（`{cloud.get('vswitch_id', '-')}`），"
         f"内网 ICMP RTT 延迟仅 `{net.get('ping_rtt_ms', '-')}` ms，内网带宽达 `{net.get('iperf3_gbps', '-')}` Gbps。"
-        "由于测试禁用了客户端内核属性/目录项缓存（`Timeout=0s`），每一次 `lookup`、`getattr`、`create`、`rename`、`unlink`、`setattr` 均真实触发跨机 ConnectRPC (HTTP/2) 请求及服务端 PostgreSQL 事务提交。"
-    )
-    lines.append(
-        f"- **ADR-0023 (`1619a96`) 性能跃升实证**：经过全路径会话心跳 30s 内存节流（`touchSessionThrottled`）、`Flush` 无锁快速路径、非孤儿句柄 `Release`/`ReleaseDir` 免除 `Inode` 排他锁以及 `Lookup` 单语句免事务包装优化后，全量 8,798 项 POSIX 断言在 `Timeout=0s` 下的总执行耗时从优化前的 **`344.23 s`（`25.56 tests/s`）** 大幅缩短至 **`{total_dur:.2f} s`（`{throughput:.2f} tests/s`）**，**整体提速 `1.68x`（耗时缩短 `40.5%`）**：其中 `chown/` 从 `151.14s` 降至 `84.40s`（**1.79x**），`rename/` 从 `69.98s` 降至 `38.78s`（**1.80x**），`chmod/` 从 `27.32s` 降至 `15.13s`（**1.81x**），`link/` 从 `24.16s` 降至 `13.16s`（**1.84x**），`open/` 从 `10.17s` 降至 `5.86s`（**1.74x**）。"
+        "内核属性与目录项缓存超时设为 `0s`；客户端 NamespaceCache 仍会影响请求路径。"
     )
     if top_dirs:
         top_summary = "、".join(
@@ -352,54 +372,23 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
             for d in top_dirs[:3]
         )
         lines.append(f"- **耗时集中度分析**：耗时排名前三的子集为 {top_summary}。")
-        lines.append(
-            "  - `rename/` 包含 4,857 项断言（占全量测试断言的 55.2%），密集覆盖文件、目录、符号链接、FIFO 等不同节点类型之间的同目录/跨目录原子替换与错误码（`EISDIR`/`ENOTDIR`/`ENOTEMPTY`/`EACCES`/`EINVAL`）矩阵，每次断言涉及多步父目录权限准备、文件创建、重命名与清理 RPC。"
-        )
-        lines.append(
-            "  - `chown/` 包含 1,497 项断言（占全量断言的 17.0%），重点测试特权/非特权用户切换（`setuid`/`setgid`/`setgroups`）下属主属组变更及 `S_ISUID`/`S_ISGID` 位清除逻辑。"
-        )
     lines.append("")
 
     lines.append("### 4.2 关键 POSIX 契约与边界语义验证结论")
     lines.append("")
-    lines.append("1. **非恒等根 Inode 映射 (`1 <-> root_ino`)**：")
-    lines.append(
-        f"   - 本次评测虚拟磁盘 `root_ino = {bowl_cfg.get('root_ino', '-')}`（大于 1），客户端 `ToServerIno` / `ToKernelIno` 在 FUSE 内核固定根号 `1` 与服务端持久化 `root_ino` 之间完成透明双向映射，根目录权限与 `..` 回溯全部通过验证。"
-    )
-    lines.append("2. **扩展属性标志位 (`chflags` / `FS_IOC_SETFLAGS`)**：")
-    lines.append(
-        "   - `chflags/00.t ~ 13.t` 完整测试了 Linux VFS `FS_IMMUTABLE_FL` 与 `FS_APPEND_FL` 标志位。客户端 `RawFS.Ioctl` 同时兼容 `FS_IOC_GETFLAGS`/`FS_IOC_SETFLAGS` 与内核 `FS_IOC_FSGETXATTR`/`FS_IOC_FSSETXATTR` (fileattr API)，服务端在 `SetAttr`、`Write`、`Unlink`、`Rename`、`Link` 中严格执行不可变（Immutable）与仅追加（Append-Only）保护。"
-    )
-    lines.append("3. **多身份权限裁决 (`--allow-other` + `default_permissions`)**：")
-    lines.append(
-        "   - `pjdfstest` 在测试过程中频繁切换进程有效 UID/GID（如 `65534`），通过 `--allow-other` 与内核 `default_permissions` 配合服务端传入的 Caller `uid`/`gid`/`umask`，精确通过了粘滞位（Sticky Bit `S_ISVTX`）目录删除/重命名限制、父目录写执行权限检查及新建节点属组继承（`S_ISGID` 目录继承）。"
-    )
-    lines.append("4. **Open-Unlink 孤儿文件生命周期与空间预分配**：")
-    lines.append(
-        "   - `unlink/14.t`、`posix_fallocate/00.t`、`truncate/`、`ftruncate/` 验证了打开状态下删除最后一条硬链接后句柄仍可正常读写与截断，以及 `fallocate` 物理空间预分配与配额扣减的一致性。"
-    )
+    lines.append(f"本轮磁盘根 Inode 为 `{bowl_cfg.get('root_ino', '-')}`。用例覆盖标志位、多用户权限、打开后解链和空间预分配；各目录及脚本结果见第 3、5 节。")
     lines.append("")
 
     if summary["failed_cases"]:
-        lines.append("### 4.3 未通过子项归因分析（Failure Root-Cause Analysis）")
+        lines.append("### 4.3 未通过子项")
         lines.append("")
-        lines.append("| 用例文件 | 总断言数 | 失败数 | 失败子测试序号 | 触发机制与根因说明 |")
-        lines.append("| :--- | ---: | ---: | :--- | :--- |")
+        lines.append("| 用例文件 | 总断言数 | 失败数 | 失败子测试序号 |")
+        lines.append("| :--- | ---: | ---: | :--- |")
         for fc in summary["failed_cases"]:
             nums = ", ".join(str(n) for n in fc["failed_nums"][:20])
             if len(fc["failed_nums"]) > 20:
                 nums += " ..."
-            reason = "-"
-            if fc["case"] in ("ftruncate/12.t", "truncate/12.t"):
-                reason = (
-                    "`12.t` 执行 `truncate <file> 999999999999999`（约 `909.49 TiB` 稀疏扩展），期望返回 `0` 或 `EFBIG`/`EINVAL`；"
-                    "本次挂载的测试虚拟磁盘配额设为 `50GiB`，触发服务端 `SetAttr` 配额上限保护返回 `ENOSPC`（符合 Bowl 磁盘配额契约；将测试盘配额设为 `>= 1PiB` 即可返回 `0` 通过）"
-                )
-            elif fc["case"] == "rename/10.t":
-                reason = (
-                    "`rename/10.t` 测试粘滞位（Sticky Bit `S_ISVTX`）目录中的重命名矩阵；该失败并非权限裁决错误，而是 Linux FUSE 内核在 `--allow-other` + `default_permissions` 且 `EntryTimeout=0s`（禁用 dentry 缓存）时的已知 VFS 竞争条件：当 `rename(s1, s2)` 的目标文件 `s2` 已有其他硬链接（`nlink > 1`）时，内核 `vfs_rename` 预检与用户态 FUSE `RENAME` 之间对已存在目标 dentry 的二次 `revalidate` 触发返回 `ENOENT`。"
-                )
-            lines.append(f"| `{fc['case']}` | {fc['tests']} | {fc['failed']} | {nums or '-'} | {reason} |")
+            lines.append(f"| `{fc['case']}` | {fc['tests']} | {fc['failed']} | {nums or '-'} |")
         lines.append("")
 
     # Section 5: Full 238 Case Breakdown

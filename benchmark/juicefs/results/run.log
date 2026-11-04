@@ -1,28 +1,28 @@
-[2026-11-02T15:53:30Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
-[2026-11-02T15:53:36Z] Compiled and compressed binaries ready in /tmp/bowl-jfsbench-20261102-155330-ktPmKZ
-[2026-11-02T15:53:36Z] Step 2/6: Creating temporary SSH KeyPair bowl-jfsbench-kp-20261102-155330 in us-west-1...
-[2026-11-02T15:53:37Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
-[2026-11-02T15:53:38Z] Created Server Instance: i-rj93ymmufo05cjc13acy, Client Instance: i-rj93ymmufo05cjc13acz
-[2026-11-02T15:53:38Z] Waiting for both instances to reach Running state...
-[2026-11-02T15:53:45Z] Server (i-rj93ymmufo05cjc13acy): Public=47.251.249.246, Private=172.16.1.223
-[2026-11-02T15:53:45Z] Client (i-rj93ymmufo05cjc13acz): Public=47.89.249.207, Private=172.16.1.222
-[2026-11-02T15:53:45Z] Waiting for SSH readiness on Server (47.251.249.246) and Client (47.89.249.207)...
-[2026-11-02T15:54:05Z] Direct SSH ready on bowl-bench-server (47.251.249.246)
-[2026-11-02T15:54:07Z] Direct SSH ready on bowl-bench-client (47.89.249.207)
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-[2026-11-02T15:54:20Z] Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (172.16.1.223)...
-Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
+[2026-11-03T23:39:47Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
+[2026-11-03T23:39:52Z] Compiled and compressed binaries ready in /tmp/bowl-jfsbench-20261103-233947-eJUks4
+[2026-11-03T23:39:52Z] Step 2/6: Creating temporary SSH KeyPair bowl-jfsbench-kp-20261103-233947 in us-west-1...
+[2026-11-03T23:39:54Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
+[2026-11-03T23:39:56Z] Created Server Instance: i-rj920xxtjyecqzjas9gm, Client Instance: i-rj920xxtjyecqzjas9gn
+[2026-11-03T23:39:56Z] Waiting for both instances to reach Running state...
+[2026-11-03T23:40:03Z] Server (i-rj920xxtjyecqzjas9gm): Public=43.110.149.45, Private=172.16.1.196
+[2026-11-03T23:40:03Z] Client (i-rj920xxtjyecqzjas9gn): Public=47.254.41.244, Private=172.16.1.197
+[2026-11-03T23:40:03Z] Waiting for SSH readiness on Server (43.110.149.45) and Client (47.254.41.244)...
+[2026-11-03T23:40:22Z] Direct SSH ready on bowl-bench-server (43.110.149.45)
+[2026-11-03T23:40:24Z] Direct SSH ready on bowl-bench-client (47.254.41.244)
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+[2026-11-03T23:40:31Z] Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (172.16.1.196)...
+Warning: Permanently added '43.110.149.45' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.45' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.45' (ED25519) to the list of known hosts.
+Warning: Permanently added '43.110.149.45' (ED25519) to the list of known hosts.
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 Preconfiguring packages ...
+Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
-(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%Failed to stop iperf3.service: Unit iperf3.service not loaded.
-(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
 Preparing to unpack .../00-libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
 Unpacking libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Selecting previously unselected package libiperf0:amd64.
@@ -219,271 +219,277 @@ CREATE DATABASE
 CREATE DATABASE
 ALTER SYSTEM
 ALTER SYSTEM
-2026/11/02 23:55:38 OK   20261015165500_create_metadata_tables.sql (4.2ms)
-2026/11/02 23:55:38 OK   20261016180000_add_symlink_target_to_inodes.sql (2.03ms)
-2026/11/02 23:55:38 OK   20261017000000_create_file_handles_table.sql (2.44ms)
-2026/11/02 23:55:38 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.73ms)
-2026/11/02 23:55:38 OK   20261017020000_convert_entries_name_to_bytea.sql (5.59ms)
-2026/11/02 23:55:38 OK   20261017030000_create_inode_xattrs_table.sql (2.07ms)
-2026/11/02 23:55:38 OK   20261018000000_create_file_locks_tables.sql (6.94ms)
-2026/11/02 23:55:38 OK   20261018010000_add_session_id_to_file_handles.sql (1.82ms)
-2026/11/02 23:55:38 OK   20261019000000_align_juicefs_meta_foundation.sql (4.23ms)
-2026/11/02 23:55:38 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.13ms)
-2026/11/02 23:55:38 OK   20261028000000_add_chunks_and_slice_refs.sql (3.39ms)
-2026/11/02 23:55:38 OK   20261029000000_alter_chunks_indx_to_bigint.sql (4.07ms)
-2026/11/02 23:55:38 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.21ms)
-2026/11/02 23:55:38 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.43ms)
-2026/11/02 23:55:38 goose: successfully migrated database to version: 20261101000000
+2026/11/04 07:41:54 OK   20261015165500_create_metadata_tables.sql (3.95ms)
+2026/11/04 07:41:54 OK   20261016180000_add_symlink_target_to_inodes.sql (1.7ms)
+2026/11/04 07:41:54 OK   20261017000000_create_file_handles_table.sql (2.96ms)
+2026/11/04 07:41:54 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.49ms)
+2026/11/04 07:41:54 OK   20261017020000_convert_entries_name_to_bytea.sql (5.6ms)
+2026/11/04 07:41:54 OK   20261017030000_create_inode_xattrs_table.sql (2.01ms)
+2026/11/04 07:41:54 OK   20261018000000_create_file_locks_tables.sql (6.87ms)
+2026/11/04 07:41:54 OK   20261018010000_add_session_id_to_file_handles.sql (1.69ms)
+2026/11/04 07:41:54 OK   20261019000000_align_juicefs_meta_foundation.sql (4.9ms)
+2026/11/04 07:41:54 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.42ms)
+2026/11/04 07:41:54 OK   20261028000000_add_chunks_and_slice_refs.sql (3.73ms)
+2026/11/04 07:41:54 OK   20261029000000_alter_chunks_indx_to_bigint.sql (3.24ms)
+2026/11/04 07:41:54 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.37ms)
+2026/11/04 07:41:54 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (1.97ms)
+2026/11/04 07:41:54 OK   20261104000000_add_adr0029_control_plane_schema.sql (10.98ms)
+2026/11/04 07:41:54 OK   20261104010000_drop_legacy_posix_tables.sql (7.12ms)
+2026/11/04 07:41:54 goose: successfully migrated database to version: 20261104010000
 Synchronizing state of redis-server.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
 Executing: /usr/lib/systemd/systemd-sysv-install enable redis-server
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-s3.service → /etc/systemd/system/jfs-s3.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-webdav.service → /etc/systemd/system/jfs-webdav.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
-[2026-11-02T15:55:39Z] Server node (172.16.1.223) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy.
-[2026-11-02T15:55:39Z] Measuring Server local cloud_essd disk baseline...
-Warning: Permanently added '47.251.249.246' (ED25519) to the list of known hosts.
-[2026-11-02T15:56:05Z] Server baseline: {"server":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","pg_version":"psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","redis_version":"Redis server v=7.0.15","minio_version":"rclone v1.68.2"},"disk_baseline":{"local_seq_write_mib_s":"164.09","local_seq_read_mib_s":"184.29"}}
-[2026-11-02T15:56:05Z] Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (172.16.1.222)...
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+[2026-11-03T23:41:55Z] Server node (172.16.1.196) services (Bowl:9000, rclone S3:9001, PG:5432, Redis:6379) are up and healthy.
+[2026-11-03T23:41:55Z] Measuring Server local cloud_essd disk baseline...
+Warning: Permanently added '43.110.149.45' (ED25519) to the list of known hosts.
+[2026-11-03T23:42:22Z] Server baseline: {"server":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","pg_version":"psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","redis_version":"Redis server v=7.0.15","rclone_version":"rclone v1.68.2"},"disk_baseline":{"local_seq_write_mib_s":"169.41","local_seq_read_mib_s":"170.45"}}
+[2026-11-03T23:42:22Z] Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (172.16.1.197)...
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
-Preparing to unpack .../00-libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
+Preparing to unpack .../libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
 Unpacking libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Selecting previously unselected package libiperf0:amd64.
-Preparing to unpack .../01-libiperf0_3.16-1build2_amd64.deb ...
+Preparing to unpack .../libiperf0_3.16-1build2_amd64.deb ...
 Unpacking libiperf0:amd64 (3.16-1build2) ...
 Selecting previously unselected package iperf3.
-Preparing to unpack .../02-iperf3_3.16-1build2_amd64.deb ...
+Preparing to unpack .../iperf3_3.16-1build2_amd64.deb ...
 Unpacking iperf3 (3.16-1build2) ...
+Preparing to unpack .../libpcre2-8-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-8-0:amd64 (10.42-4ubuntu2.2) over (10.42-4ubuntu2.1) ...
+Setting up libpcre2-8-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package m4.
-Preparing to unpack .../03-m4_1.4.19-4build1_amd64.deb ...
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85482 files and directories currently installed.)
+Preparing to unpack .../00-m4_1.4.19-4build1_amd64.deb ...
 Unpacking m4 (1.4.19-4build1) ...
 Selecting previously unselected package autoconf.
-Preparing to unpack .../04-autoconf_2.71-3_all.deb ...
+Preparing to unpack .../01-autoconf_2.71-3_all.deb ...
 Unpacking autoconf (2.71-3) ...
 Selecting previously unselected package autotools-dev.
-Preparing to unpack .../05-autotools-dev_20220109.1_all.deb ...
+Preparing to unpack .../02-autotools-dev_20220109.1_all.deb ...
 Unpacking autotools-dev (20220109.1) ...
 Selecting previously unselected package automake.
-Preparing to unpack .../06-automake_1%3a1.16.5-1.3ubuntu1_all.deb ...
+Preparing to unpack .../03-automake_1%3a1.16.5-1.3ubuntu1_all.deb ...
 Unpacking automake (1:1.16.5-1.3ubuntu1) ...
 Selecting previously unselected package libgfxdr0:amd64.
-Preparing to unpack .../07-libgfxdr0_11.1-4ubuntu0.1_amd64.deb ...
+Preparing to unpack .../04-libgfxdr0_11.1-4ubuntu0.1_amd64.deb ...
 Unpacking libgfxdr0:amd64 (11.1-4ubuntu0.1) ...
 Selecting previously unselected package libglusterfs0:amd64.
-Preparing to unpack .../08-libglusterfs0_11.1-4ubuntu0.1_amd64.deb ...
+Preparing to unpack .../05-libglusterfs0_11.1-4ubuntu0.1_amd64.deb ...
 Unpacking libglusterfs0:amd64 (11.1-4ubuntu0.1) ...
 Selecting previously unselected package libgfrpc0:amd64.
-Preparing to unpack .../09-libgfrpc0_11.1-4ubuntu0.1_amd64.deb ...
+Preparing to unpack .../06-libgfrpc0_11.1-4ubuntu0.1_amd64.deb ...
 Unpacking libgfrpc0:amd64 (11.1-4ubuntu0.1) ...
 Selecting previously unselected package libgfapi0:amd64.
-Preparing to unpack .../10-libgfapi0_11.1-4ubuntu0.1_amd64.deb ...
+Preparing to unpack .../07-libgfapi0_11.1-4ubuntu0.1_amd64.deb ...
 Unpacking libgfapi0:amd64 (11.1-4ubuntu0.1) ...
 Selecting previously unselected package libnbd0.
-Preparing to unpack .../11-libnbd0_1.20.0-1_amd64.deb ...
+Preparing to unpack .../08-libnbd0_1.20.0-1_amd64.deb ...
 Unpacking libnbd0 (1.20.0-1) ...
 Selecting previously unselected package libdaxctl1:amd64.
-Preparing to unpack .../12-libdaxctl1_77-2ubuntu2_amd64.deb ...
+Preparing to unpack .../09-libdaxctl1_77-2ubuntu2_amd64.deb ...
 Unpacking libdaxctl1:amd64 (77-2ubuntu2) ...
 Selecting previously unselected package libndctl6:amd64.
-Preparing to unpack .../13-libndctl6_77-2ubuntu2_amd64.deb ...
+Preparing to unpack .../10-libndctl6_77-2ubuntu2_amd64.deb ...
 Unpacking libndctl6:amd64 (77-2ubuntu2) ...
 Selecting previously unselected package libpmem1:amd64.
-Preparing to unpack .../14-libpmem1_1.13.1-1.1ubuntu2_amd64.deb ...
+Preparing to unpack .../11-libpmem1_1.13.1-1.1ubuntu2_amd64.deb ...
 Unpacking libpmem1:amd64 (1.13.1-1.1ubuntu2) ...
 Selecting previously unselected package libboost-iostreams1.83.0:amd64.
-Preparing to unpack .../15-libboost-iostreams1.83.0_1.83.0-2.1ubuntu3.2_amd64.deb ...
+Preparing to unpack .../12-libboost-iostreams1.83.0_1.83.0-2.1ubuntu3.2_amd64.deb ...
 Unpacking libboost-iostreams1.83.0:amd64 (1.83.0-2.1ubuntu3.2) ...
 Selecting previously unselected package libboost-thread1.83.0:amd64.
-Preparing to unpack .../16-libboost-thread1.83.0_1.83.0-2.1ubuntu3.2_amd64.deb ...
+Preparing to unpack .../13-libboost-thread1.83.0_1.83.0-2.1ubuntu3.2_amd64.deb ...
 Unpacking libboost-thread1.83.0:amd64 (1.83.0-2.1ubuntu3.2) ...
 Selecting previously unselected package librdmacm1t64:amd64.
-Preparing to unpack .../17-librdmacm1t64_50.0-2ubuntu0.2_amd64.deb ...
+Preparing to unpack .../14-librdmacm1t64_50.0-2ubuntu0.2_amd64.deb ...
 Unpacking librdmacm1t64:amd64 (50.0-2ubuntu0.2) ...
 Selecting previously unselected package librados2.
-Preparing to unpack .../18-librados2_19.2.3-0ubuntu0.24.04.3_amd64.deb ...
+Preparing to unpack .../15-librados2_19.2.3-0ubuntu0.24.04.3_amd64.deb ...
 Unpacking librados2 (19.2.3-0ubuntu0.24.04.3) ...
 Selecting previously unselected package libpmemobj1:amd64.
-Preparing to unpack .../19-libpmemobj1_1.13.1-1.1ubuntu2_amd64.deb ...
+Preparing to unpack .../16-libpmemobj1_1.13.1-1.1ubuntu2_amd64.deb ...
 Unpacking libpmemobj1:amd64 (1.13.1-1.1ubuntu2) ...
 Selecting previously unselected package librbd1.
-Preparing to unpack .../20-librbd1_19.2.3-0ubuntu0.24.04.3_amd64.deb ...
+Preparing to unpack .../17-librbd1_19.2.3-0ubuntu0.24.04.3_amd64.deb ...
 Unpacking librbd1 (19.2.3-0ubuntu0.24.04.3) ...
 Selecting previously unselected package fio.
-Preparing to unpack .../21-fio_3.36-1ubuntu0.1_amd64.deb ...
+Preparing to unpack .../18-fio_3.36-1ubuntu0.1_amd64.deb ...
 Unpacking fio (3.36-1ubuntu0.1) ...
 Selecting previously unselected package libgfortran5:amd64.
-Preparing to unpack .../22-libgfortran5_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
+Preparing to unpack .../19-libgfortran5_14.2.0-4ubuntu2~24.04.1_amd64.deb ...
 Unpacking libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) ...
 Selecting previously unselected package libgfortran-13-dev:amd64.
-Preparing to unpack .../23-libgfortran-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+Preparing to unpack .../20-libgfortran-13-dev_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
 Unpacking libgfortran-13-dev:amd64 (13.3.0-6ubuntu2~24.04.1) ...
 Selecting previously unselected package gfortran-13-x86-64-linux-gnu.
-Preparing to unpack .../24-gfortran-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+Preparing to unpack .../21-gfortran-13-x86-64-linux-gnu_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
 Unpacking gfortran-13-x86-64-linux-gnu (13.3.0-6ubuntu2~24.04.1) ...
 Selecting previously unselected package gfortran-13.
-Preparing to unpack .../25-gfortran-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
+Preparing to unpack .../22-gfortran-13_13.3.0-6ubuntu2~24.04.1_amd64.deb ...
 Unpacking gfortran-13 (13.3.0-6ubuntu2~24.04.1) ...
 Selecting previously unselected package gfortran-x86-64-linux-gnu.
-Preparing to unpack .../26-gfortran-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
+Preparing to unpack .../23-gfortran-x86-64-linux-gnu_4%3a13.2.0-7ubuntu1_amd64.deb ...
 Unpacking gfortran-x86-64-linux-gnu (4:13.2.0-7ubuntu1) ...
 Selecting previously unselected package gfortran.
-Preparing to unpack .../27-gfortran_4%3a13.2.0-7ubuntu1_amd64.deb ...
+Preparing to unpack .../24-gfortran_4%3a13.2.0-7ubuntu1_amd64.deb ...
 Unpacking gfortran (4:13.2.0-7ubuntu1) ...
-Preparing to unpack .../28-git-man_1%3a2.43.0-1ubuntu7.4_all.deb ...
+Preparing to unpack .../25-git-man_1%3a2.43.0-1ubuntu7.4_all.deb ...
 Unpacking git-man (1:2.43.0-1ubuntu7.4) over (1:2.43.0-1ubuntu7.3) ...
-Preparing to unpack .../29-git_1%3a2.43.0-1ubuntu7.4_amd64.deb ...
+Preparing to unpack .../26-git_1%3a2.43.0-1ubuntu7.4_amd64.deb ...
 Unpacking git (1:2.43.0-1ubuntu7.4) over (1:2.43.0-1ubuntu7.3) ...
 Selecting previously unselected package libllvm17t64:amd64.
-Preparing to unpack .../30-libllvm17t64_1%3a17.0.6-9ubuntu1_amd64.deb ...
+Preparing to unpack .../27-libllvm17t64_1%3a17.0.6-9ubuntu1_amd64.deb ...
 Unpacking libllvm17t64:amd64 (1:17.0.6-9ubuntu1) ...
 Selecting previously unselected package libamd-comgr2:amd64.
-Preparing to unpack .../31-libamd-comgr2_6.0+git20231212.4510c28+dfsg-3build2_amd64.deb ...
+Preparing to unpack .../28-libamd-comgr2_6.0+git20231212.4510c28+dfsg-3build2_amd64.deb ...
 Unpacking libamd-comgr2:amd64 (6.0+git20231212.4510c28+dfsg-3build2) ...
 Selecting previously unselected package libhsakmt1:amd64.
-Preparing to unpack .../32-libhsakmt1_5.7.0-1build1_amd64.deb ...
+Preparing to unpack .../29-libhsakmt1_5.7.0-1build1_amd64.deb ...
 Unpacking libhsakmt1:amd64 (5.7.0-1build1) ...
 Selecting previously unselected package libhsa-runtime64-1.
-Preparing to unpack .../33-libhsa-runtime64-1_5.7.1-2build1_amd64.deb ...
+Preparing to unpack .../30-libhsa-runtime64-1_5.7.1-2build1_amd64.deb ...
 Unpacking libhsa-runtime64-1 (5.7.1-2build1) ...
 Selecting previously unselected package libamdhip64-5.
-Preparing to unpack .../34-libamdhip64-5_5.7.1-3_amd64.deb ...
+Preparing to unpack .../31-libamdhip64-5_5.7.1-3_amd64.deb ...
 Unpacking libamdhip64-5 (5.7.1-3) ...
 Selecting previously unselected package libevent-pthreads-2.1-7t64:amd64.
-Preparing to unpack .../35-libevent-pthreads-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
+Preparing to unpack .../32-libevent-pthreads-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
 Unpacking libevent-pthreads-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
 Selecting previously unselected package libpsm-infinipath1.
-Preparing to unpack .../36-libpsm-infinipath1_3.3+20.604758e7-6.3build1_amd64.deb ...
+Preparing to unpack .../33-libpsm-infinipath1_3.3+20.604758e7-6.3build1_amd64.deb ...
 Unpacking libpsm-infinipath1 (3.3+20.604758e7-6.3build1) ...
 Selecting previously unselected package libpsm2-2.
-Preparing to unpack .../37-libpsm2-2_11.2.185-2build1_amd64.deb ...
+Preparing to unpack .../34-libpsm2-2_11.2.185-2build1_amd64.deb ...
 Unpacking libpsm2-2 (11.2.185-2build1) ...
 Selecting previously unselected package libfabric1:amd64.
-Preparing to unpack .../38-libfabric1_1.17.0-3build2_amd64.deb ...
+Preparing to unpack .../35-libfabric1_1.17.0-3build2_amd64.deb ...
 Unpacking libfabric1:amd64 (1.17.0-3build2) ...
 Selecting previously unselected package libhwloc15:amd64.
-Preparing to unpack .../39-libhwloc15_2.10.0-1build1_amd64.deb ...
+Preparing to unpack .../36-libhwloc15_2.10.0-1build1_amd64.deb ...
 Unpacking libhwloc15:amd64 (2.10.0-1build1) ...
 Selecting previously unselected package libmunge2:amd64.
-Preparing to unpack .../40-libmunge2_0.5.15-4ubuntu0.1_amd64.deb ...
+Preparing to unpack .../37-libmunge2_0.5.15-4ubuntu0.1_amd64.deb ...
 Unpacking libmunge2:amd64 (0.5.15-4ubuntu0.1) ...
 Selecting previously unselected package libpciaccess0:amd64.
-Preparing to unpack .../41-libpciaccess0_0.17-3ubuntu0.24.04.3_amd64.deb ...
+Preparing to unpack .../38-libpciaccess0_0.17-3ubuntu0.24.04.3_amd64.deb ...
 Unpacking libpciaccess0:amd64 (0.17-3ubuntu0.24.04.3) ...
 Selecting previously unselected package libxnvctrl0:amd64.
-Preparing to unpack .../42-libxnvctrl0_510.47.03-0ubuntu4.24.04.1_amd64.deb ...
+Preparing to unpack .../39-libxnvctrl0_510.47.03-0ubuntu4.24.04.1_amd64.deb ...
 Unpacking libxnvctrl0:amd64 (510.47.03-0ubuntu4.24.04.1) ...
 Selecting previously unselected package ocl-icd-libopencl1:amd64.
-Preparing to unpack .../43-ocl-icd-libopencl1_2.3.2-1build1_amd64.deb ...
+Preparing to unpack .../40-ocl-icd-libopencl1_2.3.2-1build1_amd64.deb ...
 Unpacking ocl-icd-libopencl1:amd64 (2.3.2-1build1) ...
 Selecting previously unselected package libhwloc-plugins:amd64.
-Preparing to unpack .../44-libhwloc-plugins_2.10.0-1build1_amd64.deb ...
+Preparing to unpack .../41-libhwloc-plugins_2.10.0-1build1_amd64.deb ...
 Unpacking libhwloc-plugins:amd64 (2.10.0-1build1) ...
 Selecting previously unselected package libpmix2t64:amd64.
-Preparing to unpack .../45-libpmix2t64_5.0.1-4.1build1_amd64.deb ...
+Preparing to unpack .../42-libpmix2t64_5.0.1-4.1build1_amd64.deb ...
 Unpacking libpmix2t64:amd64 (5.0.1-4.1build1) ...
 Selecting previously unselected package libucx0:amd64.
-Preparing to unpack .../46-libucx0_1.16.0+ds-5ubuntu1_amd64.deb ...
+Preparing to unpack .../43-libucx0_1.16.0+ds-5ubuntu1_amd64.deb ...
 Unpacking libucx0:amd64 (1.16.0+ds-5ubuntu1) ...
 Selecting previously unselected package libopenmpi3t64:amd64.
-Preparing to unpack .../47-libopenmpi3t64_4.1.6-7ubuntu2_amd64.deb ...
+Preparing to unpack .../44-libopenmpi3t64_4.1.6-7ubuntu2_amd64.deb ...
 Unpacking libopenmpi3t64:amd64 (4.1.6-7ubuntu2) ...
 Selecting previously unselected package libcaf-openmpi-3t64:amd64.
-Preparing to unpack .../48-libcaf-openmpi-3t64_2.10.2+ds-2.1build2_amd64.deb ...
+Preparing to unpack .../45-libcaf-openmpi-3t64_2.10.2+ds-2.1build2_amd64.deb ...
 Unpacking libcaf-openmpi-3t64:amd64 (2.10.2+ds-2.1build2) ...
 Selecting previously unselected package libcoarrays-dev:amd64.
-Preparing to unpack .../49-libcoarrays-dev_2.10.2+ds-2.1build2_amd64.deb ...
+Preparing to unpack .../46-libcoarrays-dev_2.10.2+ds-2.1build2_amd64.deb ...
 Unpacking libcoarrays-dev:amd64 (2.10.2+ds-2.1build2) ...
 Selecting previously unselected package openmpi-common.
-Preparing to unpack .../50-openmpi-common_4.1.6-7ubuntu2_all.deb ...
+Preparing to unpack .../47-openmpi-common_4.1.6-7ubuntu2_all.deb ...
 Unpacking openmpi-common (4.1.6-7ubuntu2) ...
 Selecting previously unselected package openmpi-bin.
-Preparing to unpack .../51-openmpi-bin_4.1.6-7ubuntu2_amd64.deb ...
+Preparing to unpack .../48-openmpi-bin_4.1.6-7ubuntu2_amd64.deb ...
 Unpacking openmpi-bin (4.1.6-7ubuntu2) ...
 Selecting previously unselected package libcoarrays-openmpi-dev:amd64.
-Preparing to unpack .../52-libcoarrays-openmpi-dev_2.10.2+ds-2.1build2_amd64.deb ...
+Preparing to unpack .../49-libcoarrays-openmpi-dev_2.10.2+ds-2.1build2_amd64.deb ...
 Unpacking libcoarrays-openmpi-dev:amd64 (2.10.2+ds-2.1build2) ...
 Selecting previously unselected package libevent-2.1-7t64:amd64.
-Preparing to unpack .../53-libevent-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
+Preparing to unpack .../50-libevent-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
 Unpacking libevent-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
 Selecting previously unselected package libevent-extra-2.1-7t64:amd64.
-Preparing to unpack .../54-libevent-extra-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
+Preparing to unpack .../51-libevent-extra-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
 Unpacking libevent-extra-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
 Selecting previously unselected package libevent-openssl-2.1-7t64:amd64.
-Preparing to unpack .../55-libevent-openssl-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
+Preparing to unpack .../52-libevent-openssl-2.1-7t64_2.1.12-stable-9ubuntu2.2_amd64.deb ...
 Unpacking libevent-openssl-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
 Selecting previously unselected package libevent-dev.
-Preparing to unpack .../56-libevent-dev_2.1.12-stable-9ubuntu2.2_amd64.deb ...
+Preparing to unpack .../53-libevent-dev_2.1.12-stable-9ubuntu2.2_amd64.deb ...
 Unpacking libevent-dev (2.1.12-stable-9ubuntu2.2) ...
 Selecting previously unselected package libsepol-dev:amd64.
-Preparing to unpack .../57-libsepol-dev_3.5-2build1_amd64.deb ...
+Preparing to unpack .../54-libsepol-dev_3.5-2build1_amd64.deb ...
 Unpacking libsepol-dev:amd64 (3.5-2build1) ...
 Selecting previously unselected package libpcre2-16-0:amd64.
-Preparing to unpack .../58-libpcre2-16-0_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-16-0:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../55-libpcre2-16-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-16-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-32-0:amd64.
-Preparing to unpack .../59-libpcre2-32-0_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-32-0:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../56-libpcre2-32-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-32-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-posix3:amd64.
-Preparing to unpack .../60-libpcre2-posix3_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-posix3:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../57-libpcre2-posix3_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-posix3:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-dev:amd64.
-Preparing to unpack .../61-libpcre2-dev_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-dev:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../58-libpcre2-dev_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-dev:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libselinux1-dev:amd64.
-Preparing to unpack .../62-libselinux1-dev_3.5-2ubuntu2.1_amd64.deb ...
+Preparing to unpack .../59-libselinux1-dev_3.5-2ubuntu2.1_amd64.deb ...
 Unpacking libselinux1-dev:amd64 (3.5-2ubuntu2.1) ...
 Selecting previously unselected package libfuse3-dev:amd64.
-Preparing to unpack .../63-libfuse3-dev_3.14.0-5build1_amd64.deb ...
+Preparing to unpack .../60-libfuse3-dev_3.14.0-5build1_amd64.deb ...
 Unpacking libfuse3-dev:amd64 (3.14.0-5build1) ...
 Selecting previously unselected package libjs-jquery-ui.
-Preparing to unpack .../64-libjs-jquery-ui_1.13.2+dfsg-1_all.deb ...
+Preparing to unpack .../61-libjs-jquery-ui_1.13.2+dfsg-1_all.deb ...
 Unpacking libjs-jquery-ui (1.13.2+dfsg-1) ...
 Selecting previously unselected package libltdl7:amd64.
-Preparing to unpack .../65-libltdl7_2.4.7-7build1_amd64.deb ...
+Preparing to unpack .../62-libltdl7_2.4.7-7build1_amd64.deb ...
 Unpacking libltdl7:amd64 (2.4.7-7build1) ...
 Selecting previously unselected package libltdl-dev:amd64.
-Preparing to unpack .../66-libltdl-dev_2.4.7-7build1_amd64.deb ...
+Preparing to unpack .../63-libltdl-dev_2.4.7-7build1_amd64.deb ...
 Unpacking libltdl-dev:amd64 (2.4.7-7build1) ...
 Selecting previously unselected package libnl-3-dev:amd64.
-Preparing to unpack .../67-libnl-3-dev_3.7.0-0.3build1.1_amd64.deb ...
+Preparing to unpack .../64-libnl-3-dev_3.7.0-0.3build1.1_amd64.deb ...
 Unpacking libnl-3-dev:amd64 (3.7.0-0.3build1.1) ...
 Selecting previously unselected package libnl-route-3-dev:amd64.
-Preparing to unpack .../68-libnl-route-3-dev_3.7.0-0.3build1.1_amd64.deb ...
+Preparing to unpack .../65-libnl-route-3-dev_3.7.0-0.3build1.1_amd64.deb ...
 Unpacking libnl-route-3-dev:amd64 (3.7.0-0.3build1.1) ...
 Selecting previously unselected package libpkgconf3:amd64.
-Preparing to unpack .../69-libpkgconf3_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../66-libpkgconf3_1.8.1-2build1_amd64.deb ...
 Unpacking libpkgconf3:amd64 (1.8.1-2build1) ...
 Selecting previously unselected package libnuma-dev:amd64.
-Preparing to unpack .../70-libnuma-dev_2.0.18-1ubuntu0.24.04.1_amd64.deb ...
+Preparing to unpack .../67-libnuma-dev_2.0.18-1ubuntu0.24.04.1_amd64.deb ...
 Unpacking libnuma-dev:amd64 (2.0.18-1ubuntu0.24.04.1) ...
 Selecting previously unselected package libhwloc-dev:amd64.
-Preparing to unpack .../71-libhwloc-dev_2.10.0-1build1_amd64.deb ...
+Preparing to unpack .../68-libhwloc-dev_2.10.0-1build1_amd64.deb ...
 Unpacking libhwloc-dev:amd64 (2.10.0-1build1) ...
 Selecting previously unselected package libpmix-dev:amd64.
-Preparing to unpack .../72-libpmix-dev_5.0.1-4.1build1_amd64.deb ...
+Preparing to unpack .../69-libpmix-dev_5.0.1-4.1build1_amd64.deb ...
 Unpacking libpmix-dev:amd64 (5.0.1-4.1build1) ...
 Selecting previously unselected package libtool.
-Preparing to unpack .../73-libtool_2.4.7-7build1_all.deb ...
+Preparing to unpack .../70-libtool_2.4.7-7build1_all.deb ...
 Unpacking libtool (2.4.7-7build1) ...
 Selecting previously unselected package pkgconf-bin.
-Preparing to unpack .../74-pkgconf-bin_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../71-pkgconf-bin_1.8.1-2build1_amd64.deb ...
 Unpacking pkgconf-bin (1.8.1-2build1) ...
 Selecting previously unselected package pkgconf:amd64.
-Preparing to unpack .../75-pkgconf_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../72-pkgconf_1.8.1-2build1_amd64.deb ...
 Unpacking pkgconf:amd64 (1.8.1-2build1) ...
 Selecting previously unselected package pkg-config:amd64.
-Preparing to unpack .../76-pkg-config_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../73-pkg-config_1.8.1-2build1_amd64.deb ...
 Unpacking pkg-config:amd64 (1.8.1-2build1) ...
 Selecting previously unselected package libibverbs-dev:amd64.
-Preparing to unpack .../77-libibverbs-dev_50.0-2ubuntu0.2_amd64.deb ...
+Preparing to unpack .../74-libibverbs-dev_50.0-2ubuntu0.2_amd64.deb ...
 Unpacking libibverbs-dev:amd64 (50.0-2ubuntu0.2) ...
 Selecting previously unselected package libopenmpi-dev:amd64.
-Preparing to unpack .../78-libopenmpi-dev_4.1.6-7ubuntu2_amd64.deb ...
+Preparing to unpack .../75-libopenmpi-dev_4.1.6-7ubuntu2_amd64.deb ...
 Unpacking libopenmpi-dev:amd64 (4.1.6-7ubuntu2) ...
 Setting up libpciaccess0:amd64 (0.17-3ubuntu0.24.04.3) ...
 Setting up libevent-pthreads-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
@@ -492,12 +498,12 @@ Setting up libboost-thread1.83.0:amd64 (1.83.0-2.1ubuntu3.2) ...
 Setting up m4 (1.4.19-4build1) ...
 Setting up libevent-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
 Setting up libnbd0 (1.20.0-1) ...
-Setting up libpcre2-16-0:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-16-0:amd64 (10.42-4ubuntu2.2) ...
 Setting up libnuma-dev:amd64 (2.0.18-1ubuntu0.24.04.1) ...
 Setting up libxnvctrl0:amd64 (510.47.03-0ubuntu4.24.04.1) ...
 Setting up libglusterfs0:amd64 (11.1-4ubuntu0.1) ...
 Setting up autotools-dev (20220109.1) ...
-Setting up libpcre2-32-0:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-32-0:amd64 (10.42-4ubuntu2.2) ...
 Setting up libpkgconf3:amd64 (1.8.1-2build1) ...
 Setting up libjs-jquery-ui (1.13.2+dfsg-1) ...
 Setting up libmunge2:amd64 (0.5.15-4ubuntu0.1) ...
@@ -511,7 +517,7 @@ Setting up libltdl7:amd64 (2.4.7-7build1) ...
 Setting up libgfortran5:amd64 (14.2.0-4ubuntu2~24.04.1) ...
 Setting up autoconf (2.71-3) ...
 Setting up libevent-extra-2.1-7t64:amd64 (2.1.12-stable-9ubuntu2.2) ...
-Setting up libpcre2-posix3:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-posix3:amd64 (10.42-4ubuntu2.2) ...
 Setting up libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Setting up libnl-3-dev:amd64 (3.7.0-0.3build1.1) ...
 Setting up ocl-icd-libopencl1:amd64 (2.3.2-1build1) ...
@@ -531,7 +537,7 @@ Setting up automake (1:1.16.5-1.3ubuntu1) ...
 update-alternatives: using /usr/bin/automake-1.16 to provide /usr/bin/automake (automake) in auto mode
 Setting up libfabric1:amd64 (1.17.0-3build2) ...
 Setting up librados2 (19.2.3-0ubuntu0.24.04.3) ...
-Setting up libpcre2-dev:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-dev:amd64 (10.42-4ubuntu2.2) ...
 Setting up libtool (2.4.7-7build1) ...
 Setting up libselinux1-dev:amd64 (3.5-2ubuntu2.1) ...
 Setting up libhwloc-plugins:amd64 (2.10.0-1build1) ...
@@ -582,11 +588,21 @@ Processing triggers for man-db (2.12.0-4build2) ...
 
 Running kernel seems to be up-to-date.
 
-No services need to be restarted.
+Restarting services...
+ /etc/needrestart/restart.d/systemd-manager
+ systemctl restart cron.service fwupd.service multipathd.service packagekit.service polkit.service ssh.service systemd-journald.service systemd-networkd.service systemd-resolved.service systemd-udevd.service tuned.service udisks2.service
+
+Service restarts being deferred:
+ systemctl restart ModemManager.service
+ /etc/needrestart/restart.d/dbus.service
+ systemctl restart networkd-dispatcher.service
+ systemctl restart systemd-logind.service
+ systemctl restart unattended-upgrades.service
 
 No containers need to be restarted.
 
-No user sessions are running outdated binaries.
+User sessions running outdated binaries:
+ root @ user manager service: systemd[1940]
 
 No VM guests are running outdated hypervisor (qemu) binaries on this host.
 Cloning into '/opt/ior'...
@@ -1221,8 +1237,6 @@ mdtest.c:948:39: warning: ‘__builtin___sprintf_chk’ may write a terminating 
       |                                       ^
 In function ‘sprintf’,
     inlined from ‘directory_test’ at mdtest.c:948:13:
-  CC       libaiori_a-ior-output.o
-  CC       libaiori_a-option.o
 /usr/include/x86_64-linux-gnu/bits/stdio2.h:30:10: note: ‘__builtin___sprintf_chk’ output 2 or more bytes (assuming 4097) into a destination of size 4096
    30 |   return __builtin___sprintf_chk (__s, __USE_FORTIFY_LEVEL - 1,
       |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1244,6 +1258,8 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
+  CC       libaiori_a-ior-output.o
+  CC       libaiori_a-option.o
 mdtest.c: In function ‘file_test’:
 mdtest.c:1043:39: warning: ‘__builtin___sprintf_chk’ may write a terminating nul past the end of the destination [-Wformat-overflow=]
  1043 |             sprintf( temp_path, "%s/%s", testdir, path );
@@ -1421,11 +1437,6 @@ In function ‘sprintf’,
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
 mdtest.c: In function ‘mdtest_run’:
-  CC       libaiori_a-aiori-DUMMY.o
-  CC       libaiori_a-aiori-MPIIO.o
-  CC       libaiori_a-aiori-MMAP.o
-  CC       libaiori_a-aiori-POSIX.o
-  CC       mdtest-mdtest-main.o
 mdtest.c:1729:31: warning: ‘.0’ directive writing 2 bytes into a region of size between 1 and 4096 [-Wformat-overflow=]
  1729 |   sprintf(unique_stat_dir, "%s.0", base_tree_name);
       |                               ^~
@@ -1467,14 +1478,19 @@ In function ‘sprintf’,
       |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
    32 |                                   __va_arg_pack ());
       |                                   ~~~~~~~~~~~~~~~~~
+  CC       libaiori_a-aiori-DUMMY.o
+  CC       libaiori_a-aiori-MPIIO.o
+  CC       libaiori_a-aiori-MMAP.o
+  CC       libaiori_a-aiori-POSIX.o
+  CC       mdtest-mdtest-main.o
   CC       mdtest-aiori.o
   CC       mdtest-aiori-DUMMY.o
   CC       mdtest-aiori-MPIIO.o
   CC       mdtest-aiori-MMAP.o
   CC       mdtest-aiori-POSIX.o
   AR       libaiori.a
-ar: `u' modifier ignored since `D' is the default (see `U')  CCLD     ior
-
+ar: `u' modifier ignored since `D' is the default (see `U')
+  CCLD     ior
   CCLD     mdtest
 Making all in test
 make[3]: Nothing to be done for 'all'.
@@ -1484,49 +1500,49 @@ Making all in contrib
   CC       cbif.o
   CCLD     cbif
 make[1]: Nothing to be done for 'all-am'.
-[2026-11-02T15:56:37Z] Measuring internal VPC RTT and throughput (172.16.1.222 -> 172.16.1.223)...
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-[2026-11-02T15:56:47Z] Client info & VPC network baseline: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0","juicefs_version":"juicefs version 1.2.1+2024-08-30.cd871d1","fio_version":"fio-3.36","mdtest_version":"mdtest-3.3.0"},"network":{"ping_rtt_ms":"0.035/0.064/0.269/0.051","iperf3_gbps":"15.71"}}
-[2026-11-02T15:56:47Z] Step 5/6: Running benchmark suites (bowl jfs_pg jfs_redis) on Client -> Server...
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
+[2026-11-03T23:42:57Z] Measuring internal VPC RTT and throughput (172.16.1.197 -> 172.16.1.196)...
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+[2026-11-03T23:43:05Z] Client info & VPC network baseline: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0","juicefs_version":"juicefs version 1.2.1+2024-08-30.cd871d1","fio_version":"fio-3.36","mdtest_version":"mdtest-3.3.0"},"network":{"ping_rtt_ms":"0.033/0.069/0.350/0.069","iperf3_gbps":"15.71"}}
+[2026-11-03T23:43:05Z] Step 5/6: Running benchmark suites (bowl jfs_pg jfs_redis) on Client -> Server...
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
 ==================================================================
 [bowl] Starting benchmark suites on /mnt/bowl ...
 ==================================================================
 [bowl] [1/3] Running juicefs bench /mnt/bowl -p 4 ...
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
-2026/11/02 23:56:52.098596 juicefs[5703] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+2026/11/04 07:43:11.058576 juicefs[5895] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-+------------------+----------------+---------------+
-|       ITEM       |      VALUE     |      COST     |
-+------------------+----------------+---------------+
-|   Write big file |   340.02 MiB/s |  12.05 s/file |
-|    Read big file |  1782.86 MiB/s |   2.30 s/file |
-| Write small file |  343.5 files/s | 11.64 ms/file |
-|  Read small file | 1873.5 files/s |  2.14 ms/file |
-|        Stat file | 6851.0 files/s |  0.58 ms/file |
-+------------------+----------------+---------------+
++------------------+-----------------+----------------+
+|       ITEM       |      VALUE      |      COST      |
++------------------+-----------------+----------------+
+|   Write big file |     27.20 MiB/s |  150.60 s/file |
+|    Read big file |     88.85 MiB/s |   46.10 s/file |
+| Write small file |    13.1 files/s | 304.81 ms/file |
+|  Read small file |    44.9 files/s |  89.12 ms/file |
+|        Stat file | 18201.4 files/s |   0.22 ms/file |
++------------------+-----------------+----------------+
 [bowl] [2/3] Running fio suite (8 workloads) on /mnt/bowl/fio_work ...
   -> [bowl] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [bowl] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
 [bowl] [3/3] Running mdtest suite on /mnt/bowl ...
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:02:41 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:16:23 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1539,19 +1555,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :        512.721        512.721        512.721          0.000
-   Directory stat            :       2883.826       2883.826       2883.826          0.000
-   Directory removal         :        593.843        593.843        593.843          0.000
-   File creation             :        686.044        686.044        686.044          0.000
-   File stat                 :       2863.764       2863.764       2863.764          0.000
-   File read                 :        870.383        870.383        870.383          0.000
-   File removal              :        589.159        589.159        589.159          0.000
-   Tree creation             :        595.629        595.629        595.629          0.000
-   Tree removal              :        613.293        613.293        613.293          0.000
--- finished at 11/03/2026 00:04:34 --
+   Directory creation        :         53.589         53.589         53.589          0.000
+   Directory stat            :        210.768        210.768        210.768          0.000
+   Directory removal         :         60.931         60.931         60.931          0.000
+   File creation             :         58.218         58.218         58.218          0.000
+   File stat                 :        227.042        227.042        227.042          0.000
+   File read                 :        218.060        218.060        218.060          0.000
+   File removal              :         62.415         62.415         62.415          0.000
+   Tree creation             :         75.257         75.257         75.257          0.000
+   Tree removal              :         88.274         88.274         88.274          0.000
+-- finished at 11/04/2026 08:34:02 --
 
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:04:35 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:34:03 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1564,26 +1580,26 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       1963.777       1963.763       1963.772          0.006
-   Directory stat            :     273354.962     273105.156     273263.346         94.742
-   Directory removal         :       2353.678       2353.673       2353.677          0.002
-   File creation             :       1931.278       1931.256       1931.266          0.008
-   File stat                 :     240798.488     240709.872     240750.889         35.052
-   File read                 :       5017.802       5017.746       5017.773          0.025
-   File removal              :       2316.711       2316.702       2316.706          0.003
-   Tree creation             :        267.245        267.245        267.245          0.000
-   Tree removal              :        334.185        334.185        334.185          0.000
--- finished at 11/03/2026 00:04:37 --
+   Directory creation        :         80.120         80.120         80.120          0.000
+   Directory stat            :        322.245        322.245        322.245          0.000
+   Directory removal         :         77.369         77.369         77.369          0.000
+   File creation             :         72.995         72.995         72.995          0.000
+   File stat                 :        320.959        320.958        320.958          0.000
+   File read                 :      14694.444      14691.867      14693.349          0.934
+   File removal              :         80.871         80.871         80.871          0.000
+   Tree creation             :         21.285         21.285         21.285          0.000
+   Tree removal              :         22.053         22.053         22.053          0.000
+-- finished at 11/04/2026 08:35:04 --
 
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
-2026/11/03 00:04:38.367548 juicefs[5983] <INFO>: Meta address: postgres://postgres:****@172.16.1.223:5432/jfs_pg?sslmode=disable [interface.go:504]
-2026/11/03 00:04:38.380010 juicefs[5983] <WARNING>: The latency to database is too high: 12.352693ms [sql.go:311]
-2026/11/03 00:04:38.388574 juicefs[5983] <INFO>: Data use minio://172.16.1.223:9001/jfs-pg/jfs-pg-bench/ [format.go:484]
-2026/11/03 00:04:38.452492 juicefs[5983] <INFO>: Volume is formatted as {
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+2026/11/04 08:35:05.746800 juicefs[16700] <INFO>: Meta address: postgres://postgres:****@172.16.1.196:5432/jfs_pg?sslmode=disable [interface.go:504]
+2026/11/04 08:35:05.755899 juicefs[16700] <WARNING>: The latency to database is too high: 8.986459ms [sql.go:311]
+2026/11/04 08:35:05.764400 juicefs[16700] <INFO>: Data use minio://172.16.1.196:9001/jfs-pg/jfs-pg-bench/ [format.go:484]
+2026/11/04 08:35:05.825015 juicefs[16700] <INFO>: Volume is formatted as {
   "Name": "jfs-pg-bench",
-  "UUID": "add5b410-07cc-4694-8f3a-df426891f516",
+  "UUID": "bcd6e2cb-4f36-45ae-aea9-16519a4ec7f4",
   "Storage": "minio",
-  "Bucket": "http://172.16.1.223:9001/jfs-pg",
+  "Bucket": "http://172.16.1.196:9001/jfs-pg",
   "AccessKey": "minioadmin",
   "SecretKey": "removed",
   "BlockSize": 4096,
@@ -1596,53 +1612,53 @@ Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   "DirStats": true,
   "EnableACL": false
 } [format.go:521]
-2026/11/03 00:04:38.479378 juicefs[5992] <INFO>: Meta address: postgres://postgres:****@172.16.1.223:5432/jfs_pg?sslmode=disable [interface.go:504]
-2026/11/03 00:04:38.485464 juicefs[5992] <INFO>: Data use minio://172.16.1.223:9001/jfs-pg/jfs-pg-bench/ [mount.go:629]
-2026/11/03 00:04:38.986113 juicefs[5992] <INFO>: [92mOK[0m, jfs-pg-bench is ready at /mnt/jfs_pg [mount_unix.go:200]
+2026/11/04 08:35:05.851764 juicefs[16710] <INFO>: Meta address: postgres://postgres:****@172.16.1.196:5432/jfs_pg?sslmode=disable [interface.go:504]
+2026/11/04 08:35:05.858401 juicefs[16710] <INFO>: Data use minio://172.16.1.196:9001/jfs-pg/jfs-pg-bench/ [mount.go:629]
+2026/11/04 08:35:06.359028 juicefs[16710] <INFO>: [92mOK[0m, jfs-pg-bench is ready at /mnt/jfs_pg [mount_unix.go:200]
 ==================================================================
 [jfs_pg] Starting benchmark suites on /mnt/jfs_pg ...
 ==================================================================
 [jfs_pg] [1/3] Running juicefs bench /mnt/jfs_pg -p 4 ...
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 25.6 s, CPU: 63.2%, Memory: 644.1 MiB
+Time used: 25.3 s, CPU: 66.9%, Memory: 704.6 MiB
 +------------------+------------------+--------------+
 |       ITEM       |       VALUE      |     COST     |
 +------------------+------------------+--------------+
-|   Write big file |     303.92 MiB/s | 13.48 s/file |
-|    Read big file |     454.98 MiB/s |  9.00 s/file |
-| Write small file |    520.9 files/s | 7.68 ms/file |
-|  Read small file |   2705.1 files/s | 1.48 ms/file |
-|        Stat file |  13524.9 files/s | 0.30 ms/file |
-|   FUSE operation | 71371 operations |   1.43 ms/op |
-|      Update meta |  6601 operations |   1.76 ms/op |
-|       Put object |  1424 operations | 182.57 ms/op |
-|       Get object |  1024 operations | 110.86 ms/op |
-|    Delete object |  1424 operations |   0.73 ms/op |
-| Write into cache |  1173 operations |   7.05 ms/op |
-|  Read from cache |   403 operations |   0.30 ms/op |
+|   Write big file |     305.90 MiB/s | 13.39 s/file |
+|    Read big file |     451.96 MiB/s |  9.06 s/file |
+| Write small file |    473.0 files/s | 8.46 ms/file |
+|  Read small file |   3316.7 files/s | 1.21 ms/file |
+|        Stat file |  13620.8 files/s | 0.29 ms/file |
+|   FUSE operation | 71350 operations |   1.54 ms/op |
+|      Update meta |  6580 operations |   1.67 ms/op |
+|       Put object |  1424 operations | 182.77 ms/op |
+|       Get object |  1024 operations | 177.38 ms/op |
+|    Delete object |  1424 operations |   0.63 ms/op |
+| Write into cache |  1163 operations |   6.08 ms/op |
+|  Read from cache |   402 operations |   0.06 ms/op |
 +------------------+------------------+--------------+
 [jfs_pg] [2/3] Running fio suite (8 workloads) on /mnt/jfs_pg/fio_work ...
   -> [jfs_pg] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_pg] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
 [jfs_pg] [3/3] Running mdtest suite on /mnt/jfs_pg ...
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:10:50 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:41:17 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_pg/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1655,19 +1671,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :        506.417        506.417        506.417          0.000
-   Directory stat            :       1162.700       1162.700       1162.700          0.000
-   Directory removal         :        538.461        538.461        538.461          0.000
-   File creation             :       1129.713       1129.713       1129.713          0.000
-   File stat                 :       4647.792       4647.792       4647.792          0.000
-   File read                 :       2444.656       2444.656       2444.656          0.000
-   File removal              :        934.645        934.645        934.645          0.000
-   Tree creation             :        913.377        913.377        913.377          0.000
-   Tree removal              :        778.425        778.425        778.425          0.000
--- finished at 11/03/2026 00:12:24 --
+   Directory creation        :        503.880        503.880        503.880          0.000
+   Directory stat            :       1182.568       1182.568       1182.568          0.000
+   Directory removal         :        534.603        534.603        534.603          0.000
+   File creation             :       1136.052       1136.052       1136.052          0.000
+   File stat                 :       4602.639       4602.639       4602.639          0.000
+   File read                 :       2406.542       2406.542       2406.542          0.000
+   File removal              :        954.721        954.721        954.721          0.000
+   Tree creation             :        894.929        894.929        894.929          0.000
+   Tree removal              :        733.489        733.489        733.489          0.000
+-- finished at 11/04/2026 08:42:51 --
 
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:12:25 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:42:51 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_pg/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1680,26 +1696,26 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       3091.398       3091.341       3091.380          0.023
-   Directory stat            :      61010.747      60991.712      61003.949          7.788
-   Directory removal         :       3079.434       3079.294       3079.354          0.051
-   File creation             :       3484.398       3483.771       3484.175          0.239
-   File stat                 :     289650.912     286193.581     287137.165       1454.519
-   File read                 :      14019.636      14017.419      14018.996          0.913
-   File removal              :       3207.739       3207.630       3207.662          0.045
-   Tree creation             :        454.226        454.226        454.226          0.000
-   Tree removal              :        603.405        603.405        603.405          0.000
--- finished at 11/03/2026 00:12:26 --
+   Directory creation        :       2694.013       2693.990       2694.005          0.009
+   Directory stat            :     356451.987     356242.586     356347.548         79.052
+   Directory removal         :       2993.177       2993.163       2993.173          0.006
+   File creation             :       3402.274       3401.532       3402.079          0.316
+   File stat                 :     312513.428     305271.092     307659.689       2841.773
+   File read                 :      14087.319      14084.224      14085.412          1.154
+   File removal              :       3256.977       3256.602       3256.863          0.151
+   Tree creation             :        374.739        374.739        374.739          0.000
+   Tree removal              :        573.118        573.118        573.118          0.000
+-- finished at 11/04/2026 08:42:53 --
 
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
-2026/11/03 00:12:27.283480 juicefs[13992] <INFO>: Meta address: redis://172.16.1.223:6379/1 [interface.go:504]
-2026/11/03 00:12:27.287528 juicefs[13992] <INFO>: Ping redis latency: 60.281µs [redis.go:3515]
-2026/11/03 00:12:27.287767 juicefs[13992] <INFO>: Data use minio://172.16.1.223:9001/jfs-redis/jfs-redis-bench/ [format.go:484]
-2026/11/03 00:12:27.296188 juicefs[13992] <INFO>: Volume is formatted as {
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+2026/11/04 08:42:53.873079 juicefs[17208] <INFO>: Meta address: redis://172.16.1.196:6379/1 [interface.go:504]
+2026/11/04 08:42:53.876028 juicefs[17208] <INFO>: Ping redis latency: 57.804µs [redis.go:3515]
+2026/11/04 08:42:53.876622 juicefs[17208] <INFO>: Data use minio://172.16.1.196:9001/jfs-redis/jfs-redis-bench/ [format.go:484]
+2026/11/04 08:42:53.884459 juicefs[17208] <INFO>: Volume is formatted as {
   "Name": "jfs-redis-bench",
-  "UUID": "61dbcfa4-c9b0-4c6c-bd90-6826a9e891c7",
+  "UUID": "c1162ecd-235b-4a4f-853e-a6909845f907",
   "Storage": "minio",
-  "Bucket": "http://172.16.1.223:9001/jfs-redis",
+  "Bucket": "http://172.16.1.196:9001/jfs-redis",
   "AccessKey": "minioadmin",
   "SecretKey": "removed",
   "BlockSize": 4096,
@@ -1712,54 +1728,54 @@ Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
   "DirStats": true,
   "EnableACL": false
 } [format.go:521]
-2026/11/03 00:12:27.321938 juicefs[14001] <INFO>: Meta address: redis://172.16.1.223:6379/1 [interface.go:504]
-2026/11/03 00:12:27.322820 juicefs[14001] <INFO>: Ping redis latency: 44.34µs [redis.go:3515]
-2026/11/03 00:12:27.323650 juicefs[14001] <INFO>: Data use minio://172.16.1.223:9001/jfs-redis/jfs-redis-bench/ [mount.go:629]
+2026/11/04 08:42:53.910039 juicefs[17217] <INFO>: Meta address: redis://172.16.1.196:6379/1 [interface.go:504]
+2026/11/04 08:42:53.910807 juicefs[17217] <INFO>: Ping redis latency: 45.417µs [redis.go:3515]
+2026/11/04 08:42:53.911634 juicefs[17217] <INFO>: Data use minio://172.16.1.196:9001/jfs-redis/jfs-redis-bench/ [mount.go:629]
+2026/11/04 08:42:54.411939 juicefs[17217] <INFO>: [92mOK[0m, jfs-redis-bench is ready at /mnt/jfs_redis [mount_unix.go:200]
 ==================================================================
 [jfs_redis] Starting benchmark suites on /mnt/jfs_redis ...
 ==================================================================
 [jfs_redis] [1/3] Running juicefs bench /mnt/jfs_redis -p 4 ...
-2026/11/03 00:12:27.823939 juicefs[14001] <INFO>: [92mOK[0m, jfs-redis-bench is ready at /mnt/jfs_redis [mount_unix.go:200]
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-Time used: 25.0 s, CPU: 63.2%, Memory: 641.2 MiB
+Time used: 24.8 s, CPU: 65.4%, Memory: 559.0 MiB
 +------------------+------------------+--------------+
 |       ITEM       |       VALUE      |     COST     |
 +------------------+------------------+--------------+
-|   Write big file |     303.74 MiB/s | 13.49 s/file |
-|    Read big file |     459.94 MiB/s |  8.91 s/file |
-| Write small file |    682.6 files/s | 5.86 ms/file |
-|  Read small file |   3188.8 files/s | 1.25 ms/file |
-|        Stat file |  16577.3 files/s | 0.24 ms/file |
-|   FUSE operation | 71298 operations |   1.54 ms/op |
-|      Update meta |  1740 operations |   0.59 ms/op |
-|       Put object |  1424 operations | 186.54 ms/op |
-|       Get object |  1024 operations | 183.55 ms/op |
-|    Delete object |  1392 operations |   0.94 ms/op |
-| Write into cache |  1195 operations |   6.89 ms/op |
-|  Read from cache |   400 operations |   0.58 ms/op |
+|   Write big file |     305.51 MiB/s | 13.41 s/file |
+|    Read big file |     447.56 MiB/s |  9.15 s/file |
+| Write small file |    928.8 files/s | 4.31 ms/file |
+|  Read small file |   2020.5 files/s | 1.98 ms/file |
+|        Stat file |  46891.5 files/s | 0.09 ms/file |
+|   FUSE operation | 71284 operations |   1.57 ms/op |
+|      Update meta |  1740 operations |   0.49 ms/op |
+|       Put object |  1424 operations | 184.83 ms/op |
+|       Get object |  1024 operations | 160.94 ms/op |
+|    Delete object |  1423 operations |   0.63 ms/op |
+| Write into cache |  1183 operations |   5.80 ms/op |
+|  Read from cache |   400 operations |   0.54 ms/op |
 +------------------+------------------+--------------+
 [jfs_redis] [2/3] Running fio suite (8 workloads) on /mnt/jfs_redis/fio_work ...
   -> [jfs_redis] fio seq_write_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_read_1job (bs=4M, size=4G, numjobs=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
   -> [jfs_redis] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
 [jfs_redis] [3/3] Running mdtest suite on /mnt/jfs_redis ...
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:18:36 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:49:02 --
 
 mdtest-3.3.0 was launched with 1 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_redis/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'
@@ -1772,19 +1788,19 @@ Nodemap: 1
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       2418.552       2418.552       2418.552          0.000
-   Directory stat            :      14796.435      14796.435      14796.435          0.000
-   Directory removal         :       1954.886       1954.886       1954.886          0.000
-   File creation             :       2252.597       2252.597       2252.597          0.000
-   File stat                 :      16351.861      16351.861      16351.861          0.000
-   File read                 :       4842.695       4842.695       4842.695          0.000
-   File removal              :       2101.462       2101.462       2101.462          0.000
-   Tree creation             :       2431.773       2431.773       2431.773          0.000
-   Tree removal              :       1972.288       1972.288       1972.288          0.000
--- finished at 11/03/2026 00:19:05 --
+   Directory creation        :       2259.367       2259.367       2259.367          0.000
+   Directory stat            :      16471.765      16471.765      16471.765          0.000
+   Directory removal         :       1958.369       1958.369       1958.369          0.000
+   File creation             :       2273.726       2273.726       2273.726          0.000
+   File stat                 :      16592.102      16592.102      16592.102          0.000
+   File read                 :       4899.763       4899.763       4899.763          0.000
+   File removal              :       2143.768       2143.768       2143.768          0.000
+   Tree creation             :       2361.842       2361.842       2361.842          0.000
+   Tree removal              :       1981.472       1981.472       1981.472          0.000
+-- finished at 11/04/2026 08:49:30 --
 
-Warning: Permanently added '172.16.1.223' (ED25519) to the list of known hosts.
--- started at 11/03/2026 00:19:06 --
+Warning: Permanently added '172.16.1.196' (ED25519) to the list of known hosts.
+-- started at 11/04/2026 08:49:31 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/jfs_redis/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -1797,19 +1813,19 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       5943.512       5943.399       5943.469          0.045
-   Directory stat            :     463900.718     463332.573     463568.213        213.634
-   Directory removal         :       7568.275       7567.952       7568.178          0.131
-   File creation             :       7063.449       7057.198       7061.822          2.670
-   File stat                 :      64716.872      64157.060      64327.593        226.134
-   File read                 :      18971.369      18956.783      18965.219          5.285
-   File removal              :       8080.484       8078.779       8079.223          0.728
-   Tree creation             :        369.210        369.210        369.210          0.000
-   Tree removal              :        594.458        594.458        594.458          0.000
--- finished at 11/03/2026 00:19:06 --
+   Directory creation        :       6460.000       6458.770       6459.672          0.521
+   Directory stat            :      64577.678      64444.085      64485.649         53.554
+   Directory removal         :       6318.773       6318.242       6318.468          0.192
+   File creation             :       7017.004       7016.933       7016.976          0.026
+   File stat                 :     476551.163     473647.009     475808.311       1247.923
+   File read                 :      18797.640      18789.495      18793.218          2.904
+   File removal              :       8003.327       8002.046       8002.706          0.453
+   Tree creation             :        363.257        363.257        363.257          0.000
+   Tree removal              :       1612.569       1612.569       1612.569          0.000
+-- finished at 11/04/2026 08:49:32 --
 
-[2026-11-02T16:19:07Z] Benchmark targets (bowl jfs_pg jfs_redis) completed at 2026-11-02T16:19:07Z. Fetching results...
-Warning: Permanently added '47.89.249.207' (ED25519) to the list of known hosts.
-[2026-11-02T16:19:49Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-02T16:19:51Z] Verified both ECS instances (i-rj93ymmufo05cjc13acy, i-rj93ymmufo05cjc13acz) are deleted (Remaining: 0).
-[2026-11-02T16:19:52Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-0655a17/juicefs/REPORT.md
+[2026-11-04T00:49:32Z] Benchmark targets (bowl jfs_pg jfs_redis) completed at 2026-11-04T00:49:32Z. Fetching results...
+Warning: Permanently added '47.254.41.244' (ED25519) to the list of known hosts.
+[2026-11-04T00:50:16Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
+[2026-11-04T00:50:18Z] Verified both ECS instances (i-rj920xxtjyecqzjas9gm, i-rj920xxtjyecqzjas9gn) are deleted (Remaining: 0).
+[2026-11-04T00:50:19Z] Benchmark complete! Report written to: /Users/fanxing/code/starsrc/bowl/.worktrees/starsrc-590/benchmark/juicefs/.run-590-retry/REPORT.md

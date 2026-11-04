@@ -8,16 +8,23 @@
 #       Runs TiDB v8.5.5 (Unistore, :4000) + Drive9 Server (:9009, local S3)
 #   - Node 2 (Client): ecs.c9i.xlarge (4 vCPU, 8 GiB, cloud_essd 120 GiB)
 #       Runs Linux FUSE Clients over VPC Private Network:
-#         1. Bowl (PG 16 + BlockStore, production default noatime + 1s cache)
+#         1. Bowl（PostgreSQL 控制面 + Pebble 分支存储，noatime + 1s 缓存）
 #         2. Drive9 Default (--profile=coding-agent --durability=interactive)
-#         3. Drive9 Remote Sync (--profile=none --durability=fsync, 1s cache)
+#         3. Drive9 Remote Sync (--profile=none --durability=close-sync, 1s cache)
 #       Executes:
 #         - Suite 1: `juicefs bench -p 4`
 #         - Suite 2: `drive9_fuse_bench.py` (Cold & Hot cache, 10 micro + 5 macro)
 #         - Suite 3: `fuse_perf_baseline.py` (SHA-256 I/O + SQLite DELETE & WAL)
+# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
+# 每个 (disk_id, branch_name) 使用独立 Pebble 存储 Inode、Entry、Xattr、
+# Orphan 和 4 MiB 数据块；整块用 Set，局部更新用 ValueMerger，Checkpoint
+# 和 Fork 通过硬链接共享文件。FileHandle、FileLock、O_TMPFILE 和按需加载的
+# NamespaceCache 在客户端本地维护。当前提交禁用内核 writeback_cache；
+# Flush/Fsync 向服务端请求持久化。
 # ==============================================================================
 
 set -euo pipefail
+export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -63,6 +70,15 @@ cleanup() {
   local exit_code=$?
   set +e
   log "=== Triggering Cloud Resource Cleanup Trap (exit_code=${exit_code}) ==="
+
+  # 失败时先回传已有输出，保留退出原因，再释放按量资源。
+  if [[ "${exit_code}" != "0" && -n "${CLIENT_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
+    scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
+    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
+  fi
+  if [[ "${exit_code}" != "0" && -n "${SERVER_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
+    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
+  fi
 
   local instance_ids=()
   [[ -n "${SERVER_INSTANCE_ID}" ]] && instance_ids+=("${SERVER_INSTANCE_ID}")
@@ -155,6 +171,24 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 
 chmod +x "${BUILD_DIR}/drive9-server" "${BUILD_DIR}/drive9"
 DRIVE9_GIT_COMMIT="$(git -C "${DRIVE9_REPO}" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+
+# 记录本轮实际上传的四个二进制文件，避免复跑后沿用旧哈希。
+python3 - "${BUILD_DIR}" "${RESULTS_DIR}/binary_sha256.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+build = Path(sys.argv[1])
+hashes = {}
+for name in ("drive9", "storage-service", "bowl", "drive9-server"):
+    digest = hashlib.sha256()
+    with (build / name).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    hashes[name] = digest.hexdigest()
+Path(sys.argv[2]).write_text(json.dumps(hashes, indent=2) + "\n")
+PY
 
 cp "${SCRIPT_DIR}/drive9_fuse_bench.py" "${BUILD_DIR}/drive9_fuse_bench.py"
 cp "${SCRIPT_DIR}/fuse_perf_baseline.py" "${BUILD_DIR}/fuse_perf_baseline.py"
@@ -758,16 +792,23 @@ INSTANCES_DELETED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 DELETED_SERVER_ID="${SERVER_INSTANCE_ID}"
 DELETED_CLIENT_ID="${CLIENT_INSTANCE_ID}"
+REMAINING_COUNT=2
+for poll in {1..30}; do
+  REMAINING_COUNT=$(aliyun ecs DescribeInstances --RegionId "${REGION}" --InstanceIds "${IDS_JSON}" | jq '.Instances.Instance | length')
+  [[ "${REMAINING_COUNT}" == "0" ]] && break
+  sleep 5
+done
+log "Verified remaining target ECS instances count after DeleteInstances: ${REMAINING_COUNT}"
+if [[ "${REMAINING_COUNT}" != "0" ]]; then
+  log "ERROR: 仍有 ${REMAINING_COUNT} 台测试实例，清理钩子将继续尝试。"
+  exit 1
+fi
 SERVER_INSTANCE_ID=""
 CLIENT_INSTANCE_ID=""
 
-sleep 6
-REMAINING_COUNT=$(aliyun ecs DescribeInstances --RegionId "${REGION}" --InstanceIds "${IDS_JSON}" | jq '.Instances.Instance | length')
-log "Verified remaining target ECS instances count after DeleteInstances: ${REMAINING_COUNT}"
-
 aliyun ecs DeleteKeyPairs \
   --RegionId "${REGION}" \
-  --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
 DELETED_KEY_PAIR="${KEY_PAIR_NAME}"
 KEY_PAIR_NAME=""
 
@@ -830,6 +871,8 @@ jq -n \
     },
     bowl_config: {
       git_commit: $bowl_commit,
+      storage_engine: "Pebble per branch",
+      kernel_writeback_cache: false,
       atime_mode: "noatime",
       fuse_cache_timeout: "1.0s (entry=1s, attr=1s, direntry=1s)"
     },
