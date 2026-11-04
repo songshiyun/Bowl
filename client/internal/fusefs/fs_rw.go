@@ -248,8 +248,8 @@ func (fs *RawFS) fetchReadWindow(ctx context.Context, hra *handleReadAhead, ino,
 //  4. 当 want > MaxRPCChunkSize 时按 4 MiB 顺序循环分片读取；
 //  5. 遇到 EOF 或短读立即停止分片循环并返回已读数据；中途分片报错但已有数据读取成功时按短读返回 fuse.OK，首片失败返回对应 errno。
 func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return nil, status
@@ -481,8 +481,8 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 // 4. 当 len(data) > MaxRPCChunkSize 时按 4 MiB 顺序分片调用，并累加实际写入字节数；
 // 5. 遵循 POSIX 短写语义：若中途分片报错（如 ENOSPC）且已有数据写入成功，返回已写入字节数与 fuse.OK；首片即失败返回对应 errno。
 func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (uint32, fuse.Status) {
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return 0, status
@@ -514,6 +514,10 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		return n, st
 	}
 	if appendMode {
+		// 同一 Inode 的 O_APPEND 必须在“读取当前大小 -> 提交 Write”之间保持定序，
+		// 否则并发追加会读到相同旧大小而互相覆盖。
+		unlock := fs.inodeLocks.lock(input.NodeId)
+		defer unlock()
 		cached, st := fs.getInode(cancel, input.NodeId)
 		if st != fuse.OK {
 			return 0, st
@@ -543,7 +547,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatusWithSession(err, nil)
 		}
-		fs.dirtyInodes[ino] = struct{}{}
+		fs.markDirty(ino)
 		fs.cache.invalidateInode(input.NodeId)
 		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		return resp.Msg.GetSize(), fuse.OK
@@ -590,7 +594,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.cache.invalidateInode(input.NodeId)
 		fs.cache.putInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, 0)
 		n := resp.Msg.GetSize()
-		fs.dirtyInodes[ino] = struct{}{}
+		fs.markDirty(ino)
 		totalWritten += n
 		if n < chunkSize {
 			break

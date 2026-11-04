@@ -26,6 +26,7 @@ type handleMockStorageServer struct {
 
 	getAttrFn      func(context.Context, *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error)
 	createFn       func(context.Context, *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error)
+	setAttrFn      func(context.Context, *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error)
 	fsyncFn        func(context.Context, *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error)
 	renewSessionFn func(context.Context, *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error)
 }
@@ -40,6 +41,13 @@ func (m *handleMockStorageServer) GetAttr(ctx context.Context, req *connect.Requ
 func (m *handleMockStorageServer) Create(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 	if m.createFn != nil {
 		return m.createFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
+}
+
+func (m *handleMockStorageServer) SetAttr(ctx context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+	if m.setAttrFn != nil {
+		return m.setAttrFn(ctx, req)
 	}
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
 }
@@ -222,6 +230,84 @@ func TestRawFS_Create(t *testing.T) {
 			Mode:     0o644,
 		}, "exists.txt", &out)
 		require.Equal(t, fuse.Status(syscall.EEXIST), status)
+	})
+}
+
+func TestRawFS_默认保留内核页缓存(t *testing.T) {
+	mockSrv := &handleMockStorageServer{
+		getAttrFn: func(_ context.Context, req *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error) {
+			return connect.NewResponse(&storagev1.GetAttrResponse{Inode: &storagev1.Inode{
+				Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644},
+			}}), nil
+		},
+		setAttrFn: func(_ context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+			return connect.NewResponse(&storagev1.SetAttrResponse{Inode: &storagev1.Inode{
+				Ino: req.Msg.GetIno(), Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644},
+			}}), nil
+		},
+		createFn: func(_ context.Context, _ *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
+			return connect.NewResponse(&storagev1.CreateResponse{
+				Inode:               &storagev1.Inode{Ino: 2002, Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644, Nlink: 1}},
+				EntryTimeoutSeconds: 1,
+				AttrTimeoutSeconds:  1,
+			}), nil
+		},
+	}
+	client := setupHandleTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+
+	newFS := func(cfg fusefs.Config) *fusefs.RawFS {
+		cfg.RootIno = 1001
+		fs := fusefs.NewRawFS(client, mgr, cfg)
+		t.Cleanup(fs.OnUnmount)
+		return fs
+	}
+
+	t.Run("Open 非截断保留页缓存", func(t *testing.T) {
+		var out fuse.OpenOut
+		status := newFS(fusefs.Config{}).Open(nil, &fuse.OpenIn{
+			InHeader: fuse.InHeader{NodeId: 2002}, Flags: syscall.O_RDONLY,
+		}, &out)
+		require.Equal(t, fuse.OK, status)
+		require.NotZero(t, out.OpenFlags&fuse.FOPEN_KEEP_CACHE)
+		require.Zero(t, out.OpenFlags&fuse.FOPEN_DIRECT_IO)
+	})
+
+	t.Run("Open 截断不保留页缓存", func(t *testing.T) {
+		var out fuse.OpenOut
+		status := newFS(fusefs.Config{}).Open(nil, &fuse.OpenIn{
+			InHeader: fuse.InHeader{NodeId: 2002}, Flags: syscall.O_RDWR | syscall.O_TRUNC,
+		}, &out)
+		require.Equal(t, fuse.OK, status)
+		require.Zero(t, out.OpenFlags&fuse.FOPEN_KEEP_CACHE)
+	})
+
+	t.Run("DirectIO 不保留页缓存", func(t *testing.T) {
+		var out fuse.OpenOut
+		status := newFS(fusefs.Config{DirectIO: true}).Open(nil, &fuse.OpenIn{
+			InHeader: fuse.InHeader{NodeId: 2002}, Flags: syscall.O_RDWR,
+		}, &out)
+		require.Equal(t, fuse.OK, status)
+		require.NotZero(t, out.OpenFlags&fuse.FOPEN_DIRECT_IO)
+		require.Zero(t, out.OpenFlags&fuse.FOPEN_KEEP_CACHE)
+	})
+
+	t.Run("Create 非截断保留页缓存", func(t *testing.T) {
+		var out fuse.CreateOut
+		status := newFS(fusefs.Config{}).Create(nil, &fuse.CreateIn{
+			InHeader: fuse.InHeader{NodeId: 1}, Flags: syscall.O_CREAT | syscall.O_WRONLY, Mode: 0o644,
+		}, "file.txt", &out)
+		require.Equal(t, fuse.OK, status)
+		require.NotZero(t, out.OpenFlags&fuse.FOPEN_KEEP_CACHE)
+	})
+
+	t.Run("Create 截断不保留页缓存", func(t *testing.T) {
+		var out fuse.CreateOut
+		status := newFS(fusefs.Config{}).Create(nil, &fuse.CreateIn{
+			InHeader: fuse.InHeader{NodeId: 1}, Flags: syscall.O_CREAT | syscall.O_WRONLY | syscall.O_TRUNC, Mode: 0o644,
+		}, "file.txt", &out)
+		require.Equal(t, fuse.OK, status)
+		require.Zero(t, out.OpenFlags&fuse.FOPEN_KEEP_CACHE)
 	})
 }
 

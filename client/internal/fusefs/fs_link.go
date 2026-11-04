@@ -20,8 +20,8 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -52,6 +52,8 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 // Readlink 实现读取符号链接目标路径操作。
 // 将 Inode 映射为服务端 Inode 后调用 StorageService，原样返回目标字节切片，不进行有损字符集过滤。
 func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte, fuse.Status) {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
 		return nil, status
@@ -77,8 +79,8 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return st
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	if status, local := fs.linkTmp(cancel, input, filename, out); local {
 		return status
 	}

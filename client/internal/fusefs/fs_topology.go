@@ -18,8 +18,8 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 
 	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
@@ -59,8 +59,8 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 
 	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
@@ -101,8 +101,8 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -146,8 +146,8 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -161,6 +161,11 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		}
 		inode = cached.inode
 		child = fs.ToKernelIno(inode.GetIno())
+	}
+	if child != 0 {
+		// 与并发 Release 的最后一个句柄关闭按 Inode 串行，保证孤儿标记不会互相错过。
+		unlock := fs.inodeLocks.lock(child)
+		defer unlock()
 	}
 	open := child != 0 && fs.handles.IsOpen(child)
 	sid := fs.currentSession()

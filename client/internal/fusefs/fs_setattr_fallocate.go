@@ -22,8 +22,8 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return status
 	}
 
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	if status, local := fs.setTmpAttr(input, out); local {
 		return status
@@ -132,8 +132,8 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 // Fallocate 实现文件空间预分配与稀疏空洞打洞，对应 Linux FUSE FUSE_FALLOCATE 协议。
 func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse.Status {
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}

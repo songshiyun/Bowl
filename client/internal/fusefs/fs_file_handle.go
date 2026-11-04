@@ -52,8 +52,8 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	if status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -85,7 +85,13 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()
 	if fs.cfg.DirectIO {
+		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
+	} else if input.Flags&uint32(syscall.O_TRUNC) != 0 {
+		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
+	} else {
+		// 非截断且非 DirectIO 时保留内核 Page Cache，避免每次 open 全量清空。
+		out.OpenFlags |= fuse.FOPEN_KEEP_CACHE
 	}
 	return fuse.OK
 }
@@ -102,8 +108,8 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	cached, status := fs.getInode(cancel, input.NodeId)
 	if status != fuse.OK {
@@ -147,38 +153,27 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	out.Fh = fh
 	if fs.cfg.DirectIO {
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
+	} else if input.Flags&uint32(syscall.O_TRUNC) == 0 {
+		// 非截断且非 DirectIO 时保留内核 Page Cache，避免每次 open 全量清空。
+		out.OpenFlags |= fuse.FOPEN_KEEP_CACHE
 	}
 	return fuse.OK
 }
 
-// Flush 同步已写入的文件并释放当前 LockOwner 的本地 POSIX 锁。
+// Flush 在 close(fd) 时排空内核页缓存写入并释放本地 POSIX 记录锁。
+// 常规文件不再发起跨机物理 Fsync RPC；显式 Fsync、FsyncDir 与 OnUnmount 才确认物理落盘。
 func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
 	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
-	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
-		return status
-	}
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
-		return status
-	}
-	if _, dirty := fs.dirtyInodes[ino]; dirty {
-		ctx, done := fs.RPCContext(cancel)
-		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
-		done()
-		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
-			return fs.ToStatusWithSession(err, cancel)
-		}
-		delete(fs.dirtyInodes, ino)
-	}
-	return fuse.OK
+	// 匿名文件尚未具名，关闭时必须先上云并解链；该路径只写服务端 WAL，不触发物理 fsync。
+	return fs.syncTmpFile(cancel, input.NodeId)
 }
 
 // Fsync 等待服务端完成文件持久化。
@@ -186,8 +181,8 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return status
@@ -205,17 +200,23 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
 	}))
 	if err == nil {
-		delete(fs.dirtyInodes, ino)
+		fs.clearDirty(ino)
 	}
 	return fs.ToStatusWithSession(err, cancel)
 }
 
 // Release 在本地释放句柄与 flock；最后一个孤儿句柄触发回收。
 func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	h, ok := fs.handles.Get(input.Fh)
 	if !ok || h.Ino != input.NodeId || h.IsDir {
+		return
+	}
+	// 与在途 Unlink/Rename 的孤儿标记按 Inode 串行，避免最后句柄关闭与解链互相错过。
+	unlock := fs.inodeLocks.lock(h.Ino)
+	defer unlock()
+	if _, ok := fs.handles.Get(input.Fh); !ok {
 		return
 	}
 	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)

@@ -57,17 +57,21 @@ type RawFS struct {
 	locks   *LockTable
 	handles *HandleTable
 	cache   *NamespaceCache
-	// 协调目录变更、句柄引用和缓存填充。
-	namespaceMu    sync.RWMutex
+	// lifecycleMu 保证 OnUnmount 等待所有在途 FUSE 请求排空；常规请求只持读锁。
+	lifecycleMu sync.RWMutex
+	// stateMu 仅保护本地内存态的微秒级读写，绝不包裹跨机 RPC。
+	stateMu        sync.Mutex
 	dirtyInodes    map[uint64]struct{}
-	tmpMu          sync.RWMutex
-	tmpFiles       map[uint64]*tmpFile
-	serverToLocal  map[uint64]uint64
 	orphanSessions map[uint64]uint64
-	nextTmp        atomic.Uint64
-	sessions       *session.Manager
-	cfg            Config
-	nextReqID      atomic.Uint64
+	// inodeLocks 按 Inode 粒度串行化 O_APPEND 定序与 Unlink/Release 孤儿标记。
+	inodeLocks    inodeLocks
+	tmpMu         sync.RWMutex
+	tmpFiles      map[uint64]*tmpFile
+	serverToLocal map[uint64]uint64
+	nextTmp       atomic.Uint64
+	sessions      *session.Manager
+	cfg           Config
+	nextReqID     atomic.Uint64
 
 	releaseMu       sync.Mutex
 	releaseQueue    []reclaimRetryItem
@@ -308,8 +312,9 @@ func (fs *RawFS) NextRequestID() uint64 {
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
 	fs.locks.Close()
-	fs.namespaceMu.Lock()
-	for ino := range fs.dirtyInodes {
+	// 排他锁等待所有在途请求释放读锁，确保卸载前脏节点全部排空。
+	fs.lifecycleMu.Lock()
+	for _, ino := range fs.takeDirtyInodes() {
 		ctx, done := fs.RPCContext(nil)
 		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
 		done()
@@ -317,15 +322,16 @@ func (fs *RawFS) OnUnmount() {
 			slog.Warn("卸载时同步文件失败", "ino", ino, "error", err)
 		}
 	}
-	clear(fs.dirtyInodes)
 	fs.handles.clear()
 	fs.cache.clear()
 	fs.tmpMu.Lock()
 	clear(fs.tmpFiles)
 	clear(fs.serverToLocal)
 	fs.tmpMu.Unlock()
+	fs.stateMu.Lock()
 	clear(fs.orphanSessions)
-	fs.namespaceMu.Unlock()
+	fs.stateMu.Unlock()
+	fs.lifecycleMu.Unlock()
 	fs.clearAllReadAhead()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {
@@ -345,20 +351,49 @@ func shouldRetryReclaim(err error) bool {
 	}
 }
 
+// markDirty 记录尚未显式 Fsync 的节点。
+func (fs *RawFS) markDirty(ino uint64) {
+	fs.stateMu.Lock()
+	fs.dirtyInodes[ino] = struct{}{}
+	fs.stateMu.Unlock()
+}
+
+// clearDirty 在服务端确认落盘后清除脏标记。
+func (fs *RawFS) clearDirty(ino uint64) {
+	fs.stateMu.Lock()
+	delete(fs.dirtyInodes, ino)
+	fs.stateMu.Unlock()
+}
+
+// takeDirtyInodes 原子取走并清空全部脏节点，供卸载时排空。
+func (fs *RawFS) takeDirtyInodes() []uint64 {
+	fs.stateMu.Lock()
+	defer fs.stateMu.Unlock()
+	inodes := make([]uint64, 0, len(fs.dirtyInodes))
+	for ino := range fs.dirtyInodes {
+		inodes = append(inodes, ino)
+	}
+	clear(fs.dirtyInodes)
+	return inodes
+}
+
 // markOrphan 记录解链时使用的会话，避免轮换后误用新会话回收旧节点。
-// 调用方须持有 namespaceMu。
 func (fs *RawFS) markOrphan(ino uint64, sid *uint64) {
 	var sessionID uint64
 	if sid != nil {
 		sessionID = *sid
 	}
+	fs.stateMu.Lock()
 	fs.orphanSessions[ino] = sessionID
+	fs.stateMu.Unlock()
 	fs.handles.MarkOrphan(ino)
 }
 
 func (fs *RawFS) reclaimOrphan(ino uint64) {
+	fs.stateMu.Lock()
 	sid := fs.orphanSessions[ino]
 	delete(fs.orphanSessions, ino)
+	fs.stateMu.Unlock()
 	if fs.sessions != nil && (sid == 0 || sid != fs.sessions.CurrentSessionID()) {
 		return
 	}
@@ -511,16 +546,15 @@ func BuildMountOptions(cfg Config) *fuse.MountOptions {
 	}
 
 	return &fuse.MountOptions{
-		FsName:               "bowl:" + cfg.DiskID,
-		Name:                 "bowl",
-		Options:              options,
-		AllowOther:           cfg.AllowOther,
-		EnableLocks:          true,
-		DisableXAttrs:        false,
-		DisabledCapabilities: fuse.CAP_WRITEBACK_CACHE,
-		MaxWrite:             1 << 20,
-		MaxReadAhead:         1 << 20,
-		DirectMount:          true,
-		Debug:                cfg.Debug,
+		FsName:        "bowl:" + cfg.DiskID,
+		Name:          "bowl",
+		Options:       options,
+		AllowOther:    cfg.AllowOther,
+		EnableLocks:   true,
+		DisableXAttrs: false,
+		MaxWrite:      1 << 20,
+		MaxReadAhead:  1 << 20,
+		DirectMount:   true,
+		Debug:         cfg.Debug,
 	}
 }

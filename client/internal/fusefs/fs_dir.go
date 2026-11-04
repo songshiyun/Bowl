@@ -14,8 +14,8 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	cached, status := fs.getInode(cancel, input.NodeId)
 	if status != fuse.OK {
 		return status
@@ -43,7 +43,7 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 	if status != fuse.OK {
 		return nil, status
 	}
-	epoch := fs.cache.version()
+	epoch, generation := fs.cache.snapshot()
 	ctx, done := fs.RPCContext(cancel)
 	defer done()
 	offset := input.Offset
@@ -71,7 +71,7 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 			return entries, fuse.OK
 		}
 		if len(page) < 512 {
-			fs.cache.putDirAt(epoch, input.NodeId, entries)
+			fs.cache.putDirAtIf(generation, epoch, input.NodeId, entries)
 			return entries, fuse.OK
 		}
 	}
@@ -79,8 +79,8 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 
 // ReadDir 返回目录项及其续读位置。
 func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	entries, status := fs.readDirEntries(cancel, input)
 	if status != fuse.OK {
 		return status
@@ -102,8 +102,8 @@ func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.D
 
 // ReadDirPlus 返回目录项和属性；点目录项不增加内核引用计数。
 func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	entries, status := fs.readDirEntries(cancel, input)
 	if status != fuse.OK {
 		return status
@@ -133,8 +133,8 @@ func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fu
 
 // FsyncDir 等待服务端完成目录持久化。
 func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
-	fs.namespaceMu.RLock()
-	defer fs.namespaceMu.RUnlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, true)
 	if status != fuse.OK {
 		return status
@@ -157,8 +157,8 @@ func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Stat
 
 // ReleaseDir 只释放本地目录句柄。
 func (fs *RawFS) ReleaseDir(input *fuse.ReleaseIn) {
-	fs.namespaceMu.Lock()
-	defer fs.namespaceMu.Unlock()
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	h, ok := fs.handles.Get(input.Fh)
 	if !ok || !h.IsDir || h.Ino != input.NodeId {
 		return

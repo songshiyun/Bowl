@@ -113,6 +113,7 @@ func TestRawFS_BuildMountOptions(t *testing.T) {
 	require.Equal(t, 1<<20, opts.MaxReadAhead)
 	require.True(t, opts.DirectMount)
 	require.True(t, opts.Debug)
+	require.Zero(t, opts.DisabledCapabilities&fuse.CAP_WRITEBACK_CACHE, "必须启用内核 writeback_cache")
 
 	// 非只读时 Options 不应包含 ro
 	optsRW := fusefs.BuildMountOptions(fusefs.Config{DiskID: "rw", ReadOnly: false})
