@@ -111,9 +111,12 @@ func TestRawFS_BuildMountOptions(t *testing.T) {
 	require.False(t, opts.DisableXAttrs)
 	require.Equal(t, 1<<20, opts.MaxWrite)
 	require.Equal(t, 1<<20, opts.MaxReadAhead)
+	require.Equal(t, 64, opts.MaxBackground)
+	require.Equal(t, 48, opts.CongestionThreshold)
 	require.True(t, opts.DirectMount)
 	require.True(t, opts.Debug)
-	require.Zero(t, opts.DisabledCapabilities&fuse.CAP_WRITEBACK_CACHE, "必须启用内核 writeback_cache")
+	require.NotZero(t, opts.ExtraCapabilities&fuse.CAP_HANDLE_KILLPRIV, "必须声明 CAP_HANDLE_KILLPRIV 由文件系统原生处理 killpriv")
+	require.NotZero(t, opts.DisabledCapabilities&fuse.CAP_WRITEBACK_CACHE, "必须禁用内核 writeback_cache 以保持 1 MiB 直通写")
 
 	// 非只读时 Options 不应包含 ro
 	optsRW := fusefs.BuildMountOptions(fusefs.Config{DiskID: "rw", ReadOnly: false})

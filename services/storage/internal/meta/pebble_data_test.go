@@ -550,3 +550,76 @@ func TestPebbleDataValidationFlagsOrphansAndSync(t *testing.T) {
 	_, err = e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, SessionID: &e.sid})
 	require.ErrorIs(t, err, meta.ErrNotFound)
 }
+
+// TestPebbleDataKillPrivRemovesSecurityCapability 验证服务端在写、属性变更与预分配时
+// 于同一 Pebble 批次内原子清除 security.capability，原生满足 Linux killpriv 语义。
+func TestPebbleDataKillPrivRemovesSecurityCapability(t *testing.T) {
+	e := setupPebbleCreate(t, 1<<20)
+	ctx := e.branchContext()
+	file, err := e.mgr.Create(ctx, meta.CreateParams{ParentIno: 1, Name: []byte("cap"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+	name := []byte("security.capability")
+	value := []byte{0x01, 0x00, 0x00, 0x02}
+
+	setCapability := func(t *testing.T) {
+		t.Helper()
+		require.NoError(t, e.mgr.SetXattr(ctx, meta.SetXattrParams{Ino: ino, Name: name, Value: value}))
+		got, err := e.mgr.GetXattr(ctx, ino, name)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+	}
+	requireNoCapability := func(t *testing.T) {
+		t.Helper()
+		_, err := e.mgr.GetXattr(ctx, ino, name)
+		require.ErrorIs(t, err, meta.ErrNoData)
+	}
+
+	t.Run("Write 原子清除", func(t *testing.T) {
+		setCapability(t)
+		_, err := e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("x"), SessionID: &e.sid})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+
+	t.Run("SetAttr 大小变更原子清除", func(t *testing.T) {
+		setCapability(t)
+		size := uint64(4)
+		_, err := e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{Size: &size, SessionID: &e.sid})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+
+	t.Run("SetAttr UID 变更原子清除", func(t *testing.T) {
+		setCapability(t)
+		uid := uint32(1000)
+		_, err := e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{UID: &uid, SessionID: &e.sid})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+
+	t.Run("SetAttr GID 变更原子清除", func(t *testing.T) {
+		setCapability(t)
+		gid := uint32(1000)
+		_, err := e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{GID: &gid, SessionID: &e.sid})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+
+	t.Run("SetAttr 权限变更原子清除", func(t *testing.T) {
+		setCapability(t)
+		mode := uint32(0o600)
+		_, err := e.mgr.SetAttr(e.ctx, ino, meta.SetAttrInput{Mode: &mode, SessionID: &e.sid})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+
+	t.Run("Fallocate 原子清除", func(t *testing.T) {
+		setCapability(t)
+		err := e.mgr.Fallocate(e.ctx, meta.FallocateParams{
+			Ino: ino, Offset: 0, Length: 8, Mode: meta.FallocFlKeepSize, SessionID: &e.sid,
+		})
+		require.NoError(t, err)
+		requireNoCapability(t)
+	})
+}
