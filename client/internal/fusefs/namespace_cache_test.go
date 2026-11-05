@@ -6,6 +6,7 @@ import (
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func testInode(ino uint64, mode uint32, nlink uint32) *storagev1.Inode {
@@ -217,4 +218,157 @@ func TestNamespaceCache默认容量覆盖大规模工作集(t *testing.T) {
 	require.True(t, ok)
 	_, ok = cache.inode(20000)
 	require.True(t, ok)
+}
+
+// 新建目录登记为权威完整目录后，缺失名字必须直接判定 ENOENT，不再穿透网络 Lookup。
+func TestNamespaceCache新建目录权威判定ENOENT(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	epoch := cache.version()
+	cache.markNewDirAt(epoch, 10)
+
+	ino, ok := cache.entry(10, "missing")
+	require.True(t, ok, "新建空目录的缺失名字必须权威命中")
+	require.Zero(t, ino)
+
+	// 目录内创建文件后，已知名字命中，其它名字仍权威 ENOENT。
+	cache.putEntryAt(epoch, 10, "file", 11)
+	ino, ok = cache.entry(10, "file")
+	require.True(t, ok)
+	require.Equal(t, uint64(11), ino)
+	ino, ok = cache.entry(10, "other")
+	require.True(t, ok)
+	require.Zero(t, ino)
+}
+
+// 目录流失效后必须降级为独立目录项并保持权威完整：兄弟项继续命中，缺失名仍 ENOENT。
+func TestNamespaceCache目录流降级保留权威完整(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	cache.putDir(10, []*storagev1.DirEntryPlus{
+		{Ino: 11, Name: []byte("a"), NextOffset: 1, Inode: testInode(11, syscall.S_IFREG|0o644, 1)},
+		{Ino: 12, Name: []byte("b"), NextOffset: 2, Inode: testInode(12, syscall.S_IFREG|0o644, 1)},
+	})
+	_, ok := cache.dir(10)
+	require.True(t, ok)
+
+	cache.invalidateDirListing(10)
+	for name, want := range map[string]uint64{"a": 11, "b": 12} {
+		ino, ok := cache.entry(10, name)
+		require.True(t, ok, "降级后兄弟项 %s 必须保持命中", name)
+		require.Equal(t, want, ino)
+	}
+	ino, ok := cache.entry(10, "missing")
+	require.True(t, ok, "完整降级后缺失名字必须权威 ENOENT")
+	require.Zero(t, ino)
+
+	// 显式删除目录项后不得再声称目录内容完整。
+	cache.removeEntry(10, "a")
+	_, ok = cache.entry(10, "other")
+	require.False(t, ok, "删除目录项后必须撤销权威完整标记")
+}
+
+// 目录流条目超过容量四分之一时不降级，也不得声称内容完整。
+func TestNamespaceCache大目录降级不声称完整(t *testing.T) {
+	cache := NewNamespaceCache(4)
+	cache.putDir(10, []*storagev1.DirEntryPlus{
+		{Ino: 11, Name: []byte("a"), NextOffset: 1, Inode: testInode(11, syscall.S_IFREG|0o644, 1)},
+		{Ino: 12, Name: []byte("b"), NextOffset: 2, Inode: testInode(12, syscall.S_IFREG|0o644, 1)},
+	})
+	cache.invalidateDirListing(10)
+	_, ok := cache.entry(10, "missing")
+	require.False(t, ok, "未能完整降级时不得权威判定 ENOENT")
+}
+
+// 祖先目录流被失效后，其权威完整标记必须一并撤销，避免把仍存在的名字误判为 ENOENT。
+func TestNamespaceCache祖先目录流失效撤销完整标记(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	cache.putDir(1, []*storagev1.DirEntryPlus{
+		{Ino: 10, Name: []byte("dir"), NextOffset: 1, Inode: testInode(10, syscall.S_IFDIR|0o755, 2)},
+	})
+	cache.putDir(10, []*storagev1.DirEntryPlus{
+		{Ino: 11, Name: []byte("a"), NextOffset: 1, Inode: testInode(11, syscall.S_IFREG|0o644, 1)},
+	})
+	cache.invalidateDirListing(10)
+	_, ok := cache.entry(1, "missing")
+	require.False(t, ok, "祖先目录流被移除后不得再声称内容完整")
+}
+
+// Create/Mkdir 等操作返回的子节点时间戳必须就地刷新父目录属性，
+// 避免内核随后触发的 FUSE_GETATTR(parent) 再发一次网络 RPC。
+func TestNamespaceCache刷新父目录属性(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	parent := testInode(10, syscall.S_IFDIR|0o755, 2)
+	parent.Attr.Mtime = &timestamppb.Timestamp{Seconds: 100}
+	parent.Attr.Ctime = &timestamppb.Timestamp{Seconds: 100}
+	cache.putInode(10, parent, 1, 2)
+
+	child := testInode(11, syscall.S_IFDIR|0o755, 2)
+	child.Attr.Ctime = &timestamppb.Timestamp{Seconds: 200, Nanos: 7}
+	child.Attr.Mtime = &timestamppb.Timestamp{Seconds: 200, Nanos: 7}
+
+	epoch := cache.version()
+	cache.invalidateDirListingTouchParentAt(epoch, 10, child, 1, 3)
+
+	got, ok := cache.inode(10)
+	require.True(t, ok, "父目录属性必须就地刷新而不是被清除")
+	require.Equal(t, uint32(3), got.inode.Attr.Nlink)
+	require.Equal(t, int64(200), got.inode.Attr.Mtime.Seconds)
+	require.Equal(t, int32(7), got.inode.Attr.Mtime.Nanos)
+	require.Equal(t, int64(200), got.inode.Attr.Ctime.Seconds)
+	require.Equal(t, float64(3), got.attrTimeout)
+	require.Equal(t, float64(1), got.entryTimeout)
+
+	// nlink 递减不得下溢到 0 以下。
+	cache.invalidateDirListingTouchParentAt(epoch, 10, child, -1, 0)
+	got, ok = cache.inode(10)
+	require.True(t, ok)
+	require.Equal(t, uint32(2), got.inode.Attr.Nlink)
+	require.Equal(t, float64(3), got.attrTimeout, "attrTimeout<=0 时必须沿用父目录原有有效期")
+
+	// 子节点属性缺失时无法刷新父属性，只能保守失效。
+	cache.invalidateDirListingTouchParentAt(epoch, 10, &storagev1.Inode{Ino: 12}, 0, 0)
+	_, ok = cache.inode(10)
+	require.False(t, ok, "无法刷新时必须保守失效父属性")
+}
+
+// Unlink/Rmdir/Rename 不返回子节点时间戳，使用当前时间刷新父目录属性并保留父目录 Inode 缓存。
+func TestNamespaceCacheTouchParentNowKeepsInode(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	parent := testInode(10, syscall.S_IFDIR|0o755, 3)
+	parent.Attr.Mtime = &timestamppb.Timestamp{Seconds: 100}
+	parent.Attr.Ctime = &timestamppb.Timestamp{Seconds: 100}
+	cache.putInode(10, parent, 1, 2)
+	cache.putDir(10, []*storagev1.DirEntryPlus{
+		{Ino: 11, Name: []byte("sub"), NextOffset: 1, Inode: testInode(11, syscall.S_IFDIR|0o755, 2)},
+	})
+
+	epoch := cache.version()
+	cache.invalidateDirListingTouchParentNowAt(epoch, 10, -1)
+
+	got, ok := cache.inode(10)
+	require.True(t, ok, "Rmdir/Unlink/Rename 后父目录 Inode 必须保留")
+	require.Equal(t, uint32(2), got.inode.Attr.Nlink)
+	require.Greater(t, got.inode.Attr.Mtime.Seconds, int64(100))
+	require.Greater(t, got.inode.Attr.Ctime.Seconds, int64(100))
+	require.Equal(t, float64(2), got.attrTimeout)
+	require.Equal(t, float64(1), got.entryTimeout)
+
+	// 目录流本身已被降级为独立目录项，不再命中完整目录流。
+	_, ok = cache.dir(10)
+	require.False(t, ok)
+	ino, ok := cache.entry(10, "sub")
+	require.True(t, ok)
+	require.Equal(t, uint64(11), ino)
+
+	// nlink 递减不得下溢。
+	cache.invalidateDirListingTouchParentNowAt(epoch, 10, -1)
+	cache.invalidateDirListingTouchParentNowAt(epoch, 10, -1)
+	got, ok = cache.inode(10)
+	require.True(t, ok)
+	require.Zero(t, got.inode.Attr.Nlink)
+
+	// epoch 已过期时不得用旧会话的响应回填父目录属性。
+	cache.putInode(20, testInode(20, syscall.S_IFDIR|0o755, 2), 1, 2)
+	cache.invalidateDirListingTouchParentNowAt(cache.version()+1, 20, 0)
+	_, ok = cache.inode(20)
+	require.False(t, ok, "epoch 过期时必须放弃回填父目录属性")
 }

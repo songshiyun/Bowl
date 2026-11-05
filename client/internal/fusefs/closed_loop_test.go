@@ -37,6 +37,7 @@ type loopClient struct {
 	fallocateFn func(*storagev1.FallocateRequest) (*storagev1.FallocateResponse, error)
 	fsyncFn     func(*storagev1.FsyncRequest) (*storagev1.FsyncResponse, error)
 	unlinkFn    func(*storagev1.UnlinkRequest) (*storagev1.UnlinkResponse, error)
+	rmdirFn     func(*storagev1.RmdirRequest) (*storagev1.RmdirResponse, error)
 	reclaimFn   func(*storagev1.ReclaimOrphanRequest) (*storagev1.ReclaimOrphanResponse, error)
 }
 
@@ -100,6 +101,10 @@ func (m *loopClient) Fsync(_ context.Context, r *connect.Request[storagev1.Fsync
 }
 func (m *loopClient) Unlink(_ context.Context, r *connect.Request[storagev1.UnlinkRequest]) (*connect.Response[storagev1.UnlinkResponse], error) {
 	v, e := m.unlinkFn(r.Msg)
+	return connect.NewResponse(v), e
+}
+func (m *loopClient) Rmdir(_ context.Context, r *connect.Request[storagev1.RmdirRequest]) (*connect.Response[storagev1.RmdirResponse], error) {
+	v, e := m.rmdirFn(r.Msg)
 	return connect.NewResponse(v), e
 }
 func (m *loopClient) ReclaimOrphan(_ context.Context, r *connect.Request[storagev1.ReclaimOrphanRequest]) (*connect.Response[storagev1.ReclaimOrphanResponse], error) {
@@ -707,6 +712,47 @@ func TestTmpfile具名化写入失败后保留本地数据(t *testing.T) {
 	require.Equal(t, fuse.OK, status)
 	require.Equal(t, []byte("data"), data)
 	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: out.NodeId}, Fh: out.Fh})
+}
+
+// TestUnlink与Rmdir回填负缓存不穿透Lookup 验证删除成功后，同名 Lookup 直接命中
+// 负缓存返回 ENOENT，不再向服务端发起跨机 Lookup RPC。
+func TestUnlink与Rmdir回填负缓存不穿透Lookup(t *testing.T) {
+	file := testInode(20, syscall.S_IFREG|0o600, 1)
+	dir := testInode(30, syscall.S_IFDIR|0o755, 2)
+	lookups := 0
+	client := &loopClient{
+		lookupFn: func(r *storagev1.LookupRequest) (*storagev1.LookupResponse, error) {
+			lookups++
+			switch string(r.Name) {
+			case "file":
+				return &storagev1.LookupResponse{Inode: file}, nil
+			case "dir":
+				return &storagev1.LookupResponse{Inode: dir}, nil
+			}
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("不存在"))
+		},
+		unlinkFn: func(*storagev1.UnlinkRequest) (*storagev1.UnlinkResponse, error) {
+			return &storagev1.UnlinkResponse{}, nil
+		},
+		rmdirFn: func(*storagev1.RmdirRequest) (*storagev1.RmdirResponse, error) {
+			return &storagev1.RmdirResponse{}, nil
+		},
+	}
+	fs := NewRawFS(client, nil, Config{RootIno: 1})
+	defer fs.OnUnmount()
+	parent := &fuse.InHeader{NodeId: 1}
+
+	require.Equal(t, fuse.OK, fs.Lookup(nil, parent, "file", &fuse.EntryOut{}))
+	require.Equal(t, 1, lookups)
+	require.Equal(t, fuse.OK, fs.Unlink(nil, parent, "file"))
+	require.Equal(t, fuse.ENOENT, fs.Lookup(nil, parent, "file", &fuse.EntryOut{}))
+	require.Equal(t, 1, lookups, "Unlink 后的 Lookup 必须命中负缓存，不得发 RPC")
+
+	require.Equal(t, fuse.OK, fs.Lookup(nil, parent, "dir", &fuse.EntryOut{}))
+	require.Equal(t, 2, lookups)
+	require.Equal(t, fuse.OK, fs.Rmdir(nil, parent, "dir"))
+	require.Equal(t, fuse.ENOENT, fs.Lookup(nil, parent, "dir", &fuse.EntryOut{}))
+	require.Equal(t, 2, lookups, "Rmdir 后的 Lookup 必须命中负缓存，不得发 RPC")
 }
 
 func Test孤儿回收请求保留磁盘分支与原会话(t *testing.T) {

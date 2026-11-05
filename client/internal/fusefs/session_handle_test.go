@@ -30,7 +30,9 @@ func Test本地句柄会话过期取消预读(t *testing.T) {
 			return connect.NewResponse(&storagev1.RenewSessionResponse{ExpiresAt: timestamppb.New(time.Now().Add(120 * time.Millisecond))}), nil
 		},
 		readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
-			if req.Msg.GetOffset() == step+fusefs.MaxRPCChunkSize {
+			// 统一预读状态机后，窗口与预取都按 4 MiB 对齐：第二次顺序读拉取 [0,4MiB)，
+			// 随后的异步预取固定从 4 MiB 开始。
+			if req.Msg.GetOffset() == fusefs.MaxRPCChunkSize {
 				once.Do(func() { close(started) })
 				<-ctx.Done()
 				close(canceled)

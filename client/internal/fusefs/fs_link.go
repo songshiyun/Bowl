@@ -38,7 +38,7 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDirListing(header.NodeId)
+	fs.cache.invalidateDirListingTouchParentAt(epoch, header.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
 	inode := resp.Msg.GetInode()
 	if inode != nil {
 		child := fs.ToKernelIno(inode.GetIno())
@@ -108,7 +108,7 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDirListing(input.NodeId)
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
 	fs.cache.putEntryAt(epoch, input.NodeId, filename, input.Oldnodeid)
 	fs.cache.putInodeAt(epoch, input.Oldnodeid, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())

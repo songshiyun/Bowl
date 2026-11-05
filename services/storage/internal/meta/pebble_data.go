@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -79,7 +80,9 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 }
 
 // commitPebbleData 在同分支元数据锁内读取 BranchStat、构建批次并记账提交。
-func (m *manager) commitPebbleData(disk string, store *pebble.DB, quota *TreeQuota, branch string, inode *pebblekv.Inode, oldSize uint64, enforce bool, edit func(*pebble.Batch) error) (err error) {
+// beforeCommit 在配额与序列校验全部通过、批次真正提交前执行，用于把不可回滚的块文件
+// 原地补丁放到“已确定不会 ErrNoSpace”之后，保证失败写入不触碰旧块内容。
+func (m *manager) commitPebbleData(disk string, store *pebble.DB, quota *TreeQuota, branch string, inode *pebblekv.Inode, oldSize uint64, enforce bool, edit func(*pebble.Batch) error, beforeCommit func() error) (err error) {
 	unlockMeta := m.branchMetaLock(disk, branch)
 	defer unlockMeta()
 	stat, err := readCreateStat(store)
@@ -118,64 +121,116 @@ func (m *manager) commitPebbleData(disk string, store *pebble.DB, quota *TreeQuo
 	}
 	quota.mu.Lock()
 	defer quota.mu.Unlock()
-	if err := quota.applyLocked(branch, inode.Ino, inode.Size, true, func() error { return batch.Commit(pebble.NoSync) }, enforce); err != nil {
+	if err := quota.applyLocked(branch, inode.Ino, inode.Size, true, func() error {
+		if beforeCommit != nil {
+			if err := beforeCommit(); err != nil {
+				return err
+			}
+		}
+		return batch.Commit(pebble.NoSync)
+	}, enforce); err != nil {
 		return err
 	}
 	return nil
 }
 
 // buildWriteBlock 通过写时复制生成新的不可变块；整块为零时返回不保留实体。
-func (m *manager) buildWriteBlock(disk string, store pebbleReader, blobs *pebblekv.BlobStore, ino, block uint64, start int, chunk []byte) (ref pebblekv.BlobRef, keep bool, oldID, newID uint64, err error) {
+// 窗口内脏块（本次 Sync 前新建、尚未被任何持久化提交引用或硬链接共享）不分配新编号，
+// 而是返回原地补丁描述，由提交路径在配额校验通过后统一落盘。
+func (m *manager) buildWriteBlock(disk string, store pebbleReader, blobs *pebblekv.BlobStore, ino, block uint64, start int, chunk []byte) (writeBlockUpdate, error) {
 	key := pebblekv.DataKey(ino, block)
 	oldRef, oldOK, err := readPebbleBlobRef(store, key)
 	if err != nil {
-		return pebblekv.BlobRef{}, false, 0, 0, err
+		return writeBlockUpdate{}, err
 	}
+	update := writeBlockUpdate{key: key}
 	if oldOK {
-		oldID = oldRef.ID
+		update.oldID = oldRef.ID
 	}
 	// 满 1 MiB 整块写无需读取旧块，直接落新块文件。
 	if start == 0 && len(chunk) == pebblekv.BlobSize {
 		id, err := m.pebble.AllocateBlobID(disk)
 		if err != nil {
-			return pebblekv.BlobRef{}, false, 0, 0, err
+			return writeBlockUpdate{}, err
 		}
-		if err := blobs.Write(id, chunk); err != nil {
-			return pebblekv.BlobRef{}, false, 0, 0, err
+		if err := blobs.WriteForInode(ino, id, chunk); err != nil {
+			return writeBlockUpdate{}, err
 		}
-		return pebblekv.BlobRef{ID: id, Length: pebblekv.BlobSize}, true, oldID, id, nil
+		update.ref = pebblekv.BlobRef{ID: id, Length: pebblekv.BlobSize}
+		update.keep = true
+		update.newID = id
+		return update, nil
 	}
 	length := start + len(chunk)
 	if oldOK && int(oldRef.Length) > length {
 		length = int(oldRef.Length)
 	}
+	// 窗口内无空洞补丁快路径：start <= 旧长度时（尾部追加或块内原地覆写），
+	// 无需读取旧块构造整块缓冲区。旧实现每次 4 KiB 写都要分配并拷贝整个逻辑块
+	// （1 MiB 块写满时累计 O(n²) 拷贝），这里只记录待写入的 chunk。
+	// 热缓存由 Patch 在提交后剔除，后续读回落到块文件（OS Page Cache）。
+	if oldOK && length <= pebblekv.BlobSize && start <= int(oldRef.Length) && blobs.WindowLocal(oldRef.ID) {
+		if oldRef.Length == 0 && start == 0 && allZeroBytes(chunk) {
+			update.keep = false
+			return update, nil
+		}
+		update.ref = pebblekv.BlobRef{ID: oldRef.ID, Length: uint32(length)}
+		update.keep = true
+		update.sameRef = uint32(length) == oldRef.Length
+		update.oldID = 0
+		update.newID = 0
+		update.patchID = oldRef.ID
+		update.patchOffset = int64(start)
+		update.patchBytes = chunk
+		update.patchSize = int64(length)
+		// patchFull 留空：提交路径调用 Patch 而不是 AppendTail。
+		return update, nil
+	}
 	// 单缓冲构造新块：旧块内容直接读进新块缓冲区前缀，省掉一次整块临时分配与一次整块拷贝。
 	data := make([]byte, length)
 	if oldOK {
 		if err := blobs.ReadAt(oldRef.ID, 0, data[:oldRef.Length]); err != nil {
-			return pebblekv.BlobRef{}, false, 0, 0, err
+			return writeBlockUpdate{}, err
 		}
 	}
 	copy(data[start:], chunk)
 	if allZeroBytes(data) {
-		return pebblekv.BlobRef{}, false, oldID, 0, nil
+		update.keep = false
+		return update, nil
 	}
-	// 窗口内尾部原地追加：该块在本次 Sync 前新建、尚未被任何持久化提交引用或硬链接共享，
-	// 直接追加可消除长尾块反复 CoW 的 O(n²) 拷贝，且不改变块内已有字节。
-	if oldOK && start == int(oldRef.Length) && length <= pebblekv.BlobSize && blobs.WindowLocal(oldRef.ID) {
-		if err := blobs.AppendTail(oldRef.ID, int64(start), chunk, data); err != nil {
-			return pebblekv.BlobRef{}, false, 0, 0, err
+	// 窗口内块原地改写：该块在本次 Sync 前新建、尚未被任何持久化提交引用或硬链接共享，
+	// 直接按逻辑偏移覆写可消除长尾块反复 CoW 的 O(n²) 拷贝，也消除 1 MiB 整块重写的写放大。
+	// 补丁推迟到配额校验之后执行，ErrNoSpace 时旧块内容保持 100% 不变。
+	if oldOK && length <= pebblekv.BlobSize && blobs.WindowLocal(oldRef.ID) {
+		patchOffset := int64(start)
+		patchBytes := chunk
+		if start > int(oldRef.Length) {
+			// 跨越旧块尾部的空洞写入：从旧长度开始补零，直到本次写入末端。
+			patchOffset = int64(oldRef.Length)
+			patchBytes = data[oldRef.Length : start+len(chunk)]
 		}
-		return pebblekv.BlobRef{ID: oldRef.ID, Length: uint32(length)}, true, 0, 0, nil
+		update.ref = pebblekv.BlobRef{ID: oldRef.ID, Length: uint32(length)}
+		update.keep = true
+		update.sameRef = uint32(length) == oldRef.Length
+		update.oldID = 0
+		update.newID = 0
+		update.patchID = oldRef.ID
+		update.patchOffset = patchOffset
+		update.patchBytes = patchBytes
+		update.patchFull = data
+		return update, nil
 	}
 	id, err := m.pebble.AllocateBlobID(disk)
 	if err != nil {
-		return pebblekv.BlobRef{}, false, 0, 0, err
+		return writeBlockUpdate{}, err
 	}
-	if err := blobs.Write(id, data); err != nil {
-		return pebblekv.BlobRef{}, false, 0, 0, err
+	if err := blobs.WriteForInode(ino, id, data); err != nil {
+		return writeBlockUpdate{}, err
 	}
-	return pebblekv.BlobRef{ID: id, Length: uint32(length)}, true, oldID, id, nil
+	update.ref = pebblekv.BlobRef{ID: id, Length: uint32(length)}
+	update.keep = true
+	update.newID = id
+	return update, nil
 }
 
 // fullBlockWrite 报告请求是否只包含按 1 MiB 边界对齐的完整块。
@@ -246,7 +301,7 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 			return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 		}
 		chunk := req.Data[i*pebblekv.BlobSize : (i+1)*pebblekv.BlobSize]
-		if err := blobs.Write(id, chunk); err != nil {
+		if err := blobs.WriteForInode(req.Ino, id, chunk); err != nil {
 			return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 		}
 		plans[i].newID = id
@@ -296,7 +351,7 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 			}
 		}
 		return nil
-	})
+	}, nil)
 	if err != nil {
 		return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 	}
@@ -328,11 +383,18 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 }
 
 type writeBlockUpdate struct {
-	key   []byte
-	ref   pebblekv.BlobRef
-	keep  bool
-	oldID uint64
-	newID uint64
+	key     []byte
+	ref     pebblekv.BlobRef
+	keep    bool
+	sameRef bool
+	oldID   uint64
+	newID   uint64
+	// 窗口内脏块的原地补丁：在配额校验通过后、批次提交前执行。
+	patchID     uint64
+	patchOffset int64
+	patchBytes  []byte
+	patchFull   []byte
+	patchSize   int64
 }
 
 // pebbleWriteLocked 在目标 Inode 写锁内处理局部 CoW、截断与跨块写入。
@@ -362,16 +424,16 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 		start := int(pos % pebblekv.BlobSize)
 		length := min(len(req.Data)-consumed, pebblekv.BlobSize-start)
 		chunk := req.Data[consumed : consumed+length]
-		ref, keep, oldID, newID, err := m.buildWriteBlock(disk, store, blobs, req.Ino, block, start, chunk)
+		update, err := m.buildWriteBlock(disk, store, blobs, req.Ino, block, start, chunk)
 		if err != nil {
 			return nil, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 		}
-		updates = append(updates, writeBlockUpdate{key: pebblekv.DataKey(req.Ino, block), ref: ref, keep: keep, oldID: oldID, newID: newID})
-		if oldID != 0 {
-			oldIDs = append(oldIDs, oldID)
+		updates = append(updates, update)
+		if update.oldID != 0 {
+			oldIDs = append(oldIDs, update.oldID)
 		}
-		if newID != 0 {
-			newIDs = append(newIDs, newID)
+		if update.newID != 0 {
+			newIDs = append(newIDs, update.newID)
 		}
 		pos += uint64(length)
 		consumed += length
@@ -382,10 +444,31 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 		}
 		for _, update := range updates {
 			if update.keep {
+				// 原地补丁不改变 BlobRef 时无需重写 DataKey，避免一次无意义的 LSM 写入。
+				if update.sameRef {
+					continue
+				}
 				if err := batch.Set(update.key, pebblekv.EncodeBlobRef(update.ref), nil); err != nil {
 					return err
 				}
 			} else if err := batch.Delete(update.key, nil); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, func() error {
+		// 配额与序列校验已通过，此时才允许原地覆写窗口内脏块。
+		for _, update := range updates {
+			if update.patchID == 0 {
+				continue
+			}
+			if update.patchFull == nil {
+				if err := blobs.Patch(update.patchID, update.patchOffset, update.patchBytes, update.patchSize); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := blobs.AppendTail(update.patchID, update.patchOffset, update.patchBytes, update.patchFull); err != nil {
 				return err
 			}
 		}
@@ -517,12 +600,12 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 			if err != nil {
 				return err
 			}
-			if err := blobs.Write(id, data); err != nil {
+			if err := blobs.WriteForInode(ino, id, data); err != nil {
 				return err
 			}
 			newIDs = append(newIDs, id)
 			return batch.Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: length}), nil)
-		})
+		}, nil)
 		if err != nil {
 			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 		}
@@ -591,7 +674,7 @@ func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv
 		if err != nil {
 			return err
 		}
-		if err := blobs.Write(id, data); err != nil {
+		if err := blobs.WriteForInode(ino, id, data); err != nil {
 			return err
 		}
 		*newIDs = append(*newIDs, id)
@@ -655,7 +738,7 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 				return nil
 			}
 			return m.zeroPebbleRange(disk, store, blobs, batch, params.Ino, params.Offset, min(end, inode.Size), &oldIDs, &newIDs)
-		})
+		}, nil)
 		if err != nil {
 			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 		}
@@ -694,21 +777,49 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 		if err := m.flushPebbleAtimeInodeLocked(disk, branch, store, ino); err != nil {
 			return err
 		}
-		// 先取脏标记：blobs.Sync 期间的新写入会重新置脏，不能被本次屏障吞掉。
+		// 先取脏标记：块同步期间的新写入会重新置脏，不能被本次屏障吞掉。
 		dirty := m.pebble.BranchDirty(disk, branch)
-		// 先确认块文件落盘，再同步指向它们的元数据 WAL。
-		if err := blobs.Sync(); err != nil {
-			return err
-		}
-		// 分支已干净时跳过 WAL 屏障：file fsync + dir fsync 连发时，
-		// 第二次屏障没有任何未同步写入，却要付一次完整 fsync。
-		if !dirty {
+		if dir {
+			// 目录项与属性只存在 Pebble WAL，不涉及 .blob 文件，FsyncDir 无需块文件屏障。
+			if !dirty {
+				return nil
+			}
+			if err := store.LogData(nil, pebble.Sync); err != nil {
+				return err
+			}
+			// 仍有其它 Inode 的脏块时保持分支脏标记，交给后续 fsync 或后台兜底刷盘。
+			if !blobs.HasDirty() {
+				m.pebble.MarkBranchClean(disk, branch)
+			}
 			return nil
 		}
-		if err := store.LogData(nil, pebble.Sync); err != nil {
+		if !dirty {
+			return blobs.SyncInode(ino)
+		}
+		if !blobs.HasDirty() {
+			// 没有脏块时无需并发，直接在当前协程完成 WAL 屏障。
+			if err := store.LogData(nil, pebble.Sync); err != nil {
+				return err
+			}
+			m.pebble.MarkBranchClean(disk, branch)
+			return nil
+		}
+		// 块文件屏障与元数据 WAL 屏障彼此独立，并发执行以少付一次 NVMe 缓存刷新时延。
+		var walErr error
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			walErr = store.LogData(nil, pebble.Sync)
+		}()
+		blobErr := blobs.SyncInode(ino)
+		wg.Wait()
+		if err := errors.Join(blobErr, walErr); err != nil {
 			return err
 		}
-		m.pebble.MarkBranchClean(disk, branch)
+		if !blobs.HasDirty() {
+			m.pebble.MarkBranchClean(disk, branch)
+		}
 		return nil
 	})
 }

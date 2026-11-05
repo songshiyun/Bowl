@@ -77,7 +77,7 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	if status != fuse.OK {
 		return status
 	}
-	fs.cache.invalidateDirListing(input.NodeId)
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, inode, 0, resp.Msg.GetAttrTimeoutSeconds())
 	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
 	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.caps.markAbsent(ino)

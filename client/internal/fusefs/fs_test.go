@@ -117,6 +117,10 @@ func TestRawFS_BuildMountOptions(t *testing.T) {
 	require.True(t, opts.Debug)
 	require.NotZero(t, opts.ExtraCapabilities&fuse.CAP_HANDLE_KILLPRIV, "必须声明 CAP_HANDLE_KILLPRIV 由文件系统原生处理 killpriv")
 	require.NotZero(t, opts.DisabledCapabilities&fuse.CAP_WRITEBACK_CACHE, "必须禁用内核 writeback_cache 以保持 1 MiB 直通写")
+	require.NotZero(t, opts.DisabledCapabilities&fuse.CAP_AUTO_INVAL_DATA,
+		"必须禁用 CAP_AUTO_INVAL_DATA：不能把页缓存生命周期交给服务端 mtime 与内核 i_mtime 的比较")
+	require.False(t, opts.ExplicitDataCacheControl,
+		"保留 explicit_inval_data=false，让尺寸变化仍由内核失效兜底")
 
 	// 非只读时 Options 不应包含 ro
 	optsRW := fusefs.BuildMountOptions(fusefs.Config{DiskID: "rw", ReadOnly: false})

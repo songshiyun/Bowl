@@ -3,7 +3,6 @@ package rpc
 import (
 	"context"
 	"errors"
-	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +21,9 @@ var ErrKernelInterrupted = errors.New("operation interrupted by kernel signal")
 // ContextWithCancelChan 创建一个与内核 cancel <-chan struct{} 联动的派生 context。
 // 当内核关闭 cancel 通道时，自动以 ErrKernelInterrupted 为原因取消派生上下文；
 // 当外部显式调用返回的 CancelFunc 时，安全停止监听并取消上下文。
+//
+// 快速路径不分配 stop 通道与 sync.Once：cancelCause(nil) 本身幂等，且会关闭 ctx.Done()，
+// 监听协程的两个 select 都以 ctx.Done() 作为退出信号，因此无需额外的停止通道。
 func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (context.Context, context.CancelFunc) {
 	ctx, cancelCause := context.WithCancelCause(parent)
 	if cancel == nil {
@@ -36,9 +38,6 @@ func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (cont
 	default:
 	}
 
-	stop := make(chan struct{})
-	var once sync.Once
-
 	go func() {
 		select {
 		case <-cancel:
@@ -48,21 +47,12 @@ func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (cont
 			case <-timer.C:
 				cancelCause(ErrKernelInterrupted)
 			case <-ctx.Done():
-			case <-stop:
 			}
 		case <-ctx.Done():
-		case <-stop:
 		}
 	}()
 
-	cancelFunc := func() {
-		once.Do(func() {
-			close(stop)
-			cancelCause(nil)
-		})
-	}
-
-	return ctx, cancelFunc
+	return ctx, func() { cancelCause(nil) }
 }
 
 // MapErrorWithCancel 在调用 MapError 前优先检查内核 cancel 通道是否已触发关闭。

@@ -3,6 +3,7 @@ package meta_test
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -198,4 +199,189 @@ func TestPebbleBlobCommitForkRollbackIsolation(t *testing.T) {
 	require.NoError(t, e.mgr.Rollback(e.ctx, meta.RollbackParams{DiskID: e.disk.DiskID, BranchName: "main", CommitID: commit.CommitID}))
 	versionSession(t, e, "main", 103, false, nil)
 	versionRead(t, e, 103, ino, original)
+}
+
+// refOf 读取指定块在 Pebble 中的 BlobRef。
+func refOf(t *testing.T, e *pebbleCreateEnv, ino, block uint64) pebblekv.BlobRef {
+	t.Helper()
+	var ref pebblekv.BlobRef
+	e.withBranch(t, "main", func(store *pebble.DB) {
+		decoded, err := pebblekv.DecodeBlobRef(getPebbleValue(t, store, pebblekv.DataKey(ino, block)))
+		require.NoError(t, err)
+		ref = decoded
+	})
+	return ref
+}
+
+// 窗口内块的内区间覆写必须复用同一块编号，不分配新块、不重写整个 1 MiB 块。
+func TestPebbleWindowLocalInteriorOverwriteReusesBlob(t *testing.T) {
+	e := setupPebbleCreate(t, 4*pebblekv.BlobSize)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("interior"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+
+	base := bytes.Repeat([]byte{0x11}, 4096)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: base, SessionID: &e.sid})
+	require.NoError(t, err)
+	first := refOf(t, e, ino, 0)
+	filesBefore := len(blobFiles(t, e.root, e.disk.DiskID))
+
+	patch := bytes.Repeat([]byte{0x22}, 16)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 100, Data: patch, SessionID: &e.sid})
+	require.NoError(t, err)
+	after := refOf(t, e, ino, 0)
+
+	require.Equal(t, first.ID, after.ID, "窗口内块内覆写必须复用同一块编号")
+	require.Equal(t, first.Length, after.Length, "块内覆写不得改变逻辑长度")
+	require.Len(t, blobFiles(t, e.root, e.disk.DiskID), filesBefore, "块内覆写不得产生新块文件")
+
+	model := bytes.Clone(base)
+	copy(model[100:], patch)
+	assertPebbleData(t, e, ino, model)
+
+	// 独立判据：绕过热缓存直接从磁盘读取块文件，内容必须与内存模型一致。
+	cold := pebblekv.NewBlobStore(filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main"))
+	onDisk, err := cold.Read(after.ID, int(after.Length))
+	require.NoError(t, err)
+	require.Equal(t, model, onDisk)
+}
+
+// 窗口内跨越旧块尾部的空洞写入必须复用同一块编号，并把空洞补零后写入新数据。
+func TestPebbleWindowLocalGapWriteReusesBlob(t *testing.T) {
+	e := setupPebbleCreate(t, 4*pebblekv.BlobSize)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("gap"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("abc"), SessionID: &e.sid})
+	require.NoError(t, err)
+	first := refOf(t, e, ino, 0)
+	filesBefore := len(blobFiles(t, e.root, e.disk.DiskID))
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 10, Data: []byte("xyz"), SessionID: &e.sid})
+	require.NoError(t, err)
+	after := refOf(t, e, ino, 0)
+
+	require.Equal(t, first.ID, after.ID, "窗口内空洞写入必须复用同一块编号")
+	require.Equal(t, uint32(13), after.Length)
+	require.Len(t, blobFiles(t, e.root, e.disk.DiskID), filesBefore)
+
+	model := append([]byte("abc"), make([]byte, 7)...)
+	model = append(model, []byte("xyz")...)
+	assertPebbleData(t, e, ino, model)
+
+	cold := pebblekv.NewBlobStore(filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main"))
+	onDisk, err := cold.Read(after.ID, int(after.Length))
+	require.NoError(t, err)
+	require.Equal(t, model, onDisk)
+}
+
+// 配额或写序号耗尽导致 ErrNoSpace 时，原地补丁绝不能提前落盘，旧块内容必须保持完整。
+func TestPebbleWindowLocalPatchPreservedOnNoSpace(t *testing.T) {
+	e := setupPebbleCreate(t, 4*pebblekv.BlobSize)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("nospace"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("abc"), SessionID: &e.sid})
+	require.NoError(t, err)
+	before := refOf(t, e, ino, 0)
+
+	e.withBranch(t, "main", func(store *pebble.DB) {
+		stat, err := pebblekv.DecodeBranchStat(getPebbleValue(t, store, pebblekv.StatKey()))
+		require.NoError(t, err)
+		stat.NextWriteSeq = math.MaxUint64
+		require.NoError(t, store.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), pebble.Sync))
+	})
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 1, Data: []byte("Z"), SessionID: &e.sid})
+	require.ErrorIs(t, err, meta.ErrNoSpace)
+
+	after := refOf(t, e, ino, 0)
+	require.Equal(t, before, after, "ErrNoSpace 时 BlobRef 必须保持不变")
+	got, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Size: 3, SessionID: &e.sid})
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), got.Data, "ErrNoSpace 时旧块内容必须保持完整")
+
+	cold := pebblekv.NewBlobStore(filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main"))
+	onDisk, err := cold.Read(after.ID, int(after.Length))
+	require.NoError(t, err)
+	require.Equal(t, []byte("abc"), onDisk, "磁盘上的旧块不得被未提交补丁污染")
+}
+
+// TestPebbleWindowLocalAppendNoFullCopy 锁定窗口内尾部追加的零拷贝补丁路径：
+// 对同一个 1 MiB 块连续 256 次 4 KiB 追加，不得读取旧块、不得分配新块，
+// 最终块文件内容必须与写入模型逐字节一致。
+func TestPebbleWindowLocalAppendNoFullCopy(t *testing.T) {
+	e := setupPebbleCreate(t, 4*pebblekv.BlobSize)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("append"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+
+	branch, err := e.storage.OpenBranch(e.disk.DiskID, "main")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, branch.Close()) }()
+	blobs := branch.Blobs()
+
+	const chunkSize = 4096
+	model := make([]byte, 0, pebblekv.BlobSize)
+	for i := 0; i < pebblekv.BlobSize/chunkSize; i++ {
+		chunk := bytes.Repeat([]byte{byte(i + 1)}, chunkSize)
+		model = append(model, chunk...)
+		_, err := e.mgr.Write(e.ctx, &meta.WriteRequest{
+			Ino: ino, Offset: uint64(i * chunkSize), Data: chunk, SessionID: &e.sid,
+		})
+		require.NoError(t, err)
+	}
+
+	require.Zero(t, blobs.ReadOps(), "窗口内尾部追加不得读取旧块构造整块缓冲区")
+	require.Len(t, blobFiles(t, e.root, e.disk.DiskID), 1, "256 次追加必须复用同一个块文件")
+	ref := refOf(t, e, ino, 0)
+	require.Equal(t, uint32(pebblekv.BlobSize), ref.Length)
+
+	got, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Size: uint32(len(model)), SessionID: &e.sid})
+	require.NoError(t, err)
+	require.Equal(t, model, got.Data)
+
+	cold := pebblekv.NewBlobStore(filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main"))
+	onDisk, err := cold.Read(ref.ID, int(ref.Length))
+	require.NoError(t, err)
+	require.Equal(t, model, onDisk)
+}
+
+// TestPebbleWindowLocalGapStillFullCopy 锁定空洞写入必须仍走整块拷贝补零：
+// 旧块内容被读入新缓冲区，跨越旧尾部的区间补零后再追加新数据。
+func TestPebbleWindowLocalGapStillFullCopy(t *testing.T) {
+	e := setupPebbleCreate(t, 4*pebblekv.BlobSize)
+	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("gapcopy"), Mode: 0o644})
+	require.NoError(t, err)
+	ino := file.Inode.Ino
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("abc"), SessionID: &e.sid})
+	require.NoError(t, err)
+
+	branch, err := e.storage.OpenBranch(e.disk.DiskID, "main")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, branch.Close()) }()
+	blobs := branch.Blobs()
+	readsBefore := blobs.ReadOps()
+
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 10, Data: []byte("xyz"), SessionID: &e.sid})
+	require.NoError(t, err)
+
+	require.Equal(t, readsBefore+1, blobs.ReadOps(), "空洞写入必须读取旧块并补零")
+
+	want := append([]byte("abc"), make([]byte, 7)...)
+	want = append(want, []byte("xyz")...)
+	ref := refOf(t, e, ino, 0)
+	require.Equal(t, uint32(len(want)), ref.Length)
+
+	got, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Size: uint32(len(want)), SessionID: &e.sid})
+	require.NoError(t, err)
+	require.Equal(t, want, got.Data)
+
+	cold := pebblekv.NewBlobStore(filepath.Join(e.root, "disks", e.disk.DiskID, "branches", "main"))
+	onDisk, err := cold.Read(ref.ID, int(ref.Length))
+	require.NoError(t, err)
+	require.Equal(t, want, onDisk)
 }

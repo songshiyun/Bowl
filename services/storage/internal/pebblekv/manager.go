@@ -193,16 +193,15 @@ func (m *Manager) FlushWAL() {
 			entry.mu.Unlock()
 			continue
 		}
-		// 先确认块文件落盘，再同步指向它们的元数据 WAL。
-		blobErr := entry.blobs.Sync()
-		var err error
-		if blobErr == nil {
-			err = entry.db.LogData(nil, pebble.Sync)
-		}
+		// 后台周期任务的唯一职责是兜底同步 Pebble WAL：.blob 块文件写入 OS Page Cache
+		// 即可满足进程崩溃不丢数据（ADR-0029 §3），物理落盘只由显式 Fsync / FsyncDir /
+		// Commit 屏障触发。在这里调用 blobs.Sync() 会把未 fsync 的大文件写入强行压进
+		// 云盘物理带宽，并清空 WindowLocal 使活跃尾块退化回 CoW 全块克隆。
+		walErr := entry.db.LogData(nil, pebble.Sync)
 		entry.mu.Unlock()
-		if err := errors.Join(blobErr, err); err != nil {
-			if !errors.Is(err, ErrClosed) {
-				slog.Error("后台同步分支 WAL 失败", "error", err)
+		if walErr != nil {
+			if !errors.Is(walErr, ErrClosed) {
+				slog.Error("后台同步分支 WAL 失败", "error", walErr)
 			}
 			m.mu.Lock()
 			entry.dirty = true

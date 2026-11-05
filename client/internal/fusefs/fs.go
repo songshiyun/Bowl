@@ -568,7 +568,14 @@ func BuildMountOptions(cfg Config) *fuse.MountOptions {
 		// 由文件系统自身在写批次中清除 security.capability，避免内核写前 GetXattr 探测。
 		ExtraCapabilities: fuse.CAP_HANDLE_KILLPRIV,
 		// 关闭内核 writeback 缓存，保持 1 MiB 直通写，避免 4 KiB 脏页回写与写前尺寸核对。
-		DisabledCapabilities: fuse.CAP_WRITEBACK_CACHE,
+		// 同时禁用 CAP_AUTO_INVAL_DATA：Bowl 是单分支 SWMR（同一 (disk,branch) 同时最多 1 个可写会话，
+		// 只读会话只能挂不可变 Commit），同一挂载视图内不存在第三方写入，内核页缓存只会被本地 write()
+		// 更新，不会被“外部修改”。而服务端 mtime 来自 Go 时钟、内核 i_mtime 来自 file_update_time()，
+		// 两者在非 fsync 路径上通常不等；保留 auto-inval 会让写后第一次 read() 先发一次 GetAttr，
+		// 并因 mtime 不等整文件清空页缓存。这里只关闭 AUTO_INVAL，不开启 EXPLICIT_INVAL：
+		// 尺寸变化仍由 fuse_change_attributes 的 oldsize != attr->size 分支做
+		// truncate_pagecache + invalidate_inode_pages2 兜底。
+		DisabledCapabilities: fuse.CAP_WRITEBACK_CACHE | fuse.CAP_AUTO_INVAL_DATA,
 		DirectMount:          true,
 		Debug:                cfg.Debug,
 	}

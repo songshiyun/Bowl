@@ -1,6 +1,8 @@
 package fusefs
 
 import (
+	"syscall"
+
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -94,9 +96,26 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDirListing(input.NodeId)
+	// 保留父目录 Inode 缓存并用当前时间刷新属性，避免 rename 后内核 fuse_invalidate_attr
+	// 触发的 GETATTR 每次穿透到服务端。目录跨父目录移动时同步修正父目录 nlink。
+	sourceIsDir := false
+	if source != 0 {
+		if cached, ok := fs.cache.inode(source); ok && cached.inode != nil && cached.inode.GetAttr() != nil {
+			sourceIsDir = cached.inode.GetAttr().GetMode()&syscall.S_IFMT == syscall.S_IFDIR
+		}
+	}
+	movedDir := sourceIsDir && input.NodeId != input.Newdir && input.Flags&renameExchange == 0
+	oldDelta := int32(0)
+	if movedDir {
+		oldDelta = -1
+	}
+	fs.cache.invalidateDirListingTouchParentNowAt(epoch, input.NodeId, oldDelta)
 	if input.Newdir != input.NodeId {
-		fs.cache.invalidateDirListing(input.Newdir)
+		newDelta := int32(0)
+		if movedDir {
+			newDelta = 1
+		}
+		fs.cache.invalidateDirListingTouchParentNowAt(epoch, input.Newdir, newDelta)
 	}
 	if input.Flags&renameExchange != 0 {
 		// 交换后旧名指向原目标节点，新名指向原源节点。
@@ -111,8 +130,14 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 			fs.cache.removeEntry(input.Newdir, newName)
 		}
 	} else {
-		// 旧名消失；WHITEOUT 会在旧名留下特殊节点，保守地按未命中处理。
-		fs.cache.removeEntry(input.NodeId, oldName)
+		// 旧名消失。WHITEOUT 会在旧名留下特殊节点，保守地按未命中处理；
+		// 普通重命名的旧名已确定不存在，回填负缓存（ino=0），避免随后 access()/stat()
+		// 再次穿透 RPC。同名同目录自重命名由下面的新名回填统一处理。
+		if input.Flags&renameWhiteout != 0 {
+			fs.cache.removeEntry(input.NodeId, oldName)
+		} else if input.NodeId != input.Newdir || oldName != newName {
+			fs.cache.putEntryAt(epoch, input.NodeId, oldName, 0)
+		}
 		if source != 0 {
 			fs.cache.putEntryAt(epoch, input.Newdir, newName, source)
 		} else {

@@ -1219,3 +1219,353 @@ func TestAlignedWindowNotPublishedAfterInvalidation(t *testing.T) {
 	got3, _ := res3.Bytes(nil)
 	require.Equal(t, versionTwo[:4096], got3, "失效后不得把在途窗口发布为活跃缓存")
 }
+
+// TestReadAheadFromHighOffsetAdvancesStreamEnd 锁定「首次读发生在偏移 >= 4 MiB」时的高水位修复：
+// 首读直通后必须把 streamEnd 推进到读取末尾，后续同一股流附近（非紧邻）的并发预读流量
+// 才能进入统一 4 MiB 对齐窗口单飞分支，而不是逐个退化为 128 KiB 小 RPC。
+func TestReadAheadFromHighOffsetAdvancesStreamEnd(t *testing.T) {
+	const (
+		diskID   = "00000000-0000-0000-0000-000000000001"
+		rootIno  = 1001
+		fileIno  = 2002
+		testFH   = 12345
+		total    = 32 << 20
+		startOff = 8 << 20
+		reqSize  = 128 << 10
+		readers  = 28
+	)
+
+	pattern := make([]byte, total)
+	for i := range pattern {
+		pattern[i] = byte(i % 251)
+	}
+
+	var calls, windowCalls atomic.Int64
+	var mu sync.Mutex
+	var windowOffsets []uint64
+	mockSrv := &rwMockStorageServer{
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			calls.Add(1)
+			if req.Msg.GetSize() == fusefs.MaxRPCChunkSize {
+				windowCalls.Add(1)
+				mu.Lock()
+				windowOffsets = append(windowOffsets, req.Msg.GetOffset())
+				mu.Unlock()
+			}
+			start := int(req.Msg.GetOffset())
+			if start >= len(pattern) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(pattern))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: pattern[start:end]}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	// 首读从 8 MiB 开始，直通并推进 streamEnd。
+	res0, st0 := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   startOff,
+		Size:     reqSize,
+	}, nil)
+	require.Equal(t, fuse.OK, st0)
+	got0, _ := res0.Bytes(nil)
+	require.Equal(t, pattern[startOff:startOff+reqSize], got0)
+
+	// 并发读全部落在 [8.5 MiB, 11.875 MiB)，既不紧邻首读末尾，又都在 streamEnd+4 MiB 内。
+	var wg sync.WaitGroup
+	var failuresMu sync.Mutex
+	var failures []string
+	start := make(chan struct{})
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			off := uint64(startOff + (i+4)*reqSize)
+			res, st := fs.Read(nil, &fuse.ReadIn{
+				InHeader: fuse.InHeader{NodeId: fileIno},
+				Fh:       testFH,
+				Offset:   off,
+				Size:     reqSize,
+			}, nil)
+			got, code := res.Bytes(nil)
+			if st != fuse.OK || code != fuse.OK || !bytes.Equal(got, pattern[off:off+reqSize]) {
+				failuresMu.Lock()
+				failures = append(failures, fmt.Sprintf("offset=%d status=%v bytesStatus=%v len=%d", off, st, code, len(got)))
+				failuresMu.Unlock()
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	require.Empty(t, failures, "高偏移并发读必须全部返回与源文件一致的字节流")
+	require.LessOrEqual(t, int(calls.Load()), 3,
+		"streamEnd 推进后，同一股流的并发读必须合并为一次 4 MiB 窗口拉取（首读直通 + 窗口 + 预取）")
+	require.GreaterOrEqual(t, int(windowCalls.Load()), 1, "必须至少触发一次 4 MiB 对齐窗口拉取")
+	mu.Lock()
+	require.Contains(t, windowOffsets, uint64(startOff), "窗口拉取必须对齐到 8 MiB")
+	mu.Unlock()
+}
+
+// TestInFlightWindowNotClearedByOutOfOrderSmallRead 锁定直通分支的条件清窗：
+// 在途 4 MiB 窗口拉取期间，落在同一窗口内的乱序小读不得清窗作废该窗口，
+// 窗口仍必须发布为活跃缓存，后续窗口内读取直接命中内存。
+func TestInFlightWindowNotClearedByOutOfOrderSmallRead(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+		total   = 16 << 20
+		step    = 128 << 10
+	)
+
+	pattern := make([]byte, total)
+	for i := range pattern {
+		pattern[i] = byte(i % 251)
+	}
+
+	var mu sync.Mutex
+	var requests []uint64
+	windowStarted := make(chan struct{})
+	releaseWindow := make(chan struct{})
+	var once sync.Once
+	mockSrv := &rwMockStorageServer{
+		readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			mu.Lock()
+			requests = append(requests, req.Msg.GetOffset())
+			mu.Unlock()
+			if req.Msg.GetOffset() == 0 && req.Msg.GetSize() == fusefs.MaxRPCChunkSize {
+				once.Do(func() { close(windowStarted) })
+				select {
+				case <-releaseWindow:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			start := int(req.Msg.GetOffset())
+			if start >= len(pattern) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(pattern))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: pattern[start:end]}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	// 1. 首读直通，建立 streamEnd。
+	res0, st0 := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   0,
+		Size:     step,
+	}, nil)
+	require.Equal(t, fuse.OK, st0)
+	got0, _ := res0.Bytes(nil)
+	require.Equal(t, pattern[:step], got0)
+
+	// 2. 触发 4 MiB 对齐窗口拉取（aligned=0）并阻塞在服务端。
+	type readOutcome struct {
+		data   []byte
+		status fuse.Status
+	}
+	outcome := make(chan readOutcome, 1)
+	go func() {
+		res, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   2 * step,
+			Size:     step,
+		}, nil)
+		var data []byte
+		if st == fuse.OK && res != nil {
+			data, _ = res.Bytes(nil)
+		}
+		outcome <- readOutcome{data: data, status: st}
+	}()
+
+	<-windowStarted
+
+	// 3. 在途期间下发落在同一窗口内的乱序小读，不得清窗作废在途窗口。
+	resSmall, stSmall := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   3 * step,
+		Size:     4096,
+	}, nil)
+	require.Equal(t, fuse.OK, stSmall)
+	gotSmall, _ := resSmall.Bytes(nil)
+	require.Equal(t, pattern[3*step:3*step+4096], gotSmall)
+
+	close(releaseWindow)
+
+	got := <-outcome
+	require.Equal(t, fuse.OK, got.status)
+	require.Equal(t, pattern[2*step:3*step], got.data, "在途窗口拉取必须为本次请求返回正确区间")
+
+	// 4. 窗口已被发布：窗口内未读过的区间必须直接命中内存，不得再发 RPC。
+	mu.Lock()
+	before := len(requests)
+	mu.Unlock()
+
+	resHit, stHit := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   step,
+		Size:     step,
+	}, nil)
+	require.Equal(t, fuse.OK, stHit)
+	gotHit, _ := resHit.Bytes(nil)
+	require.Equal(t, pattern[step:2*step], gotHit)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, off := range requests[before:] {
+		require.NotEqual(t, uint64(step), off, "乱序小读不得作废在途 4 MiB 窗口，窗口内读取必须命中内存")
+	}
+}
+
+// TestReadAcrossAlignedWindowBoundaryReturnsFullRequest 锁定跨 4 MiB 对齐窗口边界的读取语义：
+// 请求区间超出已拉取窗口时必须按请求尺寸直通补齐，绝不能返回短读。
+// 内核会把 FUSE 短读当作 EOF，把 i_size 截断到窗口末尾，导致后续越过该边界的读取直接返回 0。
+func TestReadAcrossAlignedWindowBoundaryReturnsFullRequest(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+		total   = 8 << 20
+		want    = 128 << 10
+	)
+
+	pattern := make([]byte, total)
+	for i := range pattern {
+		pattern[i] = byte(i % 251)
+	}
+
+	mockSrv := &rwMockStorageServer{
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			start := int(req.Msg.GetOffset())
+			if start >= len(pattern) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(pattern))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: pattern[start:end]}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	// 首读直通，建立 streamEnd。
+	res0, st0 := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   0,
+		Size:     want,
+	}, nil)
+	require.Equal(t, fuse.OK, st0)
+	got0, _ := res0.Bytes(nil)
+	require.Equal(t, pattern[:want], got0)
+
+	// 请求跨越 4 MiB 对齐窗口边界：窗口尾部只剩 64 KiB，必须补齐为完整 128 KiB。
+	offset := uint64(fusefs.MaxRPCChunkSize - 64*1024)
+	res, st := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   offset,
+		Size:     want,
+	}, nil)
+	require.Equal(t, fuse.OK, st)
+	got, code := res.Bytes(nil)
+	require.Equal(t, fuse.OK, code)
+	require.Len(t, got, want, "跨窗口边界的读取必须返回完整请求长度，短读会让内核把 i_size 截断到窗口末尾")
+	require.Equal(t, pattern[offset:offset+want], got)
+}
+
+// TestReadTailNonAlignedSizeStaysInWindow 验证文件尺寸不是请求尺寸整数倍时，
+// 顺序读到最后一段（剩余不足 want）仍由已发布的对齐窗口直接切片返回，
+// 不会因漏判 winEOF 落入直通分支多发一次 Read RPC。
+func TestReadTailNonAlignedSizeStaysInWindow(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+		total   = 300 << 10 // 300 KiB，非 128 KiB 整数倍
+		step    = 128 << 10
+	)
+
+	pattern := make([]byte, total)
+	for i := range pattern {
+		pattern[i] = byte(i % 251)
+	}
+
+	var rpcCalls atomic.Int32
+	mockSrv := &rwMockStorageServer{
+		readFn: func(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			rpcCalls.Add(1)
+			start := int(req.Msg.GetOffset())
+			if start >= len(pattern) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(pattern))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: pattern[start:end]}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	// 首次读取从 128 KiB 处直通，建立 lastReadEnd=256 KiB。
+	res, status := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   step,
+		Size:     step,
+	}, nil)
+	require.Equal(t, fuse.OK, status)
+	got, code := res.Bytes(nil)
+	require.Equal(t, fuse.OK, code)
+	require.Equal(t, pattern[step:2*step], got)
+
+	// 顺序读到最后一段：请求 128 KiB 但文件只剩 44 KiB。
+	res, status = fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   2 * step,
+		Size:     step,
+	}, nil)
+	require.Equal(t, fuse.OK, status)
+	got, code = res.Bytes(nil)
+	require.Equal(t, fuse.OK, code)
+	require.Len(t, got, total-2*step, "文件末尾不足 want 时必须返回剩余字节")
+	require.Equal(t, pattern[2*step:], got)
+
+	// 第 1 次直通 128 KiB + 第 2 次 4 MiB 对齐窗口，共 2 次 RPC；
+	// 若漏判 winEOF，会额外落入直通分支发第 3 次小 RPC。
+	require.Equal(t, int32(2), rpcCalls.Load(), "文件末尾非对齐尺寸不得落入直通分支多发 Read RPC")
+}

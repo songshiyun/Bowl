@@ -219,3 +219,188 @@ func TestBlobAppendTailOverwritesStaleResidual(t *testing.T) {
 	require.NoError(t, cold.ReadAt(id, int64(len(head)), partial))
 	require.Equal(t, tail, partial, "尾部区间不得因残留字节产生错位")
 }
+
+// TestBlobStoreHotCacheRetains400SmallBlocks 锁定 16 分片 × 64 槽位 × 4 MiB/分片预算的热块缓存：
+// 400 个 128 KiB 块（50 MiB）必须全部驻留，且命中路径完全不需要打开底层块文件。
+func TestBlobStoreHotCacheRetains400SmallBlocks(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	const (
+		blockCount = 400
+		blockSize  = 128 << 10
+	)
+
+	for i := 1; i <= blockCount; i++ {
+		data := bytes.Repeat([]byte{byte(i)}, blockSize)
+		require.NoError(t, store.Write(uint64(i), data))
+	}
+
+	// 直接移除底层块目录：任何未命中热缓存的读取都会因 open 失败而暴露。
+	require.NoError(t, os.RemoveAll(store.Root()))
+
+	for i := 1; i <= blockCount; i++ {
+		got, err := store.Read(uint64(i), blockSize)
+		require.NoError(t, err, "块 %d 必须命中热缓存而无需打开底层文件", i)
+		require.Equal(t, byte(i), got[0])
+		require.Equal(t, byte(i), got[blockSize-1])
+	}
+}
+
+// TestBlobStoreHotCacheEvictsByShardByteBudget 锁定分片字节预算淘汰：
+// 同一分片连续写入 40 个 128 KiB 块（5 MiB > 4 MiB）后，必须按环形顺序淘汰最旧的 8 个块，
+// 恰好保留最新 32 个块（4 MiB），且保留集合与字节预算精确守恒。
+func TestBlobStoreHotCacheEvictsByShardByteBudget(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	const (
+		blockSize     = 128 << 10
+		blockCount    = 40
+		shardBudget   = 4 << 20
+		retainedCount = shardBudget / blockSize // 32
+		evictedCount  = blockCount - retainedCount
+	)
+
+	// 全部落在同一分片（id % 16 == 1）。
+	for i := 0; i < blockCount; i++ {
+		id := uint64(1 + i*16)
+		require.NoError(t, store.Write(id, bytes.Repeat([]byte{byte(i + 1)}, blockSize)))
+	}
+
+	// 移除底层块目录，用“能否读取”精确观测内存驻留集合。
+	require.NoError(t, os.RemoveAll(store.Root()))
+
+	for i := 0; i < evictedCount; i++ {
+		id := uint64(1 + i*16)
+		_, err := store.Read(id, blockSize)
+		require.Error(t, err, "最旧的块 %d 必须已被环形淘汰", id)
+	}
+	for i := evictedCount; i < blockCount; i++ {
+		id := uint64(1 + i*16)
+		got, err := store.Read(id, blockSize)
+		require.NoError(t, err, "最新的块 %d 必须仍在热缓存中", id)
+		require.Equal(t, byte(i+1), got[0])
+	}
+}
+
+// SyncInode 只刷目标 Inode 的脏块，其它文件的脏块必须保持待同步状态，
+// 避免多进程写同一分支时一次 fsync 把别人的数据一起拖进屏障。
+func TestBlobStoreSyncInodeOnlySyncsTargetInode(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	require.NoError(t, store.WriteForInode(10, 1, []byte("aaaa")))
+	require.NoError(t, store.WriteForInode(20, 2, []byte("bbbb")))
+	require.True(t, store.HasDirty())
+
+	require.NoError(t, store.SyncInode(10))
+	require.EqualValues(t, 1, store.FileSyncOps(), "只应同步目标 Inode 的 1 个块")
+	require.False(t, store.WindowLocal(1), "目标块同步后必须离开窗口")
+	require.True(t, store.WindowLocal(2), "其它 Inode 的脏块必须保持待同步")
+	require.True(t, store.HasDirty())
+
+	require.NoError(t, store.SyncInode(20))
+	require.EqualValues(t, 2, store.FileSyncOps())
+	require.False(t, store.HasDirty())
+}
+
+// 未登记 Inode 的脏块（旧调用方或上次同步失败重试）必须跟随任意一次 SyncInode 落盘。
+func TestBlobStoreSyncInodeFlushesUnassociatedBlocks(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	require.NoError(t, store.WriteForInode(10, 1, []byte("aaaa")))
+	require.NoError(t, store.Write(2, []byte("bbbb")))
+	require.True(t, store.HasDirty())
+
+	require.NoError(t, store.SyncInode(10))
+	require.EqualValues(t, 2, store.FileSyncOps(), "未登记 Inode 的脏块必须一并落盘")
+	require.False(t, store.HasDirty())
+}
+
+// 多块并行同步必须覆盖全部脏块且不重不漏。
+func TestBlobStoreSyncParallelCoversAllBlocks(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	for i := uint64(1); i <= 64; i++ {
+		require.NoError(t, store.WriteForInode(10, i, []byte("data")))
+	}
+	require.NoError(t, store.SyncInode(10))
+	require.EqualValues(t, 64, store.FileSyncOps())
+	require.False(t, store.HasDirty())
+}
+
+// TestBlobSyncOnlyNewFilesNeedDirBarrier 锁定目录屏障只由“新建 / 删除块文件”触发：
+// AppendTail / Patch 原地覆写不改变目录项，绝不能为它们多付一次分片目录 fsync。
+func TestBlobSyncOnlyNewFilesNeedDirBarrier(t *testing.T) {
+	store := pebblekv.NewBlobStore(filepath.Join(t.TempDir(), "branches", "main"))
+	data := bytes.Repeat([]byte{0x11}, 4096)
+
+	require.NoError(t, store.Write(0x21, data))
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 1, store.FileSyncOps())
+	require.EqualValues(t, 1, store.DirSyncOps(), "新建块必须落一次目录项屏障")
+
+	// 已落盘块的原地追加 + 原地补丁：目录项从未变化。
+	tail := bytes.Repeat([]byte{0x22}, 1024)
+	require.NoError(t, store.AppendTail(0x21, int64(len(data)), tail, nil))
+	require.NoError(t, store.Patch(0x21, 8, []byte("patch"), int64(len(data)+len(tail))))
+
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 2, store.FileSyncOps(), "只应同步被原地覆写的块文件")
+	require.EqualValues(t, 1, store.DirSyncOps(), "AppendTail / Patch 不得产生目录屏障")
+
+	// 新建块仍然必须落目录项屏障。
+	require.NoError(t, store.Write(0x22, data))
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 3, store.FileSyncOps())
+	require.EqualValues(t, 2, store.DirSyncOps(), "新建块必须落一次目录项屏障")
+
+	// 删除已落盘块必须落 unlink 的目录屏障。
+	require.NoError(t, store.Remove(0x22))
+	require.NoError(t, store.Sync())
+	require.EqualValues(t, 3, store.DirSyncOps(), "删除已落盘块必须 fsync 其分片目录")
+}
+
+// TestBlobPatchWindowLocal 锁定 Patch 的原地覆写语义：按逻辑偏移覆写 chunk 并截断到
+// 目标长度，同时剔除热缓存，让后续读回落到块文件而不是读到旧内容。
+func TestBlobPatchWindowLocal(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "branches", "main")
+	store := pebblekv.NewBlobStore(base)
+	const id = 0x31
+
+	head := bytes.Repeat([]byte{0x11}, 4096)
+	require.NoError(t, store.Write(id, head))
+
+	// 从旧长度开始追加：目标长度越过旧块尾，Patch 必须扩展文件而不是截掉新数据。
+	tail := bytes.Repeat([]byte{0x22}, 4096)
+	require.NoError(t, store.Patch(id, int64(len(head)), tail, int64(len(head)+len(tail))))
+
+	want := append(append([]byte(nil), head...), tail...)
+	onDisk, err := os.ReadFile(store.Path(id))
+	require.NoError(t, err)
+	require.Equal(t, want, onDisk, "Patch 后块文件必须等于旧内容 + chunk")
+
+	// 独立判据：清空块文件后读必须失败，证明热缓存已被剔除而不是继续返回旧前缀。
+	require.NoError(t, os.Truncate(store.Path(id), 0))
+	_, err = store.Read(id, len(want))
+	require.Error(t, err, "Patch 必须剔除热缓存，读必须回落到块文件")
+	require.NoError(t, os.WriteFile(store.Path(id), want, 0o644))
+
+	// 块内原地覆写不得改变逻辑长度。
+	patch := []byte("patch")
+	require.NoError(t, store.Patch(id, 100, patch, int64(len(want))))
+	got, err := store.Read(id, len(want))
+	require.NoError(t, err)
+	copy(want[100:], patch)
+	require.Equal(t, want, got, "块内覆写必须精确保留后续字节")
+}
+
+// TestBlobFdatasyncPath 锁定块文件屏障的落盘契约：Sync 后新的只读句柄必须读到完整内容。
+// Linux 上的 fdatasync 系统调用选择由 fdatasync_linux_test.go 单独校验。
+func TestBlobFdatasyncPath(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "branches", "main")
+	store := pebblekv.NewBlobStore(base)
+	data := bytes.Repeat([]byte{0x5a}, 8192)
+	require.NoError(t, store.WriteForInode(10, 0x41, data))
+
+	require.NoError(t, store.SyncInode(10))
+	require.EqualValues(t, 1, store.FileSyncOps())
+
+	cold := pebblekv.NewBlobStore(base)
+	got, err := cold.Read(0x41, len(data))
+	require.NoError(t, err)
+	require.Equal(t, data, got)
+}
