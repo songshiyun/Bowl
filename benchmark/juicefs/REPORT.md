@@ -4,7 +4,7 @@
 
 本报告记录了 **Bowl** 与 **JuiceFS** 在阿里云硅谷地域（`us-west-1a`）使用按量计费双机环境（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下运行 [JuiceFS 官方常规测试套件](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 **`juicefs bench` 基础测试**、**`fio` 顺序/随机大文件吞吐量测试**、**`mdtest` 元数据 IOPS 压测**）的实测对比结果。
 
-本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘。Bowl 列为提交 `c7ff002`（Round 2）在 `us-west-1a` 双机上的实测数据（`juicefs bench` / `fio` 为 2 次重复测量的中位数/均值，`mdtest` 为 2 次重复测量的中位数）；JuiceFS 两列保留上一轮同规格双机基线（`2c02e71` 轮次实测），用于同规格横向对照。
+本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘。Bowl 列为提交 `e078024`（含 Round 1 & Round 2 R2d 纯优化）在 `us-west-1a` 双机上的实测数据（`juicefs bench` / `fio` 为 2 次重复测量的中位数/均值，`mdtest` 为 2 次重复测量的中位数）；JuiceFS 两列保留上一轮同规格双机基线（`2c02e71` 轮次实测），用于同规格横向对照。
 
 三组目标的运行方式：
 
@@ -17,19 +17,19 @@
 
 | 测试维度 | 指标项 | Bowl (Pebble) | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JuiceFS(PG) | Bowl vs JuiceFS(Redis) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `333.69 MiB/s` | `309.21 MiB/s` | `304.81 MiB/s` | **1.08x** | **1.09x** |
-| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,592.58 MiB/s` | `443.80 MiB/s` | `450.12 MiB/s` | **3.59x** | **3.54x** |
-| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `342.50 files/s` | `491.50 files/s` | `746.20 files/s` | **0.70x** | **0.46x** |
-| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `3,514.00 files/s` | `1,743.30 files/s` | `3,587.10 files/s` | **2.02x** | **0.98x** |
-| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `117,097.40 files/s` | `11,043.50 files/s` | `15,478.50 files/s` | **10.60x** | **7.57x** |
-| `fio` 吞吐量 (bs=4M) | **单流顺序写 (1 job · 4GiB)** | `179.8 MiB/s` | `301.53 MiB/s` | `302.22 MiB/s` | **0.60x** | **0.59x** |
-| `fio` 吞吐量 (bs=4M) | **单流顺序读 (1 job · 4GiB)** | `188.7 MiB/s` | `184.18 MiB/s` | `184.10 MiB/s` | **1.02x** | **1.02x** |
-| `fio` 吞吐量 (bs=4M) | **16 并发顺序写 (16 jobs · 16GiB)** | `179.8 MiB/s` | `199.29 MiB/s` | `199.15 MiB/s` | **0.90x** | **0.90x** |
-| `fio` 吞吐量 (bs=4M) | **16 并发顺序读 (16 jobs · 16GiB)** | `182.0 MiB/s` | `177.58 MiB/s` | `175.35 MiB/s` | **1.02x** | **1.04x** |
-| `mdtest` (12,440 节点) | **目录创建 (Directory creation)** | `1,045.5 ops/s` | `715.68 ops/s` | `1,366.48 ops/s` | **1.46x** | **0.77x** |
-| `mdtest` (12,440 节点) | **文件创建 (File creation)** | `900.9 ops/s` | `779.16 ops/s` | `1,367.38 ops/s` | **1.16x** | **0.66x** |
-| `mdtest` (12,440 节点) | **文件 Stat (File stat)** | `31,609.8 ops/s` | `3,001.78 ops/s` | `9,879.12 ops/s` | **10.53x** | **3.20x** |
-| `mdtest` (12,440 节点) | **文件删除 (File removal)** | `1,512.0 ops/s` | `639.22 ops/s` | `1,264.58 ops/s` | **2.37x** | **1.20x** |
+| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `311.30 MiB/s` | `309.21 MiB/s` | `304.81 MiB/s` | **1.01x** | **1.02x** |
+| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,730.56 MiB/s` | `443.80 MiB/s` | `450.12 MiB/s` | **3.90x** | **3.84x** |
+| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `601.00 files/s` | `491.50 files/s` | `746.20 files/s` | **1.22x** | **0.81x** |
+| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `4,504.50 files/s` | `1,743.30 files/s` | `3,587.10 files/s` | **2.58x** | **1.26x** |
+| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `114,741.60 files/s` | `11,043.50 files/s` | `15,478.50 files/s` | **10.39x** | **7.41x** |
+| `fio` 吞吐量 (bs=4M) | **单流顺序写 (1 job · 4GiB)** | `181.25 MiB/s` | `301.53 MiB/s` | `302.22 MiB/s` | **0.60x** | **0.60x** |
+| `fio` 吞吐量 (bs=4M) | **单流顺序读 (1 job · 4GiB)** | `188.70 MiB/s` | `184.18 MiB/s` | `184.10 MiB/s` | **1.02x** | **1.02x** |
+| `fio` 吞吐量 (bs=4M) | **16 并发顺序写 (16 jobs · 16GiB)** | `180.10 MiB/s` | `199.29 MiB/s` | `199.15 MiB/s` | **0.90x** | **0.90x** |
+| `fio` 吞吐量 (bs=4M) | **16 并发顺序读 (16 jobs · 16GiB)** | `182.57 MiB/s` | `177.58 MiB/s` | `175.35 MiB/s` | **1.03x** | **1.04x** |
+| `mdtest` (12,440 节点) | **目录创建 (Directory creation)** | `4,277.51 ops/s` | `715.68 ops/s` | `1,366.48 ops/s` | **5.98x** | **3.13x** |
+| `mdtest` (12,440 节点) | **文件创建 (File creation)** | `2,780.76 ops/s` | `779.16 ops/s` | `1,367.38 ops/s` | **3.57x** | **2.03x** |
+| `mdtest` (12,440 节点) | **文件 Stat (File stat)** | `106,552.80 ops/s` | `3,001.78 ops/s` | `9,879.12 ops/s` | **35.50x** | **10.79x** |
+| `mdtest` (12,440 节点) | **文件删除 (File removal)** | `3,177.99 ops/s` | `639.22 ops/s` | `1,264.58 ops/s` | **4.97x** | **2.51x** |
 
 ---
 
@@ -58,7 +58,7 @@
 
 | 组件 / 参数项 | Bowl (`bowl`) | JuiceFS + PG (`jfs_pg`) | JuiceFS + Redis (`jfs_redis`) |
 | :--- | :--- | :--- | :--- |
-| **客户端版本** | Bowl `c7ff002` (`fusermount3` fusermount3 version: 3.14.0) | `juicefs version 1.2.1+2024-08-30.cd871d1` | `juicefs version 1.2.1+2024-08-30.cd871d1` |
+| **客户端版本** | Bowl `e078024` (R2d) (`fusermount3` fusermount3 version: 3.14.0) | `juicefs version 1.2.1+2024-08-30.cd871d1` | `juicefs version 1.2.1+2024-08-30.cd871d1` |
 | **控制面 / 文件元数据** | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) 控制面 / Pebble 分支存储 | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) (`jfs_pg` 库) | Redis server v=7.0.15 (`AOF everysec`) |
 | **数据块存储 (Server 节点)** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | rclone S3 (`http://172.16.1.228:9001/jfs-pg`) | rclone S3 (`http://172.16.1.228:9001/jfs-redis`) |
 | **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |
@@ -75,11 +75,11 @@
 
 | 测试项目 (`ITEM`) | Bowl | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Write big file** | `333.69 MiB/s (12.27 s/file)` | `309.21 MiB/s (13.25 s/file)` | `304.81 MiB/s (13.44 s/file)` | **1.08x** | **1.09x** |
-| **Read big file** | `1592.58 MiB/s (2.57 s/file)` | `443.80 MiB/s (9.23 s/file)` | `450.12 MiB/s (9.10 s/file)` | **3.59x** | **3.54x** |
-| **Write small file** | `342.50 files/s (11.68 ms/file)` | `491.50 files/s (8.14 ms/file)` | `746.20 files/s (5.36 ms/file)` | **0.70x** | **0.46x** |
-| **Read small file** | `3514.00 files/s (1.14 ms/file)` | `1743.30 files/s (2.29 ms/file)` | `3587.10 files/s (1.12 ms/file)` | **2.02x** | **0.98x** |
-| **Stat file** | `117097.40 files/s (0.03 ms/file)` | `11043.50 files/s (0.36 ms/file)` | `15478.50 files/s (0.26 ms/file)` | **10.60x** | **7.57x** |
+| **Write big file** | `311.30 MiB/s (13.15 s/file)` | `309.21 MiB/s (13.25 s/file)` | `304.81 MiB/s (13.44 s/file)` | **1.01x** | **1.02x** |
+| **Read big file** | `1730.56 MiB/s (2.37 s/file)` | `443.80 MiB/s (9.23 s/file)` | `450.12 MiB/s (9.10 s/file)` | **3.90x** | **3.84x** |
+| **Write small file** | `601.00 files/s (6.66 ms/file)` | `491.50 files/s (8.14 ms/file)` | `746.20 files/s (5.36 ms/file)` | **1.22x** | **0.81x** |
+| **Read small file** | `4504.50 files/s (0.89 ms/file)` | `1743.30 files/s (2.29 ms/file)` | `3587.10 files/s (1.12 ms/file)` | **2.58x** | **1.26x** |
+| **Stat file** | `114741.60 files/s (0.03 ms/file)` | `11043.50 files/s (0.36 ms/file)` | `15478.50 files/s (0.26 ms/file)` | **10.39x** | **7.41x** |
 
 ---
 
@@ -123,15 +123,15 @@ Bowl 延迟取自正式轮 run3 的 `clat_ns`；JuiceFS 两列保留同规格基
 
 | 元数据操作 (`Operation`) | Bowl 实测 | JuiceFS (PG 16) 实测 | JuiceFS (Redis 7) 实测 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Directory creation** | `1,045.5` | `715.7` | `1,366.5` | **1.46x** | **0.77x** |
-| **Directory stat** | `30,330.6` | `3,167.7` | `9,860.4` | **9.58x** | **3.08x** |
-| **Directory removal** | `1,267.9` | `561.0` | `1,145.8` | **2.26x** | **1.11x** |
-| **File creation** | `900.9` | `779.2` | `1,367.4` | **1.16x** | **0.66x** |
-| **File stat** | `31,609.8` | `3,001.8` | `9,879.1` | **10.53x** | **3.20x** |
-| **File read** | `49,958.9` | `1,589.2` | `2,849.3` | **31.44x** | **17.53x** |
-| **File removal** | `1,512.0` | `639.2` | `1,264.6` | **2.37x** | **1.20x** |
-| **Tree creation** | `1,054.4` | `723.2` | `1,414.5` | **1.46x** | **0.75x** |
-| **Tree removal** | `1,150.8` | `518.3` | `1,182.5` | **2.22x** | **0.97x** |
+| **Directory creation** | `4,277.5` | `715.7` | `1,366.5` | **5.98x** | **3.13x** |
+| **Directory stat** | `123,430.4` | `3,167.7` | `9,860.4` | **38.97x** | **12.52x** |
+| **Directory removal** | `1,237.6` | `561.0` | `1,145.8` | **2.21x** | **1.08x** |
+| **File creation** | `2,780.8` | `779.2` | `1,367.4` | **3.57x** | **2.03x** |
+| **File stat** | `106,552.8` | `3,001.8` | `9,879.1` | **35.50x** | **10.79x** |
+| **File read** | `48,533.0` | `1,589.2` | `2,849.3` | **30.54x** | **17.03x** |
+| **File removal** | `3,178.0` | `639.2` | `1,264.6` | **4.97x** | **2.51x** |
+| **Tree creation** | `4,161.5` | `723.2` | `1,414.5` | **5.75x** | **2.94x** |
+| **Tree removal** | `1,229.7` | `518.3` | `1,182.5` | **2.37x** | **1.04x** |
 
 ### 5.2 4 进程 MPI 并发元数据压测（`mpirun -np 4 mdtest -b 3 -z 2 -I 20 -u`）
 
@@ -139,15 +139,15 @@ Bowl 延迟取自正式轮 run3 的 `clat_ns`；JuiceFS 两列保留同规格基
 
 | 元数据操作 (`Operation`) | Bowl (Pebble) 4 并发 | JuiceFS (PG 16) 4 并发 | JuiceFS (Redis 7) 4 并发 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Directory creation** | `3,219.1` | `2,473.9` | `4,870.6` | **1.30x** | **0.66x** |
-| **Directory stat** | `298,255.8` | `309,119.2` | `361,421.6` | **0.96x** | **0.83x** |
-| **Directory removal** | `5,658.6` | `2,356.4` | `4,310.6` | **2.40x** | **1.31x** |
-| **File creation** | `3,121.6` | `2,760.8` | `4,972.7` | **1.13x** | **0.63x** |
-| **File stat** | `310,192.2` | `294,785.3` | `367,297.9` | **1.05x** | **0.84x** |
-| **File read** | `48,861.4` | `11,484.8` | `14,045.1` | **4.25x** | **3.48x** |
-| **File removal** | `5,782.3` | `2,689.4` | `4,911.0` | **2.15x** | **1.18x** |
-| **Tree creation** | `511.5` | `245.3` | `475.9` | **2.09x** | **1.07x** |
-| **Tree removal** | `876.5` | `512.1` | `317.8` | **1.71x** | **2.76x** |
+| **Directory creation** | `8,730.0` | `2,473.9` | `4,870.6` | **3.53x** | **1.79x** |
+| **Directory stat** | `1,398,661.7` | `309,119.2` | `361,421.6` | **4.52x** | **3.87x** |
+| **Directory removal** | `6,041.6` | `2,356.4` | `4,310.6` | **2.56x** | **1.40x** |
+| **File creation** | `6,122.3` | `2,760.8` | `4,972.7` | **2.22x** | **1.23x** |
+| **File stat** | `571,329.8` | `294,785.3` | `367,297.9` | **1.94x** | **1.56x** |
+| **File read** | `46,782.7` | `11,484.8` | `14,045.1` | **4.07x** | **3.33x** |
+| **File removal** | `5,830.0` | `2,689.4` | `4,911.0` | **2.17x** | **1.19x** |
+| **Tree creation** | `1,857.7` | `245.3` | `475.9` | **7.57x** | **3.90x** |
+| **Tree removal** | `882.3` | `512.1` | `317.8` | **1.72x** | **2.78x** |
 
 ---
 

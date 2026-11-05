@@ -14,19 +14,19 @@
 
 | 测试套件 | 指标项 | Bowl (Pebble) | Drive9 Default (`interactive`) | Drive9 Sync (`close-sync`) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `289.44 MiB/s` | `199.13 MiB/s` | `61.80 MiB/s` | **1.45x** | **4.68x** |
-| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,592.58 MiB/s` | `203.54 MiB/s` | `364.73 MiB/s` | **7.82x** | **4.37x** |
-| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `342.50 files/s` | `1,846.90 files/s` | `105.30 files/s` | **0.19x** | **3.25x** |
-| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `1,799.30 files/s` | `6,967.60 files/s` | `324.40 files/s` | **0.26x** | **5.55x** |
-| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `128,625.70 files/s` | `76,170.90 files/s` | `599.80 files/s` | **1.69x** | **214.45x** |
-| `drive9_fuse_bench` (Cold) | **顺序写 (256 MiB + fsync)** | `240.83 MiB/s` | `288.87 MiB/s` | `192.03 MiB/s` | **0.83x** | **1.25x** |
-| `drive9_fuse_bench` (Cold) | **顺序读 (256 MiB)** | `862.65 MiB/s` | `183.95 MiB/s` | `61.48 MiB/s` | **4.69x** | **14.03x** |
-| `drive9_fuse_bench` (Cold) | **4K 小文件写 + fsync (200 个)** | `371.73 ops/s` | `996.47 ops/s` | `150.33 ops/s` | **0.37x** | **2.47x** |
-| `drive9_fuse_bench` (Cold) | **目录创建 mkdir (500 个)** | `977.48 ops/s` | `262.03 ops/s` | `258.75 ops/s` | **3.73x** | **3.78x** |
-| `drive9_fuse_bench` (Cold) | **目录重命名 rename (500 个)** | `1,205.92 ops/s` | `100.95 ops/s` | `65.02 ops/s` | **11.95x** | **18.55x** |
-| `drive9_fuse_bench` (Cold) | **文件删除 unlink (500 个)** | `1,746.05 ops/s` | `107.04 ops/s` | `59.42 ops/s` | **16.31x** | **29.38x** |
-| `drive9_fuse_bench` (Cold) | **Git Clone (200 文件 · 20 MiB, 耗时越低越好)** | `0.97 s` | `1.82 s` | `5.72 s` | **1.88x** | **5.92x** |
-| SQLite Baseline (`WAL`) | **SQLite WAL 事务插入 (256 rows)** | `5,072.03 rows/s` | `8,256.06 rows/s` | `7,672.94 rows/s` | **0.61x** | **0.66x** |
+| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `285.06 MiB/s` | `199.83 MiB/s` | `60.79 MiB/s` | **1.43x** | **4.69x** |
+| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,730.56 MiB/s` | `226.26 MiB/s` | `298.77 MiB/s` | **7.65x** | **5.79x** |
+| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `476.80 files/s` | `2,185.90 files/s` | `100.40 files/s` | **0.22x** | **4.75x** |
+| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `4,664.40 files/s` | `6,746.10 files/s` | `13.70 files/s` | **0.69x** | **340.47x** |
+| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `87,335.80 files/s` | `13,757.70 files/s` | `35.60 files/s` | **6.35x** | **2453.25x** |
+| `drive9_fuse_bench` (Cold) | **顺序写 (256 MiB + fsync)** | `251.80 MiB/s` | `259.61 MiB/s` | `186.55 MiB/s` | **0.97x** | **1.35x** |
+| `drive9_fuse_bench` (Cold) | **顺序读 (256 MiB)** | `828.94 MiB/s` | `184.25 MiB/s` | `58.66 MiB/s` | **4.50x** | **14.13x** |
+| `drive9_fuse_bench` (Cold) | **4K 小文件写 + fsync (200 个)** | `678.55 ops/s` | `1,014.78 ops/s` | `143.53 ops/s` | **0.67x** | **4.73x** |
+| `drive9_fuse_bench` (Cold) | **目录创建 mkdir (500 个)** | `3,395.24 ops/s` | `253.69 ops/s` | `242.76 ops/s` | **13.38x** | **13.99x** |
+| `drive9_fuse_bench` (Cold) | **目录重命名 rename (500 个)** | `3,328.14 ops/s` | `98.71 ops/s` | `58.32 ops/s` | **33.72x** | **57.07x** |
+| `drive9_fuse_bench` (Cold) | **文件删除 unlink (500 个)** | `2,976.25 ops/s` | `99.04 ops/s` | `52.76 ops/s` | **30.05x** | **56.41x** |
+| `drive9_fuse_bench` (Cold) | **Git Clone (200 文件 · 20 MiB, 耗时越低越好)** | `0.77 s` | `1.84 s` | `6.07 s` | **2.39x** | **7.88x** |
+| SQLite Baseline (`WAL`) | **SQLite WAL 事务插入 (256 rows)** | `5,149.00 rows/s` | `7,182.68 rows/s` | `7,366.29 rows/s` | **0.72x** | **0.70x** |
 
 ---
 
@@ -53,7 +53,7 @@
 
 | 维度 | Bowl (`bowl`) | Drive9 Default (`drive9_default`) | Drive9 Sync (`drive9_sync`) |
 | :--- | :--- | :--- | :--- |
-| **代码版本 (Git SHA)** | Bowl `c7ff002` | Drive9 `b529a36f` | Drive9 `b529a36f` |
+| **代码版本 (Git SHA)** | Bowl `e078024` (R2d) | Drive9 `b529a36f` | Drive9 `b529a36f` |
 | **控制面 / 文件元数据** | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) 控制面 / Pebble 分支存储 | TiDB `v8.5.5` Unistore (`127.0.0.1:4000`) | TiDB `v8.5.5` Unistore (`127.0.0.1:4000`) |
 | **服务端数据块引擎** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) |
 | **客户端挂载参数** | `bowl mount` (生产默认 `noatime`) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |
@@ -141,11 +141,11 @@
 
 | 测试工作负载 (`Workload`) | 指标单位 | Bowl (Pebble) | Drive9 Default (`interactive`) | Drive9 Sync (`close-sync`) | Bowl vs Drive9 Default | Bowl vs Drive9 Sync |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| **64×1KiB 小文件写 (`fsync` + dir `fsync`)** | `files/s` | `467.88 files/s` | `888.94 files/s` | `167.23 files/s` | **0.53x** | **2.80x** |
-| **64×1KiB 小文件 SHA-256 校验读** | `files/s` | `2,057.85 files/s` | `103.37 files/s` | `369.36 files/s` | **19.91x** | **5.57x** |
-| **16 MiB 大文件写 (`fsync` + dir `fsync`)** | `MiB/s` | `53.55 MiB/s` | `59.82 MiB/s` | `50.32 MiB/s` | **0.90x** | **1.06x** |
-| **16 MiB 大文件 SHA-256 校验读 (Pass 1)** | `MiB/s` | `288.35 MiB/s` | `579.06 MiB/s` | `86.59 MiB/s` | **0.50x** | **3.33x** |
-| **16 MiB 大文件 SHA-256 校验读 (Pass 2)** | `MiB/s` | `1,279.19 MiB/s` | `768.06 MiB/s` | `53.00 MiB/s` | **1.67x** | **24.13x** |
+| **64×1KiB 小文件写 (`fsync` + dir `fsync`)** | `files/s` | `661.24 files/s` | `884.24 files/s` | `159.41 files/s` | **0.75x** | **4.15x** |
+| **64×1KiB 小文件 SHA-256 校验读** | `files/s` | `1,810.40 files/s` | `99.96 files/s` | `346.91 files/s` | **18.11x** | **5.22x** |
+| **16 MiB 大文件写 (`fsync` + dir `fsync`)** | `MiB/s` | `54.76 MiB/s` | `57.59 MiB/s` | `49.22 MiB/s` | **0.95x** | **1.11x** |
+| **16 MiB 大文件 SHA-256 校验读 (Pass 1)** | `MiB/s` | `1,216.60 MiB/s` | `612.94 MiB/s` | `78.41 MiB/s` | **1.98x** | **15.52x** |
+| **16 MiB 大文件 SHA-256 校验读 (Pass 2)** | `MiB/s` | `1,240.70 MiB/s` | `838.61 MiB/s` | `49.01 MiB/s` | **1.48x** | **25.32x** |
 | **SQLite `DELETE` 模式：事务插入 (256 rows)** | `rows/s` | `9,531.95 rows/s` | `6,747.34 rows/s` | `4,517.69 rows/s` | **1.41x** | **2.11x** |
 | **SQLite `DELETE` 模式：事务更新 (86 rows)** | `rows/s` | `1,072.36 rows/s` | `882.84 rows/s` | `952.24 rows/s` | **1.21x** | **1.13x** |
 | **SQLite `DELETE` 模式：全表聚合校验读 (256 rows)** | `rows/s` | `190,880.39 rows/s` | `721,010.99 rows/s` | `68,750.19 rows/s` | **0.26x** | **2.78x** |
