@@ -29,16 +29,19 @@ func TestRenewSessionRequestValidation(t *testing.T) {
 		{
 			name:      "合法: 最小正整数 session_id (1)",
 			sessionID: 1,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     true,
 		},
 		{
 			name:      "合法: 普通正整数 session_id (1001)",
 			sessionID: 1001,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     true,
 		},
 		{
 			name:      "合法: 最大合法 int64 边界 session_id (math.MaxInt64)",
 			sessionID: math.MaxInt64,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     true,
 		},
 		{
@@ -52,16 +55,19 @@ func TestRenewSessionRequestValidation(t *testing.T) {
 		{
 			name:      "非法: session_id 为 0",
 			sessionID: 0,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     false,
 		},
 		{
 			name:      "非法: session_id 超过 math.MaxInt64",
 			sessionID: uint64(math.MaxInt64) + 1,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     false,
 		},
 		{
 			name:      "非法: session_id 为 uint64 最大值",
 			sessionID: math.MaxUint64,
+			diskID:    ptrString("11111111-1111-7111-8111-111111111111"),
 			valid:     false,
 		},
 		{

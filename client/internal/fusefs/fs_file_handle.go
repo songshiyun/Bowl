@@ -40,216 +40,194 @@ func ToProtoOpenFlags(sysFlags uint32) uint32 {
 	return protoFlags
 }
 
-// Create 实现原子创建常规文件并打开分配文件句柄，对应 Linux FUSE FUSE_CREATE 协议。
+// Create 创建服务端目录项并分配本地句柄。
 func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
-
+	if input.Flags&uint32(syscall.O_ACCMODE) == syscall.O_ACCMODE {
+		return fuse.EINVAL
+	}
 	parentIno, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-
-	var sessionID *uint64
+	var sid uint64
 	if fs.sessions != nil {
-		sid, err := fs.sessions.AcquireSessionID(ctx)
-		if err != nil {
-			return fs.ToStatus(err, cancel)
-		}
-		sessionID = &sid
+		sid = fs.sessions.CurrentSessionID()
 	}
-
 	resp, err := fs.client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: parentIno,
-		Name:      []byte(name),
-		Mode:      input.Mode & 0xffff,
-		Uid:       input.Uid,
-		Gid:       input.Gid,
-		Flags:     ToProtoOpenFlags(input.Flags),
-		SessionId: sessionID,
+		ParentIno: parentIno, Name: []byte(name), Mode: input.Mode & 0xffff,
+		Uid: input.Uid, Gid: input.Gid, Flags: ToProtoOpenFlags(input.Flags), SessionId: optionalSession(sid),
 	}))
 	if err != nil {
 		return fs.ToStatusWithSession(err, cancel)
 	}
-
-	fh := resp.Msg.GetFh()
-	if fs.sessions != nil && sessionID != nil {
-		fs.sessions.BindHandle(fh, *sessionID)
+	inode := resp.Msg.GetInode()
+	if inode == nil || inode.GetAttr() == nil {
+		return fuse.EIO
 	}
-
-	fs.FillEntryOut(&out.EntryOut, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	ino := fs.ToKernelIno(inode.GetIno())
+	fh, status := fs.openHandle(ino, input.Flags, false)
+	if status != fuse.OK {
+		return status
+	}
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, inode, 0, resp.Msg.GetAttrTimeoutSeconds())
+	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
+	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.caps.markAbsent(ino)
+	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.addTmpLookup(ino)
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()
 	if fs.cfg.DirectIO {
+		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
+	} else if input.Flags&uint32(syscall.O_TRUNC) != 0 {
+		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
+	} else {
+		// 非截断且非 DirectIO 时保留内核 Page Cache，避免每次 open 全量清空。
+		out.OpenFlags |= fuse.FOPEN_KEEP_CACHE
 	}
-
 	return fuse.OK
 }
 
-// Open 实现打开指定 Inode 常规文件并分配文件句柄，对应 Linux FUSE FUSE_OPEN 协议。
+// Open 读取缓存中的节点类型并在本地分配句柄。
 func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
-	if fs.cfg.ReadOnly {
-		accMode := input.Flags & uint32(syscall.O_ACCMODE)
-		if accMode != uint32(syscall.O_RDONLY) || (input.Flags&uint32(syscall.O_TRUNC)) != 0 {
-			return fuse.Status(syscall.EROFS)
-		}
+	mode := input.Flags & uint32(syscall.O_ACCMODE)
+	if mode == syscall.O_ACCMODE {
+		return fuse.EINVAL
 	}
-
-	ino, status := fs.ToServerIno(input.NodeId)
+	if fs.cfg.ReadOnly && (mode != syscall.O_RDONLY || input.Flags&syscall.O_TRUNC != 0) {
+		return fuse.Status(syscall.EROFS)
+	}
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
+		return status
+	}
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	epoch := fs.cache.version()
+	cached, status := fs.getInode(cancel, input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	var sessionID *uint64
-	if fs.sessions != nil {
-		sid, err := fs.sessions.AcquireSessionID(ctx)
-		if err != nil {
-			return fs.ToStatus(err, cancel)
+	if fs.cache.version() != epoch {
+		return fuse.Status(syscall.ESTALE)
+	}
+	if cached.inode.GetAttr().GetMode()&syscall.S_IFMT == syscall.S_IFDIR {
+		return fuse.Status(syscall.EISDIR)
+	}
+	if input.Flags&syscall.O_TRUNC != 0 {
+		set := &fuse.SetAttrIn{}
+		set.NodeId = input.NodeId
+		set.Valid = fuse.FATTR_SIZE
+		if status, local := fs.setTmpAttr(set, &fuse.AttrOut{}); local {
+			if status != fuse.OK {
+				return status
+			}
+		} else {
+			ino, st := fs.ToServerIno(input.NodeId)
+			if st != fuse.OK {
+				return st
+			}
+			ctx, done := fs.RPCContext(cancel)
+			zero := uint64(0)
+			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Size: &zero, SessionId: fs.currentSession()}))
+			done()
+			fs.invalidateReadAheadByIno(ino)
+			if err != nil {
+				fs.cache.invalidateInode(input.NodeId)
+				return fs.ToStatus(err, cancel)
+			}
+			fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
+			fs.caps.markAbsent(input.NodeId)
 		}
-		sessionID = &sid
 	}
-
-	resp, err := fs.client.Open(ctx, connect.NewRequest(&storagev1.OpenRequest{
-		Ino:       ino,
-		Flags:     ToProtoOpenFlags(input.Flags),
-		SessionId: sessionID,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+	fh, status := fs.openHandle(input.NodeId, input.Flags, false)
+	if status != fuse.OK {
+		return status
 	}
-
-	if (input.Flags & uint32(syscall.O_TRUNC)) != 0 {
-		fs.invalidateReadAheadByIno(ino)
-	}
-
-	fh := resp.Msg.GetFh()
-	if fs.sessions != nil && sessionID != nil {
-		fs.sessions.BindHandle(fh, *sessionID)
-	}
-
 	out.Fh = fh
-	out.OpenFlags = resp.Msg.GetOpenFlags()
 	if fs.cfg.DirectIO {
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
+	} else if input.Flags&uint32(syscall.O_TRUNC) == 0 {
+		// 非截断且非 DirectIO 时保留内核 Page Cache，避免每次 open 全量清空。
+		out.OpenFlags |= fuse.FOPEN_KEEP_CACHE
 	}
-
 	return fuse.OK
 }
 
-// Flush 实现文件描述符关闭时的冲刷操作，对应 Linux FUSE FUSE_FLUSH 协议。
-// 若目标服务端 Inode 在当前会话下未发生过任何 POSIX 记录锁活动，本地校验通过后直接短路返回 fuse.OK；
-// 若已发生过 POSIX 记录锁活动，携带 lock_owner 与 session_id 触发服务端清理对应进程所持有的全部 POSIX 记录锁与等待队列。
+// Flush 在 close(fd) 时排空内核页缓存写入并释放本地 POSIX 记录锁。
+// 常规文件不再发起跨机物理 Fsync RPC；显式 Fsync、FsyncDir 与 OnUnmount 才确认物理落盘。
 func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
-
-	if !fs.hasPosixLockActivity(sid, ino) {
-		return fuse.OK
-	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	lockOwner := input.LockOwner
-	_, err := fs.client.Flush(ctx, connect.NewRequest(&storagev1.FlushRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		LockOwner: &lockOwner,
-		SessionId: &sid,
-	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
-	}
-
-	return fuse.OK
+	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
+	// 匿名文件尚未具名，关闭时必须先上云并解链；该路径只写服务端 WAL，不触发物理 fsync。
+	return fs.syncTmpFile(cancel, input.NodeId)
 }
 
-// Fsync 实现文件数据与元数据落盘同步操作，对应 Linux FUSE FUSE_FSYNC 协议。
-// 根据 input.FsyncFlags 区分完整 fsync 与仅数据同步 fdatasync。
+// Fsync 等待服务端完成文件持久化。
 func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
+	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
+		return status
+	}
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	if status != fuse.OK {
+		return status
+	}
+	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+		return status
+	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-
-	sid, status := fs.ResolveHandle(input.Fh)
-	if status != fuse.OK {
-		return status
-	}
-
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-
-	datasync := (input.FsyncFlags & 0x1) != 0
 	_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
-		Ino:       ino,
-		Fh:        input.Fh,
-		Datasync:  datasync,
-		SessionId: &sid,
+		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
 	}))
-	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+	if err == nil {
+		fs.clearDirty(ino)
 	}
-
-	return fuse.OK
+	return fs.ToStatusWithSession(err, cancel)
 }
 
-// Release 实现文件句柄关闭与销毁，对应 Linux FUSE FUSE_RELEASE 协议。
-// 无论服务端调用成功与否，必定在退出时解绑客户端内存中的句柄会话映射；
-// 携带 lock_owner 与 release_flags 触发服务端清理 BSD flock 锁并在孤儿节点无句柄引用时执行最终物理回收。
-func (fs *RawFS) Release(cancel <-chan struct{}, input *fuse.ReleaseIn) {
-	defer fs.removeReadAheadByFh(input.Fh)
+// Release 在本地释放句柄与 flock；最后一个孤儿句柄触发回收。
+func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	h, ok := fs.handles.Get(input.Fh)
+	if !ok || h.Ino != input.NodeId || h.IsDir {
+		return
+	}
+	// 与在途 Unlink/Rename 的孤儿标记按 Inode 串行，避免最后句柄关闭与解链互相错过。
+	unlock := fs.inodeLocks.lock(h.Ino)
+	defer unlock()
+	if _, ok := fs.handles.Get(input.Fh); !ok {
+		return
+	}
+	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)
+	fs.locks.ForgetHandle(input.Fh)
+	fs.removeReadAheadByFh(input.Fh)
+	orphan := fs.handles.IsOrphan(input.NodeId)
+	fs.handles.Release(input.Fh)
 	if fs.sessions != nil {
-		defer fs.sessions.UnbindHandle(input.Fh)
+		fs.sessions.UnbindHandle(input.Fh)
 	}
-
-	ino, status := fs.ToServerIno(input.NodeId)
-	if status != fuse.OK {
-		return
-	}
-
-	if fs.sessions == nil {
-		return
-	}
-
-	sid, ok := fs.sessions.LookupHandleSession(input.Fh)
-	if !ok {
-		return
-	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
-	lockOwner := input.LockOwner
-	releaseFlags := input.ReleaseFlags & 0x3
-
-	req := &storagev1.ReleaseRequest{
-		Ino:          ino,
-		Fh:           input.Fh,
-		LockOwner:    &lockOwner,
-		ReleaseFlags: releaseFlags,
-		SessionId:    &sid,
-	}
-	_, err := fs.client.Release(ctx, connect.NewRequest(req))
-	if isServerEBADF(err) && fs.sessions != nil {
-		fs.sessions.TriggerRenew()
-	}
-	if shouldEnqueueReleaseRetry(err) {
-		fs.enqueueReleaseFileRetry(req, sid)
-	}
+	fs.dropTmpIfUnused(input.NodeId, orphan)
 }

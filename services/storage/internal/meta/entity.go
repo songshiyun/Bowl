@@ -42,14 +42,8 @@ const (
 	DefaultDirSize   uint64 = 4096
 )
 
-// 数据层核心常量（ADR-0019 / ADR-0022 / ADR-0027 / ADR-0028）。
-const (
-	ChunkSize               = 1 << 22 // 4 MiB (4,194,304 字节)
-	BlockSize               = 1 << 22 // 4 MiB (4,194,304 字节)
-	SliceBytes              = 24      // 单个 Slice 二进制元数据描述符字节大小
-	CompactSliceThreshold   = 64      // 单个 Chunk 累积 Slice 数量触发 Compaction 的阈值
-	DefaultSliceIDBatchSize = 64      // 服务端内存预取 slice_id 号段的默认步长
-)
+// 单次数据请求的最大长度。
+const BlockSize = 1 << 22
 
 // 磁盘与 StatFS 常量。
 const (
@@ -125,24 +119,8 @@ const (
 	XattrReplace uint32 = 0x2
 )
 
-// Linux FUSE 文件锁类型、标志位、最大偏移量与会话租约常量（平台无关固定值，严禁依赖宿主机 syscall.F_*）。
-const (
-	F_RDLCK uint32 = 0
-	F_WRLCK uint32 = 1
-	F_UNLCK uint32 = 2
-
-	FuseLkFlock            uint32 = 0x1
-	FuseReleaseFlush       uint32 = 0x1
-	FuseReleaseFlockUnlock uint32 = 0x2
-
-	OffsetMax uint64 = math.MaxInt64
-
-	DefaultSessionLeaseTTL = 15 * time.Second
-
-	WaiterStatusPending   int16 = 1
-	WaiterStatusGranted   int16 = 2
-	WaiterStatusCancelled int16 = 3
-)
+// 默认客户端会话租约时长。
+const DefaultSessionLeaseTTL = 15 * time.Second
 
 // SetAttrInput 定义修改 Inode 属性的输入参数。
 type SetAttrInput struct {
@@ -208,8 +186,16 @@ type RenameParams struct {
 	Flags        uint32
 }
 
+// ReclaimOrphanParams 定义回收孤儿节点的输入参数。
+type ReclaimOrphanParams struct {
+	SessionID  uint64
+	DiskID     string
+	BranchName *string
+	Ino        uint64
+}
+
 // CreateParams 定义原子创建常规文件并分配初始文件句柄的输入参数。
-// 严禁在 Flags 中携带 O_TMPFILE 标志位（匿名临时文件必须通过 TmpFile 接口创建）。
+// 严禁在 Flags 中携带 O_TMPFILE 标志位（匿名临时文件由客户端管理）。
 type CreateParams struct {
 	ParentIno uint64
 	Name      []byte
@@ -230,39 +216,6 @@ type CreateResult struct {
 	AttrTimeoutSeconds  float64
 }
 
-// TmpFileParams 定义原子创建匿名临时常规文件并分配初始文件句柄的输入参数。
-type TmpFileParams struct {
-	ParentIno uint64
-	Mode      uint32
-	UID       uint32
-	GID       uint32
-	Flags     uint32
-	SessionID *uint64
-	Umask     uint32
-}
-
-// OpenParams 定义打开文件并分配文件句柄的输入参数。
-// 严禁在 Flags 中携带 O_TMPFILE 标志位（严防伪造 O_TMPFILE 绕过独占限制或非法复活孤儿节点）。
-type OpenParams struct {
-	Ino       uint64
-	Flags     uint32
-	SessionID *uint64
-}
-
-// OpenResult 包含打开文件分配的 FileHandle 与打开响应标志。
-type OpenResult struct {
-	Fh        uint64
-	OpenFlags uint32
-}
-
-// FlushParams 定义会话句柄冲刷与进程级 POSIX 记录锁清理操作的输入参数。
-type FlushParams struct {
-	Ino       uint64
-	Fh        uint64
-	LockOwner *uint64
-	SessionID *uint64
-}
-
 // FsyncParams 定义文件同步操作的输入参数。
 type FsyncParams struct {
 	Ino       uint64
@@ -271,40 +224,11 @@ type FsyncParams struct {
 	SessionID *uint64
 }
 
-// ReleaseParams 定义文件句柄销毁、BSD flock 句柄锁清理与孤儿回收操作的输入参数。
-type ReleaseParams struct {
-	Ino          uint64
-	Fh           uint64
-	LockOwner    *uint64
-	ReleaseFlags uint32
-	SessionID    *uint64
-}
-
-// OpenDirParams 定义打开目录并分配目录句柄的输入参数。
-type OpenDirParams struct {
-	Ino       uint64
-	Flags     uint32
-	SessionID *uint64
-}
-
-// OpenDirResult 包含打开目录分配的 FileHandle 与打开响应标志。
-type OpenDirResult struct {
-	Fh        uint64
-	OpenFlags uint32
-}
-
 // FsyncDirParams 定义目录句柄同步操作的输入参数。
 type FsyncDirParams struct {
 	Ino       uint64
 	Fh        uint64
 	Datasync  bool
-	SessionID *uint64
-}
-
-// ReleaseDirParams 定义目录句柄销毁与孤儿回收操作的输入参数。
-type ReleaseDirParams struct {
-	Ino       uint64
-	Fh        uint64
 	SessionID *uint64
 }
 
@@ -369,45 +293,6 @@ type SetXattrParams struct {
 	Name  []byte
 	Value []byte
 	Flags uint32
-}
-
-// FileLock 表示 FUSE 文件锁领域实体。
-type FileLock struct {
-	Start uint64
-	End   uint64
-	Type  uint32
-	PID   uint32
-}
-
-// GetLkParams 定义 FUSE_GETLK (31) 冲突锁探测操作的输入参数。
-type GetLkParams struct {
-	Ino       uint64
-	Fh        uint64
-	LockOwner uint64
-	Lk        FileLock
-	LkFlags   uint32
-	SessionID uint64
-}
-
-// SetLkParams 定义 FUSE_SETLK (32) 非阻塞加解锁操作的输入参数。
-type SetLkParams struct {
-	Ino       uint64
-	Fh        uint64
-	LockOwner uint64
-	Lk        FileLock
-	LkFlags   uint32
-	SessionID uint64
-}
-
-// SetLkwParams 定义 FUSE_SETLKW (33) 阻塞等待加解锁操作的输入参数。
-type SetLkwParams struct {
-	Ino       uint64
-	Fh        uint64
-	LockOwner uint64
-	Lk        FileLock
-	LkFlags   uint32
-	SessionID uint64
-	RequestID uint64
 }
 
 // 领域哨兵错误。
@@ -484,16 +369,164 @@ type RenewSessionResult struct {
 	SessionRecreated bool
 }
 
+// RenewBranchSessionParams 定义分支会话的绑定信息。
+type RenewBranchSessionParams struct {
+	SessionID  uint64
+	DiskID     string
+	BranchName *string
+	ReadOnly   bool
+	CommitID   *string
+}
+
 // Disk 描述虚拟磁盘领域实体。
 type Disk struct {
+	DiskID        string
+	Name          string
+	RootIno       uint64
+	MaxBytes      uint64
+	UsedBytes     uint64
+	UsedInodes    uint64
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	DefaultBranch string
+	Branches      []Branch
+}
+
+// Branch 描述磁盘中的逻辑分支。
+type Branch struct {
+	BranchID     string
+	DiskID       string
+	Name         string
+	ParentBranch *string
+	ForkCommitID *string
+	HeadCommitID *string
+	State        string
+	CreatedAt    time.Time
+}
+
+// CreateBranchParams 定义分支派生参数。
+type CreateBranchParams struct {
+	DiskID         string
+	Name           string
+	SourceBranch   *string
+	SourceCommitID *string
+}
+
+// DeleteBranchParams 定义分支删除参数。
+type DeleteBranchParams struct {
+	DiskID string
+	Name   string
+}
+
+// CommitParams 定义版本快照参数。
+type CommitParams struct {
 	DiskID     string
-	Name       string
-	RootIno    uint64
-	MaxBytes   uint64
-	UsedBytes  uint64
-	UsedInodes uint64
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	BranchName string
+	Message    string
+}
+
+// CommitInfo 描述版本快照及其父版本。
+type CommitInfo struct {
+	CommitID            string
+	DiskID              string
+	BranchName          string
+	ParentCommitID      *string
+	MergeParentCommitID *string
+	Message             string
+	CreatedAt           time.Time
+}
+
+// RollbackParams 定义版本回档参数。
+type RollbackParams struct {
+	DiskID     string
+	BranchName string
+	CommitID   string
+}
+
+// ConflictStrategy 指定合并冲突的处理方式。
+type ConflictStrategy int32
+
+const (
+	ConflictStrategyUnspecified ConflictStrategy = iota
+	ConflictStrategyAbortOnConflict
+	ConflictStrategyOurs
+	ConflictStrategyTheirs
+	ConflictStrategyMaterialize
+)
+
+// MergeResultType 表示合并结果。
+type MergeResultType int32
+
+const (
+	MergeResultUnspecified MergeResultType = iota
+	MergeResultMerged
+	MergeResultConflicts
+	MergeResultMaterialized
+)
+
+// MergeConflict 描述三路合并中不兼容的变更。
+type MergeConflict struct {
+	Path       string
+	BaseAttr   *Inode
+	OursAttr   *Inode
+	TheirsAttr *Inode
+	Reason     string
+}
+
+// MergeParams 定义分支合并参数。
+type MergeParams struct {
+	DiskID       string
+	SourceBranch string
+	TargetBranch string
+	Strategy     ConflictStrategy
+}
+
+// ResolveMergeParams 指定待完成的合并。
+type ResolveMergeParams struct {
+	DiskID     string
+	BranchName string
+	Message    string
+}
+
+// AbortMergeParams 指定待取消的合并。
+type AbortMergeParams struct {
+	DiskID     string
+	BranchName string
+}
+
+// MergeResult 描述合并后的快照或冲突。
+type MergeResult struct {
+	Result        MergeResultType
+	MergeCommitID *string
+	Conflicts     []MergeConflict
+}
+
+// DiffChangeType 表示路径的变更类型。
+type DiffChangeType int32
+
+const (
+	DiffChangeTypeUnspecified DiffChangeType = 0
+	DiffChangeTypeAdded       DiffChangeType = 1
+	DiffChangeTypeModified    DiffChangeType = 2
+	DiffChangeTypeDeleted     DiffChangeType = 3
+	DiffChangeTypeRenamed     DiffChangeType = 4
+)
+
+// DiffParams 指定待比较的磁盘和版本。
+type DiffParams struct {
+	DiskID  string
+	FromRef string
+	ToRef   string
+}
+
+// DiffEntry 描述路径、属性及变更的数据块。
+type DiffEntry struct {
+	ChangeType           DiffChangeType
+	Path                 string
+	OldPath              string
+	OldAttr              *Inode
+	NewAttr              *Inode
+	ModifiedBlockIndices []uint64
 }
 
 // CreateDiskParams 描述创建虚拟磁盘入参。

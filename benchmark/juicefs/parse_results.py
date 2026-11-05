@@ -12,7 +12,7 @@ from typing import Any
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TARGETS = [
-    ("bowl", "Bowl (PG 16 + BlockStore)"),
+    ("bowl", "Bowl (PG 16 控制面 + Pebble)"),
     ("jfs_pg", "JuiceFS (PG 16 + rclone S3)"),
     ("jfs_redis", "JuiceFS (Redis 7 + rclone S3)"),
 ]
@@ -87,61 +87,6 @@ MDTEST_OPS = [
     "Tree creation",
     "Tree removal",
 ]
-
-# Official published JuiceFS documentation reference baselines
-OFFICIAL_DOCS_BENCH = {
-    "jfs_pg_aws": {
-        "Write big file": {"value": 744.47, "unit": "MiB/s"},
-        "Read big file": {"value": 895.88, "unit": "MiB/s"},
-        "Write small file": {"value": 86.40, "unit": "files/s"},
-        "Read small file": {"value": 1857.90, "unit": "files/s"},
-        "Stat file": {"value": 7845.80, "unit": "files/s"},
-    },
-    "jfs_redis_aws": {
-        "Write big file": {"value": 731.93, "unit": "MiB/s"},
-        "Read big file": {"value": 892.99, "unit": "MiB/s"},
-        "Write small file": {"value": 109.10, "unit": "files/s"},
-        "Read small file": {"value": 937.30, "unit": "files/s"},
-        "Stat file": {"value": 11989.50, "unit": "files/s"},
-    },
-}
-
-OFFICIAL_DOCS_MDTEST = {
-    "JuiceFS (Redis, AWS c5.large)": {
-        "Directory creation": 1416.582,
-        "Directory stat": 3810.083,
-        "Directory removal": 1115.108,
-        "File creation": 1410.288,
-        "File stat": 5023.227,
-        "File read": 3487.947,
-        "File removal": 1163.371,
-        "Tree creation": 1503.004,
-        "Tree removal": 1119.806,
-    },
-    "Amazon EFS (AWS c5.large)": {
-        "Directory creation": 192.301,
-        "Directory stat": 1311.166,
-        "Directory removal": 213.132,
-        "File creation": 179.293,
-        "File stat": 915.230,
-        "File read": 371.012,
-        "File removal": 217.498,
-        "Tree creation": 187.906,
-        "Tree removal": 218.357,
-    },
-    "S3FS (AWS c5.large)": {
-        "Directory creation": 5.977,
-        "Directory stat": 435.898,
-        "Directory removal": 8.969,
-        "File creation": 5.696,
-        "File stat": 68.692,
-        "File read": 33.931,
-        "File removal": 23.658,
-        "Tree creation": 5.951,
-        "Tree removal": 9.889,
-    },
-}
-
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_RE.sub("", text)
@@ -282,10 +227,6 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
         "fio": fio_data,
         "mdtest_1proc": mdtest_1proc,
         "mdtest_4proc": mdtest_4proc,
-        "official_docs_reference": {
-            "juicefs_bench": OFFICIAL_DOCS_BENCH,
-            "mdtest": OFFICIAL_DOCS_MDTEST,
-        },
         "stage_timings": stage_timings,
     }
 
@@ -320,9 +261,10 @@ def render_report(summary: dict[str, Any]) -> str:
         "**`fio` 顺序/随机大文件吞吐量测试**、**`mdtest` 元数据 IOPS 压测**）的实测对比结果。"
     )
     lines.append("")
-    lines.append("本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘。实际完成范围与重跑环境见本轮执行说明；官方文档数值仅作历史参考：")
+    lines.append("本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘，依次运行以下三组目标：")
     lines.append("")
-    lines.append("1. **Bowl (PostgreSQL 16 + Server BlockStore)**：采用 Bowl 生产默认配置（`noatime` + `1.0s` FUSE 内核属性/目录项缓存，ConnectRPC 跨机直通读写）。")
+    lines.append("1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。")
+    lines.append("   客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。")
     lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
     lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 rclone S3 存储（`--trash-days 0`）。")
     lines.append("")
@@ -351,7 +293,7 @@ def render_report(summary: dict[str, Any]) -> str:
 
     lines.append("### 1.1 核心指标本轮实测总览表")
     lines.append("")
-    lines.append("| 测试维度 | 指标项 | Bowl (PG 16) | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JuiceFS(PG) | Bowl vs JuiceFS(Redis) |")
+    lines.append("| 测试维度 | 指标项 | Bowl (Pebble) | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JuiceFS(PG) | Bowl vs JuiceFS(Redis) |")
     lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: |")
 
     # Headline rows
@@ -522,13 +464,19 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **客户端版本** | Bowl `{bowl_cfg.get('bowl_git_commit', '')}` (`fusermount3` {cli.get('fusermount_version', '')}) | `{cli.get('juicefs_version', '')}` | `{cli.get('juicefs_version', '')}` |"
     )
     lines.append(
-        f"| **元数据引擎 (Server 节点)** | {srv.get('pg_version', '')} (`bowl` 库) | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
+        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / Pebble 分支存储 | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
     )
     lines.append(
-        f"| **数据块存储 (Server 节点)** | `storage-service` 本地 BlockStore (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
+        f"| **数据块存储 (Server 节点)** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
     )
     lines.append(
         f"| **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |"
+    )
+    lines.append(
+        f"| **回写缓存与持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存；`pebble.NoSync` 异步 WAL + 后台 1 秒刷盘，Flush 不触发 Fsync RPC | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |"
+    )
+    lines.append(
+        f"| **数据分片** | `1 MiB`（对齐 FUSE `MaxWrite`）不可变块文件 `blobs/<shard>/<blob_id>.blob`，整块直写、局部 CoW、删除即时 `os.Remove` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |"
     )
     lines.append(
         f"| **访问时间策略 / 回收站** | `STORAGE_ATIME_MODE=noatime` | `--trash-days 0` (关闭回收站) | `--trash-days 0` (关闭回收站) |"
@@ -549,16 +497,13 @@ def render_report(summary: dict[str, Any]) -> str:
         "4×100 个 `128 KiB` 小文件写、清理页缓存、400 个小文件读、清理页缓存、400 个小文件 `stat`。"
     )
     lines.append("")
-    lines.append("| 测试项目 (`ITEM`) | Bowl (PG 16) | JuiceFS (PG 16) | JuiceFS (Redis 7) | 官方参考: JuiceFS (PG, AWS) | 官方参考: JuiceFS (Redis, AWS) | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
-    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| 测试项目 (`ITEM`) | Bowl | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
+    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: |")
 
     for item_name, val_unit, cost_unit in BENCH_ITEMS:
         b_it = b_bench.get(item_name, {})
         pg_it = pg_bench.get(item_name, {})
         rd_it = rd_bench.get(item_name, {})
-        aws_pg = OFFICIAL_DOCS_BENCH["jfs_pg_aws"].get(item_name, {}).get("value")
-        aws_rd = OFFICIAL_DOCS_BENCH["jfs_redis_aws"].get(item_name, {}).get("value")
-
         vb = b_it.get("value")
         vpg = pg_it.get("value")
         vrd = rd_it.get("value")
@@ -566,11 +511,8 @@ def render_report(summary: dict[str, Any]) -> str:
         sb = f"{vb:.2f} {val_unit} ({b_it.get('cost', 0):.2f} {cost_unit})" if vb is not None else "—"
         spg = f"{vpg:.2f} {val_unit} ({pg_it.get('cost', 0):.2f} {cost_unit})" if vpg is not None else "—"
         srd = f"{vrd:.2f} {val_unit} ({rd_it.get('cost', 0):.2f} {cost_unit})" if vrd is not None else "—"
-        s_aws_pg = f"{aws_pg:.2f} {val_unit}" if aws_pg is not None else "—"
-        s_aws_rd = f"{aws_rd:.2f} {val_unit}" if aws_rd is not None else "—"
-
         lines.append(
-            f"| **{item_name}** | `{sb}` | `{spg}` | `{srd}` | `{s_aws_pg}` | `{s_aws_rd}` | **{fmt_ratio(vb, vpg)}** | **{fmt_ratio(vb, vrd)}** |"
+            f"| **{item_name}** | `{sb}` | `{spg}` | `{srd}` | **{fmt_ratio(vb, vpg)}** | **{fmt_ratio(vb, vrd)}** |"
         )
     lines.append("")
 
@@ -581,7 +523,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("### 4.1 吞吐量与 IOPS 对比总表（8 组标准负载）")
     lines.append("")
-    lines.append("| 测试用例 | 参数说明 | Bowl (PG 16) 带宽 / IOPS | JuiceFS (PG 16) 带宽 / IOPS | JuiceFS (Redis 7) 带宽 / IOPS | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
+    lines.append("| 测试用例 | 参数说明 | Bowl (Pebble) 带宽 / IOPS | JuiceFS (PG 16) 带宽 / IOPS | JuiceFS (Redis 7) 带宽 / IOPS | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
     lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: |")
 
     for case_key, case_label, _, case_desc in FIO_CASES:
@@ -627,26 +569,22 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("### 5.1 官方 `mdtest.md` 标准单流树压测（`mdtest -b 6 -I 8 -z 4`，12,440 节点）")
     lines.append("")
     lines.append(
-        "复刻 [JuiceFS `mdtest` 基准测试文档](https://juicefs.com/docs/zh/community/mdtest/)参数（分支因子 `6`、深度 `4`、每目录 `8` 个条目，共 `1,555` 个目录节点、`12,440` 个测试目录与 `12,440` 个测试文件），对比本轮实测结果与官方文档公布的 JuiceFS / Amazon EFS / S3FS 基线（单位：`ops/sec`，数值越大越好）："
+        "使用 [JuiceFS `mdtest` 基准测试文档](https://juicefs.com/docs/zh/community/mdtest/)的参数（分支因子 `6`、深度 `4`、每目录 `8` 个条目），比较本轮三组实测结果（单位：`ops/sec`）："
     )
     lines.append("")
-    lines.append("| 元数据操作 (`Operation`) | Bowl (PG 16) 实测 | JuiceFS (PG 16) 实测 | JuiceFS (Redis 7) 实测 | 官方文档: JuiceFS (Redis) | 官方文档: Amazon EFS | 官方文档: S3FS | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
-    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| 元数据操作 (`Operation`) | Bowl 实测 | JuiceFS (PG 16) 实测 | JuiceFS (Redis 7) 实测 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
+    lines.append("| :--- | ---: | ---: | ---: | ---: | ---: |")
 
     for op in MDTEST_OPS:
         vb = get_md_mean(b_md1, op)
         vpg = get_md_mean(pg_md1, op)
         vrd = get_md_mean(rd_md1, op)
-        doc_jfs = OFFICIAL_DOCS_MDTEST["JuiceFS (Redis, AWS c5.large)"].get(op)
-        doc_efs = OFFICIAL_DOCS_MDTEST["Amazon EFS (AWS c5.large)"].get(op)
-        doc_s3fs = OFFICIAL_DOCS_MDTEST["S3FS (AWS c5.large)"].get(op)
-
         sb = f"{vb:,.1f}" if vb is not None else "—"
         spg = f"{vpg:,.1f}" if vpg is not None else "—"
         srd = f"{vrd:,.1f}" if vrd is not None else "—"
 
         lines.append(
-            f"| **{op}** | `{sb}` | `{spg}` | `{srd}` | `{doc_jfs:,.1f}` | `{doc_efs:,.1f}` | `{doc_s3fs:,.1f}` | **{fmt_ratio(vb, vpg)}** | **{fmt_ratio(vb, vrd)}** |"
+            f"| **{op}** | `{sb}` | `{spg}` | `{srd}` | **{fmt_ratio(vb, vpg)}** | **{fmt_ratio(vb, vrd)}** |"
         )
     lines.append("")
 
@@ -654,7 +592,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("匹配 `ecs.c9i.xlarge` 的 4 vCPU 并发能力，开启 4 个 MPI 进程并发创建、查询、读取和删除各自独立目录树下的目录与文件（单位：`ops/sec`）：")
     lines.append("")
-    lines.append("| 元数据操作 (`Operation`) | Bowl (PG 16) 4 并发 | JuiceFS (PG 16) 4 并发 | JuiceFS (Redis 7) 4 并发 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
+    lines.append("| 元数据操作 (`Operation`) | Bowl (Pebble) 4 并发 | JuiceFS (PG 16) 4 并发 | JuiceFS (Redis 7) 4 并发 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
     lines.append("| :--- | ---: | ---: | ---: | ---: | ---: |")
 
     b_md4 = md4.get("bowl", {}).get("operations", {})
@@ -680,19 +618,32 @@ def render_report(summary: dict[str, Any]) -> str:
                        ("seq_write_16jobs", "16 并发顺序写"),
                        ("seq_read_16jobs", "16 并发顺序读")]:
         value = get_fio_bw(b_fio, key)
-        if value is not None:
-            lines.append(f"- Bowl {label}：`{value:.2f} MiB/s`；同轮 JuiceFS(PG) 为 `{get_fio_bw(pg_fio, key) or 0:.2f} MiB/s`。")
+        other = get_fio_bw(pg_fio, key)
+        if value is not None and other is not None:
+            lines.append(f"- Bowl {label}：`{value:.2f} MiB/s`；同轮 JuiceFS(PG) 为 `{other:.2f} MiB/s`。")
     lines.append("")
     lines.append("服务端顺序读写物理基线、请求大小与并发数见第 2、4 节。不同请求大小与持久化路径的吞吐不能直接解释为云盘利用率。")
     lines.append("")
-    lines.append("本轮 Bowl 使用 ADR-0026：块写入返回时已进入服务端页缓存，显式 `Fsync` 仅同步数据库 WAL，块数据由内核后台回写。本套件未测试整机断电恢复；吞吐结果不能作为断电后数据完整性的证明，也不能与旧版逐块刷盘结果视为相同持久化条件。")
+    bench_write = get_bench_val(b_bench, "Write big file")
+    fio_write = get_fio_bw(b_fio, "seq_write_1job")
+    if bench_write is not None and fio_write is not None:
+        if bench_write < fio_write:
+            verdict = "4 并发聚合吞吐低于单流，说明并发写路径存在额外开销，需单独剖析；不能把 `juicefs bench` 数值当作 Bowl 的单流写上限。"
+        else:
+            verdict = "4 并发聚合吞吐高于单流，说明当前写入路径可从并发中获益；该对照只描述本轮实测，仍需结合缓存与持久化条件解读。"
+        lines.append(
+            f"Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `{bench_write:.2f} MiB/s`，同轮 `fio` 单流 4 GiB 顺序写为 `{fio_write:.2f} MiB/s`。"
+            + verdict
+        )
+        lines.append("")
+    lines.append("Bowl 的写入和同步路径使用 Pebble；本套件未测试整机断电恢复，吞吐结果不能证明断电后的数据完整性。各存储栈的缓存与持久化路径不同，性能数值应结合各自配置解读。")
     lines.append("")
     lines.append("`juicefs bench` 内部清理内核页缓存，但不清理 JuiceFS 客户端本地块缓存；同轮小文件与大文件读取包含缓存行为差异。套件之间的缓存清理不能改变这一边界。")
     lines.append("")
     lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")
     lines.append("")
 
-    lines.append('本轮包含 ADR-0028：Create、Write、常规 Release 使用单语句原子 CTE 与内联异步 WAL 提交；重开文件时按版本保留内核页缓存。因此重复读取包含缓存命中收益，本轮数据不能单独归因于数据库往返减少。')
+    lines.append('ADR-0029 同时改变服务端存储和客户端状态管理；单轮数据不能将变化归因于其中某一项。')
     lines.append("")
 
     # Section 7: Cloud Resource Audit

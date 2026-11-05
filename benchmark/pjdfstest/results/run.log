@@ -1,20 +1,62 @@
-[2026-11-02T15:53:32Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
-[2026-11-02T15:53:33Z] Compiled binaries ready in /tmp/bowl-pjdfstest-20261102-155332-rbZx2t
-[2026-11-02T15:53:33Z] Step 2/6: Creating temporary SSH KeyPair bowl-pjdfstest-kp-20261102-155332 in us-west-1...
-[2026-11-02T15:53:35Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd) in us-west-1a...
-[2026-11-02T15:53:38Z] Created Server Instance: i-rj94sd2tqbpeta8fi2n4, Client Instance: i-rj94sd2tqbpeta8fi2n5
-[2026-11-02T15:53:38Z] Waiting for both instances to reach Running state...
-[2026-11-02T15:53:44Z] Server (i-rj94sd2tqbpeta8fi2n4): Public=43.110.151.206, Private=172.16.1.221
-[2026-11-02T15:53:44Z] Client (i-rj94sd2tqbpeta8fi2n5): Public=43.110.149.85, Private=172.16.1.220
-[2026-11-02T15:53:44Z] Waiting for SSH readiness on Server (43.110.151.206) and Client (43.110.149.85)...
-[2026-11-02T15:53:58Z] Direct SSH ready on bowl-bench-server (43.110.151.206)
-[2026-11-02T15:54:01Z] Direct SSH ready on bowl-bench-client (43.110.149.85)
-[2026-11-02T15:54:01Z] Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (172.16.1.221)...
-Warning: Permanently added '43.110.151.206' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.151.206' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.151.206' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.151.206' (ED25519) to the list of known hosts.
+[2026-11-04T14:49:34Z] Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64...
+[2026-11-04T14:49:38Z] Compiled binaries ready in /tmp/bowl-pjdfstest-20261104-144934-3Cr9JQ
+[2026-11-04T14:49:38Z] Step 2/6: Creating temporary SSH KeyPair bowl-pjdfstest-kp-20261104-144934 in us-west-1...
+[2026-11-04T14:49:40Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd) in us-west-1a...
+[2026-11-04T14:49:42Z] Created Server Instance: i-rj95ljav1vj04wa7i8vi, Client Instance: i-rj95ljav1vj04wa7i8vj
+[2026-11-04T14:49:42Z] Waiting for both instances to reach Running state...
+[2026-11-04T14:49:49Z] Server (i-rj95ljav1vj04wa7i8vi): Public=47.77.225.54, Private=172.16.1.210
+[2026-11-04T14:49:49Z] Client (i-rj95ljav1vj04wa7i8vj): Public=47.251.73.0, Private=172.16.1.211
+[2026-11-04T14:49:49Z] Waiting for SSH readiness on Server (47.77.225.54) and Client (47.251.73.0)...
+[2026-11-04T14:49:59Z] Direct SSH ready on bowl-bench-client (47.251.73.0)
+[2026-11-04T14:50:04Z] Direct SSH ready on bowl-bench-server (47.77.225.54)
+[2026-11-04T14:50:04Z] Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (172.16.1.210)...
+Warning: Permanently added '47.77.225.54' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.77.225.54' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.77.225.54' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.77.225.54' (ED25519) to the list of known hosts.
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Preconfiguring packages ...
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
@@ -68,6 +110,8 @@ Setting up libpq5:amd64 (16.15-0ubuntu0.24.04.1) ...
 Setting up libcommon-sense-perl:amd64 (3.75-3build3) ...
 Setting up libllvm17t64:amd64 (1:17.0.6-9ubuntu1) ...
 Setting up ssl-cert (1.1.2ubuntu1) ...
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Created symlink /etc/systemd/system/multi-user.target.wants/ssl-cert.service → /usr/lib/systemd/system/ssl-cert.service.
 Setting up libtypes-serialiser-perl (1.01-1) ...
 Setting up libsctp1:amd64 (1.0.19+dfsg-2build1) ...
@@ -76,6 +120,8 @@ Setting up libjson-xs-perl (4.040-0ubuntu0.24.04.1) ...
 Setting up postgresql-client-16 (16.15-0ubuntu0.24.04.1) ...
 update-alternatives: using /usr/share/postgresql/16/man/man1/psql.1.gz to provide /usr/share/man/man1/psql.1.gz (psql.1.gz) in auto mode
 Setting up postgresql-common (257build1.1) ...
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 
 Creating config file /etc/postgresql-common/createcluster.conf with new version
 Building PostgreSQL dictionaries from installed myspell/hunspell packages...
@@ -83,6 +129,8 @@ Removing obsolete dictionary files:
 Created symlink /etc/systemd/system/multi-user.target.wants/postgresql.service → /usr/lib/systemd/system/postgresql.service.
 Setting up libiperf0:amd64 (3.16-1build2) ...
 Setting up postgresql-16 (16.15-0ubuntu0.24.04.1) ...
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Creating new PostgreSQL cluster 16/main ...
 /usr/lib/postgresql/16/bin/initdb -D /var/lib/postgresql/16/main --auth-local peer --auth-host scram-sha-256 --no-instructions
 The files belonging to this database system will be owned by user "postgres".
@@ -105,10 +153,38 @@ running bootstrap script ... ok
 performing post-bootstrap initialization ... ok
 syncing data to disk ... ok
 Setting up iperf3 (3.16-1build2) ...
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Setting up postgresql (16+257build1.1) ...
 Processing triggers for ufw (0.36.2-6) ...
 Processing triggers for man-db (2.12.0-4build2) ...
 Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 
 Running kernel seems to be up-to-date.
 
@@ -121,114 +197,210 @@ No user sessions are running outdated binaries.
 No VM guests are running outdated hypervisor (qemu) binaries on this host.
 Synchronizing state of postgresql.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
 Executing: /usr/lib/systemd/systemd-sysv-install enable postgresql
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 ALTER ROLE
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 CREATE DATABASE
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 ALTER SYSTEM
-2026/11/02 23:55:20 OK   20261015165500_create_metadata_tables.sql (4.17ms)
-2026/11/02 23:55:20 OK   20261016180000_add_symlink_target_to_inodes.sql (1.56ms)
-2026/11/02 23:55:20 OK   20261017000000_create_file_handles_table.sql (2.73ms)
-2026/11/02 23:55:20 OK   20261017010000_convert_symlink_target_to_bytea.sql (4.56ms)
-2026/11/02 23:55:20 OK   20261017020000_convert_entries_name_to_bytea.sql (4.53ms)
-2026/11/02 23:55:20 OK   20261017030000_create_inode_xattrs_table.sql (2.09ms)
-2026/11/02 23:55:20 OK   20261018000000_create_file_locks_tables.sql (6.76ms)
-2026/11/02 23:55:20 OK   20261018010000_add_session_id_to_file_handles.sql (1.97ms)
-2026/11/02 23:55:20 OK   20261019000000_align_juicefs_meta_foundation.sql (3.67ms)
-2026/11/02 23:55:20 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.37ms)
-2026/11/02 23:55:20 OK   20261028000000_add_chunks_and_slice_refs.sql (3.51ms)
-2026/11/02 23:55:20 OK   20261029000000_alter_chunks_indx_to_bigint.sql (2.34ms)
-2026/11/02 23:55:20 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.15ms)
-2026/11/02 23:55:20 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (1.41ms)
-2026/11/02 23:55:20 goose: successfully migrated database to version: 20261101000000
+2026/11/04 22:51:30 OK   20261015165500_create_metadata_tables.sql (4.1ms)
+2026/11/04 22:51:30 OK   20261016180000_add_symlink_target_to_inodes.sql (1.8ms)
+2026/11/04 22:51:30 OK   20261017000000_create_file_handles_table.sql (2.12ms)
+2026/11/04 22:51:30 OK   20261017010000_convert_symlink_target_to_bytea.sql (4.48ms)
+2026/11/04 22:51:30 OK   20261017020000_convert_entries_name_to_bytea.sql (4.37ms)
+2026/11/04 22:51:30 OK   20261017030000_create_inode_xattrs_table.sql (2.19ms)
+2026/11/04 22:51:30 OK   20261018000000_create_file_locks_tables.sql (6.37ms)
+2026/11/04 22:51:30 OK   20261018010000_add_session_id_to_file_handles.sql (1.69ms)
+2026/11/04 22:51:30 OK   20261019000000_align_juicefs_meta_foundation.sql (3.63ms)
+2026/11/04 22:51:30 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.1ms)
+2026/11/04 22:51:30 OK   20261028000000_add_chunks_and_slice_refs.sql (3.2ms)
+2026/11/04 22:51:30 OK   20261029000000_alter_chunks_indx_to_bigint.sql (2.55ms)
+2026/11/04 22:51:30 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.22ms)
+2026/11/04 22:51:30 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (1.32ms)
+2026/11/04 22:51:30 OK   20261104000000_add_adr0029_control_plane_schema.sql (9.65ms)
+2026/11/04 22:51:30 OK   20261104010000_drop_legacy_posix_tables.sql (5.63ms)
+2026/11/04 22:51:30 goose: successfully migrated database to version: 20261104010000
 Created symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
-[2026-11-02T15:55:22Z] Server node (172.16.1.221:9000) is up and healthy.
-[2026-11-02T15:55:22Z] Step 4/6: Preparing Client (172.16.1.220), building pjdfstest, and mounting Bowl over VPC internal network...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
+[2026-11-04T14:51:32Z] Server node (172.16.1.210:9000) is up and healthy.
+[2026-11-04T14:51:32Z] Step 4/6: Preparing Client (172.16.1.211), building pjdfstest, and mounting Bowl over VPC internal network...
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Preconfiguring packages ...
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
 Selecting previously unselected package libsctp1:amd64.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85461 files and directories currently installed.)
-Preparing to unpack .../00-libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
+Preparing to unpack .../libsctp1_1.0.19+dfsg-2build1_amd64.deb ...
 Unpacking libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Selecting previously unselected package libiperf0:amd64.
-Preparing to unpack .../01-libiperf0_3.16-1build2_amd64.deb ...
+Preparing to unpack .../libiperf0_3.16-1build2_amd64.deb ...
 Unpacking libiperf0:amd64 (3.16-1build2) ...
 Selecting previously unselected package iperf3.
-Preparing to unpack .../02-iperf3_3.16-1build2_amd64.deb ...
+Preparing to unpack .../iperf3_3.16-1build2_amd64.deb ...
 Unpacking iperf3 (3.16-1build2) ...
+Preparing to unpack .../libpcre2-8-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-8-0:amd64 (10.42-4ubuntu2.2) over (10.42-4ubuntu2.1) ...
+Setting up libpcre2-8-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package m4.
-Preparing to unpack .../03-m4_1.4.19-4build1_amd64.deb ...
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85482 files and directories currently installed.)
+Preparing to unpack .../00-m4_1.4.19-4build1_amd64.deb ...
 Unpacking m4 (1.4.19-4build1) ...
 Selecting previously unselected package autoconf.
-Preparing to unpack .../04-autoconf_2.71-3_all.deb ...
+Preparing to unpack .../01-autoconf_2.71-3_all.deb ...
 Unpacking autoconf (2.71-3) ...
 Selecting previously unselected package autotools-dev.
-Preparing to unpack .../05-autotools-dev_20220109.1_all.deb ...
+Preparing to unpack .../02-autotools-dev_20220109.1_all.deb ...
 Unpacking autotools-dev (20220109.1) ...
 Selecting previously unselected package automake.
-Preparing to unpack .../06-automake_1%3a1.16.5-1.3ubuntu1_all.deb ...
+Preparing to unpack .../03-automake_1%3a1.16.5-1.3ubuntu1_all.deb ...
 Unpacking automake (1:1.16.5-1.3ubuntu1) ...
-Preparing to unpack .../07-git-man_1%3a2.43.0-1ubuntu7.4_all.deb ...
+Preparing to unpack .../04-git-man_1%3a2.43.0-1ubuntu7.4_all.deb ...
 Unpacking git-man (1:2.43.0-1ubuntu7.4) over (1:2.43.0-1ubuntu7.3) ...
-Preparing to unpack .../08-git_1%3a2.43.0-1ubuntu7.4_amd64.deb ...
+Preparing to unpack .../05-git_1%3a2.43.0-1ubuntu7.4_amd64.deb ...
 Unpacking git (1:2.43.0-1ubuntu7.4) over (1:2.43.0-1ubuntu7.3) ...
 Selecting previously unselected package libsepol-dev:amd64.
-Preparing to unpack .../09-libsepol-dev_3.5-2build1_amd64.deb ...
+Preparing to unpack .../06-libsepol-dev_3.5-2build1_amd64.deb ...
 Unpacking libsepol-dev:amd64 (3.5-2build1) ...
 Selecting previously unselected package libpcre2-16-0:amd64.
-Preparing to unpack .../10-libpcre2-16-0_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-16-0:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../07-libpcre2-16-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-16-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-32-0:amd64.
-Preparing to unpack .../11-libpcre2-32-0_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-32-0:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../08-libpcre2-32-0_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-32-0:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-posix3:amd64.
-Preparing to unpack .../12-libpcre2-posix3_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-posix3:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../09-libpcre2-posix3_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-posix3:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libpcre2-dev:amd64.
-Preparing to unpack .../13-libpcre2-dev_10.42-4ubuntu2.1_amd64.deb ...
-Unpacking libpcre2-dev:amd64 (10.42-4ubuntu2.1) ...
+Preparing to unpack .../10-libpcre2-dev_10.42-4ubuntu2.2_amd64.deb ...
+Unpacking libpcre2-dev:amd64 (10.42-4ubuntu2.2) ...
 Selecting previously unselected package libselinux1-dev:amd64.
-Preparing to unpack .../14-libselinux1-dev_3.5-2ubuntu2.1_amd64.deb ...
+Preparing to unpack .../11-libselinux1-dev_3.5-2ubuntu2.1_amd64.deb ...
 Unpacking libselinux1-dev:amd64 (3.5-2ubuntu2.1) ...
 Selecting previously unselected package libfuse3-dev:amd64.
-Preparing to unpack .../15-libfuse3-dev_3.14.0-5build1_amd64.deb ...
+Preparing to unpack .../12-libfuse3-dev_3.14.0-5build1_amd64.deb ...
 Unpacking libfuse3-dev:amd64 (3.14.0-5build1) ...
 Selecting previously unselected package libltdl7:amd64.
-Preparing to unpack .../16-libltdl7_2.4.7-7build1_amd64.deb ...
+Preparing to unpack .../13-libltdl7_2.4.7-7build1_amd64.deb ...
 Unpacking libltdl7:amd64 (2.4.7-7build1) ...
 Selecting previously unselected package libltdl-dev:amd64.
-Preparing to unpack .../17-libltdl-dev_2.4.7-7build1_amd64.deb ...
+Preparing to unpack .../14-libltdl-dev_2.4.7-7build1_amd64.deb ...
 Unpacking libltdl-dev:amd64 (2.4.7-7build1) ...
 Selecting previously unselected package libpkgconf3:amd64.
-Preparing to unpack .../18-libpkgconf3_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../15-libpkgconf3_1.8.1-2build1_amd64.deb ...
 Unpacking libpkgconf3:amd64 (1.8.1-2build1) ...
 Selecting previously unselected package libtool.
-Preparing to unpack .../19-libtool_2.4.7-7build1_all.deb ...
+Preparing to unpack .../16-libtool_2.4.7-7build1_all.deb ...
 Unpacking libtool (2.4.7-7build1) ...
 Selecting previously unselected package pkgconf-bin.
-Preparing to unpack .../20-pkgconf-bin_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../17-pkgconf-bin_1.8.1-2build1_amd64.deb ...
 Unpacking pkgconf-bin (1.8.1-2build1) ...
 Selecting previously unselected package pkgconf:amd64.
-Preparing to unpack .../21-pkgconf_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../18-pkgconf_1.8.1-2build1_amd64.deb ...
 Unpacking pkgconf:amd64 (1.8.1-2build1) ...
 Selecting previously unselected package pkg-config:amd64.
-Preparing to unpack .../22-pkg-config_1.8.1-2build1_amd64.deb ...
+Preparing to unpack .../19-pkg-config_1.8.1-2build1_amd64.deb ...
 Unpacking pkg-config:amd64 (1.8.1-2build1) ...
 Setting up m4 (1.4.19-4build1) ...
-Setting up libpcre2-16-0:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-16-0:amd64 (10.42-4ubuntu2.2) ...
 Setting up autotools-dev (20220109.1) ...
-Setting up libpcre2-32-0:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-32-0:amd64 (10.42-4ubuntu2.2) ...
 Setting up libpkgconf3:amd64 (1.8.1-2build1) ...
 Setting up libsepol-dev:amd64 (3.5-2build1) ...
 Setting up pkgconf-bin (1.8.1-2build1) ...
 Setting up libltdl7:amd64 (2.4.7-7build1) ...
 Setting up autoconf (2.71-3) ...
-Setting up libpcre2-posix3:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-posix3:amd64 (10.42-4ubuntu2.2) ...
 Setting up libsctp1:amd64 (1.0.19+dfsg-2build1) ...
 Setting up git-man (1:2.43.0-1ubuntu7.4) ...
 Setting up automake (1:1.16.5-1.3ubuntu1) ...
 update-alternatives: using /usr/bin/automake-1.16 to provide /usr/bin/automake (automake) in auto mode
-Setting up libpcre2-dev:amd64 (10.42-4ubuntu2.1) ...
+Setting up libpcre2-dev:amd64 (10.42-4ubuntu2.2) ...
 Setting up libtool (2.4.7-7build1) ...
 Setting up libselinux1-dev:amd64 (3.5-2ubuntu2.1) ...
 Setting up pkgconf:amd64 (1.8.1-2build1) ...
@@ -238,33 +410,127 @@ Setting up pkg-config:amd64 (1.8.1-2build1) ...
 Setting up git (1:2.43.0-1ubuntu7.4) ...
 Setting up libfuse3-dev:amd64 (3.14.0-5build1) ...
 Setting up iperf3 (3.16-1build2) ...
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
 Processing triggers for ufw (0.36.2-6) ...
 Processing triggers for man-db (2.12.0-4build2) ...
 Processing triggers for install-info (7.1-3build2) ...
 Processing triggers for libc-bin (2.39-0ubuntu8.9) ...
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+locale: Cannot set LC_CTYPE to default locale: No such file or directory
+locale: Cannot set LC_ALL to default locale: No such file or directory
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 
 Running kernel seems to be up-to-date.
 
-No services need to be restarted.
+Restarting services...
+ /etc/needrestart/restart.d/systemd-manager
+ systemctl restart cron.service multipathd.service packagekit.service polkit.service ssh.service systemd-journald.service systemd-networkd.service systemd-resolved.service systemd-udevd.service tuned.service udisks2.service
+
+Service restarts being deferred:
+ systemctl restart ModemManager.service
+ /etc/needrestart/restart.d/dbus.service
+ systemctl restart networkd-dispatcher.service
+ systemctl restart systemd-logind.service
+ systemctl restart unattended-upgrades.service
 
 No containers need to be restarted.
 
-No user sessions are running outdated binaries.
+User sessions running outdated binaries:
+ root @ user manager service: systemd[1755]
 
 No VM guests are running outdated hypervisor (qemu) binaries on this host.
 Cloning into '/opt/pjdfstest'...
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 configure.ac:12: installing './compile'
 configure.ac:10: installing './config.guess'
 configure.ac:10: installing './config.sub'
 configure.ac:4: installing './install-sh'
+configure.ac:4: installing './missing'
+Makefile.am: installing './INSTALL'
+Makefile.am: installing './depcomp'
 checking for a BSD-compatible install... /usr/bin/install -c
 checking whether build environment is sane... yes
 checking for a race-free mkdir -p... /usr/bin/mkdir -p
 checking for gawk... gawk
-checking whether make sets $(MAKE)... configure.ac:4: installing './missing'
-Makefile.am: installing './INSTALL'
-Makefile.am: installing './depcomp'
-yes
+checking whether make sets $(MAKE)... yes
 checking whether make supports nested variables... yes
 checking build system type... x86_64-pc-linux-gnu
 checking host system type... x86_64-pc-linux-gnu
@@ -338,52 +604,60 @@ cc -DHAVE_CONFIG_H -I.    -Wall -Werror -g -O2 -MT pjdfstest.o -MD -MP -MF .deps
 mv -f .deps/pjdfstest.Tpo .deps/pjdfstest.Po
 cc -Wall -Werror -g -O2   -o pjdfstest pjdfstest.o  
 make[1]: Leaving directory '/opt/pjdfstest'
-[2026-11-02T15:55:52Z] Measuring internal VPC RTT and throughput (172.16.1.220 -> 172.16.1.221)...
-Warning: Permanently added '43.110.151.206' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-[2026-11-02T15:56:02Z] Client mounted /mnt/bowl over VPC internal network: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0"},"network":{"ping_rtt_ms":"0.060/0.094/0.331/0.058","iperf3_gbps":"15.29"},"bowl":{"disk_id":"01a19cf9-8d3c-7454-8a34-24fb0279ed9a","root_ino":2,"pjdfstest_git_commit":"85a8aea"}}
-[2026-11-02T15:56:02Z] Step 5/6: Running full pjdfstest suite on /mnt/bowl/work...
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
+[2026-11-04T14:52:11Z] Measuring internal VPC RTT and throughput (172.16.1.211 -> 172.16.1.210)...
+Warning: Permanently added '47.77.225.54' (ED25519) to the list of known hosts.
+perl: warning: Setting locale failed.
+perl: warning: Please check that your locale settings:
+	LANGUAGE = (unset),
+	LC_ALL = (unset),
+	LC_CTYPE = "UTF-8",
+	LANG = "en_US.UTF-8"
+    are supported and installed on your system.
+perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+[2026-11-04T14:52:21Z] Client mounted /mnt/bowl over VPC internal network: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"7.4 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0"},"network":{"ping_rtt_ms":"0.067/0.105/0.328/0.058","iperf3_gbps":"15.71"},"bowl":{"disk_id":"01a1a70b-f508-7dd0-b119-9c6215f0f615","root_ino":1,"pjdfstest_git_commit":"85a8aea"}}
+[2026-11-04T14:52:21Z] Step 5/6: Running full pjdfstest suite on /mnt/bowl/work...
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
 [pjdfstest-runner] Discovered 17 syscall directories: chflags, chmod, chown, ftruncate, granular, link, mkdir, mkfifo, mknod, open, posix_fallocate, rename, rmdir, symlink, truncate, unlink, utimensat
 [01/17] Running prove --timer -rv /opt/pjdfstest/tests/chflags ...
-    -> Done chflags in 0.22s (rc=0): Files=14, Tests=14,  1 wallclock secs ( 0.02 usr  0.01 sys +  0.05 cusr  0.04 csys =  0.12 CPU) Result: PASS
+    -> Done chflags in 0.15s (rc=0): Files=14, Tests=14,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.04 cusr  0.04 csys =  0.10 CPU) Result: PASS
 [02/17] Running prove --timer -rv /opt/pjdfstest/tests/chmod ...
-    -> Done chmod in 14.91s (rc=0): Files=13, Tests=327, 14 wallclock secs ( 0.06 usr  0.01 sys +  0.98 cusr  0.80 csys =  1.85 CPU) Result: PASS
+    -> Done chmod in 13.58s (rc=0): Files=13, Tests=327, 13 wallclock secs ( 0.06 usr  0.01 sys +  1.02 cusr  0.70 csys =  1.79 CPU) Result: PASS
 [03/17] Running prove --timer -rv /opt/pjdfstest/tests/chown ...
-    -> Done chown in 83.85s (rc=0): Files=11, Tests=1497, 83 wallclock secs ( 0.17 usr  0.02 sys +  2.60 cusr  2.02 csys =  4.81 CPU) Result: PASS
+    -> Done chown in 79.94s (rc=0): Files=11, Tests=1497, 80 wallclock secs ( 0.18 usr  0.02 sys +  2.53 cusr  1.85 csys =  4.58 CPU) Result: PASS
 [04/17] Running prove --timer -rv /opt/pjdfstest/tests/ftruncate ...
-    -> Done ftruncate in 3.82s (rc=0): Files=15, Tests=89,  4 wallclock secs ( 0.03 usr  0.01 sys +  0.64 cusr  0.54 csys =  1.22 CPU) Result: PASS
+    -> Done ftruncate in 2.98s (rc=0): Files=15, Tests=89,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.67 cusr  0.47 csys =  1.19 CPU) Result: PASS
 [05/17] Running prove --timer -rv /opt/pjdfstest/tests/granular ...
-    -> Done granular in 0.12s (rc=0): Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.02 cusr  0.02 csys =  0.06 CPU) Result: PASS
+    -> Done granular in 0.09s (rc=0): Files=7, Tests=7,  0 wallclock secs ( 0.02 usr  0.00 sys +  0.01 cusr  0.02 csys =  0.05 CPU) Result: PASS
 [06/17] Running prove --timer -rv /opt/pjdfstest/tests/link ...
-    -> Done link in 13.09s (rc=0): Files=18, Tests=359, 13 wallclock secs ( 0.07 usr  0.01 sys +  1.07 cusr  0.84 csys =  1.99 CPU) Result: PASS
+    -> Done link in 11.66s (rc=0): Files=18, Tests=359, 12 wallclock secs ( 0.06 usr  0.01 sys +  1.04 cusr  0.79 csys =  1.90 CPU) Result: PASS
 [07/17] Running prove --timer -rv /opt/pjdfstest/tests/mkdir ...
-    -> Done mkdir in 2.82s (rc=0): Files=13, Tests=118,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.66 cusr  0.58 csys =  1.29 CPU) Result: PASS
+    -> Done mkdir in 2.03s (rc=0): Files=13, Tests=118,  2 wallclock secs ( 0.04 usr  0.01 sys +  0.68 cusr  0.51 csys =  1.24 CPU) Result: PASS
 [08/17] Running prove --timer -rv /opt/pjdfstest/tests/mkfifo ...
-    -> Done mkfifo in 2.86s (rc=0): Files=13, Tests=120,  3 wallclock secs ( 0.04 usr  0.00 sys +  0.70 cusr  0.53 csys =  1.27 CPU) Result: PASS
+    -> Done mkfifo in 2.04s (rc=0): Files=13, Tests=120,  2 wallclock secs ( 0.04 usr  0.01 sys +  0.67 cusr  0.52 csys =  1.24 CPU) Result: PASS
 [09/17] Running prove --timer -rv /opt/pjdfstest/tests/mknod ...
-    -> Done mknod in 5.24s (rc=0): Files=12, Tests=186,  5 wallclock secs ( 0.04 usr  0.01 sys +  0.79 cusr  0.60 csys =  1.44 CPU) Result: PASS
+    -> Done mknod in 4.17s (rc=0): Files=12, Tests=186,  4 wallclock secs ( 0.04 usr  0.01 sys +  0.76 cusr  0.57 csys =  1.38 CPU) Result: PASS
 [10/17] Running prove --timer -rv /opt/pjdfstest/tests/open ...
-    -> Done open in 5.77s (rc=0): Files=27, Tests=337,  6 wallclock secs ( 0.06 usr  0.03 sys +  1.07 cusr  0.82 csys =  1.98 CPU) Result: PASS
+    -> Done open in 4.57s (rc=0): Files=27, Tests=337,  5 wallclock secs ( 0.06 usr  0.02 sys +  1.04 cusr  0.78 csys =  1.90 CPU) Result: PASS
 [11/17] Running prove --timer -rv /opt/pjdfstest/tests/posix_fallocate ...
-    -> Done posix_fallocate in 0.06s (rc=0): Files=1, Tests=1,  0 wallclock secs ( 0.01 usr +  0.00 sys =  0.01 CPU) Result: PASS
+    -> Done posix_fallocate in 0.05s (rc=0): Files=1, Tests=1,  0 wallclock secs ( 0.01 usr +  0.00 sys =  0.01 CPU) Result: PASS
 [12/17] Running prove --timer -rv /opt/pjdfstest/tests/rename ...
-    -> Done rename in 37.29s (rc=0): Files=25, Tests=4857, 37 wallclock secs ( 0.51 usr  0.04 sys +  7.57 cusr  5.71 csys = 13.83 CPU) Result: PASS
+    -> Done rename in 23.83s (rc=0): Files=25, Tests=4857, 24 wallclock secs ( 0.51 usr  0.04 sys +  7.38 cusr  5.09 csys = 13.02 CPU) Result: PASS
 [13/17] Running prove --timer -rv /opt/pjdfstest/tests/rmdir ...
-    -> Done rmdir in 3.08s (rc=0): Files=16, Tests=145,  3 wallclock secs ( 0.04 usr  0.01 sys +  0.74 cusr  0.61 csys =  1.40 CPU) Result: PASS
+    -> Done rmdir in 2.17s (rc=0): Files=16, Tests=145,  2 wallclock secs ( 0.04 usr  0.01 sys +  0.71 cusr  0.58 csys =  1.34 CPU) Result: PASS
 [14/17] Running prove --timer -rv /opt/pjdfstest/tests/symlink ...
-    -> Done symlink in 2.76s (rc=0): Files=13, Tests=95,  2 wallclock secs ( 0.03 usr  0.01 sys +  0.66 cusr  0.54 csys =  1.24 CPU) Result: PASS
+    -> Done symlink in 2.02s (rc=0): Files=13, Tests=95,  2 wallclock secs ( 0.04 usr  0.00 sys +  0.66 cusr  0.49 csys =  1.19 CPU) Result: PASS
 [15/17] Running prove --timer -rv /opt/pjdfstest/tests/truncate ...
-    -> Done truncate in 3.83s (rc=0): Files=15, Tests=84,  4 wallclock secs ( 0.03 usr  0.01 sys +  0.63 cusr  0.54 csys =  1.21 CPU) Result: PASS
+    -> Done truncate in 2.99s (rc=0): Files=15, Tests=84,  3 wallclock secs ( 0.03 usr  0.01 sys +  0.64 cusr  0.49 csys =  1.17 CPU) Result: PASS
 [16/17] Running prove --timer -rv /opt/pjdfstest/tests/unlink ...
-    -> Done unlink in 20.34s (rc=0): Files=15, Tests=440, 20 wallclock secs ( 0.07 usr  0.01 sys +  1.16 cusr  0.90 csys =  2.14 CPU) Result: PASS
+    -> Done unlink in 18.78s (rc=0): Files=15, Tests=440, 19 wallclock secs ( 0.08 usr  0.01 sys +  1.14 cusr  0.83 csys =  2.06 CPU) Result: PASS
 [17/17] Running prove --timer -rv /opt/pjdfstest/tests/utimensat ...
-    -> Done utimensat in 1.74s (rc=0): Files=10, Tests=122,  2 wallclock secs ( 0.02 usr  0.01 sys +  0.24 cusr  0.21 csys =  0.48 CPU) Result: PASS
-[2026-11-02T15:59:26Z] pjdfstest execution finished at 2026-11-02T15:59:26Z.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.149.85' (ED25519) to the list of known hosts.
-[2026-11-02T15:59:35Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-02T15:59:37Z] Verified both ECS instances (i-rj94sd2tqbpeta8fi2n4, i-rj94sd2tqbpeta8fi2n5) are deleted (Remaining: 0).
-[parse_results] Parsed 238 files, 8798/8798 tests passed (100.00%) in 201.82s
-[2026-11-02T15:59:39Z] Benchmark complete! Report written to: /tmp/bowl-benchmark-0655a17/pjdfstest/REPORT.md
+    -> Done utimensat in 1.43s (rc=0): Files=10, Tests=122,  1 wallclock secs ( 0.03 usr  0.01 sys +  0.24 cusr  0.19 csys =  0.47 CPU) Result: PASS
+[2026-11-04T14:55:15Z] pjdfstest execution finished at 2026-11-04T14:55:15Z.
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+Warning: Permanently added '47.251.73.0' (ED25519) to the list of known hosts.
+[2026-11-04T14:55:26Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
+[2026-11-04T14:55:28Z] Verified both ECS instances (i-rj95ljav1vj04wa7i8vi, i-rj95ljav1vj04wa7i8vj) are deleted (Remaining: 0).
+[parse_results] Parsed 238 files, 8798/8798 tests passed (100.00%) in 172.49s
+[2026-11-04T14:55:29Z] Benchmark complete! Report written to: /Users/fanxing/code/starsrc/bowl/.worktrees/starsrc-597/benchmark/pjdfstest/REPORT.md

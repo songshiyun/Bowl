@@ -1,6 +1,6 @@
 {
-  "test_started_at": "2026-11-02T15:56:47Z",
-  "test_completed_at": "2026-11-02T16:19:07Z",
+  "test_started_at": "2026-11-04T14:25:12Z",
+  "test_completed_at": "2026-11-04T14:48:27Z",
   "cloud": {
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
@@ -23,13 +23,13 @@
     "kernel": "6.8.0-147-generic",
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "redis_version": "Redis server v=7.0.15",
-    "minio_version": "rclone v1.68.2",
-    "instance_id": "i-rj93ymmufo05cjc13acy",
-    "private_ip": "172.16.1.223"
+    "rclone_version": "rclone v1.68.2",
+    "instance_id": "i-rj96sq7p2sw4a0bucoit",
+    "private_ip": "172.16.1.207"
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": "164.09",
-    "local_seq_read_mib_s": "184.29"
+    "local_seq_write_mib_s": "172.52",
+    "local_seq_read_mib_s": "174.46"
   },
   "client_node": {
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -41,17 +41,31 @@
     "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
     "fio_version": "fio-3.36",
     "mdtest_version": "mdtest-3.3.0",
-    "instance_id": "i-rj93ymmufo05cjc13acz",
-    "private_ip": "172.16.1.222"
+    "instance_id": "i-rj96sq7p2sw4a0bucoiu",
+    "private_ip": "172.16.1.206"
   },
   "network_baseline": {
-    "ping_rtt_ms": "0.035/0.064/0.269/0.051",
+    "ping_rtt_ms": "0.062/0.095/0.331/0.059",
     "iperf3_gbps": "15.71"
   },
   "bowl_config": {
-    "bowl_git_commit": "0655a17",
-    "disk_id": "01a19cfa-4a0f-7913-835a-310e661f60f7",
-    "root_ino": 2,
+    "bowl_git_commit": "1f7cde9",
+    "storage_engine": "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
+    "blob_layout": "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
+    "blob_size_bytes": 1048576,
+    "blob_ref_bytes": 12,
+    "kernel_writeback_cache": false,
+    "open_keep_cache": true,
+    "handle_killpriv": true,
+    "max_background": 64,
+    "congestion_threshold": 48,
+    "flush_issues_fsync_rpc": false,
+    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
+    "branch_lock": "拓扑生命周期 RLock + 按 inode 细粒度锁",
+    "parallel_blob_write": "1 MiB 块在 Inode 锁外并行落盘",
+    "point_lookup_snapshot_free": true,
+    "disk_id": "01a1a6f3-2fb9-734c-945c-07bc9f2d7b4a",
+    "root_ino": 1,
     "disk_size": "2PiB",
     "atime_mode": "noatime",
     "entry_timeout": "1.0s",
@@ -65,9 +79,9 @@
     "chunk_size": "64MiB (default)"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-jfsbench-kp-20261102-155330",
-    "instances_created_at": "2026-11-02T15:53:38Z",
-    "instances_deleted_at": "2026-11-02T16:19:51Z",
+    "key_pair_name": "bowl-jfsbench-kp-20261104-142150",
+    "instances_created_at": "2026-11-04T14:21:57Z",
+    "instances_deleted_at": "2026-11-04T14:49:13Z",
     "remaining_benchmark_instances": 0
   }
 }

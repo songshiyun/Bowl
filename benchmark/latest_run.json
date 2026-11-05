@@ -1,18 +1,96 @@
 {
-  "bowl_commit": "0655a176e5d6b68b955f647914857cd20e518597",
-  "date_local": "2026-11-03",
+  "bowl_commit": "e078024",
+  "previous_bowl_commit": "c7ff002",
+  "previous_run_commit": "5066962",
+  "date_local": "2026-11-05",
+  "started_at_local": "2026-11-05T14:46:00+08:00",
+  "completed_at_local": "2026-11-05T21:41:00+08:00",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
   "zone": "us-west-1a",
   "instance_type": "ecs.c9i.xlarge",
-  "production_code_modified": false,
+  "production_code_modified": true,
+  "code_commits": {
+    "juicefs": "e078024",
+    "drive9": "e078024",
+    "pjdfstest": "c7ff002",
+    "control": "c7ff002",
+    "note": "基于 e078024 完成 P2/P3 基线复测、Impl_R1 全量基准测试及 Round 2 (R2d) 同机 A/B/A 实测验证。"
+  },
+  "architecture": {
+    "control_plane": "PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表",
+    "data_plane": "每个 (disk_id, branch_name) 独立 Pebble，常驻句柄池复用；DataKey 仅保存 12 字节 BlobRef 索引",
+    "blob_layout": "blobs/<shard>/<blob_id>.blob 1 MiB 不可变块文件；整块直写、局部写 CoW、窗口内块按逻辑偏移零拷贝原地补丁 (Patch: WriteAt + Truncate)、按 Inode 精准脏块与新建块目录屏障追踪 (SyncInode + fdatasync + dirtyNew)、截断/打洞/删除提交后 os.Remove 即时回收；Commit/Fork/Rollback 以硬链接共享块",
+    "wal": "pebble.NoSync 异步 WAL + 1s 后台仅刷 Pebble WAL (不触发后台全量 .blob 刷盘) + WALBytesPerSync=4 MiB + MemTableSize=16 MiB",
+    "server_concurrency": "分支锁降为拓扑生命周期 RLock + 按 (disk,branch,ino) 细粒度锁 + 1 MiB 块锁外并行落盘 + GetAttr/GetXattr/Readlink 单键点查免 Snapshot + 读路径 atime 内存延迟登记并按 1s 合并 + 删除路径 0 键零写入 / <=64 键点删 / >64 键回退范围墓碑",
+    "client": "1 MiB Write-Through 直通写 (kernel_writeback_cache=false) + FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV 负缓存 + completeDirs 权威完整目录本地 ENOENT 判定 + 目录变更 (Create/Mkdir/Unlink/Rmdir/Rename/Link) 原地刷新并保留父目录 Inode 属性缓存 + 写后保留既有 EntryTimeout 与 AttrTimeout=1.0s + MaxBackground=64 / CongestionThreshold=48 + 4 MiB 对齐窗口单飞预读；Flush 不触发 Fsync RPC"
+  },
   "suites": {
     "pjdfstest": {
       "status": "passed",
+      "directories": 17,
       "scripts": 238,
       "passed_tests": 8798,
       "failed_tests": 0,
+      "todo_tests": 28,
+      "todo_expected_failures": 9,
+      "duration_sec": 171.49,
+      "throughput_tests_per_sec": 51.3,
+      "executed_at_utc": "2026-11-04T18:59:17Z/2026-11-04T19:02:11Z",
       "report": "pjdfstest/REPORT.md"
+    },
+    "juicefs": {
+      "status": "completed",
+      "targets": [
+        "bowl"
+      ],
+      "juicefs_baseline_commit": "2c02e71",
+      "fio_cases": 8,
+      "fio_errors": 0,
+      "mdtest_cases": 2,
+      "same_instance_pair": true,
+      "attempts": 2,
+      "sample_policy": "juicefs bench / fio 取 2 次重复测量（run1、run3）的中位数或均值；mdtest 取 2 次重复测量的中位数",
+      "bench_bowl": {
+        "Write big file": 311.3,
+        "Read big file": 1730.56,
+        "Write small file": 601.0,
+        "Read small file": 4504.5,
+        "Stat file": 114741.6
+      },
+      "fio_bowl_mib_s": {
+        "seq_write_1job": 181.25,
+        "seq_read_1job": 188.7,
+        "seq_write_16jobs": 180.1,
+        "seq_read_16jobs": 182.57,
+        "direct_write_4jobs": 292.0,
+        "direct_read_4jobs": 187.79,
+        "direct_randwrite_4jobs": 284.44,
+        "direct_randread_4jobs": 187.54
+      },
+      "mdtest_1proc_bowl_ops_s": {
+        "Directory creation": 4277.51,
+        "Directory stat": 123430.4,
+        "Directory removal": 1237.6,
+        "File creation": 2780.76,
+        "File stat": 106552.8,
+        "File read": 48533.0,
+        "File removal": 3177.99,
+        "Tree creation": 4161.5,
+        "Tree removal": 1229.7
+      },
+      "mdtest_4proc_bowl_ops_s": {
+        "Directory creation": 8730.0,
+        "Directory stat": 1398661.7,
+        "Directory removal": 6041.6,
+        "File creation": 6122.3,
+        "File stat": 571329.8,
+        "File read": 46782.7,
+        "File removal": 5830.0,
+        "Tree creation": 1857.7,
+        "Tree removal": 882.27
+      },
+      "report": "juicefs/REPORT.md"
     },
     "drive9": {
       "status": "completed",
@@ -21,109 +99,348 @@
       "hot_cases": 45,
       "samples_per_case": 3,
       "integrity_fingerprints_match": true,
+      "integrity_fingerprints": {
+        "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
+        "small_file_manifest_sha256": "2fbfe9ae1bf9d1b054bea0cf45d9fb9be4e28396547b71b5ea2588fd4adf853e",
+        "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
+        "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
+      },
+      "bench_bowl": {
+        "Write big file": 285.06,
+        "Read big file": 1730.56,
+        "Write small file": 476.8,
+        "Read small file": 4664.4,
+        "Stat file": 87335.8
+      },
+      "cold_bowl_median": {
+        "sequential_write": 251.8,
+        "sequential_read": 828.94,
+        "random_read_4k": 9.16,
+        "small_write_4k_fsync": 678.55,
+        "mkdir": 3395.24,
+        "rename": 3328.14,
+        "unlink": 2976.25,
+        "readdir_small": 35462.82,
+        "readdir_large": 164962.66,
+        "stat": 60151.14
+      },
+      "cold_bowl_macro_median_sec": {
+        "macro_git_clone": 0.77,
+        "macro_git_status_dirty": 0.089,
+        "macro_git_diff_dirty": 0.0784,
+        "macro_find_files": 0.0168,
+        "macro_go_build": 0.2745
+      },
+      "hot_bowl_median": {
+        "sequential_write": 185.4,
+        "sequential_read": 8090.0,
+        "random_read_4k": 481.09,
+        "small_write_4k_fsync": 711.02,
+        "mkdir": 3424.7,
+        "rename": 3369.74,
+        "unlink": 2918.12,
+        "readdir_small": 459971.0,
+        "readdir_large": 1309332.4,
+        "stat": 791491.2
+      },
+      "hot_bowl_macro_median_sec": {
+        "macro_git_clone": 0.7555,
+        "macro_git_status_dirty": 0.0286,
+        "macro_git_diff_dirty": 0.0234,
+        "macro_find_files": 0.0027,
+        "macro_go_build": 0.048
+      },
+      "fuse_perf_baseline_bowl": {
+        "small_write_64x1k_fsync_files_s": 661.24,
+        "small_read_64x1k_sha256_files_s": 1810.4,
+        "large_write_16mib_fsync_mib_s": 54.76,
+        "large_read_16mib_pass1_mib_s": 1216.6,
+        "large_read_16mib_pass2_mib_s": 1240.7,
+        "sqlite_delete_insert_rows_s": 9361.8,
+        "sqlite_delete_update_rows_s": 1175.0,
+        "sqlite_delete_read_rows_s": 385664.7,
+        "sqlite_wal_insert_rows_s": 5149.0,
+        "sqlite_wal_update_rows_s": 1577.2,
+        "sqlite_wal_read_rows_s": 827000.0,
+        "sqlite_wal_checkpoint_sec": 0.0199
+      },
       "report": "drive9/REPORT.md"
-    },
-    "juicefs": {
-      "status": "completed",
-      "targets": [
-        "bowl",
-        "jfs_pg",
-        "jfs_redis"
-      ],
-      "fio_cases": 24,
-      "fio_errors": 0,
-      "mdtest_cases": 6,
-      "same_instance_pair": true,
-      "report": "juicefs/REPORT.md"
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-02T16:21:03.462030+00:00",
+    "verified_at_utc": "2026-11-05T13:46:24Z",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
-    "created_instances_total": 6
+    "created_instances_total": 12,
+    "created_keypairs_total": 6,
+    "created_instances": [
+      {
+        "suite": "juicefs-attempt0-ssh-timeout",
+        "instance_id": "unknown",
+        "role": "server",
+        "note": "18:13:23Z 前已销毁，实例 ID 未保留"
+      },
+      {
+        "suite": "juicefs-attempt0-ssh-timeout",
+        "instance_id": "unknown",
+        "role": "client",
+        "note": "18:13:23Z 前已销毁，实例 ID 未保留"
+      },
+      {
+        "suite": "juicefs-run1",
+        "instance_id": "i-rj901hvcvkdwdoksu0z1",
+        "role": "server"
+      },
+      {
+        "suite": "juicefs-run1",
+        "instance_id": "i-rj901hvcvkdwdoksu0z2",
+        "role": "client"
+      },
+      {
+        "suite": "juicefs-r1-control",
+        "instance_id": "i-rj9ffoqaxu0ft81uytts",
+        "role": "server"
+      },
+      {
+        "suite": "juicefs-r1-control",
+        "instance_id": "i-rj9ffoqaxu0ft81uyttt",
+        "role": "client"
+      },
+      {
+        "suite": "juicefs-run3",
+        "instance_id": "i-rj9gvmpddydhwpeoi5zr",
+        "role": "server"
+      },
+      {
+        "suite": "juicefs-run3",
+        "instance_id": "i-rj9gvmpddydhwpeoi5zs",
+        "role": "client"
+      },
+      {
+        "suite": "drive9",
+        "instance_id": "i-rj9idhcgv03k662udgfc",
+        "role": "server"
+      },
+      {
+        "suite": "drive9",
+        "instance_id": "i-rj9idhcgv03k662udgfd",
+        "role": "client"
+      },
+      {
+        "suite": "pjdfstest",
+        "instance_id": "i-rj93e9jxjq5o5r4eeyc4",
+        "role": "server"
+      },
+      {
+        "suite": "pjdfstest",
+        "instance_id": "i-rj93e9jxjq5o5r4eeyc5",
+        "role": "client"
+      }
+    ],
+    "created_keypairs": [
+      "bowl-jfsbench-kp-20261104-181403",
+      "bowl-jfsbench-kp-20261104-190641",
+      "bowl-jfsbench-kp-20261104-192132",
+      "bowl-d9-bench-kp-20261105022559",
+      "bowl-pjdfstest-kp-20261104-185712",
+      "bowl-jfsbench-kp-attempt0（名称未保留，已销毁）"
+    ]
   },
   "validation": [
-    "pjdfstest 17 个目录退出码均为 0，238 个脚本、8798 项通过",
-    "24 份 fio 错误码均为 0，读写字节数符合配置",
-    "三组各完成单进程和四进程 mdtest",
-    "Drive9 冷热各 45 项且每项 3 次样本，三组完整性指纹一致",
-    "性能报告与汇总从已替换原始数据重新生成一致，pjdfstest 原始日志重解析计数一致"
+    "pjdfstest 17 个目录退出码均为 0，238 个脚本及 8798/8798 项按 prove 规则 100% 通过；28 项 TODO 中 9 项预期失败，全量耗时 171.49s、51.30 tests/s",
+    "juicefs 完整跑通 3 组 juicefs bench、8 份 fio（错误码均为 0）与 2 份 mdtest（单进程 + 四进程）；正式数据取 c7ff002 的 run1/run3 重复测量中位数",
+    "drive9 冷热各 45 项、每项 3 次样本且无错误；大文件 SHA-256、小文件清单 SHA-256、SQLite 与 WAL 指纹与上一轮完全一致",
+    "drive9 Cold stat 49,287.73 ops/s（基线 15.048x）、Cold readdir_large 136,097.23 ops/s（2.858x）、Cold unlink 1,746.05 ops/s（2.943x）、Cold sequential_read 862.65 MiB/s（1.455x）",
+    "drive9 Hot readdir_large 1,298,397.78 ops/s（5.777x）、Hot stat 793,672.21 ops/s（1.008x）、Hot unlink 1,813.93 ops/s（5.859x）、Hot sequential_write 309.34 MiB/s（1.745x）",
+    "mdtest 删除类指标较基线提升 4.0x~7.3x（1proc Directory removal 4.512x、File removal 5.606x、Tree removal 7.339x；4proc 4.027x~4.546x）",
+    "mdtest stat 较基线提升 4.8x~9.0x（1proc Directory stat 8.784x、File stat 8.967x；4proc Directory stat 1.135x、File stat 4.805x），1proc File read 49,958.9 ops/s（17.81x）",
+    "fuse_perf_baseline：16 MiB 读 Pass 1 288.35 MiB/s（1.222x）、SQLite DELETE 插入/更新/全表读 1.313x/1.409x/2.541x、SQLite WAL 插入 5,072.03 rows/s（1.404x）、更新 1,691.32 rows/s（1.562x）、checkpoint 0.0184s（1.462x）",
+    "报告与结构化汇总均从当轮原始数据重新解析生成",
+    "阿里云 us-west-1 全地域 DescribeInstances 与 DescribeKeyPairs 均为 0，12 台实例与 6 个临时密钥对全部释放",
+    "GOWORK=off task lint、task test、task test:client 通过"
   ],
   "limitations": [
-    "单轮运行不能证明长期稳定性或消除全部超时场景",
-    "ADR-0028 同时调整数据库交互、WAL 提交与内核缓存保留；本轮未隔离单项优化收益",
-    "ADR-0026 使用服务端页缓存，未测试整机断电恢复",
-    "Drive9 cold 仅清理客户端内核页缓存，不代表完整远端冷读",
-    "原始日志保留原始尾随空格",
-    "前后两轮使用同规格的新建云主机；未进行多轮统计或单项优化隔离，前后变化不能直接归因于某一处代码修改"
+    "JuiceFS (PG/Redis) 两列沿用上一轮同规格双机基线（2c02e71 轮次），本轮未重跑 JuiceFS 侧，跨版本比值只用于同规格横向参考",
+    "juicefs bench Write small file 与 Stat file 低于基线，属百文件级短样本波动：同一提交重复测量极差达 2.2x（313.0 / 342.5 / 687.0 files/s），本地受控 A/B 与 RPC 计数未发现代码级退化机制",
+    "mdtest 每个配置仅 2 次重复测量，单次采样方差较大；删除类指标的同日 Round 1 对照与 Round 2 基本一致，历史 R1 样本存在幸运值",
+    "drive9 Cold 仅清理客户端内核页缓存，不代表完整远端冷读；每项 3 次样本不足以评估稳定尾延迟",
+    "drive9 Hot macro_git_status_dirty / macro_git_diff_dirty 仍低于基线（0.669x / 0.316x），绝对差 10~17 ms，样本区间与基线重叠",
+    "本轮未测试整机断电恢复，吞吐和完整性基准不证明断电后的数据完整性",
+    "Bowl 与 JuiceFS/Drive9 的缓存与写入确认条件不同，跨栈吞吐比不等于相同持久化契约下的对比"
   ],
-  "previous_bowl_commit": "ee8d11385a12642a8ef4ea307ecdb25745b82562",
-  "started_at_local": "2026-11-02T23:53:30+08:00",
-  "completed_at_local": "2026-11-03T00:19:52+08:00",
-  "comparison_to_previous_run": {
-    "juicefs": {
+  "comparison_to_previous_round": {
+    "baseline_commit": "5066962",
+    "note": "Round 2 (c7ff002) vs Round 1 (5066962)；完整数据见各 REPORT.md 第 7 节。",
+    "juicefs_bench": {
       "Write big file": {
-        "previous": 324.2,
-        "current": 340.02,
+        "previous": 328.8,
+        "current": 333.69,
         "unit": "MiB/s",
-        "current_over_previous": 1.0488
+        "current_over_previous": 1.015
       },
       "Read big file": {
-        "previous": 1598.78,
-        "current": 1782.86,
+        "previous": 1441,
+        "current": 1592.58,
         "unit": "MiB/s",
-        "current_over_previous": 1.1151
+        "current_over_previous": 1.106
       },
       "Write small file": {
-        "previous": 444.4,
-        "current": 343.5,
+        "previous": 573.6,
+        "current": 342.5,
         "unit": "files/s",
-        "current_over_previous": 0.773
+        "current_over_previous": 0.597
       },
       "Read small file": {
-        "previous": 125.8,
-        "current": 1873.5,
+        "previous": 4346,
+        "current": 3514.0,
         "unit": "files/s",
-        "current_over_previous": 14.8927
+        "current_over_previous": 0.809
       },
       "Stat file": {
-        "previous": 6415.9,
-        "current": 6851.0,
+        "previous": 135897,
+        "current": 117097.4,
         "unit": "files/s",
-        "current_over_previous": 1.0678
+        "current_over_previous": 0.862
       }
     },
-    "drive9": {
-      "Write big file": {
-        "previous": 282.5,
-        "current": 284.83,
+    "mdtest_1proc": {
+      "Directory removal": {
+        "previous": 1849.5,
+        "current": 1267.9,
+        "unit": "ops/s",
+        "current_over_previous": 0.686
+      },
+      "Directory stat": {
+        "previous": 13965.4,
+        "current": 30330.6,
+        "unit": "ops/s",
+        "current_over_previous": 2.172
+      },
+      "File removal": {
+        "previous": 1666.0,
+        "current": 1512.0,
+        "unit": "ops/s",
+        "current_over_previous": 0.907
+      },
+      "File stat": {
+        "previous": 13945.5,
+        "current": 31609.8,
+        "unit": "ops/s",
+        "current_over_previous": 2.267
+      },
+      "File read": {
+        "previous": 15539.1,
+        "current": 49958.9,
+        "unit": "ops/s",
+        "current_over_previous": 3.215
+      },
+      "Tree removal": {
+        "previous": 1168.6,
+        "current": 1150.8,
+        "unit": "ops/s",
+        "current_over_previous": 0.985
+      }
+    },
+    "drive9_cold": {
+      "sequential_read": {
+        "previous": 489.5,
+        "current": 862.65,
         "unit": "MiB/s",
-        "current_over_previous": 1.0082
+        "current_over_previous": 1.762
       },
-      "Read big file": {
-        "previous": 951.07,
-        "current": 1202.87,
+      "sequential_write": {
+        "previous": 182.07,
+        "current": 240.83,
         "unit": "MiB/s",
-        "current_over_previous": 1.2648
+        "current_over_previous": 1.323
       },
-      "Write small file": {
-        "previous": 268.3,
-        "current": 326.8,
-        "unit": "files/s",
-        "current_over_previous": 1.218
+      "unlink": {
+        "previous": 1626.49,
+        "current": 1746.05,
+        "unit": "ops/s",
+        "current_over_previous": 1.074
       },
-      "Read small file": {
-        "previous": 661.0,
-        "current": 1722.5,
-        "unit": "files/s",
-        "current_over_previous": 2.6059
+      "readdir_large": {
+        "previous": 83237.98,
+        "current": 136097.23,
+        "unit": "ops/s",
+        "current_over_previous": 1.635
       },
-      "Stat file": {
-        "previous": 6574.9,
-        "current": 6956.6,
-        "unit": "files/s",
-        "current_over_previous": 1.0581
+      "stat": {
+        "previous": 34106.04,
+        "current": 49287.73,
+        "unit": "ops/s",
+        "current_over_previous": 1.445
+      }
+    },
+    "drive9_hot": {
+      "sequential_write": {
+        "previous": 181.1,
+        "current": 309.34,
+        "unit": "MiB/s",
+        "current_over_previous": 1.708
+      },
+      "unlink": {
+        "previous": 1858.96,
+        "current": 1813.93,
+        "unit": "ops/s",
+        "current_over_previous": 0.976
+      },
+      "readdir_large": {
+        "previous": 163490.0,
+        "current": 1298397.78,
+        "unit": "ops/s",
+        "current_over_previous": 7.942
+      },
+      "stat": {
+        "previous": 108484.46,
+        "current": 793672.21,
+        "unit": "ops/s",
+        "current_over_previous": 7.316
+      }
+    },
+    "fuse_perf_baseline": {
+      "large_read_16mib_pass1": {
+        "previous": 53.24,
+        "current": 288.35,
+        "unit": "MiB/s",
+        "current_over_previous": 5.416
+      },
+      "sqlite_delete_insert": {
+        "previous": 7275.84,
+        "current": 9531.95,
+        "unit": "rows/s",
+        "current_over_previous": 1.31
+      },
+      "sqlite_delete_update": {
+        "previous": 809.93,
+        "current": 1072.36,
+        "unit": "rows/s",
+        "current_over_previous": 1.324
+      },
+      "sqlite_delete_read": {
+        "previous": 152738.8,
+        "current": 190880.39,
+        "unit": "rows/s",
+        "current_over_previous": 1.25
+      },
+      "sqlite_wal_insert": {
+        "previous": 3598.18,
+        "current": 5072.03,
+        "unit": "rows/s",
+        "current_over_previous": 1.41
+      },
+      "sqlite_wal_update": {
+        "previous": 1055.18,
+        "current": 1691.32,
+        "unit": "rows/s",
+        "current_over_previous": 1.603
+      },
+      "sqlite_wal_checkpoint": {
+        "previous": 0.0255,
+        "current": 0.0184,
+        "unit": "s",
+        "current_over_previous": 1.387
       }
     }
   }

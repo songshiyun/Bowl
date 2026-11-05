@@ -20,11 +20,15 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(linkName),
 		Target:    []byte(pointedTo),
 		Uid:       header.Uid,
@@ -34,6 +38,13 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDirListingTouchParentAt(epoch, header.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, header.NodeId, linkName, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -41,6 +52,8 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 // Readlink 实现读取符号链接目标路径操作。
 // 将 Inode 映射为服务端 Inode 后调用 StorageService，原样返回目标字节切片，不进行有损字符集过滤。
 func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte, fuse.Status) {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
 		return nil, status
@@ -50,7 +63,7 @@ func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte
 	defer cancelFunc()
 
 	resp, err := fs.client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{
-		Ino: ino,
+		Ino: ino, SessionId: fs.currentSession(),
 	}))
 	if err != nil {
 		return nil, fs.ToStatus(err, cancel)
@@ -66,6 +79,11 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return st
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	if status, local := fs.linkTmp(cancel, input, filename, out); local {
+		return status
+	}
 	srcIno, status := fs.ToServerIno(input.Oldnodeid)
 	if status != fuse.OK {
 		return status
@@ -76,6 +94,7 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		return status
 	}
 
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -83,11 +102,15 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		Ino:          srcIno,
 		NewParentIno: newParentIno,
 		NewName:      []byte(filename),
+		SessionId:    fs.currentSession(),
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+	fs.cache.putEntryAt(epoch, input.NodeId, filename, input.Oldnodeid)
+	fs.cache.putInodeAt(epoch, input.Oldnodeid, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }

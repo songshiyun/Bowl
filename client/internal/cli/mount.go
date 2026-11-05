@@ -37,6 +37,8 @@ const mountUsageHelp = `用法:
   --log-file string    日志文件路径 (仅用于后台守护模式)
   --allow-other        允许本机其他非 root 用户访问挂载点
   --ro                 只读挂载
+  --branch string      挂载指定分支（分支磁盘默认 main）
+  --commit string      挂载不可变提交 UUID（需要 --ro）
   --direct-io          绕过内核页缓存直通数据
   --debug              开启调试日志
   -h, --help           查看帮助信息
@@ -47,9 +49,13 @@ type MountServerRunner func(ctx context.Context, client storagev1connect.Storage
 
 var defaultMountRunner MountServerRunner = runForegroundMount
 
+func mountSessionConfig(cfg fusefs.Config) session.Config {
+	return session.Config{DiskID: cfg.DiskID, BranchName: cfg.BranchName, ReadOnly: cfg.ReadOnly, CommitID: cfg.CommitID}
+}
+
 // runForegroundMount 是默认的前台挂载执行器。
 func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, stdout, stderr io.Writer) error {
-	sessionMgr, err := session.New(ctx, client, session.Config{DiskID: cfg.DiskID})
+	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
 	if err != nil {
 		return fmt.Errorf("初始化客户端会话失败: %w", err)
 	}
@@ -66,10 +72,15 @@ func runForegroundMount(ctx context.Context, client storagev1connect.StorageServ
 		return fmt.Errorf("创建 FUSE 服务失败: %w", err)
 	}
 
-	go server.Serve()
+	serveDone := make(chan struct{})
+	go func() {
+		defer close(serveDone)
+		server.Serve()
+	}()
 
 	if err := server.WaitMount(); err != nil {
 		_ = server.Unmount()
+		<-serveDone
 		return fmt.Errorf("等待挂载就绪失败: %w", err)
 	}
 
@@ -88,7 +99,7 @@ func runForegroundMount(ctx context.Context, client storagev1connect.StorageServ
 		}
 	}()
 
-	server.Wait()
+	<-serveDone
 	close(stopWait)
 	return nil
 }
@@ -102,6 +113,8 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		logFile    string
 		allowOther bool
 		ro         bool
+		branchName string
+		commitID   string
 		directIO   bool
 		debug      bool
 		help       bool
@@ -136,6 +149,20 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 				directIO = true
 			case "debug":
 				debug = true
+			case "branch", "commit":
+				if !hasVal {
+					if i+1 >= len(args) {
+						fmt.Fprintf(stderr, "错误: --%s 需要指定参数值\n", name)
+						return 2
+					}
+					i++
+					val = args[i]
+				}
+				if name == "branch" {
+					branchName = val
+				} else {
+					commitID = val
+				}
 			case "endpoint":
 				if hasVal {
 					endpoint = val
@@ -192,6 +219,25 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	parsedUUID, err := uuid.Parse(diskIDStr)
 	if err != nil || parsedUUID == uuid.Nil {
 		fmt.Fprintf(stderr, "错误: 无效的 disk-id \"%s\"，必须为合法的非 Nil UUID\n", diskIDStr)
+		return 2
+	}
+	if branchName != "" && commitID != "" {
+		fmt.Fprintln(stderr, "错误: --branch and --commit are mutually exclusive")
+		return 2
+	}
+	if commitID != "" {
+		if !ro {
+			fmt.Fprintln(stderr, "错误: --commit requires --ro (read-only snapshot mount)")
+			return 2
+		}
+		parsedCommit, err := uuid.Parse(commitID)
+		if err != nil || parsedCommit == uuid.Nil {
+			fmt.Fprintln(stderr, "错误: --commit 必须为有效的非 Nil UUID")
+			return 2
+		}
+	}
+	if branchName != "" && !validBranchName(branchName) {
+		fmt.Fprintln(stderr, "错误: --branch 分支名称无效")
 		return 2
 	}
 
@@ -272,6 +318,16 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		AllowOther: allowOther,
 		Debug:      debug,
 	}
+	if commitID != "" {
+		cfg.CommitID = commitID
+		cfg.RootIno = 1
+	} else if branchName != "" || len(disk.GetBranches()) != 0 {
+		if branchName == "" {
+			branchName = "main"
+		}
+		cfg.BranchName = branchName
+		cfg.RootIno = 1
+	}
 
 	// 5. 模式选择：检测是否为内部后台工作子进程
 	if os.Getenv("BOWL_DAEMON_WORKER") == "1" {
@@ -292,4 +348,16 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+func validBranchName(name string) bool {
+	if len(name) > 255 || name == "." || name == ".." {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] == '/' || name[i] < 0x20 || name[i] == 0x7f {
+			return false
+		}
+	}
+	return true
 }

@@ -2,7 +2,23 @@
 # ==============================================================================
 # Bowl - Aliyun Silicon Valley (us-west-1) Dual-ECS Internal Network pjdfstest
 # ==============================================================================
+# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
+# 存储引擎：每个 (disk_id, branch_name) 独立 Pebble（常驻句柄池复用句柄与缓存），
+# DataKey 仅保存 12 字节 BlobRef 索引；文件数据落在 blobs/<shard>/<blob_id>.blob
+# 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后
+# os.Remove 即时回收旧块，Checkpoint/Fork 以硬链接共享块。
+# 服务端并发与持久化：分支锁收敛为拓扑生命周期 RLock，按 (disk,branch,ino) 的
+# 细粒度 inodeMu 串行元数据；完整 1 MiB 块在锁外并行落盘；GetAttr/GetXattr/
+# Readlink 单键点查免 Snapshot；读路径 atime 先登记内存、按 1 秒周期与持久化
+# 屏障合并；常规批次 pebble.NoSync 异步 WAL，后台 1 秒刷盘与 WALBytesPerSync
+# 4 MiB 兜底（MemTableSize 16 MiB）。
+# 客户端写入与缓存：1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
+# 避免 4 KiB 脏页回写与写前尺寸核对）+ FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV
+# 负缓存（写批次内清除 security.capability）+ 写后 AttrTimeout=1.0s +
+# MaxBackground=64 / CongestionThreshold=48。Flush 不触发跨机 Fsync RPC，
+# 仅显式 Fsync/Sync 请求服务端持久化屏障。
 set -euo pipefail
+export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -366,17 +382,10 @@ PING_RTT="$(echo "${PING_OUT}" | awk -F'=' '{gsub(/ ms/, "", $2); gsub(/^[ \t]+/
 IPERF_BPS="$(iperf3 -c "${SERVER_PRIV_IP}" -t 5 -J | jq -r '.end.sum_received.bits_per_second // 0')"
 IPERF_GBPS="$(awk -v bps="${IPERF_BPS}" 'BEGIN {printf "%.2f", bps / 1e9}')"
 
-# Create disk with root_ino > 1 to test non-identity root inode mapping
-DISK_ID=""
-ROOT_INO=0
-for i in {1..5}; do
-  CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "pjdfstest-disk-${i}" --endpoint "${ENDPOINT}" --json)"
-  DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
-  ROOT_INO="$(echo "${CREATE_JSON}" | jq -r '.root_ino')"
-  if [[ "${ROOT_INO}" -gt 1 ]]; then
-    break
-  fi
-done
+# ADR-0029 中每个磁盘的根 Inode 固定为 1。
+CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "pjdfstest-disk" --endpoint "${ENDPOINT}" --json)"
+DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
+ROOT_INO="$(echo "${CREATE_JSON}" | jq -r '.root_ino')"
 
 mkdir -p /mnt/bowl
 if grep -q " /mnt/bowl " /proc/self/mountinfo; then
@@ -508,9 +517,13 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
     REMAINING_INSTANCES="${COUNT}"
     sleep 5
   done
+  if [[ "${REMAINING_INSTANCES}" != "0" ]]; then
+    log "ERROR: 仍有 ${REMAINING_INSTANCES} 台测试实例，清理钩子将继续尝试。"
+    exit 1
+  fi
   rm -f "${CREATED_INSTANCES_FILE}"
 
-  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
   KEY_CREATED=0
 fi
 
@@ -561,8 +574,23 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
+      storage_engine: "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
+      blob_layout: "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
+      blob_size_bytes: 1048576,
+      blob_ref_bytes: 12,
+      kernel_writeback_cache: false,
+      open_keep_cache: true,
+      handle_killpriv: true,
+      max_background: 64,
+      congestion_threshold: 48,
+      flush_issues_fsync_rpc: false,
+      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
+      branch_lock: "拓扑生命周期 RLock + 按 inode 细粒度锁",
+      parallel_blob_write: "1 MiB 块在 Inode 锁外并行落盘",
+      point_lookup_snapshot_free: true,
       disk_size: "2PiB",
       atime_mode: "strictatime",
+      atime_writeback: "内存延迟登记 + 1s 周期合并",
       entry_timeout: "0",
       attr_timeout: "0",
       dir_entry_timeout: "0"

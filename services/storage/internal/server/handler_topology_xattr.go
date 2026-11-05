@@ -11,6 +11,9 @@ import (
 
 // Link 创建硬链接，返回更新后的 Inode 实体元数据与内核缓存超时时长。
 func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRequest]) (*connect.Response[storagev1.LinkResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	inode, err := s.metaManager.Link(ctx, meta.LinkParams{
 		Ino:          req.Msg.GetIno(),
 		NewParentIno: req.Msg.GetNewParentIno(),
@@ -29,6 +32,12 @@ func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRe
 
 // Unlink 删除指定父目录下的非目录项（解链）。
 func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.UnlinkRequest]) (*connect.Response[storagev1.UnlinkResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
+	if req.Msg.OpenInClient != nil {
+		ctx = meta.WithOpenInClient(ctx, *req.Msg.OpenInClient)
+	}
 	err := s.metaManager.Unlink(ctx, req.Msg.GetParentIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)
@@ -39,6 +48,9 @@ func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.Unli
 
 // Rmdir 移除指定父目录下的空目录项。
 func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.RmdirRequest]) (*connect.Response[storagev1.RmdirResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	err := s.metaManager.Rmdir(ctx, req.Msg.GetParentIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)
@@ -49,6 +61,12 @@ func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.Rmdir
 
 // Rename 执行原子文件/目录重命名、移动或双向交换。
 func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
+	if req.Msg.TargetOpenInClient != nil {
+		ctx = meta.WithOpenInClient(ctx, *req.Msg.TargetOpenInClient)
+	}
 	err := s.metaManager.Rename(ctx, meta.RenameParams{
 		OldParentIno: req.Msg.GetOldParentIno(),
 		OldName:      req.Msg.GetOldName(),
@@ -65,6 +83,9 @@ func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.Rena
 
 // SetXattr 设置目标节点的扩展属性键值。
 func (s *Server) SetXattr(ctx context.Context, req *connect.Request[storagev1.SetXattrRequest]) (*connect.Response[storagev1.SetXattrResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	err := s.metaManager.SetXattr(ctx, meta.SetXattrParams{
 		Ino:   req.Msg.GetIno(),
 		Name:  req.Msg.GetName(),
@@ -80,6 +101,9 @@ func (s *Server) SetXattr(ctx context.Context, req *connect.Request[storagev1.Se
 
 // GetXattr 获取目标节点指定扩展属性键的属性值。
 func (s *Server) GetXattr(ctx context.Context, req *connect.Request[storagev1.GetXattrRequest]) (*connect.Response[storagev1.GetXattrResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	val, err := s.metaManager.GetXattr(ctx, req.Msg.GetIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)
@@ -92,6 +116,9 @@ func (s *Server) GetXattr(ctx context.Context, req *connect.Request[storagev1.Ge
 
 // ListXattr 列出目标节点绑定的所有扩展属性名称列表。
 func (s *Server) ListXattr(ctx context.Context, req *connect.Request[storagev1.ListXattrRequest]) (*connect.Response[storagev1.ListXattrResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	names, err := s.metaManager.ListXattr(ctx, req.Msg.GetIno())
 	if err != nil {
 		return nil, toConnectError(err)
@@ -104,6 +131,9 @@ func (s *Server) ListXattr(ctx context.Context, req *connect.Request[storagev1.L
 
 // RemoveXattr 移除目标节点指定的扩展属性键。
 func (s *Server) RemoveXattr(ctx context.Context, req *connect.Request[storagev1.RemoveXattrRequest]) (*connect.Response[storagev1.RemoveXattrResponse], error) {
+	if req.Msg.SessionId != nil {
+		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
+	}
 	err := s.metaManager.RemoveXattr(ctx, req.Msg.GetIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)

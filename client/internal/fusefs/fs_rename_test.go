@@ -22,6 +22,14 @@ type mockRenameStorageServer struct {
 	storagev1connect.UnimplementedStorageServiceHandler
 
 	renameFn func(context.Context, *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error)
+	lookupFn func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
+}
+
+func (m *mockRenameStorageServer) Lookup(ctx context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+	if m.lookupFn != nil {
+		return m.lookupFn(ctx, req)
+	}
+	return nil, connect.NewError(connect.CodeNotFound, errors.New("not found"))
 }
 
 func (m *mockRenameStorageServer) Rename(ctx context.Context, req *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
@@ -258,5 +266,64 @@ func TestRawFS_Rename(t *testing.T) {
 		}
 		status := rawFS.Rename(cancelChan, input, "a", "b")
 		require.Equal(t, fuse.EINTR, status)
+	})
+}
+
+// TestRawFS_RenameNegativeCache 验证普通重命名后旧名直接命中负缓存返回 ENOENT，
+// 而 RENAME_WHITEOUT 因旧名会留下 whiteout 特殊节点仍必须穿透 Lookup RPC。
+func TestRawFS_RenameNegativeCache(t *testing.T) {
+	mockSrv := &mockRenameStorageServer{}
+	client := setupTestRenameRPCServer(t, mockSrv)
+	cfg := fusefs.Config{
+		DiskID:  "00000000-0000-0000-0000-000000000001",
+		RootIno: 1001,
+	}
+	parent := &fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID}
+
+	t.Run("普通重命名后旧名命中负缓存且不发 Lookup RPC", func(t *testing.T) {
+		lookups := 0
+		source := &storagev1.Inode{
+			Ino:  4001,
+			Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644, Nlink: 1},
+		}
+		mockSrv.lookupFn = func(_ context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+			lookups++
+			if string(req.Msg.GetName()) == "old" {
+				return connect.NewResponse(&storagev1.LookupResponse{Inode: source}), nil
+			}
+			return nil, makeStorageError(connect.CodeNotFound, "ENOENT", "not found")
+		}
+		mockSrv.renameFn = func(context.Context, *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
+			return connect.NewResponse(&storagev1.RenameResponse{}), nil
+		}
+		fs := fusefs.NewRawFS(client, nil, cfg)
+		t.Cleanup(fs.OnUnmount)
+
+		require.Equal(t, fuse.OK, fs.Lookup(nil, parent, "old", &fuse.EntryOut{}))
+		require.Equal(t, 1, lookups)
+		require.Equal(t, fuse.OK, fs.Rename(nil, &fuse.RenameIn{InHeader: *parent, Newdir: fuse.FUSE_ROOT_ID}, "old", "new"))
+		require.Equal(t, fuse.ENOENT, fs.Lookup(nil, parent, "old", &fuse.EntryOut{}))
+		require.Equal(t, 1, lookups, "普通重命名后的旧名必须命中负缓存，不得发 Lookup RPC")
+	})
+
+	t.Run("RENAME_WHITEOUT 后旧名仍穿透 Lookup RPC", func(t *testing.T) {
+		lookups := 0
+		mockSrv.lookupFn = func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+			lookups++
+			return nil, makeStorageError(connect.CodeNotFound, "ENOENT", "not found")
+		}
+		mockSrv.renameFn = func(context.Context, *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
+			return connect.NewResponse(&storagev1.RenameResponse{}), nil
+		}
+		fs := fusefs.NewRawFS(client, nil, cfg)
+		t.Cleanup(fs.OnUnmount)
+
+		require.Equal(t, fuse.OK, fs.Rename(nil, &fuse.RenameIn{
+			InHeader: *parent,
+			Newdir:   fuse.FUSE_ROOT_ID,
+			Flags:    0x4, // RENAME_WHITEOUT
+		}, "gone", "whiteout-target"))
+		require.Equal(t, fuse.ENOENT, fs.Lookup(nil, parent, "gone", &fuse.EntryOut{}))
+		require.Equal(t, 1, lookups, "WHITEOUT 会在旧名留下特殊节点，必须穿透 Lookup RPC")
 	})
 }

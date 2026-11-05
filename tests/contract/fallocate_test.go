@@ -101,13 +101,13 @@ func TestFallocateRequestValidation(t *testing.T) {
 
 		// 边界与防御负向用例：fh
 		{
-			name:   "非法: fh 为 0",
+			name:   "合法: 客户端本地管理句柄",
 			ino:    1,
 			fh:     0,
 			offset: 0,
 			length: 1,
 			mode:   0,
-			valid:  false,
+			valid:  true,
 		},
 		{
 			name:   "非法: fh 超过 math.MaxInt64",

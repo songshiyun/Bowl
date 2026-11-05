@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -112,8 +111,16 @@ func TestRawFS_BuildMountOptions(t *testing.T) {
 	require.False(t, opts.DisableXAttrs)
 	require.Equal(t, 1<<20, opts.MaxWrite)
 	require.Equal(t, 1<<20, opts.MaxReadAhead)
+	require.Equal(t, 64, opts.MaxBackground)
+	require.Equal(t, 48, opts.CongestionThreshold)
 	require.True(t, opts.DirectMount)
 	require.True(t, opts.Debug)
+	require.NotZero(t, opts.ExtraCapabilities&fuse.CAP_HANDLE_KILLPRIV, "必须声明 CAP_HANDLE_KILLPRIV 由文件系统原生处理 killpriv")
+	require.NotZero(t, opts.DisabledCapabilities&fuse.CAP_WRITEBACK_CACHE, "必须禁用内核 writeback_cache 以保持 1 MiB 直通写")
+	require.NotZero(t, opts.DisabledCapabilities&fuse.CAP_AUTO_INVAL_DATA,
+		"必须禁用 CAP_AUTO_INVAL_DATA：不能把页缓存生命周期交给服务端 mtime 与内核 i_mtime 的比较")
+	require.False(t, opts.ExplicitDataCacheControl,
+		"保留 explicit_inval_data=false，让尺寸变化仍由内核失效兜底")
 
 	// 非只读时 Options 不应包含 ro
 	optsRW := fusefs.BuildMountOptions(fusefs.Config{DiskID: "rw", ReadOnly: false})
@@ -463,6 +470,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RootIno: rootIno,
 		})
 		t.Cleanup(rawFS.OnUnmount)
+		require.Equal(t, fuse.OK, rawFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		payload := []byte("adr-0027-30s-budget-verification-payload")
 		start := time.Now()
@@ -505,7 +513,6 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			writeAttempts       int
 			clientReadDeadlines []time.Time
 			serverReadRemDLs    []time.Duration
-			setLkwEntered       atomic.Bool
 		)
 
 		srv := &fullChainMockServer{
@@ -548,17 +555,6 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 					}
 				}
 				return connect.NewResponse(&storagev1.ReadResponse{Data: []byte("ok")}), nil
-			},
-			setLkwFn: func(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-				_, hasDL := ctx.Deadline()
-				require.False(t, hasDL, "SetLkw 必须豁免常规 RPCTimeout 与重试 MaxElapsedTime 截止时间")
-				setLkwEntered.Store(true)
-				select {
-				case <-time.After(150 * time.Millisecond):
-					return connect.NewResponse(&storagev1.SetLkwResponse{}), nil
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
 			},
 		}
 
@@ -605,6 +601,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RPCTimeout: 80 * time.Millisecond,
 		})
 		t.Cleanup(shortFS.OnUnmount)
+		require.Equal(t, fuse.OK, shortFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		var entryOut fuse.EntryOut
 		start := time.Now()
@@ -620,6 +617,7 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 			RootIno: rootIno,
 		})
 		t.Cleanup(defaultFS.OnUnmount)
+		require.Equal(t, fuse.OK, defaultFS.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
 
 		cancelCh := make(chan struct{})
 		go func() {
@@ -663,38 +661,31 @@ func TestRawFS_EndToEndDefault30sBudget_And_ChainContracts(t *testing.T) {
 		require.Less(t, serverReadRemDLs[1], serverReadRemDLs[0], "服务端第 2 次尝试收到的剩余预算必须随已消耗时间递减，不得重置为 30s")
 		mu.Unlock()
 
-		// 6. SetLkw 豁免常规超时（即便在 80ms shortFS 下阻塞 150ms 仍成功），且支持取消返回 EINTR
-		stLkwOK := shortFS.SetLkw(nil, &fuse.LkIn{
-			InHeader: fuse.InHeader{NodeId: fileIno},
-			Fh:       testFH,
-			Owner:    100,
-			Lk: fuse.FileLock{
-				Start: 0,
-				End:   10,
-				Typ:   uint32(syscall.F_WRLCK),
-			},
-		})
-		require.Equal(t, fuse.OK, stLkwOK, "SetLkw 必须豁免 80ms 常规 RPCTimeout")
-
-		setLkwEntered.Store(false)
+		// 6. 本地 SetLkw 不受 RPC 超时约束，并响应内核中断。
+		request := func(owner uint64, typ uint32) *fuse.LkIn {
+			return &fuse.LkIn{InHeader: fuse.InHeader{NodeId: fileIno}, Fh: testFH, Owner: owner,
+				Lk: fuse.FileLock{Start: 0, End: 10, Typ: typ}}
+		}
+		require.Equal(t, fuse.OK, shortFS.SetLk(nil, request(100, uint32(syscall.F_WRLCK))))
+		cancelLock := make(chan struct{})
+		defer close(cancelLock)
+		lockDone := make(chan fuse.Status, 1)
+		go func() { lockDone <- shortFS.SetLkw(cancelLock, request(101, uint32(syscall.F_WRLCK))) }()
+		select {
+		case status := <-lockDone:
+			t.Fatalf("等待锁提前返回：%v", status)
+		case <-time.After(150 * time.Millisecond):
+		}
+		require.Equal(t, fuse.OK, shortFS.SetLk(nil, request(100, uint32(syscall.F_UNLCK))))
+		select {
+		case status := <-lockDone:
+			require.Equal(t, fuse.OK, status)
+		case <-time.After(time.Second):
+			t.Fatal("释放锁后等待者未被唤醒")
+		}
 		lkwCancel := make(chan struct{})
-		go func() {
-			for !setLkwEntered.Load() {
-				time.Sleep(5 * time.Millisecond)
-			}
-			close(lkwCancel)
-		}()
-		stLkwCancel := shortFS.SetLkw(lkwCancel, &fuse.LkIn{
-			InHeader: fuse.InHeader{NodeId: fileIno},
-			Fh:       testFH,
-			Owner:    100,
-			Lk: fuse.FileLock{
-				Start: 0,
-				End:   10,
-				Typ:   uint32(syscall.F_WRLCK),
-			},
-		})
-		require.Equal(t, fuse.EINTR, stLkwCancel, "SetLkw 在取消时必须返回 EINTR")
+		go func() { time.Sleep(40 * time.Millisecond); close(lkwCancel) }()
+		require.Equal(t, fuse.EINTR, shortFS.SetLkw(lkwCancel, request(102, uint32(syscall.F_WRLCK))))
 		// 7. 上游更早截止时间（caller context deadline < 30s DefaultMaxElapsedTime）在 NewClientFromConfig 默认拦截器下优先触发
 		upstreamCtx, upstreamCancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
 		defer upstreamCancel()
@@ -717,7 +708,6 @@ type fullChainMockServer struct {
 	lookupFn       func(context.Context, *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error)
 	writeFn        func(context.Context, *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error)
 	readFn         func(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error)
-	setLkwFn       func(context.Context, *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error)
 }
 
 func (m *fullChainMockServer) RenewSession(ctx context.Context, req *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
@@ -734,10 +724,6 @@ func (m *fullChainMockServer) Write(ctx context.Context, req *connect.Request[st
 
 func (m *fullChainMockServer) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 	return m.readFn(ctx, req)
-}
-
-func (m *fullChainMockServer) SetLkw(ctx context.Context, req *connect.Request[storagev1.SetLkwRequest]) (*connect.Response[storagev1.SetLkwResponse], error) {
-	return m.setLkwFn(ctx, req)
 }
 
 func newChainStorageError(code connect.Code, reason, msg string) error {

@@ -21,6 +21,7 @@ var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
 
 // Server 封装并管理底层 HTTP 服务与 ConnectRPC 路由处理器。
 type Server struct {
+	storagev1connect.UnimplementedStorageServiceHandler
 	metaManager meta.Manager
 	config      config.ServerConfig
 	logger      *slog.Logger
@@ -86,7 +87,7 @@ func New(p Params) (*Server, error) {
 	}
 
 	interceptors, err := serverx.NewInterceptorsWithValidator(
-		p.Logger,
+		quietExpectedNotFound(p.Logger),
 		obsCfg,
 		valInterceptor,
 		extra...,
@@ -98,7 +99,7 @@ func New(p Params) (*Server, error) {
 	srv := &Server{
 		metaManager: p.MetaManager,
 		config:      p.Config,
-		logger:      p.Logger,
+		logger:      quietExpectedNotFound(p.Logger),
 	}
 
 	mux := http.NewServeMux()

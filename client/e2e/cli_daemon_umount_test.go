@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,12 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 // findBowlDaemonPID 扫描 /proc 查找与指定 diskID 和 mountpoint 绑定的后台 bowl 守护进程 PID。
@@ -93,52 +88,10 @@ func waitForProcessExit(t *testing.T, pid int, timeout time.Duration) error {
 	return fmt.Errorf("进程 PID %d 在 %v 内未退出", pid, timeout)
 }
 
-// createE2EDisk 带有重试机制的测试磁盘创建器。
-func createE2EDisk(t *testing.T, client storagev1connect.StorageServiceClient) *storagev1.Disk {
-	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		resp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
-			Name:     fmt.Sprintf("e2e-disk-%d-%d", time.Now().UnixNano(), attempt),
-			MaxBytes: 10 * 1024 * 1024 * 1024,
-		}))
-		if err == nil && resp.Msg.GetDisk().GetRootIno() == 1 {
-			_, delErr := client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-				DiskId: resp.Msg.GetDisk().GetDiskId(),
-			}))
-			cancel()
-			require.NoError(t, delErr, "清理过渡磁盘 (root_ino == 1) 失败")
-			continue
-		}
-		cancel()
-		if err == nil && resp.Msg.GetDisk().GetRootIno() > 1 {
-			disk := resp.Msg.GetDisk()
-			diskID := disk.GetDiskId()
-			t.Cleanup(func() {
-				cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cleanCancel()
-				_, delErr := client.DeleteDisk(cleanCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-					DiskId: diskID,
-				}))
-				if delErr != nil && connect.CodeOf(delErr) != connect.CodeNotFound {
-					require.NoError(t, delErr, "清理测试磁盘失败: %s", diskID)
-				}
-			})
-			return disk
-		}
-		if err != nil {
-			lastErr = err
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("创建测试磁盘失败: %v", lastErr)
-	return nil
-}
-
 // TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection 验证默认后台模式挂载零延迟访问、重复挂载拦截与 umount 卸载及守护进程退出。
 func TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createE2EDisk(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -194,7 +147,7 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("explicit --log-file is created and written", func(t *testing.T) {
-		disk := createE2EDisk(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 		customLog := filepath.Join(t.TempDir(), "logs", "custom-mount.log")
 
@@ -217,7 +170,7 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 	})
 
 	t.Run("default system log /var/log/bowl/mount-<disk-id>.log is written", func(t *testing.T) {
-		disk := createE2EDisk(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)
@@ -244,7 +197,7 @@ func TestE2E_CLI_Umount_AliasAndForceLazy(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	t.Run("unmount alias works identically to umount", func(t *testing.T) {
-		disk := createE2EDisk(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)
@@ -263,7 +216,7 @@ func TestE2E_CLI_Umount_AliasAndForceLazy(t *testing.T) {
 	})
 
 	t.Run("force lazy unmount detaches busy directory and daemon exits cleanly", func(t *testing.T) {
-		disk := createE2EDisk(t, client)
+		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)

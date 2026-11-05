@@ -1,0 +1,248 @@
+package meta_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/cockroachdb/pebble/v2"
+	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/services/storage/internal/db"
+	"github.com/starsrc/bowl/services/storage/internal/meta"
+	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
+)
+
+func TestDiskCreatesMainAndInitialCommit(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree")
+	root := t.TempDir()
+	storage := newTestStorage(t, root)
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 1024})
+	require.NoError(t, err)
+	require.Equal(t, "main", disk.DefaultBranch)
+	require.Len(t, disk.Branches, 1)
+	require.NotNil(t, disk.Branches[0].HeadCommitID)
+	require.Equal(t, disk.Branches[0].HeadCommitID, disk.Branches[0].ForkCommitID)
+	require.Equal(t, uint64(0), disk.UsedBytes)
+	require.Equal(t, uint64(1), disk.UsedInodes)
+
+	branch, err := storage.OpenBranch(disk.DiskID, "main")
+	require.NoError(t, err)
+	value, closer, err := branch.DB().Get(pebblekv.InodeKey(1))
+	require.NoError(t, err)
+	inode, err := pebblekv.DecodeInode(value)
+	require.NoError(t, err)
+	require.NoError(t, closer.Close())
+	require.Equal(t, uint64(1), inode.Ino)
+	require.Equal(t, uint32(2), inode.Nlink)
+	value, closer, err = branch.DB().Get(pebblekv.StatKey())
+	require.NoError(t, err)
+	stat, err := pebblekv.DecodeBranchStat(value)
+	require.NoError(t, err)
+	require.NoError(t, closer.Close())
+	require.Equal(t, pebblekv.BranchStat{Inodes: 1, NextWriteSeq: 1}, stat)
+	require.NoError(t, branch.Close())
+	commit, err := storage.OpenCommit(disk.DiskID, *disk.Branches[0].HeadCommitID)
+	require.NoError(t, err)
+	_, closer, err = commit.DB().Get(pebblekv.InodeKey(1))
+	require.NoError(t, err)
+	require.NoError(t, closer.Close())
+	require.NoError(t, commit.Close())
+	nextIno, err := storage.AllocateInode(disk.DiskID)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), nextIno)
+	var storageDir, checkpointDir string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT d.storage_dir, c.checkpoint_dir FROM disks d JOIN commits c ON c.disk_id = d.disk_id WHERE d.disk_id = $1 AND c.commit_id = $2`, disk.DiskID, *disk.Branches[0].HeadCommitID).Scan(&storageDir, &checkpointDir))
+	require.Equal(t, filepath.Join(root, "disks", disk.DiskID), storageDir)
+	require.Equal(t, filepath.Join(storageDir, "commits", *disk.Branches[0].HeadCommitID), checkpointDir)
+
+	got, err := mgr.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	require.Equal(t, disk.Branches, got.Branches)
+	list, err := mgr.ListDisks(ctx, meta.ListDisksParams{})
+	require.NoError(t, err)
+	require.Len(t, list.Disks, 1)
+	require.Equal(t, disk.Branches, list.Disks[0].Branches)
+	sid := uint64(101)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	fs, err := mgr.StatFS(meta.WithSessionID(ctx, &sid), disk.RootIno)
+	require.NoError(t, err)
+	require.Equal(t, disk.UsedBytes, fs.UsedBytes)
+	require.Equal(t, disk.UsedInodes, fs.Files)
+
+	require.NoError(t, mgr.CloseSession(ctx, sid))
+	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
+	_, err = os.Stat(filepath.Join(root, "disks", disk.DiskID))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskRestoresDeduplicatedBranchUsage(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_quota")
+	root := t.TempDir()
+	storage := newTestStorage(t, root)
+	mgr := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(storage))
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 400})
+	require.NoError(t, err)
+
+	main, err := storage.OpenBranch(disk.DiskID, "main")
+	require.NoError(t, err)
+	put := func(branch *pebblekv.Branch, ino, size uint64, nlink uint32) {
+		t.Helper()
+		value, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: ino, Mode: meta.S_IFREG | 0o644, Nlink: nlink, Size: size})
+		require.NoError(t, err)
+		require.NoError(t, branch.DB().Set(pebblekv.InodeKey(ino), value, pebble.Sync))
+	}
+	put(main, 2, 100, 1)
+	put(main, 3, 20, 1)
+	require.NoError(t, main.Checkpoint("test-fork"))
+	require.NoError(t, main.Close())
+	require.NoError(t, storage.Fork(disk.DiskID, "test-fork", "feature"))
+	feature, err := storage.OpenBranch(disk.DiskID, "feature")
+	require.NoError(t, err)
+	put(feature, 2, 150, 1)
+	put(feature, 4, 30, 1)
+	put(feature, 5, 1000, 0)
+	put(feature, 6, 10, 0)
+	require.NoError(t, feature.DB().Set(pebblekv.OrphanKey(6), []byte{1}, pebble.Sync))
+	require.NoError(t, feature.Close())
+	require.NoError(t, storage.Close())
+	_, err = pool.Exec(ctx, `UPDATE disks SET branches = branches || jsonb_build_array(jsonb_build_object(
+		'branch_id', gen_random_uuid(), 'name', 'feature', 'parent_branch', 'main',
+		'fork_commit_id', NULL, 'head_commit_id', NULL, 'state', 'NORMAL', 'merge_state', NULL)) WHERE disk_id = $1`, disk.DiskID)
+	require.NoError(t, err)
+
+	restartedStorage := newTestStorage(t, root)
+	restarted := meta.New(db.NewStore(pool), meta.WithStorageRoot(root), meta.WithPebbleManager(restartedStorage))
+	got, err := restarted.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	require.Equal(t, uint64(210), got.UsedBytes)
+	require.Equal(t, uint64(5), got.UsedInodes)
+	require.Len(t, got.Branches, 2)
+	list, err := restarted.ListDisks(ctx, meta.ListDisksParams{})
+	require.NoError(t, err)
+	require.Equal(t, uint64(210), list.Disks[0].UsedBytes)
+	sid := uint64(301)
+	_, err = restarted.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: disk.DiskID})
+	require.NoError(t, err)
+	fs, err := restarted.StatFS(meta.WithSessionID(ctx, &sid), disk.RootIno)
+	require.NoError(t, err)
+	require.Equal(t, uint64(210), fs.UsedBytes)
+	require.Equal(t, uint64(5), fs.Files)
+	tooSmall := uint64(209)
+	_, err = restarted.UpdateDisk(ctx, meta.UpdateDiskParams{DiskID: disk.DiskID, MaxBytes: &tooSmall})
+	require.ErrorIs(t, err, meta.ErrInvalidShrink)
+	newLimit := uint64(220)
+	_, err = restarted.UpdateDisk(ctx, meta.UpdateDiskParams{DiskID: disk.DiskID, MaxBytes: &newLimit})
+	require.NoError(t, err)
+	quota, err := restarted.TreeQuota(ctx, disk.DiskID)
+	require.NoError(t, err)
+	feature, err = restartedStorage.OpenBranch(disk.DiskID, "feature")
+	require.NoError(t, err)
+	value, err := pebblekv.EncodeInode(pebblekv.Inode{Ino: 4, Mode: meta.S_IFREG | 0o644, Nlink: 1, Size: 40})
+	require.NoError(t, err)
+	require.NoError(t, quota.Apply("feature", 4, 40, true, func() error {
+		return feature.DB().Set(pebblekv.InodeKey(4), value, pebble.Sync)
+	}))
+	require.ErrorIs(t, quota.Apply("feature", 7, 1, true, nil), meta.ErrNoSpace)
+	require.NoError(t, feature.Close())
+	got, err = restarted.GetDisk(ctx, disk.DiskID)
+	require.NoError(t, err)
+	require.Equal(t, uint64(220), got.UsedBytes)
+	require.NoError(t, restarted.CloseSession(ctx, sid))
+	require.NoError(t, restarted.DeleteDisk(ctx, disk.DiskID))
+}
+
+func TestDiskDeleteChecksAllBranchSessions(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_session")
+	root := t.TempDir()
+	mgr := newTestManager(t, db.NewStore(pool), root)
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 1024})
+	require.NoError(t, err)
+	quota, err := mgr.TreeQuota(ctx, disk.DiskID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, disk_id, expires_at)
+		VALUES (41, $1, clock_timestamp() + interval '1 minute')`, disk.DiskID)
+	require.NoError(t, err)
+	require.ErrorIs(t, mgr.DeleteDisk(ctx, disk.DiskID), meta.ErrBusy)
+	_, err = pool.Exec(ctx, `DELETE FROM client_sessions WHERE session_id = 41`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, disk_id, branch_name, read_only, lease_managed, expires_at)
+		VALUES (42, $1, 'feature', false, true, clock_timestamp() + interval '1 minute')`, disk.DiskID)
+	require.NoError(t, err)
+	require.ErrorIs(t, mgr.DeleteDisk(ctx, disk.DiskID), meta.ErrBusy)
+	_, err = pool.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 minute' WHERE session_id = 42`)
+	require.NoError(t, err)
+	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
+	var commits, disks, sessions int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM commits WHERE disk_id = $1`, disk.DiskID).Scan(&commits))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM disks WHERE disk_id = $1`, disk.DiskID).Scan(&disks))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE session_id IN (41, 42)`).Scan(&sessions))
+	require.Zero(t, commits)
+	require.Zero(t, disks)
+	require.Zero(t, sessions)
+	_, err = os.Stat(filepath.Join(root, "disks", disk.DiskID))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, quota.Apply("main", 2, 1, true, nil), meta.ErrNotFound)
+}
+
+func TestDiskDeleteDoesNotRequireReadableBranch(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_missing")
+	root := t.TempDir()
+	mgr := newTestManager(t, db.NewStore(pool), root)
+	disk, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "disks", disk.DiskID, "branches", "main")))
+	require.NoError(t, mgr.DeleteDisk(ctx, disk.DiskID))
+	_, err = os.Stat(filepath.Join(root, "disks", disk.DiskID))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestDiskCreateRemovesStorageWhenCommitRegistrationFails(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_tree_create_error")
+	root := t.TempDir()
+	_, err := pool.Exec(ctx, `CREATE FUNCTION reject_initial_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION '拒绝登记快照'; END $$;
+		CREATE TRIGGER reject_initial_commit BEFORE INSERT ON commits FOR EACH ROW EXECUTE FUNCTION reject_initial_commit()`)
+	require.NoError(t, err)
+	mgr := newTestManager(t, db.NewStore(pool), root)
+	_, err = mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "tree", MaxBytes: 100})
+	require.Error(t, err)
+	var disks int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM disks`).Scan(&disks))
+	require.Zero(t, disks)
+	entries, err := os.ReadDir(filepath.Join(root, "disks"))
+	require.NoError(t, err)
+	require.Empty(t, entries)
+}
+
+func TestDisksUseIndependentRootInodes(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "disk_root_isolation")
+	mgr := newTestManager(t, db.NewStore(pool), t.TempDir())
+	first, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "first", MaxBytes: 1024})
+	require.NoError(t, err)
+	second, err := mgr.CreateDisk(ctx, meta.CreateDiskParams{Name: "second", MaxBytes: 1024})
+	require.NoError(t, err)
+	require.NotEqual(t, first.DiskID, second.DiskID)
+	require.Equal(t, uint64(1), first.RootIno)
+	require.Equal(t, uint64(1), second.RootIno)
+	firstID, secondID := uint64(101), uint64(102)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: firstID, DiskID: first.DiskID})
+	require.NoError(t, err)
+	_, err = mgr.RenewBranchSession(ctx, meta.RenewBranchSessionParams{SessionID: secondID, DiskID: second.DiskID})
+	require.NoError(t, err)
+	firstCtx := meta.WithSessionID(ctx, &firstID)
+	secondCtx := meta.WithSessionID(ctx, &secondID)
+	_, err = mgr.Mknod(firstCtx, meta.MknodParams{ParentIno: 1, Name: []byte("first-only"), Mode: meta.S_IFREG | 0o644})
+	require.NoError(t, err)
+	_, err = mgr.Lookup(secondCtx, 1, []byte("first-only"))
+	require.ErrorIs(t, err, meta.ErrNotFound)
+	_, err = mgr.Lookup(firstCtx, 1, []byte("first-only"))
+	require.NoError(t, err)
+	for _, sessionID := range []uint64{firstID, secondID} {
+		require.NoError(t, mgr.CloseSession(ctx, sessionID))
+	}
+	require.NoError(t, mgr.DeleteDisk(ctx, first.DiskID))
+	require.NoError(t, mgr.DeleteDisk(ctx, second.DiskID))
+}

@@ -18,11 +18,16 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
@@ -32,6 +37,16 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, resp.Msg.GetInode(), 1, resp.Msg.GetAttrTimeoutSeconds())
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+		// 新建目录在本次会话内为空：登记为权威完整目录，目录内首次 Create/Mkdir 的
+		// Lookup 可直接返回 ENOENT，无需一次必然失败的网络 RPC。
+		fs.cache.markNewDirAt(epoch, child)
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -47,11 +62,16 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+
+	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
@@ -62,6 +82,14 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+	inode := resp.Msg.GetInode()
+	if inode != nil {
+		child := fs.ToKernelIno(inode.GetIno())
+		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+		fs.caps.markAbsent(child)
+	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
@@ -77,17 +105,41 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
+	child, _ := fs.cache.entry(header.NodeId, name)
+	var inode *storagev1.Inode
+	if fs.handles.AnyOpen() {
+		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		if st != fuse.OK {
+			return st
+		}
+		inode = cached.inode
+		child = fs.ToKernelIno(inode.GetIno())
+	}
+	epoch := fs.cache.version()
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
+		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	// Rmdir 使父目录 nlink 减 1；保留父目录 Inode 缓存避免随后的 GetAttr 穿透。
+	fs.cache.invalidateDirListingTouchParentNowAt(epoch, header.NodeId, -1)
+	// 目录项已确定不存在，回填负缓存（ino=0），避免随后的 access()/stat() 再次穿透 RPC。
+	fs.cache.putEntryAt(epoch, header.NodeId, name, 0)
+	if child != 0 {
+		fs.handles.MarkRemovedDir(child, inode)
+		fs.cache.invalidateInode(child)
+		fs.cache.invalidateDir(child)
+	}
 	return fuse.OK
 }
 
@@ -102,16 +154,52 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
+	child, _ := fs.cache.entry(header.NodeId, name)
+	var inode *storagev1.Inode
+	if fs.handles.AnyOpen() {
+		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		if st != fuse.OK {
+			return st
+		}
+		inode = cached.inode
+		child = fs.ToKernelIno(inode.GetIno())
+	}
+	if child != 0 {
+		// 与并发 Release 的最后一个句柄关闭按 Inode 串行，保证孤儿标记不会互相错过。
+		unlock := fs.inodeLocks.lock(child)
+		defer unlock()
+	}
+	open := child != 0 && fs.handles.IsOpen(child)
+	sid := fs.currentSession()
+	epoch := fs.cache.version()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
-		ParentIno: parentIno,
-		Name:      []byte(name),
+		ParentIno:    parentIno,
+		Name:         []byte(name),
+		OpenInClient: &open,
+		SessionId:    sid,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
 	}
 
+	// Unlink 不改变父目录 nlink；保留父目录 Inode 缓存避免下一次 unlink 前
+	// inode_permission(MAY_EXEC) 触发一次跨机 GetAttr。
+	fs.cache.invalidateDirListingTouchParentNowAt(epoch, header.NodeId, 0)
+	// 目录项已确定不存在，回填负缓存（ino=0）。SQLite DELETE 模式在提交后
+	// unlink("*-journal")，下一个事务的 hasHotJournal() 会立即 access() 该名字；
+	// 负缓存命中可消除这次 100% 穿透的跨机 Lookup RPC。
+	fs.cache.putEntryAt(epoch, header.NodeId, name, 0)
+	if child != 0 {
+		fs.cache.invalidateInode(child)
+	}
+	if open && inode != nil && inode.GetAttr().GetNlink() == 1 {
+		fs.markOrphan(child, sid)
+	}
 	return fuse.OK
 }

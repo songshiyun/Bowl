@@ -3,7 +3,6 @@
 package e2e_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,17 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // TestE2E_Symlink_Readlink 验证符号链接创建、相对/绝对路径、长路径与非UTF8字节读取、悬空符号链接及对非符号链接执行 Readlink 返回 EINVAL。
 func TestE2E_Symlink_Readlink(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -116,7 +112,7 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 // TestE2E_Link_Hardlink 验证同盘多硬链接创建、Nlink 递增、解链后剩余硬链接存活与 Ino 一致性，以及目录硬链接 EPERM 与同名冲突 EEXIST。
 func TestE2E_Link_Hardlink(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 
@@ -215,32 +211,14 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 // TestE2E_Link_Symlink_ReadOnly 验证只读挂载模式下拦截 Symlink 与 Link 返回 EROFS，但允许 Readlink。
 func TestE2E_Link_Symlink_ReadOnly(t *testing.T) {
 	client := newTestStorageClient(t)
-	disk := createDiskWithRootInoGT1(t, client)
+	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
 
-	// 1. 直连 StorageService 预置一个普通文件和一个符号链接
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	mknodResp, err := client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
-		ParentIno: disk.GetRootIno(),
-		Name:      []byte("pre_reg.txt"),
-		Mode:      uint32(syscall.S_IFREG | 0644),
-		Uid:       1000,
-		Gid:       1000,
-	}))
-	require.NoError(t, err, "预置普通文件失败")
-
-	symResp, err := client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{
-		ParentIno: disk.GetRootIno(),
-		Name:      []byte("pre_symlink"),
-		Target:    []byte("/existing/pre_target"),
-		Uid:       1000,
-		Gid:       1000,
-	}))
-	require.NoError(t, err, "预置符号链接失败")
-	require.NotNil(t, mknodResp)
-	require.NotNil(t, symResp)
+	prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+		require.NoError(t, os.WriteFile(filepath.Join(mp, "pre_reg.txt"), nil, 0o644))
+		require.NoError(t, os.Symlink("/existing/pre_target", filepath.Join(mp, "pre_symlink")))
+	})
+	var err error
 
 	// 2. 以只读挂载模式启动 bowl mount
 	mountpoint := t.TempDir()

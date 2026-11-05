@@ -2,7 +2,23 @@
 # ==============================================================================
 # Bowl vs JuiceFS - Aliyun Silicon Valley (us-west-1) Dual-ECS Benchmark Suite
 # ==============================================================================
+# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
+# 存储引擎：每个 (disk_id, branch_name) 独立 Pebble（常驻句柄池复用句柄与缓存），
+# DataKey 仅保存 12 字节 BlobRef 索引；文件数据落在 blobs/<shard>/<blob_id>.blob
+# 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后
+# os.Remove 即时回收旧块，Checkpoint/Fork 以硬链接共享块。
+# 服务端并发与持久化：分支锁收敛为拓扑生命周期 RLock，按 (disk,branch,ino) 的
+# 细粒度 inodeMu 串行元数据；完整 1 MiB 块在锁外并行落盘；GetAttr/GetXattr/
+# Readlink 单键点查免 Snapshot；读路径 atime 先登记内存、按 1 秒周期与持久化
+# 屏障合并；常规批次 pebble.NoSync 异步 WAL，后台 1 秒刷盘与 WALBytesPerSync
+# 4 MiB 兜底（MemTableSize 16 MiB）。
+# 客户端写入与缓存：1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
+# 避免 4 KiB 脏页回写与写前尺寸核对）+ FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV
+# 负缓存（写批次内清除 security.capability）+ 写后 AttrTimeout=1.0s +
+# MaxBackground=64 / CongestionThreshold=48。Flush 不触发跨机 Fsync RPC，
+# 仅显式 Fsync/Sync 请求服务端持久化屏障。
 set -euo pipefail
+export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -47,6 +63,9 @@ cleanup() {
     scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
     ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
     ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u postgresql -u postgresql@16-main --no-pager -n 200" > "${RESULTS_DIR}/postgresql.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -k --no-pager | grep -Ei 'out of memory|oom-kill|killed process' || true" > "${RESULTS_DIR}/kernel-oom.log" 2>/dev/null
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "free -m; df -h /var/lib/bowl/data; systemctl is-active postgresql@16-main || true" > "${RESULTS_DIR}/server-state.log" 2>/dev/null
   fi
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
@@ -258,7 +277,7 @@ scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ss
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
 
 # ==============================================================================
-# Step 3: Deploy Storage Service + PostgreSQL + Redis + MinIO on Server Node
+# 第 3 步：在服务端部署 Storage、PostgreSQL、Redis 与 rclone S3。
 # ==============================================================================
 log "Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (${SERVER_PRIV_IP})..."
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis"
@@ -400,7 +419,7 @@ fi
 pkill -f "iperf3 -s" || true
 iperf3 -s -D
 EOF
-log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, MinIO:9001, PG:5432, Redis:6379) are up and healthy."
+log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, rclone S3:9001, PG:5432, Redis:6379) are up and healthy."
 
 # Measure Server local cloud_essd disk baseline + Server system info
 log "Measuring Server local cloud_essd disk baseline..."
@@ -420,7 +439,7 @@ OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
 KERNEL="$(uname -r)"
 PG_VER="$(psql --version | head -n1)"
 REDIS_VER="$(redis-server --version | awk '{print $1, $2, $3}')"
-MINIO_VER="$(rclone --version | head -n1)"
+RCLONE_VER="$(rclone --version | head -n1)"
 
 jq -n \
   --arg cpu "${CPU_MODEL}" \
@@ -430,11 +449,11 @@ jq -n \
   --arg kernel "${KERNEL}" \
   --arg pg "${PG_VER}" \
   --arg redis "${REDIS_VER}" \
-  --arg minio "${MINIO_VER}" \
+  --arg rclone "${RCLONE_VER}" \
   --arg disk_w "${WRITE_MIB}" \
   --arg disk_r "${READ_MIB}" \
   '{
-    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, minio_version: $minio},
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, rclone_version: $rclone},
     disk_baseline: {local_seq_write_mib_s: $disk_w, local_seq_read_mib_s: $disk_r}
   }'
 EOF
@@ -660,7 +679,7 @@ has_target() {
 }
 
 # ------------------------------------------------------------------------------
-# Target 1: Bowl (PostgreSQL 16 + Server BlockStore)
+# 对象 1：Bowl（PostgreSQL 控制面 + Pebble 分支存储）
 # ------------------------------------------------------------------------------
 if has_target "bowl"; then
   ENDPOINT="http://${SERVER_PRIV_IP}:9000"
@@ -760,8 +779,11 @@ if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
 fi
 if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
   BOWL_DISK_JSON="$(cat "${RESULTS_DIR}/bowl_disk.json")"
+elif [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  log "ERROR: Bowl 磁盘信息缺失，无法生成本轮报告。"
+  exit 1
 else
-  BOWL_DISK_JSON='{"disk_id":"01a18c0e-61ab-7afb-ab0c-67ffb1f51473","root_ino":2}'
+  BOWL_DISK_JSON='{}'
 fi
 
 # ==============================================================================
@@ -786,9 +808,13 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
     REMAINING_INSTANCES="${COUNT}"
     sleep 5
   done
+  if [[ "${REMAINING_INSTANCES}" != "0" ]]; then
+    log "ERROR: 仍有 ${REMAINING_INSTANCES} 台测试实例，清理钩子将继续尝试。"
+    exit 1
+  fi
   rm -f "${CREATED_INSTANCES_FILE}"
 
-  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
+  aliyun ecs DeleteKeyPairs --RegionId "${REGION_ID}" --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
   KEY_CREATED=0
 fi
 
@@ -841,6 +867,20 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: {
       bowl_git_commit: $bowl_commit,
+      storage_engine: "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
+      blob_layout: "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
+      blob_size_bytes: 1048576,
+      blob_ref_bytes: 12,
+      kernel_writeback_cache: false,
+      open_keep_cache: true,
+      handle_killpriv: true,
+      max_background: 64,
+      congestion_threshold: 48,
+      flush_issues_fsync_rpc: false,
+      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
+      branch_lock: "拓扑生命周期 RLock + 按 inode 细粒度锁",
+      parallel_blob_write: "1 MiB 块在 Inode 锁外并行落盘",
+      point_lookup_snapshot_free: true,
       disk_id: $bowl_disk.disk_id,
       root_ino: $bowl_disk.root_ino,
       disk_size: "2PiB",

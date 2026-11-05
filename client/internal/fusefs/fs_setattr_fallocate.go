@@ -22,13 +22,19 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return status
 	}
 
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
+	epoch := fs.cache.version()
+	if status, local := fs.setTmpAttr(input, out); local {
+		return status
+	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
 
 	req := &storagev1.SetAttrRequest{
-		Ino: ino,
+		Ino: ino, SessionId: fs.currentSession(),
 	}
 	hasUpdate := false
 	valid := input.Valid
@@ -84,31 +90,27 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		hasUpdate = true
 	}
 
-	// 仅当 FATTR_FH 置位时解析并绑定文件句柄与会话标识；未置位时严格保持 req.Fh == nil 且 req.SessionId == nil。
+	// 当 FATTR_FH 置位时校验本地句柄；服务端请求不携带旧版句柄。
 	if (valid & fuse.FATTR_FH) != 0 {
-		sid, st := fs.ResolveHandle(input.Fh)
+		h, sid, st := fs.checkedHandle(input.NodeId, input.Fh, false)
 		if st != fuse.OK {
 			return st
 		}
-		fh := input.Fh
-		req.Fh = &fh
-		req.SessionId = &sid
+		if valid&fuse.FATTR_SIZE != 0 && !h.CanWrite() {
+			return fuse.EBADF
+		}
+		req.SessionId = optionalSession(sid)
 	}
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
-	// 空更新回退保护：当没有任何受支持属性位被置位时（例如仅包含 FATTR_LOCKOWNER），
-	// 不发送空更新请求以规避服务端 setattr_has_update CEL 校验拒绝，自动回退调用 GetAttr 并填充返回。
 	if !hasUpdate {
-		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino,
-		}))
-		if err != nil {
-			return fs.ToStatus(err, cancel)
+		cached, st := fs.getInode(cancel, input.NodeId)
+		if st == fuse.OK {
+			fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
 		}
-		fs.FillAttrOut(out, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
-		return fuse.OK
+		return st
 	}
 
 	fs.invalidateReadAheadByIno(ino)
@@ -116,18 +118,25 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
+		fs.cache.invalidateInode(input.NodeId)
 		if req.SessionId != nil {
 			return fs.ToStatusWithSession(err, cancel)
 		}
 		return fs.ToStatus(err, cancel)
 	}
 
+	fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
+	if valid&(fuse.FATTR_SIZE|fuse.FATTR_UID|fuse.FATTR_GID|fuse.FATTR_MODE) != 0 {
+		fs.caps.markAbsent(input.NodeId)
+	}
 	fs.FillAttrOut(out, resp.Msg.GetInode(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
 
 // Fallocate 实现文件空间预分配与稀疏空洞打洞，对应 Linux FUSE FUSE_FALLOCATE 协议。
 func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse.Status {
+	fs.lifecycleMu.RLock()
+	defer fs.lifecycleMu.RUnlock()
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
@@ -137,9 +146,12 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return status
 	}
 
-	sid, status := fs.ResolveHandle(input.Fh)
+	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return status
+	}
+	if !handle.CanWrite() {
+		return fuse.EBADF
 	}
 
 	// 模式位校验：仅支持默认预留 0、FALLOC_FL_KEEP_SIZE 与 FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE。
@@ -150,25 +162,36 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return fuse.Status(syscall.EOPNOTSUPP)
 	}
 
+	if _, local := fs.localTmpInode(input.NodeId); local {
+		if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+			return status
+		}
+		ino, status = fs.ToServerIno(input.NodeId)
+		if status != fuse.OK {
+			return status
+		}
+	}
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
 	req := &storagev1.FallocateRequest{
 		Ino:       ino,
-		Fh:        input.Fh,
+		Fh:        0,
 		Offset:    input.Offset,
 		Length:    input.Length,
 		Mode:      input.Mode,
-		SessionId: &sid,
+		SessionId: optionalSession(sid),
 	}
 
 	fs.invalidateReadAheadByIno(ino)
 	defer fs.invalidateReadAheadByIno(ino)
 
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
+	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
 		return fs.ToStatusWithSession(err, cancel)
 	}
+	fs.caps.markAbsent(input.NodeId)
 
 	return fuse.OK
 }

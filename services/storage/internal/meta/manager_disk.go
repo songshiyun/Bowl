@@ -8,12 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -40,7 +40,7 @@ func toDomainDisk(row db.GetDiskRow) *Disk {
 	return &Disk{
 		DiskID:     diskID,
 		Name:       row.Name,
-		RootIno:    uint64(row.RootIno),
+		RootIno:    RootIno,
 		MaxBytes:   uint64(row.MaxBytes),
 		UsedBytes:  uint64(row.UsedBytes),
 		UsedInodes: uint64(row.UsedInodes),
@@ -51,66 +51,51 @@ func toDomainDisk(row db.GetDiskRow) *Disk {
 
 // CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error) {
-	// 静态参数校验（无需触达数据库）：
-	// 1. 数值边界优先：max_bytes 必须在 1 到 math.MaxInt64 之间
 	if params.MaxBytes == 0 || params.MaxBytes > math.MaxInt64 {
-		return nil, fmt.Errorf("%w: max_bytes must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), params.MaxBytes)
+		return nil, ErrInvalidArgument
 	}
-
-	// 2. 字符串边界校验：优先校验超长，后校验空字节
 	if err := validateDiskName(params.Name); err != nil {
 		return nil, err
 	}
-
-	// 3. 生成 UUIDv7 磁盘主键
 	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("generate uuidv7: %w", err)
-	}
-
-	diskID := pgtype.UUID{
-		Bytes: id,
-		Valid: true,
-	}
-
-	// 4. 单次读写事务内原子创建根目录 Inode 与 Disk 记录（控制面保持 synchronous_commit = on 同步提交）
-	var createdDisk db.GetDiskRow
-	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		rootInode, err := q.CreateRootInode(ctx, db.CreateRootInodeParams{
-			Mode:  int32(S_IFDIR | 0o755),
-			Nlink: 2,
-			Uid:   0,
-			Gid:   0,
-			Rdev:  0,
-			Size:  int64(DefaultDirSize),
-		})
-		if err != nil {
-			return fmt.Errorf("create root inode: %w", err)
-		}
-
-		row, err := q.CreateDisk(ctx, db.CreateDiskParams{
-			DiskID:   diskID,
-			Name:     params.Name,
-			RootIno:  rootInode.Ino,
-			MaxBytes: int64(params.MaxBytes),
-		})
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return fmt.Errorf("%w: root_ino %d already exists", ErrAlreadyExists, rootInode.Ino)
-			}
-			return fmt.Errorf("create disk: %w", err)
-		}
-
-		createdDisk = db.GetDiskRow(row)
-		return nil
-	})
 	if err != nil {
 		return nil, err
 	}
-
-	m.initDiskQuotaOnCreate(createdDisk)
-	return toDomainDisk(createdDisk), nil
+	commitID, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
+	if err := m.createDiskStorage(id.String(), commitID.String()); err != nil {
+		return nil, errors.Join(fmt.Errorf("初始化磁盘存储: %w", err), m.pebble.RemoveDisk(id.String()))
+	}
+	pgID := pgtype.UUID{Bytes: id, Valid: true}
+	var created db.GetDiskRow
+	var branches []byte
+	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+		row, err := q.CreateDisk(ctx, db.CreateDiskParams{DiskID: pgID, Name: params.Name, MaxBytes: int64(params.MaxBytes)})
+		if err != nil {
+			return fmt.Errorf("创建磁盘: %w", err)
+		}
+		created = db.GetDiskRow(row)
+		branches, err = m.registerDiskStorage(ctx, q, created, commitID)
+		return err
+	})
+	if err != nil {
+		return nil, errors.Join(err, m.pebble.RemoveDisk(id.String()))
+	}
+	disk := toDomainDisk(created)
+	if err := setDiskBranches(disk, branches); err != nil {
+		return nil, err
+	}
+	disk.UsedInodes = 1
+	// 预热配额协调器，使首个数据面 RPC 无需再查询控制面。
+	control := db.GetDiskControlPlaneRow{
+		DiskID: created.DiskID, StorageDir: filepath.Join(m.storageRoot, "disks", id.String()), Branches: branches,
+	}
+	if _, err := m.loadTreeQuota(ctx, created, control); err != nil {
+		return nil, err
+	}
+	return disk, nil
 }
 
 // parseDiskID 解析字符串形式的 UUID 为 pgtype.UUID，并拦截非法格式或全零 Nil UUID。
@@ -139,9 +124,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 		}
 		return nil, err
 	}
-	m.syncDiskRowWithQuotaState(&row)
-
-	return toDomainDisk(row), nil
+	return m.diskWithBranches(ctx, row)
 }
 
 // diskPageCursor 定义 ListDisks 游标令牌的序列化载荷。
@@ -233,8 +216,11 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	disks := make([]*Disk, 0, len(rows))
 	for i := range rows {
 		r := db.GetDiskRow(rows[i])
-		m.syncDiskRowWithQuotaState(&r)
-		disks = append(disks, toDomainDisk(r))
+		disk, err := m.diskWithBranches(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		disks = append(disks, disk)
 	}
 
 	return &ListDisksResult{
@@ -246,225 +232,143 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 // UpdateDisk 更新虚拟磁盘属性（名称、最大容量）。
 // 在事务内通过 FOR UPDATE 行锁排他锁定磁盘，校验缩容水位线（new_max_bytes >= used_bytes）并原子持久化新配额与名称。
 func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error) {
-	// 静态参数校验（无需触达数据库）：
-	pgID, err := parseDiskID(params.DiskID)
+	id, err := parseDiskID(params.DiskID)
 	if err != nil {
 		return nil, err
 	}
-
 	if params.Name == nil && params.MaxBytes == nil {
-		return nil, fmt.Errorf("%w: at least one of name or max_bytes must be set", ErrInvalidArgument)
+		return nil, ErrInvalidArgument
 	}
-
-	if params.MaxBytes != nil && (*params.MaxBytes == 0 || *params.MaxBytes > math.MaxInt64) {
-		return nil, fmt.Errorf("%w: max_bytes must be in range [1, %d]", ErrInvalidArgument, int64(math.MaxInt64))
-	}
-
 	if params.Name != nil {
 		if err := validateDiskName(*params.Name); err != nil {
 			return nil, err
 		}
 	}
-
-	var (
-		prevRow    db.GetDiskRow
-		hasPrevRow bool
-		updatedRow db.GetDiskRow
-	)
-	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		if hasPrevRow {
-			m.updateDiskQuotaOnUpdate(prevRow)
-			hasPrevRow = false
-		}
-		current, err := q.GetDiskForUpdate(ctx, pgID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get disk for update %s: %w", params.DiskID, err)
-		}
-
-		if params.MaxBytes != nil && current.RootIno > 0 && m.hasPool() {
-			if r, ok := q.(interface{ RawDBTX() db.DBTX }); ok && r != nil && r.RawDBTX() != nil {
-				_, _ = r.RawDBTX().Exec(ctx, `SELECT 1 FROM inodes WHERE root_ino = $1 AND (mode & 61440) = 32768 FOR SHARE`, current.RootIno)
-			}
-		}
-
-		newName := current.Name
-		if params.Name != nil {
-			newName = *params.Name
-		}
-
-		newMaxBytes := uint64(current.MaxBytes)
-		if params.MaxBytes != nil {
-			newMaxBytes = *params.MaxBytes
-		}
-
-		// 缩容水位保护：严禁缩容至当前已用空间以下
-		currentUsedBytes := m.currentDiskUsedBytes(current.RootIno, current.UsedBytes)
-		if params.MaxBytes != nil && *params.MaxBytes < currentUsedBytes {
-			return ErrInvalidShrink
-		}
-
-		updated, err := q.UpdateDisk(ctx, db.UpdateDiskParams{
-			DiskID:   pgID,
-			Name:     newName,
-			MaxBytes: int64(newMaxBytes),
-		})
-		if err != nil {
-			return fmt.Errorf("update disk %s: %w", params.DiskID, err)
-		}
-
-		prevRow = db.GetDiskRow(current)
-		hasPrevRow = true
-		updatedRow = db.GetDiskRow(updated)
-		m.updateDiskQuotaOnUpdate(updatedRow)
-		return nil
-	})
+	if params.MaxBytes != nil && (*params.MaxBytes == 0 || *params.MaxBytes > math.MaxInt64) {
+		return nil, ErrInvalidArgument
+	}
+	m.writeQuotaMu.Lock()
+	defer m.writeQuotaMu.Unlock()
+	tree, err := m.TreeQuota(ctx, params.DiskID)
 	if err != nil {
-		if hasPrevRow {
-			m.updateDiskQuotaOnUpdate(prevRow)
-		}
 		return nil, err
 	}
-
-	m.syncDiskRowWithQuotaState(&updatedRow)
-	return toDomainDisk(updatedRow), nil
+	tree.mu.Lock()
+	var updated db.GetDiskRow
+	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+		current, err := q.GetDiskForUpdate(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		name, limit := current.Name, uint64(current.MaxBytes)
+		if params.Name != nil {
+			name = *params.Name
+		}
+		if params.MaxBytes != nil {
+			limit = *params.MaxBytes
+		}
+		if limit < tree.usage.Bytes {
+			return ErrInvalidShrink
+		}
+		row, err := q.UpdateDisk(ctx, db.UpdateDiskParams{DiskID: id, Name: name, MaxBytes: int64(limit)})
+		if err != nil {
+			return err
+		}
+		updated = db.GetDiskRow(row)
+		return nil
+	})
+	if err == nil {
+		tree.mu.Unlock()
+		err = tree.SetMaxBytes(uint64(updated.MaxBytes))
+	} else {
+		tree.mu.Unlock()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m.diskWithBranches(ctx, updated)
 }
 
-// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-// 在单次读写事务内排他锁定目标磁盘、清理过期客户端会话、校验是否存在存活挂载会话，随后删除 Disk 记录并按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联的 entries、inode_xattrs、file_handles、file_locks）。
-// 事务提交成功后，主动关闭并清理内存中对应 Inode 的阻塞等待通道，唤醒正在等待锁的协程。
+// DeleteDisk 在没有活跃会话时删除控制面记录和磁盘存储。
 func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
-	// 静态参数校验（无需触达数据库）：非法格式或全零 Nil UUID 直接返回 ErrInvalidArgument
-	pgID, err := parseDiskID(diskID)
+	id, err := parseDiskID(diskID)
 	if err != nil {
 		return err
 	}
-
-	var (
-		rootIno       int64
-		expiredCount  int64
-		reclaimedInos []int64
-		deletedInos   []int64
-	)
-
+	diskID = id.String()
+	m.writeQuotaMu.Lock()
+	defer m.writeQuotaMu.Unlock()
+	m.treeQuotaMu.Lock()
+	if m.treeQuotas == nil {
+		m.treeQuotas = make(map[string]*TreeQuota)
+	}
+	tree := m.treeQuotas[diskID]
+	temporary := tree == nil
+	if temporary {
+		tree = NewTreeQuota(0)
+		m.treeQuotas[diskID] = tree
+	}
+	tree.mu.Lock()
+	if tree.closed {
+		tree.mu.Unlock()
+		m.treeQuotaMu.Unlock()
+		return ErrNotFound
+	}
+	tree.closed = true
+	tree.mu.Unlock()
+	m.treeQuotaMu.Unlock()
 	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		rootIno = 0
-		expiredCount = 0
-		reclaimedInos = nil
-		deletedInos = nil
-
-		// 1. 获取并排他锁定目标 Disk 行与关联 Inodes
-		diskRow, err := q.GetDiskForUpdate(ctx, pgID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("get disk for update %s: %w", diskID, err)
-		}
-		rootIno = diskRow.RootIno
-
-		// 2. 先清理已过期的客户端会话，若清理了过期会话则回收无引用孤儿节点与配额
-		expiredCount, err = q.DeleteExpiredClientSessions(ctx)
-		if err != nil {
-			return fmt.Errorf("delete expired client sessions before delete disk %s: %w", diskID, err)
-		}
-		if expiredCount > 0 {
-			reclaimedInos, err = m.reclaimUnreferencedOrphansInTx(ctx, q)
-			if err != nil {
-				return err
-			}
-		}
-
-		// 3. 查询绑定该磁盘或持有该磁盘下句柄的未过期会话
-		activeSIDs, err := q.ListActiveSessionIDsByDisk(ctx, db.ListActiveSessionIDsByDiskParams{
-			DiskID:  pgID,
-			RootIno: diskRow.RootIno,
-		})
-		if err != nil {
-			return fmt.Errorf("list active sessions for disk %s: %w", diskID, err)
-		}
-		if len(activeSIDs) > 0 {
-			return fmt.Errorf("%w: disk %s has active mounted session %d", ErrBusy, diskID, uint64(activeSIDs[0]))
-		}
-
-		// 4. 删除该 Disk 行
-		rows, err := q.DeleteDisk(ctx, pgID)
-		if err != nil {
-			return fmt.Errorf("delete disk %s: %w", diskID, err)
-		}
-		if rows == 0 {
+		_, err := q.GetDiskForUpdate(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-
-		// 5. 按 root_ino 批量强制删除该磁盘下的全部 Inode（依赖外键 ON DELETE CASCADE 自动级联清除关联项）
-		deletedInos, err = q.DeleteInodesByRootIno(ctx, diskRow.RootIno)
 		if err != nil {
-			return fmt.Errorf("delete inodes by root_ino %d for disk %s: %w", diskRow.RootIno, diskID, err)
+			return err
 		}
-
-		if len(deletedInos) > 0 {
-			if err := deleteAllChunksByInos(ctx, q, deletedInos); err != nil {
-				return fmt.Errorf("delete chunks for disk %s (root_ino=%d): %w", diskID, diskRow.RootIno, err)
-			}
+		sessions, err := q.ListActiveSessionIDsByDisk(ctx, id)
+		if err != nil {
+			return err
 		}
-
+		if len(sessions) > 0 {
+			return ErrBusy
+		}
+		count, err := q.DeleteDisk(ctx, id)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrNotFound
+		}
 		return nil
 	})
 	if err != nil {
+		m.treeQuotaMu.Lock()
+		tree.mu.Lock()
+		tree.closed = false
+		tree.mu.Unlock()
+		if temporary {
+			delete(m.treeQuotas, diskID)
+		}
+		m.treeQuotaMu.Unlock()
 		return err
 	}
-
-	// 6. 事务成功提交后，主动清理孤儿节点状态、锁等待通道、配额状态与目录游标，并通知锁等待者
-	m.finalizeReclaimedOrphans(reclaimedInos)
-	m.finalizeReclaimedOrphans(deletedInos)
-	if rootIno > 0 {
-		m.deleteDiskQuotaState(rootIno)
-		m.clearDirCursorsForInos(uint64(rootIno))
+	m.treeQuotaMu.Lock()
+	delete(m.treeQuotas, diskID)
+	m.treeQuotaMu.Unlock()
+	if err := m.pebble.RemoveDisk(diskID); err != nil {
+		return fmt.Errorf("清理磁盘存储目录: %w", err)
 	}
-	if expiredCount > 0 {
-		m.cleanExpiredDirCursors(ctx)
-	}
-	m.notifyAllLockWaiters()
-
+	m.invalidatePebbleDiskSessions(diskID)
 	return nil
 }
 
-// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
-// 接收目标节点的 uint64 ino，按 root_ino O(1) 查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
-func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error) {
-	// 静态参数校验（无需触达数据库）：ino 必须在 [1, math.MaxInt64] 区间内
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, fmt.Errorf("%w: ino must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), ino)
-	}
-
-	// 1. 查询目标 Inode（支持已解链但仍打开的孤儿节点 nlink == 0）
-	inode, err := m.store.GetInode(ctx, int64(ino))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("get inode %d for statfs: %w", ino, err)
-	}
-	if inode.RootIno <= 0 {
-		return nil, ErrNotFound
-	}
-
-	// 2. 根据 root_ino 查询其绑定的 Disk 实体
-	row, err := m.store.GetDiskByRootIno(ctx, inode.RootIno)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("get disk by root_ino %d: %w", inode.RootIno, err)
-	}
-	diskRow := db.GetDiskRow(row)
-	m.syncDiskRowWithQuotaState(&diskRow)
-
+func statFSForDisk(disk *Disk) *StatFSResult {
 	// 3. 计算容量与 4096 字节块统计信息
-	totalBytes := uint64(diskRow.MaxBytes)
-	usedBytes := uint64(diskRow.UsedBytes)
+	totalBytes := disk.MaxBytes
+	usedBytes := disk.UsedBytes
 
 	var availBytes uint64
 	if totalBytes > usedBytes {
@@ -481,8 +385,8 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 	bfree := bavail
 
 	var files uint64
-	if diskRow.UsedInodes > 0 {
-		files = uint64(diskRow.UsedInodes)
+	if disk.UsedInodes > 0 {
+		files = disk.UsedInodes
 	}
 
 	return &StatFSResult{
@@ -497,5 +401,5 @@ func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error)
 		Files:      files,
 		Ffree:      0,
 		Namelen:    MaxFileNameBytes,
-	}, nil
+	}
 }

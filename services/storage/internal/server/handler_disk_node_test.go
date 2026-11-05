@@ -93,6 +93,13 @@ func TestServer_DiskRPCs(t *testing.T) {
 	t.Run("CreateDisk_Success", func(t *testing.T) {
 		client, mockMgr := setupDiskNodeTestClient(t)
 		disk := sampleDisk(validUUID, "disk-alpha", 1, 1073741824)
+		commitID := "018f6738-4e89-7381-8000-123456789abd"
+		disk.DefaultBranch = "main"
+		disk.Branches = []meta.Branch{{
+			BranchID: "018f6738-4e89-7381-8000-123456789abe", DiskID: validUUID,
+			Name: "main", ForkCommitID: &commitID, HeadCommitID: &commitID,
+			State: "NORMAL", CreatedAt: disk.CreatedAt,
+		}}
 
 		mockMgr.EXPECT().
 			CreateDisk(mock.Anything, meta.CreateDiskParams{
@@ -118,6 +125,10 @@ func TestServer_DiskRPCs(t *testing.T) {
 		assert.Equal(t, uint64(1), res.Msg.Disk.UsedInodes)
 		assert.Equal(t, disk.CreatedAt.Unix(), res.Msg.Disk.CreatedAt.AsTime().Unix())
 		assert.Equal(t, disk.UpdatedAt.Unix(), res.Msg.Disk.UpdatedAt.AsTime().Unix())
+		require.Equal(t, "main", res.Msg.Disk.GetDefaultBranch())
+		require.Len(t, res.Msg.Disk.Branches, 1)
+		assert.Equal(t, commitID, res.Msg.Disk.Branches[0].GetHeadCommitId())
+		assert.Equal(t, storagev1.BranchState_BRANCH_STATE_NORMAL, res.Msg.Disk.Branches[0].State)
 	})
 
 	t.Run("CreateDisk_DomainError", func(t *testing.T) {
