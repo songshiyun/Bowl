@@ -223,16 +223,22 @@ func (s *BlobStore) WindowLocal(id uint64) bool {
 	return ok
 }
 
-// AppendTail 在窗口内块的尾部原地追加 chunk，并把热缓存替换为追加后的完整内容。
-// full 必须是追加后的完整块（长度与块文件最终大小一致），供后续局部写 CoW 与热读直接命中内存。
-func (s *BlobStore) AppendTail(id uint64, chunk, full []byte) error {
-	file, err := os.OpenFile(s.Path(id), os.O_WRONLY|os.O_APPEND, 0o644)
+// AppendTail 在窗口内块按逻辑偏移 offset 覆写 chunk，并把热缓存替换为追加后的完整内容。
+// 使用 WriteAt + Truncate 而非 O_APPEND：上一次未提交/失败批次可能在块尾留下残留字节，
+// 按逻辑偏移覆写并截断到 offset+len(chunk) 才能保证块内容精确、不错位。
+// full 必须是写入后的完整块（长度与块文件最终大小一致），供后续局部写 CoW 与热读直接命中内存。
+func (s *BlobStore) AppendTail(id uint64, offset int64, chunk, full []byte) error {
+	file, err := os.OpenFile(s.Path(id), os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
-	_, writeErr := file.Write(chunk)
+	_, writeErr := file.WriteAt(chunk, offset)
+	var truncErr error
+	if writeErr == nil {
+		truncErr = file.Truncate(offset + int64(len(chunk)))
+	}
 	closeErr := file.Close()
-	if err := errors.Join(writeErr, closeErr); err != nil {
+	if err := errors.Join(writeErr, truncErr, closeErr); err != nil {
 		return err
 	}
 	s.cacheHotOwned(id, full)

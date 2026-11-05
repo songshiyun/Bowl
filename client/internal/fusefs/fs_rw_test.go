@@ -1108,3 +1108,114 @@ func TestConcurrentReadAheadCoalesces(t *testing.T) {
 	require.LessOrEqual(t, int(calls.Load()), 4, "32 个 128 KiB 并发顺序读必须合并为不超过 4 次 RPC")
 	require.GreaterOrEqual(t, int(windowCalls.Load()), 1, "并发顺序读必须至少触发一次 4 MiB 对齐窗口拉取")
 }
+
+// TestAlignedWindowNotPublishedAfterInvalidation 锁定 4 MiB 对齐窗口单飞拉取的代数校验：
+// 拉取在途期间若句柄窗口被并发写失效，拉取结果不得发布为活跃缓存或触发预读，
+// 后续读取必须重新向服务端拉取，绝不能命中过期窗口。
+func TestAlignedWindowNotPublishedAfterInvalidation(t *testing.T) {
+	const (
+		diskID  = "00000000-0000-0000-0000-000000000001"
+		rootIno = 1001
+		fileIno = 2002
+		testFH  = 12345
+		step    = 128 << 10
+	)
+	versionOne := bytes.Repeat([]byte{0x11}, 4*1024*1024)
+	versionTwo := bytes.Repeat([]byte{0x22}, 4*1024*1024)
+
+	var version atomic.Int32
+	version.Store(1)
+	windowStarted := make(chan struct{})
+	releaseWindow := make(chan struct{})
+	var once sync.Once
+
+	mockSrv := &rwMockStorageServer{
+		readFn: func(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+			// 先定格本次请求看到的数据版本，再阻塞窗口拉取，确保在途结果一定是旧版本。
+			data := versionOne
+			if version.Load() == 2 {
+				data = versionTwo
+			}
+			if req.Msg.GetOffset() == 0 && req.Msg.GetSize() == fusefs.MaxRPCChunkSize {
+				once.Do(func() { close(windowStarted) })
+				select {
+				case <-releaseWindow:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			start := int(req.Msg.GetOffset())
+			if start >= len(data) {
+				return connect.NewResponse(&storagev1.ReadResponse{}), nil
+			}
+			end := min(start+int(req.Msg.GetSize()), len(data))
+			return connect.NewResponse(&storagev1.ReadResponse{Data: data[start:end]}), nil
+		},
+		writeFn: func(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+			version.Store(2)
+			return connect.NewResponse(&storagev1.WriteResponse{Size: uint32(len(req.Msg.GetData()))}), nil
+		},
+	}
+
+	client := setupRWTestRPCServer(t, mockSrv)
+	mgr := setupTestSessionManager(t, client)
+	mgr.BindHandle(testFH, mgr.CurrentSessionID())
+	fs := fusefs.NewRawFS(client, mgr, fusefs.Config{DiskID: diskID, RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+	require.Equal(t, fuse.OK, fs.PrepareTestHandle(fileIno, testFH, syscall.O_RDWR, false))
+
+	// 1. 首次读取直通建立 lastReadEnd=step。
+	res1, st1 := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   0,
+		Size:     step,
+	}, nil)
+	require.Equal(t, fuse.OK, st1)
+	got1, _ := res1.Bytes(nil)
+	require.Equal(t, versionOne[:step], got1)
+
+	// 2. 向前跳跃 step 触发 4 MiB 对齐窗口单飞拉取，并在在途期间执行 Write 使其失效。
+	type readOutcome struct {
+		data   []byte
+		status fuse.Status
+	}
+	outcome := make(chan readOutcome, 1)
+	go func() {
+		res, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: fileIno},
+			Fh:       testFH,
+			Offset:   2 * step,
+			Size:     step,
+		}, nil)
+		var data []byte
+		if st == fuse.OK && res != nil {
+			data, _ = res.Bytes(nil)
+		}
+		outcome <- readOutcome{data: data, status: st}
+	}()
+
+	<-windowStarted
+	_, wst := fs.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   0,
+	}, []byte("invalidate"))
+	require.Equal(t, fuse.OK, wst)
+	close(releaseWindow)
+
+	got := <-outcome
+	require.Equal(t, fuse.OK, got.status)
+	require.Equal(t, versionOne[2*step:3*step], got.data, "在途窗口拉取仍应为本次请求返回其拉到的区间")
+
+	// 3. 失效后的后续读取必须读到服务端新版本；若过期窗口被发布，这里会命中旧数据。
+	res3, st3 := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fileIno},
+		Fh:       testFH,
+		Offset:   0,
+		Size:     4096,
+	}, nil)
+	require.Equal(t, fuse.OK, st3)
+	got3, _ := res3.Bytes(nil)
+	require.Equal(t, versionTwo[:4096], got3, "失效后不得把在途窗口发布为活跃缓存")
+}

@@ -154,7 +154,7 @@ func TestBlobSyncSkipsTransientShards(t *testing.T) {
 	// 窗口内尾部原地追加：块文件与热缓存都必须呈现追加后的完整内容。
 	tail := bytes.Repeat([]byte{0x2a}, 4096)
 	full := append(append([]byte(nil), data...), tail...)
-	require.NoError(t, store.AppendTail(liveID, tail, full))
+	require.NoError(t, store.AppendTail(liveID, int64(len(data)), tail, full))
 	onDisk, err := os.ReadFile(store.Path(liveID))
 	require.NoError(t, err)
 	require.Equal(t, full, onDisk)
@@ -175,4 +175,47 @@ func TestBlobSyncSkipsTransientShards(t *testing.T) {
 	require.NoError(t, store.Remove(liveID))
 	require.NoError(t, store.Sync())
 	require.EqualValues(t, 2, store.DirSyncOps(), "删除已落盘块必须 fsync 其分片目录")
+}
+
+// TestBlobAppendTailOverwritesStaleResidual 锁定窗口内尾块追加的幂等覆盖语义：
+// 上一次未提交/失败批次可能在块文件尾部留下残留字节，再次从原逻辑偏移追加时必须
+// 精确覆写并截断残留，磁盘与热缓存都必须与逻辑块内容 100% 一致。
+func TestBlobAppendTailOverwritesStaleResidual(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "branches", "main")
+	store := pebblekv.NewBlobStore(base)
+	const id = 9
+
+	head := bytes.Repeat([]byte{0x41}, 4096)
+	require.NoError(t, store.Write(id, head))
+
+	// 模拟失败批次遗留：块文件尾部多出未被任何 DataKey 引用的残留字节。
+	residual := bytes.Repeat([]byte{0xee}, 777)
+	file, err := os.OpenFile(store.Path(id), os.O_WRONLY|os.O_APPEND, 0o644)
+	require.NoError(t, err)
+	_, err = file.Write(residual)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	tail := bytes.Repeat([]byte{0x42}, 2048)
+	full := append(append([]byte(nil), head...), tail...)
+	require.NoError(t, store.AppendTail(id, int64(len(head)), tail, full))
+
+	onDisk, err := os.ReadFile(store.Path(id))
+	require.NoError(t, err)
+	require.Equal(t, full, onDisk, "逻辑偏移写入必须覆盖并截断上一次失败批次的残留字节")
+
+	// 命中热缓存：块内容必须是写入后的完整逻辑块。
+	cached, err := store.Read(id, len(full))
+	require.NoError(t, err)
+	require.Equal(t, full, cached)
+
+	// 重新从磁盘读取（新句柄无热缓存）：必须与热缓存逐字节一致。
+	cold := pebblekv.NewBlobStore(base)
+	reloaded, err := cold.Read(id, len(full))
+	require.NoError(t, err)
+	require.Equal(t, full, reloaded)
+
+	partial := make([]byte, len(tail))
+	require.NoError(t, cold.ReadAt(id, int64(len(head)), partial))
+	require.Equal(t, tail, partial, "尾部区间不得因残留字节产生错位")
 }

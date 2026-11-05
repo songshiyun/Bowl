@@ -163,7 +163,7 @@ func (m *manager) buildWriteBlock(disk string, store pebbleReader, blobs *pebble
 	// 窗口内尾部原地追加：该块在本次 Sync 前新建、尚未被任何持久化提交引用或硬链接共享，
 	// 直接追加可消除长尾块反复 CoW 的 O(n²) 拷贝，且不改变块内已有字节。
 	if oldOK && start == int(oldRef.Length) && length <= pebblekv.BlobSize && blobs.WindowLocal(oldRef.ID) {
-		if err := blobs.AppendTail(oldRef.ID, chunk, data); err != nil {
+		if err := blobs.AppendTail(oldRef.ID, int64(start), chunk, data); err != nil {
 			return pebblekv.BlobRef{}, false, 0, 0, err
 		}
 		return pebblekv.BlobRef{ID: oldRef.ID, Length: uint32(length)}, true, 0, 0, nil

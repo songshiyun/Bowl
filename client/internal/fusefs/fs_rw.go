@@ -465,28 +465,41 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		if want >= readAheadMinWant && hra.reads > 1 && !hra.winEOF &&
 			input.Offset+uint64(want) > hra.streamEnd &&
 			input.Offset < hra.streamEnd+MaxRPCChunkSize {
+			startGen := hra.gen
 			data, err := fs.fetchAlignedWindow(ctx, hra, ino, sid, input.Offset)
 			if err != nil {
 				hra.mu.Unlock()
 				return nil, fs.ToStatusWithSession(err, cancel)
 			}
 			winOffset := input.Offset &^ uint64(MaxRPCChunkSize-1)
-			hra.winOffset = winOffset
-			hra.winData = data
-			hra.winValid = len(data) > 0
-			hra.winEOF = len(data) < MaxRPCChunkSize
-			if rel := input.Offset - winOffset; rel < uint64(len(data)) {
-				n := min(want, len(data)-int(rel))
-				hra.lastReadEnd = input.Offset + uint64(n)
-				hra.hasLastRead = true
-				hra.seqCount++
-				hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
-				if !hra.winEOF {
-					fs.startPrefetchLocked(hra, input.Fh, winOffset+MaxRPCChunkSize)
+			rel := input.Offset - winOffset
+			if hra.gen != startGen {
+				// 拉取期间该句柄窗口已被并发写或随机读失效：拉到的数据可能早于失效点，
+				// 绝不能发布为活跃缓存或触发预读，只用它为本次请求切出所需区间返回。
+				if rel < uint64(len(data)) {
+					n := min(want, len(data)-int(rel))
+					chunk := data[rel : rel+uint64(n)]
+					hra.mu.Unlock()
+					return makeReadResult(chunk, buf), fuse.OK
 				}
-				chunk := data[rel : rel+uint64(n)]
-				hra.mu.Unlock()
-				return makeReadResult(chunk, buf), fuse.OK
+			} else {
+				hra.winOffset = winOffset
+				hra.winData = data
+				hra.winValid = len(data) > 0
+				hra.winEOF = len(data) < MaxRPCChunkSize
+				if rel < uint64(len(data)) {
+					n := min(want, len(data)-int(rel))
+					hra.lastReadEnd = input.Offset + uint64(n)
+					hra.hasLastRead = true
+					hra.seqCount++
+					hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
+					if !hra.winEOF {
+						fs.startPrefetchLocked(hra, input.Fh, winOffset+MaxRPCChunkSize)
+					}
+					chunk := data[rel : rel+uint64(n)]
+					hra.mu.Unlock()
+					return makeReadResult(chunk, buf), fuse.OK
+				}
 			}
 		}
 
