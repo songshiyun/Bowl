@@ -252,23 +252,16 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
 	disk := diskID.String()
+	swapper := newWorkspaceSwapper(m)
 	var source *pebblekv.Branch
-	var unlockSource, unlockTarget func()
-	var quota *TreeQuota
-	var quotaLocked, quotaChanged, forkCreated, checkpointCreated, committed bool
+	var unlockSource func()
+	var swap *WorkspaceSwap
+	var checkpointCreated bool
 	var checkpointID string
 	defer func() {
-		if quotaLocked {
-			if !committed && quotaChanged {
-				err = errors.Join(err, quota.replaceBranchLocked(params.Name, nil, false))
-			}
-			quota.mu.Unlock()
-		}
+		swap.ReleaseUnlock()
 		if source != nil {
 			err = errors.Join(err, source.Close())
-		}
-		if unlockTarget != nil {
-			unlockTarget()
 		}
 		if unlockSource != nil {
 			unlockSource()
@@ -283,7 +276,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 		if _, i := controlStore.FindBranch(branches, params.Name); i >= 0 {
 			return ErrAlreadyExists
 		}
-		quota, err = m.versionQuota(ctx, q, diskID, control)
+		quota, err := m.versionQuota(ctx, q, diskID, control)
 		if err != nil {
 			return err
 		}
@@ -333,28 +326,12 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			}
 			fork = *sourceBranch.HeadCommitID
 		}
-		unlockTarget = m.lockBranchWrite(disk, params.Name)
-		targetPath := filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)
-		if _, err := os.Stat(targetPath); err == nil {
-			return ErrAlreadyExists
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		forkCreated = true
-		if err := m.pebble.Fork(disk, fork, params.Name); err != nil {
-			return err
-		}
-		workspace, err := m.pebble.OpenBranch(disk, params.Name)
-		if err != nil {
-			return err
-		}
-		err = prepareBranch(workspace.DB(), workspace.Blobs(), params.Name)
 		var sizes map[uint64]uint64
-		if err == nil {
-			sizes, err = readBranchSizesFromDB(workspace.DB())
-		}
-		err = errors.Join(err, workspace.Close())
+		swap, sizes, err = swapper.StageFork(disk, fork, params.Name)
 		if err != nil {
+			return err
+		}
+		if err := swap.StageReplace(quota, sizes, true); err != nil {
 			return err
 		}
 		now := time.Now().UTC()
@@ -363,22 +340,11 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
 			return err
 		}
-		quota.mu.Lock()
-		quotaLocked = true
-		if err := quota.replaceBranchLocked(params.Name, sizes, true); err != nil {
-			return err
-		}
-		quotaChanged = true
 		result = &Branch{BranchID: id, DiskID: disk, Name: params.Name, ParentBranch: &parent, ForkCommitID: &fork, HeadCommitID: &fork, State: "NORMAL", CreatedAt: now}
 		return nil
 	})
-	committed = err == nil
+	err = swap.Finalize(err)
 	if err != nil {
-		if forkCreated {
-			// 删除工作区前先驱逐刚打开的常驻句柄，避免残留指向已删目录的实例。
-			err = errors.Join(err, m.pebble.EvictBranch(disk, params.Name),
-				os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)))
-		}
 		if checkpointCreated {
 			err = errors.Join(err, os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "commits", checkpointID)))
 		}
@@ -419,23 +385,8 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
 	disk := diskID.String()
-	path := filepath.Join(m.storageRoot, "disks", disk, "branches", params.Name)
-	backup := filepath.Join(filepath.Dir(path), ".delete-"+uuid.Must(uuid.NewV7()).String())
-	var unlock func()
-	var quota *TreeQuota
-	var oldSizes map[uint64]uint64
-	var moved, quotaLocked, quotaChanged, committed bool
-	defer func() {
-		if quotaLocked {
-			if !committed && quotaChanged {
-				err = errors.Join(err, quota.replaceBranchLocked(params.Name, oldSizes, false))
-			}
-			quota.mu.Unlock()
-		}
-		if unlock != nil {
-			unlock()
-		}
-	}()
+	swapper := newWorkspaceSwapper(m)
+	var swap *WorkspaceSwap
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
 		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
@@ -456,43 +407,21 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 		if active {
 			return ErrBusy
 		}
-		quota, err = m.versionQuota(ctx, q, diskID, control)
+		quota, err := m.versionQuota(ctx, q, diskID, control)
 		if err != nil {
 			return err
 		}
-		unlock = m.lockBranchWrite(disk, params.Name)
-		if err := m.pebble.EvictBranch(disk, params.Name); err != nil {
+		swap, err = swapper.StageDelete(disk, params.Name)
+		if err != nil {
 			return err
 		}
-		if err := os.Rename(path, backup); err != nil {
+		if err := swap.StageReplace(quota, nil, false); err != nil {
 			return err
 		}
-		moved = true
 		branches = append(branches[:i], branches[i+1:]...)
-		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
-			return err
-		}
-		quota.mu.Lock()
-		quotaLocked = true
-		oldSizes = quota.branches[params.Name]
-		if err := quota.replaceBranchLocked(params.Name, nil, false); err != nil {
-			return err
-		}
-		quotaChanged = true
-		return nil
+		return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
 	})
-	committed = err == nil
-	if moved {
-		if err != nil {
-			err = errors.Join(err, os.Rename(backup, path))
-		} else {
-			err = os.RemoveAll(backup)
-		}
-	}
-	if err == nil {
-		m.invalidatePebbleBranchSessions(disk, params.Name)
-	}
-	return err
+	return swap.Finalize(err)
 }
 
 // Rollback 将无活跃写端的分支恢复到指定快照。
@@ -526,25 +455,8 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
 	disk := diskID.String()
-	path := filepath.Join(m.storageRoot, "disks", disk, "branches", params.BranchName)
-	staging := ".restore-" + uuid.Must(uuid.NewV7()).String()
-	stagePath := filepath.Join(filepath.Dir(path), staging)
-	backup := filepath.Join(filepath.Dir(path), ".backup-"+uuid.Must(uuid.NewV7()).String())
-	var unlock func()
-	var quota *TreeQuota
-	var oldSizes map[uint64]uint64
-	var moved, installed, quotaLocked, quotaChanged, committed bool
-	defer func() {
-		if quotaLocked {
-			if !committed && quotaChanged {
-				err = errors.Join(err, quota.replaceBranchLocked(params.BranchName, oldSizes, false))
-			}
-			quota.mu.Unlock()
-		}
-		if unlock != nil {
-			unlock()
-		}
-	}()
+	swapper := newWorkspaceSwapper(m)
+	var swap *WorkspaceSwap
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
 		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
@@ -585,63 +497,23 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 		if err != nil {
 			return err
 		}
-		quota, err = m.versionQuota(ctx, q, diskID, control)
+		quota, err := m.versionQuota(ctx, q, diskID, control)
 		if err != nil {
 			return err
 		}
-		unlock = m.lockBranchWrite(disk, params.BranchName)
-		if err := m.pebble.EvictBranch(disk, params.BranchName); err != nil {
-			return err
-		}
-		if err := m.pebble.Fork(disk, commitID.String(), staging); err != nil {
-			return err
-		}
-		workspace, err := m.pebble.OpenBranch(disk, staging)
-		if err != nil {
-			return err
-		}
-		err = prepareBranch(workspace.DB(), workspace.Blobs(), staging)
 		var sizes map[uint64]uint64
-		if err == nil {
-			sizes, err = readBranchSizesFromDB(workspace.DB())
-		}
-		err = errors.Join(err, workspace.Close())
+		swap, sizes, err = swapper.StageRestore(disk, params.BranchName, commitID.String())
 		if err != nil {
 			return err
 		}
-		if err := os.Rename(path, backup); err != nil {
+		if err := swap.StageReplace(quota, sizes, false); err != nil {
 			return err
 		}
-		moved = true
-		if err := os.Rename(stagePath, path); err != nil {
-			return err
-		}
-		installed = true
 		id := commitID.String()
 		target.HeadCommitID = &id
 		target.State = "NORMAL"
 		target.MergeState = nil
-		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
-			return err
-		}
-		quota.mu.Lock()
-		quotaLocked = true
-		oldSizes = quota.branches[params.BranchName]
-		if err := quota.replaceBranchLocked(params.BranchName, sizes, false); err != nil {
-			return err
-		}
-		quotaChanged = true
-		return nil
+		return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
 	})
-	committed = err == nil
-	if err != nil && moved {
-		if installed {
-			err = errors.Join(err, os.RemoveAll(path))
-		}
-		err = errors.Join(err, os.Rename(backup, path))
-	} else if err == nil && moved {
-		err = os.RemoveAll(backup)
-	}
-	err = errors.Join(err, os.RemoveAll(stagePath))
-	return err
+	return swap.Finalize(err)
 }

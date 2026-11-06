@@ -65,8 +65,10 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	if err != nil {
 		return nil, err
 	}
-	if err := m.createDiskStorage(id.String(), commitID.String()); err != nil {
-		return nil, errors.Join(fmt.Errorf("初始化磁盘存储: %w", err), m.pebble.RemoveDisk(id.String()))
+	swapper := newWorkspaceSwapper(m)
+	swap, err := swapper.StageDiskCreate(id.String(), commitID.String())
+	if err != nil {
+		return nil, fmt.Errorf("初始化磁盘存储: %w", err)
 	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 	var created db.GetDiskRow
@@ -80,8 +82,8 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		branches, err = m.registerDiskStorage(ctx, q, created, commitID)
 		return err
 	})
-	if err != nil {
-		return nil, errors.Join(err, m.pebble.RemoveDisk(id.String()))
+	if err = swap.Finalize(err); err != nil {
+		return nil, err
 	}
 	disk := toDomainDisk(created)
 	if err := setDiskBranches(disk, branches); err != nil {
