@@ -49,7 +49,7 @@ func TestPebbleConcurrentRPCsKeepBranchConsistent(t *testing.T) {
 // 回档替换分支目录前必须驱逐常驻句柄，回档后读取必须返回快照内容且后续写入落在新目录。
 func TestPebbleRollbackEvictsResidentBranchInstance(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
-	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("versioned"), Mode: 0o644})
+	file, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("versioned"), Mode: 0o644, SessionID: &e.sid})
 	require.NoError(t, err)
 	ino := file.Inode.Ino
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("before"), SessionID: &e.sid})

@@ -451,6 +451,40 @@ func (m *manager) Readlink(ctx context.Context, sid *uint64, ino uint64) ([]byte
 	return result, err
 }
 
+func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleReadDir(ctx, view, params.Ino, params.Offset, params.Limit)
+}
+
+func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleReadDirPlus(ctx, view, params.Ino, params.Offset, params.Limit)
+}
+
 func (m *manager) pebbleReadDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntry, error) {
 	plus, err := m.readPebbleDir(ctx, session, ino, offset, limit)
 	if err != nil {

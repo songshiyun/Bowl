@@ -80,7 +80,7 @@ func TestWorkspaceSwapperCreateBranchQuotaExceededRollback(t *testing.T) {
 	require.NoError(t, err)
 
 	// 在 main 上删除文件释放配额，并将磁盘缩容至 512 字节。
-	require.NoError(t, e.mgr.Unlink(e.branchContext(), 1, []byte("historical")))
+	require.NoError(t, e.mgr.Unlink(e.ctx, &e.sid, 1, []byte("historical"), false))
 	size := uint64(512)
 	_, err = e.mgr.UpdateDisk(e.ctx, meta.UpdateDiskParams{DiskID: e.disk.DiskID, MaxBytes: &size})
 	require.NoError(t, err)

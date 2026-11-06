@@ -27,8 +27,8 @@ type Manager interface {
 	Symlink(context.Context, SymlinkParams) (*Inode, error)
 	Readlink(context.Context, *uint64, uint64) ([]byte, error)
 	Link(context.Context, LinkParams) (*Inode, error)
-	Unlink(context.Context, uint64, []byte) error
-	Rmdir(context.Context, uint64, []byte) error
+	Unlink(context.Context, *uint64, uint64, []byte, bool) error
+	Rmdir(context.Context, *uint64, uint64, []byte) error
 	Rename(context.Context, RenameParams) error
 	ReclaimOrphan(context.Context, ReclaimOrphanParams) error
 	Create(context.Context, CreateParams) (*CreateResult, error)
