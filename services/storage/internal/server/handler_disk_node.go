@@ -212,10 +212,8 @@ func (s *Server) SetAttr(ctx context.Context, req *connect.Request[storagev1.Set
 
 // Mknod 在指定父目录下创建常规文件或特殊设备节点。
 func (s *Server) Mknod(ctx context.Context, req *connect.Request[storagev1.MknodRequest]) (*connect.Response[storagev1.MknodResponse], error) {
-	if req.Msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
-	}
 	inode, err := s.metaManager.Mknod(ctx, meta.MknodParams{
+		SessionID: req.Msg.SessionId,
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Mode:      req.Msg.Mode,
@@ -235,10 +233,8 @@ func (s *Server) Mknod(ctx context.Context, req *connect.Request[storagev1.Mknod
 
 // Mkdir 在指定父目录下创建子目录。
 func (s *Server) Mkdir(ctx context.Context, req *connect.Request[storagev1.MkdirRequest]) (*connect.Response[storagev1.MkdirResponse], error) {
-	if req.Msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
-	}
 	inode, err := s.metaManager.Mkdir(ctx, meta.MkdirParams{
+		SessionID: req.Msg.SessionId,
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Mode:      req.Msg.Mode,
@@ -257,10 +253,8 @@ func (s *Server) Mkdir(ctx context.Context, req *connect.Request[storagev1.Mkdir
 
 // Symlink 在指定父目录下创建指向目标路径的符号链接节点。
 func (s *Server) Symlink(ctx context.Context, req *connect.Request[storagev1.SymlinkRequest]) (*connect.Response[storagev1.SymlinkResponse], error) {
-	if req.Msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
-	}
 	inode, err := s.metaManager.Symlink(ctx, meta.SymlinkParams{
+		SessionID: req.Msg.SessionId,
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Target:    req.Msg.Target,

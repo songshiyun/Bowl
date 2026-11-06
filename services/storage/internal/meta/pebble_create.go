@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,18 +25,103 @@ type pebbleNodeParams struct {
 	target []byte
 }
 
-// createBranchSession 校验请求与上下文中的会话标识。
-func createBranchSession(ctx context.Context, paramID *uint64) (*uint64, bool, error) {
-	if contextID, ok := SessionIDFromContext(ctx); ok && contextID != nil {
-		if err := validateOptionalSessionID(contextID); err != nil {
-			return nil, false, err
-		}
-		if paramID != nil && *contextID != *paramID {
-			return nil, false, ErrInvalidArgument
-		}
-		return contextID, true, nil
+func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
 	}
-	return paramID, false, nil
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
+	}
+	if params.Mode > 0o177777 {
+		return nil, ErrInvalidArgument
+	}
+
+	modeType := params.Mode & S_IFMT
+	switch modeType {
+	case S_IFREG, S_IFCHR, S_IFBLK, S_IFIFO, S_IFSOCK:
+	default:
+		return nil, ErrInvalidArgument
+	}
+
+	return m.createPebbleNode(ctx, params.SessionID, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: modeType | ((params.Mode & PermMask) &^ (params.Umask & PermMask)), uid: params.UID, gid: params.GID, rdev: params.Rdev})
+}
+
+func (m *manager) Mkdir(ctx context.Context, params MkdirParams) (*Inode, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
+	}
+	if params.Mode > 65535 {
+		return nil, ErrInvalidArgument
+	}
+
+	modeType := params.Mode & S_IFMT
+	if modeType != 0 && modeType != S_IFDIR {
+		return nil, ErrInvalidArgument
+	}
+
+	return m.createPebbleNode(ctx, params.SessionID, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: S_IFDIR | ((params.Mode & PermMask) &^ (params.Umask & PermMask)), uid: params.UID, gid: params.GID})
+}
+
+func (m *manager) Symlink(ctx context.Context, params SymlinkParams) (*Inode, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
+	}
+	if len(params.Target) == 0 || bytes.IndexByte(params.Target, 0) >= 0 {
+		return nil, ErrInvalidArgument
+	}
+	if len(params.Target) > MaxSymlinkTargetBytes {
+		return nil, ErrNameTooLong
+	}
+
+	return m.createPebbleNode(ctx, params.SessionID, pebbleNodeParams{parent: params.ParentIno, name: params.Name, mode: S_IFLNK | 0o777, uid: params.UID, gid: params.GID, target: params.Target})
+}
+
+func (m *manager) Link(ctx context.Context, params LinkParams) (*Inode, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if params.NewParentIno == 0 || params.NewParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateEntryName(params.NewName); err != nil {
+		return nil, err
+	}
+
+	return m.linkPebbleNode(ctx, params.SessionID, params)
+}
+
+func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResult, error) {
+	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	if err := validateEntryName(params.Name); err != nil {
+		return nil, err
+	}
+	if params.Mode > 0xffff {
+		return nil, ErrInvalidArgument
+	}
+	if (params.Flags & O_TMPFILE) != 0 {
+		return nil, ErrInvalidArgument
+	}
+
+	modeType := params.Mode & S_IFMT
+	if modeType != 0 && modeType != S_IFREG {
+		return nil, ErrInvalidArgument
+	}
+
+	effectivePerm := (params.Mode & PermMask) &^ (params.Umask & (PermMask & 0o777))
+	mode := S_IFREG | effectivePerm
+
+	return m.pebbleCreateResult(ctx, params.SessionID, params, mode)
 }
 
 func (m *manager) pebbleCreateResult(ctx context.Context, sid *uint64, params CreateParams, mode uint32) (*CreateResult, error) {
