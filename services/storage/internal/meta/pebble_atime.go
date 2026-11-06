@@ -395,25 +395,19 @@ func (t *PebbleAtimeTracker) FlushAll(ctx context.Context) error {
 }
 
 func (m *manager) markPebbleAtimeDirty(session pebbleReadSession, inode pebblekv.Inode, now time.Time) {
-	if session.readOnly {
-		return
-	}
-	m.atimes.MarkDirty(session.diskID.String(), session.branch, inode, now)
+	m.gate.RecordAtime(session, inode, now)
 }
 
 func (m *manager) applyDirtyPebbleAtime(session pebbleReadSession, inode *pebblekv.Inode) {
-	if session.readOnly {
-		return
-	}
-	m.atimes.Overlay(session.diskID.String(), session.branch, inode)
+	m.gate.OverlayAtime(session, inode)
 }
 
 // flushAndCheckBranchDirtyLocked 在持有分支独占锁下刷盘该分支的内存脏 atime 并检测 dirty:* 键。
 func (m *manager) flushAndCheckBranchDirtyLocked(disk, branch string, store *pebble.DB) (bool, error) {
-	return m.atimes.FlushAndCheckDirtyLocked(disk, branch, store)
+	return m.gate.FlushAndCheckBranchDirtyLocked(disk, branch, store)
 }
 
 // checkpointBranchLocked 在持有分支独占锁下先刷盘内存脏 atime 再生成 Pebble Checkpoint。
 func (m *manager) checkpointBranchLocked(disk, branchName string, branch *pebblekv.Branch, commitID string) error {
-	return m.atimes.CheckpointBranchLocked(disk, branchName, branch, commitID)
+	return m.gate.CheckpointBranchLocked(disk, branchName, branch, commitID)
 }

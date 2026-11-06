@@ -39,172 +39,44 @@ type pebbleDirCursorKey struct {
 	offset    uint64
 }
 
-// findPebbleSession 从控制面读取会话权威状态，调用方通常应使用带缓存的 loadPebbleSession。
-func (m *manager) findPebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
-	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
-		return pebbleReadSession{}, ErrInvalidArgument
-	}
-	return newBranchControlStore(m.store).FindSession(ctx, *sid)
-}
-
 // loadPebbleSession 命中内存缓存时直接返回，避免每次数据面 RPC 查询 PostgreSQL。
 func (m *manager) loadPebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
-	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
-		return pebbleReadSession{}, ErrInvalidArgument
-	}
-	m.sessionCacheMu.Lock()
-	entry, cached := m.sessionCache[*sid]
-	m.sessionCacheMu.Unlock()
-	if cached && time.Now().Before(entry.fresh) {
-		return entry.session, nil
-	}
-	session, err := m.findPebbleSession(ctx, sid)
-	if err != nil {
-		return pebbleReadSession{}, err
-	}
-	m.cachePebbleSession(session)
-	return session, nil
-}
-
-// peekPebbleSession 只读取缓存，不触发数据库查询；用于锁内复查会话是否已被注销。
-func (m *manager) peekPebbleSession(id uint64) (pebbleReadSession, bool) {
-	m.sessionCacheMu.Lock()
-	defer m.sessionCacheMu.Unlock()
-	entry, ok := m.sessionCache[id]
-	return entry.session, ok
+	return m.gate.loadSession(ctx, sid)
 }
 
 func (m *manager) cachePebbleSession(session pebbleReadSession) {
-	m.sessionCacheMu.Lock()
-	defer m.sessionCacheMu.Unlock()
-	if m.sessionCache == nil {
-		m.sessionCache = make(map[uint64]pebbleSessionCacheEntry)
-	}
-	now := time.Now()
-	if len(m.sessionCache) >= maxCachedSessions {
-		for id, entry := range m.sessionCache {
-			if now.After(entry.fresh) {
-				delete(m.sessionCache, id)
-			}
-		}
-	}
-	m.sessionCache[session.id] = pebbleSessionCacheEntry{session: session, fresh: now.Add(m.sessionCacheTTL)}
+	m.gate.cacheSession(session)
 }
 
 func (m *manager) invalidatePebbleSession(id uint64) {
-	m.sessionCacheMu.Lock()
-	defer m.sessionCacheMu.Unlock()
-	delete(m.sessionCache, id)
+	m.gate.InvalidateSession(id)
 }
 
 func (m *manager) invalidatePebbleBranchSessions(disk, branch string) {
-	m.sessionCacheMu.Lock()
-	defer m.sessionCacheMu.Unlock()
-	for id, entry := range m.sessionCache {
-		if entry.session.diskID.String() == disk && entry.session.branch == branch {
-			delete(m.sessionCache, id)
-		}
-	}
+	m.gate.InvalidateBranchSessions(disk, branch)
 }
 
 func (m *manager) invalidatePebbleDiskSessions(disk string) {
-	m.sessionCacheMu.Lock()
-	defer m.sessionCacheMu.Unlock()
-	for id, entry := range m.sessionCache {
-		if entry.session.diskID.String() == disk {
-			delete(m.sessionCache, id)
-		}
-	}
-}
-
-func samePebbleSession(a, b pebbleReadSession) bool {
-	return a.id == b.id && a.diskID == b.diskID && a.branch == b.branch && a.readOnly == b.readOnly &&
-		a.commitID == b.commitID && a.createdAt.Equal(b.createdAt)
+	m.gate.InvalidateDiskSessions(disk)
 }
 
 func (m *manager) requirePebbleSession(ctx context.Context, sid *uint64) (pebbleReadSession, error) {
-	session, err := m.loadPebbleSession(ctx, sid)
-	if err != nil {
-		return pebbleReadSession{}, err
-	}
-	if !session.managed || !session.active {
-		return pebbleReadSession{}, ErrBadFileHandle
-	}
-	return session, nil
+	return m.gate.requireSession(ctx, sid)
 }
 
 // withPebbleReadSession 在分支读锁内用短命快照执行多键读取，保证 Inode 与 Blob 视图一致。
-func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) (err error) {
-	disk := session.diskID.String()
-	if session.readOnly {
-		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
-		if err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, commit.Close()) }()
-		return fn(commit.DB(), commit.Blobs())
-	}
-	unlock := m.locks.LockBranchRead(disk, session.branch)
-	defer unlock()
-	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
-		return ErrBadFileHandle
-	}
-	branch, err := m.pebble.OpenBranch(disk, session.branch)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, branch.Close()) }()
-	snapshot := branch.DB().NewSnapshot()
-	defer func() { err = errors.Join(err, snapshot.Close()) }()
-	return fn(snapshot, branch.Blobs())
+func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
+	return m.gate.withSnapshotReadSession(ctx, session, fn)
 }
 
 // withPebblePointReadSession 直接读取分支实例，单键点查不创建 Pebble Snapshot。
-func (m *manager) withPebblePointReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) (err error) {
-	disk := session.diskID.String()
-	if session.readOnly {
-		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
-		if err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, commit.Close()) }()
-		return fn(commit.DB(), commit.Blobs())
-	}
-	unlock := m.locks.LockBranchRead(disk, session.branch)
-	defer unlock()
-	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
-		return ErrBadFileHandle
-	}
-	branch, err := m.pebble.OpenBranch(disk, session.branch)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, branch.Close()) }()
-	return fn(branch.DB(), branch.Blobs())
+func (m *manager) withPebblePointReadSession(ctx context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
+	return m.gate.withPointReadSession(ctx, session, fn)
 }
 
 // withPebbleWriteSession 在分支共享读锁内执行显式持久化屏障。
-func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) (err error) {
-	disk := session.diskID.String()
-	if session.readOnly {
-		commit, err := m.pebble.OpenCommit(disk, session.commitID.String())
-		if err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, commit.Close()) }()
-		return fn(commit.DB(), commit.Blobs())
-	}
-	unlock := m.locks.LockBranchRead(disk, session.branch)
-	defer unlock()
-	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
-		return ErrBadFileHandle
-	}
-	branch, err := m.pebble.OpenBranch(disk, session.branch)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, branch.Close()) }()
-	return fn(branch.DB(), branch.Blobs())
+func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) error {
+	return m.gate.withWriteSession(ctx, session, fn)
 }
 
 func readPebbleInode(store pebbleReader, ino uint64) (pebblekv.Inode, error) {

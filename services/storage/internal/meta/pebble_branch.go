@@ -83,6 +83,9 @@ func (m *manager) closeBranchSession(ctx context.Context, sessionID uint64) (boo
 		managed, needsSweep, err = controlStore.DeactivateOrDeleteManagedSession(ctx, q, sessionID)
 		return err
 	})
+	if err == nil && managed {
+		m.invalidatePebbleSession(sessionID)
+	}
 	if err == nil && needsSweep {
 		err = m.sweepExpiredBranchSession(ctx, sessionID)
 	}
@@ -113,6 +116,7 @@ func (m *manager) sweepExpiredBranchSession(ctx context.Context, sessionID uint6
 			return err
 		}
 		deleted = true
+		m.invalidatePebbleSession(sessionID)
 		if expired.readOnly {
 			return nil
 		}

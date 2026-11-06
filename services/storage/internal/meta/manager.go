@@ -77,24 +77,9 @@ type manager struct {
 	treeQuotas                                 map[string]*TreeQuota
 	dirCursorMu                                sync.Mutex
 	pebbleDirCursors                           map[pebbleDirCursorKey][]byte
-	sessionCacheMu                             sync.Mutex
-	sessionCache                               map[uint64]pebbleSessionCacheEntry
-	sessionCacheTTL                            time.Duration
 	atimes                                     *PebbleAtimeTracker
+	gate                                       *BranchWorkspaceGate
 }
-
-// pebbleSessionCacheEntry 是会话内存写透缓存条目，fresh 之后重新读取控制面。
-type pebbleSessionCacheEntry struct {
-	session pebbleReadSession
-	fresh   time.Time
-}
-
-const (
-	// defaultSessionCacheTTL 是会话缓存软过期时间，决定控制面变更的最长可见延迟。
-	defaultSessionCacheTTL = time.Second
-	// maxCachedSessions 是缓存条目上限，超出时优先清理已过期条目。
-	maxCachedSessions = 4096
-)
 
 type poolProvider interface{ Pool() *pgxpool.Pool }
 
@@ -156,12 +141,20 @@ func WithBranchLockTable(locks *BranchLockTable) Option {
 	}
 }
 
+// WithBranchWorkspaceGate 注入自定义分支工作区会话与访问时间网关。
+func WithBranchWorkspaceGate(gate *BranchWorkspaceGate) Option {
+	return func(m *manager) {
+		if gate != nil {
+			m.gate = gate
+		}
+	}
+}
+
 // New 创建存储管理器。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
-		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
 		locks: NewBranchLockTable()}
 	for _, opt := range opts {
 		if opt != nil {
@@ -172,6 +165,11 @@ func New(store db.Store, opts ...Option) Manager {
 		m.pebble = pebblekv.NewManager(m.storageRoot)
 	}
 	m.atimes = NewPebbleAtimeTracker(m.atimeMode, m.pebble, m.locks, m.storageRoot)
+	if m.gate == nil {
+		m.gate = NewBranchWorkspaceGate(m.store, m.pebble, m.locks, m.atimes, defaultSessionCacheTTL)
+	} else {
+		m.gate.bindDependencies(m.store, m.pebble, m.locks, m.atimes)
+	}
 	return m
 }
 
