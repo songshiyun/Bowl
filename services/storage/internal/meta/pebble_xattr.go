@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 
@@ -73,45 +72,18 @@ func pebbleXattrNames(ctx context.Context, store pebbleReader, ino uint64) (name
 	return names, iter.Error()
 }
 
-func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode pebblekv.Inode, name, value []byte, remove bool) (err error) {
-	unlockMeta := m.branchMetaLock(disk, branch)
-	defer unlockMeta()
-	stat, err := readCreateStat(store)
-	if err != nil {
-		return err
-	}
-	if stat.NextWriteSeq == math.MaxUint64 {
-		return ErrNoSpace
-	}
-	now := time.Now().UTC()
-	inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
-	inode.WriteSeq = stat.NextWriteSeq
-	stat.NextWriteSeq++
-
-	batch := store.NewBatch()
-	defer func() { err = errors.Join(err, batch.Close()) }()
-	key := pebblekv.XattrKey(inode.Ino, name)
-	if remove {
-		err = batch.Delete(key, nil)
-	} else {
-		if value == nil {
-			value = []byte{}
+func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode pebblekv.Inode, name, value []byte, remove bool) error {
+	return m.withBranchMutationTx(disk, branch, store, nil, nil, func(tx *BranchMutationTx) error {
+		now := tx.Now()
+		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
+		if err := tx.PutXattr(inode.Ino, name, value, remove); err != nil {
+			return err
 		}
-		err = batch.Set(key, value, nil)
-	}
-	if err != nil {
-		return err
-	}
-	if err := setCreateInode(batch, inode); err != nil {
-		return err
-	}
-	if err := batch.Set(pebblekv.DirtyKey(inode.Ino), []byte{1}, nil); err != nil {
-		return err
-	}
-	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-		return err
-	}
-	return batch.Commit(pebble.NoSync)
+		if err := tx.PutInode(&inode); err != nil {
+			return err
+		}
+		return tx.CommitWithoutQuota()
+	})
 }
 
 func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
