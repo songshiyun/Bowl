@@ -42,3 +42,5 @@ __pycache__/
 benchmark/drive9/.build_linux_amd64/
 .r3-export/
 .r3-ui/
+
+artifacts/
