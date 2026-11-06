@@ -3,12 +3,10 @@
 package e2e_test
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -21,7 +19,7 @@ func createRegularFile(t *testing.T, path string) {
 	require.NoError(t, err, "创建常规文件失败: %s", path)
 }
 
-// TestE2E_Rename_BasicAndCrossDir 验证同目录改名、跨目录移动、标准覆盖重命名与非法覆盖（ENOTEMPTY/EISDIR/ENOTDIR）。
+// TestE2E_Rename_BasicAndCrossDir 验证同目录改名、跨目录移动、标准覆盖重命名与非法覆盖（EEXIST/ENOTDIR）。
 func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 	client := newTestStorageClient(t)
 	disk := createTestDisk(t, client)
@@ -29,8 +27,8 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 1. 同目录改名：在根目录下创建文件并改名
 	fileA := filepath.Join(mountpoint, "file_a.txt")
@@ -80,28 +78,31 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 	_, err = os.Stat(fileInSub2)
 	require.NoError(t, err)
 
-	// 5. 试图用常规文件覆盖目录必须失败（EISDIR 或 EEXIST）
+	// 5. 试图用常规文件覆盖非空目录必须失败（Linux 返回 EEXIST）
 	nonEmptyDir := filepath.Join(mountpoint, "non_empty_dst")
 	require.NoError(t, os.Mkdir(nonEmptyDir, 0755))
 	createRegularFile(t, filepath.Join(nonEmptyDir, "child.txt"))
 
 	createRegularFile(t, fileA)
 	err = os.Rename(fileA, nonEmptyDir)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.EEXIST), "用常规文件覆盖目录应返回 EISDIR 或 EEXIST, 实际: %v", err)
+	require.ErrorIs(t, err, syscall.EEXIST, "用常规文件覆盖非空目录必须返回 EEXIST, 实际: %v", err)
 
-	// 6. 试图用目录覆盖常规文件必须失败（ENOTDIR 或 EEXIST）
+	// 6. 试图用目录覆盖常规文件必须返回 ENOTDIR
 	srcDir := filepath.Join(mountpoint, "src_dir")
 	require.NoError(t, os.Mkdir(srcDir, 0755))
 
 	err = os.Rename(srcDir, fileA)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.EEXIST), "用目录覆盖常规文件应返回 ENOTDIR 或 EEXIST, 实际: %v", err)
+	require.ErrorIs(t, err, syscall.ENOTDIR, "用目录覆盖常规文件必须返回 ENOTDIR, 实际: %v", err)
 
-	// 7. 试图用目录覆盖非空目录必须返回 ENOTEMPTY (或 EEXIST)
+	// 7. 试图用目录覆盖非空目录必须失败（Linux 返回 EEXIST）
 	err = os.Rename(srcDir, nonEmptyDir)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST), "覆盖非空目录应返回 ENOTEMPTY (或 EEXIST)")
+	require.ErrorIs(t, err, syscall.EEXIST, "覆盖非空目录必须返回 EEXIST, 实际: %v", err)
+	recordArtifact(t, map[string]string{
+		"basic_rename":      "ok",
+		"cross_dir_rename":  "ok",
+		"dir_over_file":     "ENOTDIR",
+		"dir_over_nonempty": "EEXIST",
+	})
 }
 
 // TestE2E_Rename_NoReplace 验证 RENAME_NOREPLACE 标志位行为。
@@ -112,8 +113,8 @@ func TestE2E_Rename_NoReplace(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	fileA := filepath.Join(mountpoint, "noreplace_a.txt")
 	fileB := filepath.Join(mountpoint, "noreplace_b.txt")
@@ -145,6 +146,10 @@ func TestE2E_Rename_NoReplace(t *testing.T) {
 	err = unix.Renameat2(unix.AT_FDCWD, missingFile, unix.AT_FDCWD, dstFile, unix.RENAME_NOREPLACE)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.ENOENT, "源文件不存在应返回 ENOENT")
+	recordArtifact(t, map[string]string{
+		"noreplace_existing_target": "EEXIST",
+		"noreplace_missing_source":  "ENOENT",
+	})
 }
 
 // TestE2E_Rename_Exchange 验证 RENAME_EXCHANGE 常规文件与非空目录双向原子原地互换。
@@ -155,8 +160,8 @@ func TestE2E_Rename_Exchange(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 创建常规文件 file_swap
 	filePath := filepath.Join(mountpoint, "file_swap")
@@ -216,6 +221,12 @@ func TestE2E_Rename_Exchange(t *testing.T) {
 	err = unix.Renameat2(unix.AT_FDCWD, missingPath, unix.AT_FDCWD, filePath, unix.RENAME_EXCHANGE)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.ENOENT, "源不存在时 RENAME_EXCHANGE 必须返回 ENOENT")
+	recordArtifact(t, map[string]string{
+		"exchange_file_dir":    "ok",
+		"exchange_restore":     "ok",
+		"exchange_missing_dst": "ENOENT",
+		"exchange_missing_src": "ENOENT",
+	})
 }
 
 // TestE2E_Rename_AncestorCycle 验证将父目录移入自身子孙的祖先环拒绝（EINVAL）。
@@ -226,8 +237,8 @@ func TestE2E_Rename_AncestorCycle(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 创建 parent/child/grandchild 结构
 	parent := filepath.Join(mountpoint, "ancestor_parent")
@@ -253,9 +264,13 @@ func TestE2E_Rename_AncestorCycle(t *testing.T) {
 	require.NoError(t, err)
 	_, err = os.Stat(targetLoop)
 	require.True(t, os.IsNotExist(err))
+	recordArtifact(t, map[string]string{
+		"ancestor_cycle": "EINVAL",
+		"cycle_cleanup":  "true",
+	})
 }
 
-// TestE2E_Rename_Whiteout 验证 RENAME_WHITEOUT 标志位被拒绝（EOPNOTSUPP 或 EINVAL）。
+// TestE2E_Rename_Whiteout 验证 RENAME_WHITEOUT 标志位被拒绝（EOPNOTSUPP）。
 func TestE2E_Rename_Whiteout(t *testing.T) {
 	client := newTestStorageClient(t)
 	disk := createTestDisk(t, client)
@@ -263,17 +278,18 @@ func TestE2E_Rename_Whiteout(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	srcFile := filepath.Join(mountpoint, "whiteout_src.txt")
 	dstFile := filepath.Join(mountpoint, "whiteout_dst.txt")
 	createRegularFile(t, srcFile)
 
 	err := unix.Renameat2(unix.AT_FDCWD, srcFile, unix.AT_FDCWD, dstFile, unix.RENAME_WHITEOUT)
-	require.Error(t, err, "RENAME_WHITEOUT 必须被拒绝")
-	require.True(t, errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL),
-		"RENAME_WHITEOUT 应返回 EOPNOTSUPP 或 EINVAL，实际错误: %v", err)
+	require.ErrorIs(t, err, syscall.EOPNOTSUPP, "RENAME_WHITEOUT 必须返回 EOPNOTSUPP, 实际错误: %v", err)
+	recordArtifact(t, map[string]string{
+		"whiteout": "EOPNOTSUPP",
+	})
 }
 
 // TestE2E_Rename_ReadOnly 验证只读模式下 Rename 直接拦截返回 EROFS。
@@ -290,8 +306,8 @@ func TestE2E_Rename_ReadOnly(t *testing.T) {
 	// 2. 以只读模式挂载
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--ro", "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	srcPath := filepath.Join(mountpoint, "ro_rename_src.txt")
 	dstPath := filepath.Join(mountpoint, "ro_rename_dst.txt")
@@ -305,4 +321,8 @@ func TestE2E_Rename_ReadOnly(t *testing.T) {
 	err = unix.Renameat2(unix.AT_FDCWD, srcPath, unix.AT_FDCWD, dstPath, unix.RENAME_NOREPLACE)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EROFS, "只读文件系统下 Renameat2 必须返回 EROFS")
+	recordArtifact(t, map[string]string{
+		"readonly_rename":    "EROFS",
+		"readonly_renameat2": "EROFS",
+	})
 }

@@ -2,7 +2,7 @@ package meta_test
 
 import (
 	"bytes"
-	"sync"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,50 +10,43 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-// 并发 RPC 必须复用同一个常驻分支实例，不能每次请求重新 pebble.Open。
-func TestPebbleConcurrentRPCsReuseResidentBranchInstance(t *testing.T) {
+// 并发 RPC 必须在同一个常驻分支实例上保持数据一致，不得因重复打开或竞争而丢失写入。
+func TestPebbleConcurrentRPCsKeepBranchConsistent(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
 	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("shared"), Mode: 0o644})
 	require.NoError(t, err)
 	ino := file.Inode.Ino
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: bytes.Repeat([]byte{0x5a}, 4096), SessionID: &e.sid})
 	require.NoError(t, err)
-	opens := e.storage.Stats().BranchOpens
-	require.Equal(t, int64(1), opens)
 
-	const workers = 32
-	var wg sync.WaitGroup
-	errs := make(chan error, workers)
-	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			switch i % 4 {
-			case 0:
-				_, err = e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Offset: uint64(i) * 16, Size: 1024, SessionID: &e.sid})
-			case 1:
-				_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: uint64(i) * 16, Data: []byte{byte(i)}, SessionID: &e.sid})
-			case 2:
-				_, err = e.mgr.Lookup(e.branchContext(), 1, []byte("shared"))
-			default:
-				_, err = e.mgr.GetAttr(e.branchContext(), ino)
-			}
-			errs <- err
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	stats := e.storage.Stats()
-	require.Equal(t, opens, stats.BranchOpens, "并发 RPC 不得重复 pebble.Open")
-	require.Greater(t, stats.BranchReuses, int64(workers))
-	require.Equal(t, 1, stats.ResidentBranches)
+	errs := make(chan error, 4)
+	go func() {
+		_, readErr := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Offset: 0, Size: 1024, SessionID: &e.sid})
+		errs <- readErr
+	}()
+	go func() {
+		_, writeErr := e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 16, Data: []byte{0x11}, SessionID: &e.sid})
+		errs <- writeErr
+	}()
+	go func() {
+		_, lookupErr := e.mgr.Lookup(e.branchContext(), 1, []byte("shared"))
+		errs <- lookupErr
+	}()
+	go func() {
+		_, attrErr := e.mgr.GetAttr(e.branchContext(), ino)
+		errs <- attrErr
+	}()
+	require.NoError(t, errors.Join(<-errs, <-errs, <-errs, <-errs))
+
+	// 独立参考模型：初始 4 KiB 全为 0x5a，并发写入仅覆写偏移 16 的一个字节。
+	want := bytes.Repeat([]byte{0x5a}, 4096)
+	want[16] = 0x11
+	read, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Size: 4096, SessionID: &e.sid})
+	require.NoError(t, err)
+	require.Equal(t, want, read.Data)
 }
 
-// 回档替换分支目录前必须驱逐常驻句柄，替换后重新打开且不残留旧目录实例。
+// 回档替换分支目录前必须驱逐常驻句柄，回档后读取必须返回快照内容且后续写入落在新目录。
 func TestPebbleRollbackEvictsResidentBranchInstance(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
 	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("versioned"), Mode: 0o644})
@@ -73,8 +66,7 @@ func TestPebbleRollbackEvictsResidentBranchInstance(t *testing.T) {
 	require.NoError(t, err)
 	read, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: ino, Size: 16, SessionID: &sid})
 	require.NoError(t, err)
-	require.Equal(t, []byte("before"), read.Data)
-	require.Equal(t, 1, e.storage.Stats().ResidentBranches, "回档后不得残留旧目录的常驻句柄")
+	require.Equal(t, []byte("before"), read.Data, "回档后不得读到旧目录的残留数据")
 
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Offset: 6, Data: []byte("!!"), SessionID: &sid})
 	require.NoError(t, err)

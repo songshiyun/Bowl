@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -23,19 +24,15 @@ func TestE2E_FileHandle(t *testing.T) {
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "file-test.txt")
 
 		// 1. O_CREAT 创建文件并成功打开
 		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
 		require.NoError(t, err, "O_CREATE|O_EXCL 创建新文件必须成功")
-		defer func() {
-			if f != nil {
-				_ = f.Close()
-			}
-		}()
+		t.Cleanup(func() { _ = f.Close() })
 
 		// 2. O_CREAT|O_EXCL 冲突断言 EEXIST
 		_, errConflict := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
@@ -48,7 +45,6 @@ func TestE2E_FileHandle(t *testing.T) {
 
 		// 4. 关闭文件句柄
 		require.NoError(t, f.Close(), "关闭常规文件句柄必须成功")
-		f = nil
 
 		// 5. 对目录调用非目录写打开错误边界 (EISDIR)
 		_, errDir := os.OpenFile(mountpoint, os.O_WRONLY, 0)
@@ -67,8 +63,8 @@ func TestE2E_FileHandle(t *testing.T) {
 
 		// 2. 以 --ro 只读模式挂载
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--ro", "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "只读挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "只读挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		existingFile := filepath.Join(mountpoint, "ro-target.txt")
 		newFile := filepath.Join(mountpoint, "new-file.txt")
@@ -93,13 +89,61 @@ func TestE2E_FileHandle(t *testing.T) {
 		require.NoError(t, roF.Close(), "关闭只读文件句柄")
 	})
 
+	t.Run("tmpfile_linkat_persists_across_remount", func(t *testing.T) {
+		disk := createTestDisk(t, client)
+		mountpoint, stop := mountWithCleanup(t, endpoint, disk.GetDiskId(), "--debug")
+
+		fd, err := unix.Open(mountpoint, unix.O_TMPFILE|unix.O_RDWR, 0o600)
+		require.NoError(t, err, "O_TMPFILE 打开匿名文件必须成功")
+		t.Cleanup(func() { _ = unix.Close(fd) })
+
+		payload := []byte("anonymous-tmpfile-payload")
+		written, err := unix.Write(fd, payload)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), written)
+
+		buf := make([]byte, len(payload))
+		read, err := unix.Pread(fd, buf, 0)
+		require.NoError(t, err)
+		require.Equal(t, len(payload), read)
+		require.Equal(t, payload, buf)
+
+		namedPath := filepath.Join(mountpoint, "tmpfile-named.txt")
+		require.NoError(t, unix.Linkat(
+			unix.AT_FDCWD, fmt.Sprintf("/proc/self/fd/%d", fd),
+			unix.AT_FDCWD, namedPath, unix.AT_SYMLINK_FOLLOW,
+		), "O_TMPFILE 匿名文件必须能通过 /proc/self/fd 具名化")
+		require.NoError(t, unix.Close(fd))
+
+		immediate, err := os.ReadFile(namedPath)
+		require.NoError(t, err)
+		require.Equal(t, payload, immediate)
+		namedDigest := fileSHA256(t, namedPath)
+		stop()
+
+		remountpoint, stopRemount := mountWithCleanup(t, endpoint, disk.GetDiskId(), "--debug")
+		remountedPath := filepath.Join(remountpoint, "tmpfile-named.txt")
+		persisted, err := os.ReadFile(remountedPath)
+		require.NoError(t, err, "卸载重挂后具名化的 O_TMPFILE 必须仍可读取")
+		require.Equal(t, payload, persisted)
+		persistedDigest := fileSHA256(t, remountedPath)
+		stopRemount()
+
+		recordArtifact(t, map[string]string{
+			"tmpfile_bytes":             fmt.Sprint(len(payload)),
+			"tmpfile_named_sha256":      namedDigest,
+			"tmpfile_persisted_sha256":  persistedDigest,
+			"tmpfile_remount_persisted": "true",
+		})
+	})
+
 	t.Run("unlink_whilst_open_orphan_lifecycle", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		targetName := "orphan-unlink.txt"
 		filePath := filepath.Join(mountpoint, targetName)
@@ -107,11 +151,7 @@ func TestE2E_FileHandle(t *testing.T) {
 		// 1. 通过挂载点打开并创建常规文件
 		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 		require.NoError(t, err, "挂载点打开创建常规文件必须成功")
-		defer func() {
-			if f != nil {
-				_ = f.Close()
-			}
-		}()
+		t.Cleanup(func() { _ = f.Close() })
 
 		// 2. 通过同一挂载点解链，客户端保留已打开的孤儿句柄。
 		require.NoError(t, os.Remove(filePath))
@@ -126,17 +166,22 @@ func TestE2E_FileHandle(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			var stat unix.Stat_t
-			if err := unix.Fstat(int(f.Fd()), &stat); err == nil {
-				return stat.Nlink == 0
-			}
-			return false
+			return unix.Fstat(int(f.Fd()), &stat) == nil && stat.Nlink == 0
 		}, 3*time.Second, 100*time.Millisecond, "孤儿句柄的 Nlink 必须变为 0")
 
 		// 5. 孤儿句柄仍可读写，关闭后完成本地句柄释放。
 		_, err = f.WriteString("孤儿数据")
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
-		f = nil
 
+	})
+
+	recordArtifact(t, map[string]string{
+		"excl_conflict":       "EEXIST",
+		"directory_write":     "EISDIR",
+		"readonly_create":     "EROFS",
+		"readonly_open_write": "EROFS",
+		"orphan_nlink":        "0",
+		"orphan_readwrite":    "ok",
 	})
 }

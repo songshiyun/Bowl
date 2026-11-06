@@ -12,120 +12,82 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 )
 
+func requireReasonMapping(t *testing.T, reason string, expected syscall.Errno) {
+	t.Helper()
+	connErr := connect.NewError(connect.CodeInternal, nil)
+	detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: reason, Domain: "bowl.storage"})
+	require.NoError(t, err)
+	connErr.AddDetail(detail)
+	require.Equal(t, expected, MapError(connErr), "Reason %s must map to %v", reason, expected)
+}
+
+func requireCodeMapping(t *testing.T, code connect.Code, expected syscall.Errno) {
+	t.Helper()
+	require.Equal(t, expected, MapError(connect.NewError(code, nil)), "code %s must map to %v", code, expected)
+}
+
 func TestMapError_All24ErrorInfos(t *testing.T) {
-	testCases := []struct {
-		reason        string
-		expectedErrno syscall.Errno
-	}{
-		{"EINVAL", syscall.EINVAL},
-		{"ENAMETOOLONG", syscall.ENAMETOOLONG},
-		{"ERANGE", syscall.ERANGE},
-		{"E2BIG", syscall.E2BIG},
-		{"ENOENT", syscall.ENOENT},
-		{"ENODATA", syscall.ENODATA},
-		{"EEXIST", syscall.EEXIST},
-		{"EPERM", syscall.EPERM},
-		{"EACCES", syscall.EACCES},
-		{"ENOTDIR", syscall.ENOTDIR},
-		{"EISDIR", syscall.EISDIR},
-		{"ENOTEMPTY", syscall.ENOTEMPTY},
-		{"EBADF", syscall.EBADF},
-		{"ENOSPC", syscall.ENOSPC},
-		{"EAGAIN", syscall.EAGAIN},
-		{"EDEADLK", syscall.EDEADLK},
-		{"EINTR", syscall.EINTR},
-		{"EOPNOTSUPP", syscall.EOPNOTSUPP},
-		{"EMLINK", syscall.EMLINK},
-		{"EFBIG", syscall.EFBIG},
-		{"ESPIPE", syscall.ESPIPE},
-		{"EXDEV", syscall.EXDEV},
-		{"EIO", syscall.EIO},
-		{"EROFS", syscall.EROFS},
-	}
-
-	require.Len(t, testCases, 24, "must cover exactly 24 POSIX ErrorInfo reasons")
-
-	for _, tc := range testCases {
-		t.Run("reason_"+tc.reason, func(t *testing.T) {
-			// 构造带有 ErrorInfo 的 connect.Error
-			connErr := connect.NewError(connect.CodeInternal, nil)
-			info := &errdetails.ErrorInfo{
-				Reason: tc.reason,
-				Domain: "bowl.storage",
-			}
-			detail, err := connect.NewErrorDetail(info)
-			require.NoError(t, err)
-			connErr.AddDetail(detail)
-
-			errno := MapError(connErr)
-			require.Equal(t, tc.expectedErrno, errno, "Reason %s must map to %v", tc.reason, tc.expectedErrno)
-		})
-	}
+	requireReasonMapping(t, "EINVAL", syscall.EINVAL)
+	requireReasonMapping(t, "ENAMETOOLONG", syscall.ENAMETOOLONG)
+	requireReasonMapping(t, "ERANGE", syscall.ERANGE)
+	requireReasonMapping(t, "E2BIG", syscall.E2BIG)
+	requireReasonMapping(t, "ENOENT", syscall.ENOENT)
+	requireReasonMapping(t, "ENODATA", syscall.ENODATA)
+	requireReasonMapping(t, "EEXIST", syscall.EEXIST)
+	requireReasonMapping(t, "EPERM", syscall.EPERM)
+	requireReasonMapping(t, "EACCES", syscall.EACCES)
+	requireReasonMapping(t, "ENOTDIR", syscall.ENOTDIR)
+	requireReasonMapping(t, "EISDIR", syscall.EISDIR)
+	requireReasonMapping(t, "ENOTEMPTY", syscall.ENOTEMPTY)
+	requireReasonMapping(t, "EBADF", syscall.EBADF)
+	requireReasonMapping(t, "ENOSPC", syscall.ENOSPC)
+	requireReasonMapping(t, "EAGAIN", syscall.EAGAIN)
+	requireReasonMapping(t, "EDEADLK", syscall.EDEADLK)
+	requireReasonMapping(t, "EINTR", syscall.EINTR)
+	requireReasonMapping(t, "EOPNOTSUPP", syscall.EOPNOTSUPP)
+	requireReasonMapping(t, "EMLINK", syscall.EMLINK)
+	requireReasonMapping(t, "EFBIG", syscall.EFBIG)
+	requireReasonMapping(t, "ESPIPE", syscall.ESPIPE)
+	requireReasonMapping(t, "EXDEV", syscall.EXDEV)
+	requireReasonMapping(t, "EIO", syscall.EIO)
+	requireReasonMapping(t, "EROFS", syscall.EROFS)
 }
 
 func TestMapError_ErrorInfoDomainAndReason(t *testing.T) {
 	t.Run("empty reason in ErrorInfo falls through", func(t *testing.T) {
 		connErr := connect.NewError(connect.CodeNotFound, nil)
-		info := &errdetails.ErrorInfo{
-			Reason: "",
-			Domain: "bowl.storage",
-		}
-		detail, err := connect.NewErrorDetail(info)
+		detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "", Domain: "bowl.storage"})
 		require.NoError(t, err)
 		connErr.AddDetail(detail)
-
-		// 无非空 reason，应该兜底到 connect.Code 映射 (CodeNotFound -> ENOENT)
-		errno := MapError(connErr)
-		require.Equal(t, syscall.ENOENT, errno)
+		require.Equal(t, syscall.ENOENT, MapError(connErr))
 	})
 
 	t.Run("non-bowl domain with valid reason", func(t *testing.T) {
 		connErr := connect.NewError(connect.CodeInvalidArgument, nil)
-		info := &errdetails.ErrorInfo{
-			Reason: "EEXIST",
-			Domain: "custom.domain",
-		}
-		detail, err := connect.NewErrorDetail(info)
+		detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EEXIST", Domain: "custom.domain"})
 		require.NoError(t, err)
 		connErr.AddDetail(detail)
-
-		// 规范要求: Domain == "bowl.storage" 或非空 Reason
-		errno := MapError(connErr)
-		require.Equal(t, syscall.EEXIST, errno)
+		require.Equal(t, syscall.EEXIST, MapError(connErr))
 	})
 }
 
 func TestMapError_ConnectCodeFallback(t *testing.T) {
-	testCases := []struct {
-		code          connect.Code
-		expectedErrno syscall.Errno
-	}{
-		{connect.CodeNotFound, syscall.ENOENT},
-		{connect.CodeAlreadyExists, syscall.EEXIST},
-		{connect.CodePermissionDenied, syscall.EACCES},
-		{connect.CodeInvalidArgument, syscall.EINVAL},
-		{connect.CodeUnimplemented, syscall.EOPNOTSUPP},
-		{connect.CodeResourceExhausted, syscall.ENOSPC},
-		{connect.CodeCanceled, syscall.EINTR},
-		// 其余所有 Connect Code 一律兜底为 EIO
-		{connect.CodeUnavailable, syscall.EIO},
-		{connect.CodeInternal, syscall.EIO},
-		{connect.CodeDeadlineExceeded, syscall.EIO},
-		{connect.CodeUnknown, syscall.EIO},
-		{connect.CodeAborted, syscall.EIO},
-		{connect.CodeFailedPrecondition, syscall.EIO},
-		{connect.CodeOutOfRange, syscall.EIO},
-		{connect.CodeDataLoss, syscall.EIO},
-		{connect.CodeUnauthenticated, syscall.EIO},
-	}
-
-	for _, tc := range testCases {
-		t.Run("code_"+tc.code.String(), func(t *testing.T) {
-			connErr := connect.NewError(tc.code, nil)
-			errno := MapError(connErr)
-			require.Equal(t, tc.expectedErrno, errno, "code %s must map to %v", tc.code, tc.expectedErrno)
-		})
-	}
+	requireCodeMapping(t, connect.CodeNotFound, syscall.ENOENT)
+	requireCodeMapping(t, connect.CodeAlreadyExists, syscall.EEXIST)
+	requireCodeMapping(t, connect.CodePermissionDenied, syscall.EACCES)
+	requireCodeMapping(t, connect.CodeInvalidArgument, syscall.EINVAL)
+	requireCodeMapping(t, connect.CodeUnimplemented, syscall.EOPNOTSUPP)
+	requireCodeMapping(t, connect.CodeResourceExhausted, syscall.ENOSPC)
+	requireCodeMapping(t, connect.CodeCanceled, syscall.EINTR)
+	requireCodeMapping(t, connect.CodeUnavailable, syscall.EIO)
+	requireCodeMapping(t, connect.CodeInternal, syscall.EIO)
+	requireCodeMapping(t, connect.CodeDeadlineExceeded, syscall.EIO)
+	requireCodeMapping(t, connect.CodeUnknown, syscall.EIO)
+	requireCodeMapping(t, connect.CodeAborted, syscall.EIO)
+	requireCodeMapping(t, connect.CodeFailedPrecondition, syscall.EIO)
+	requireCodeMapping(t, connect.CodeOutOfRange, syscall.EIO)
+	requireCodeMapping(t, connect.CodeDataLoss, syscall.EIO)
+	requireCodeMapping(t, connect.CodeUnauthenticated, syscall.EIO)
 }
 
 func TestMapError_TransportAndNil(t *testing.T) {
@@ -142,13 +104,11 @@ func TestMapError_TransportAndNil(t *testing.T) {
 	})
 
 	t.Run("CodeCanceled wrapping ECONNRESET maps to EIO", func(t *testing.T) {
-		connErr := connect.NewError(connect.CodeCanceled, syscall.ECONNRESET)
-		require.Equal(t, syscall.EIO, MapError(connErr))
+		require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.ECONNRESET)))
 	})
 
 	t.Run("CodeCanceled wrapping EPIPE maps to EIO", func(t *testing.T) {
-		connErr := connect.NewError(connect.CodeCanceled, syscall.EPIPE)
-		require.Equal(t, syscall.EIO, MapError(connErr))
+		require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.EPIPE)))
 	})
 }
 
@@ -157,18 +117,11 @@ func TestContextWithCancelChan_CancelTriggered(t *testing.T) {
 	ctx, cancelFn := ContextWithCancelChan(context.Background(), cancel)
 	defer cancelFn()
 
-	// 此时 context 尚未取消
 	require.NoError(t, ctx.Err())
-
-	// 模拟内核下发 FUSE_INTERRUPT 关闭 cancel 通道
 	close(cancel)
-
-	// 等待 context 取消
 	<-ctx.Done()
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.ErrorIs(t, context.Cause(ctx), ErrKernelInterrupted)
-
-	// 验证 MapError 识别该 context 错误返回 EINTR
 	require.Equal(t, syscall.EINTR, MapError(context.Cause(ctx)))
 }
 
@@ -194,23 +147,16 @@ func TestMapErrorWithCancel(t *testing.T) {
 	t.Run("prioritize EINTR when cancel chan is closed", func(t *testing.T) {
 		cancel := make(chan struct{})
 		close(cancel)
-
-		// 即使底层返回的是 CodeInternal，由于 cancel 已关闭，必须优先返回 EINTR
 		connErr := connect.NewError(connect.CodeInternal, errors.New("internal server failure"))
-		errno := MapErrorWithCancel(connErr, cancel)
-		require.Equal(t, syscall.EINTR, errno)
+		require.Equal(t, syscall.EINTR, MapErrorWithCancel(connErr, cancel))
 	})
 
 	t.Run("fallback to regular mapping when cancel chan is open", func(t *testing.T) {
 		cancel := make(chan struct{})
-		connErr := connect.NewError(connect.CodeNotFound, nil)
-		errno := MapErrorWithCancel(connErr, cancel)
-		require.Equal(t, syscall.ENOENT, errno)
+		require.Equal(t, syscall.ENOENT, MapErrorWithCancel(connect.NewError(connect.CodeNotFound, nil), cancel))
 	})
 
 	t.Run("handle nil cancel chan normally", func(t *testing.T) {
-		connErr := connect.NewError(connect.CodePermissionDenied, nil)
-		errno := MapErrorWithCancel(connErr, nil)
-		require.Equal(t, syscall.EACCES, errno)
+		require.Equal(t, syscall.EACCES, MapErrorWithCancel(connect.NewError(connect.CodePermissionDenied, nil), nil))
 	})
 }

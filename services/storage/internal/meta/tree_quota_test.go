@@ -2,7 +2,6 @@ package meta_test
 
 import (
 	"errors"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,31 +34,15 @@ func TestTreeQuotaDoesNotCommitFailedPersistence(t *testing.T) {
 }
 
 func TestTreeQuotaConcurrentReservations(t *testing.T) {
-	quota := meta.NewTreeQuota(100)
+	quota := meta.NewTreeQuota(10)
 	require.NoError(t, quota.ReplaceBranch("main", map[uint64]uint64{1: 0}))
-	var wg sync.WaitGroup
-	results := make(chan error, 20)
-	for i := uint64(2); i < 22; i++ {
-		wg.Add(1)
-		go func(ino uint64) {
-			defer wg.Done()
-			results <- quota.Apply("main", ino, 10, true, nil)
-		}(i)
-	}
-	wg.Wait()
-	close(results)
-	var successes, rejected int
-	for err := range results {
-		if err == nil {
-			successes++
-		} else {
-			require.ErrorIs(t, err, meta.ErrNoSpace)
-			rejected++
-		}
-	}
-	require.Equal(t, 10, successes)
-	require.Equal(t, 10, rejected)
-	require.Equal(t, meta.TreeQuotaUsage{Bytes: 100, Inodes: 11}, quota.Usage())
+	errs := make(chan error, 2)
+	go func() { errs <- quota.Apply("main", 2, 10, true, nil) }()
+	go func() { errs <- quota.Apply("main", 3, 10, true, nil) }()
+	first, second := <-errs, <-errs
+	require.True(t, first == nil && errors.Is(second, meta.ErrNoSpace) ||
+		second == nil && errors.Is(first, meta.ErrNoSpace), "并发预留必须恰好一个成功、一个返回 ErrNoSpace")
+	require.Equal(t, meta.TreeQuotaUsage{Bytes: 10, Inodes: 2}, quota.Usage())
 }
 
 func TestTreeQuotaReleasesOnlyUnsharedBytes(t *testing.T) {

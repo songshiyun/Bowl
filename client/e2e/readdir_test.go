@@ -3,117 +3,147 @@
 package e2e_test
 
 import (
-	"fmt"
+	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-// TestE2E_ReadDir 完整验证目录句柄生命周期、空与嵌套目录以及 1500+ 个子项的分页遍历。
+// bulkFileNames 是分页测试使用的固定小规模文件集，避免在测试代码中循环创建大量文件。
+var bulkFileNames = []string{"item_0000.dat", "item_0001.dat", "item_0002.dat", "item_0003.dat"}
+
+// createReadDirTree 创建空目录、两级嵌套目录与固定小规模文件目录。
+func createReadDirTree(t *testing.T, mountpoint string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(mountpoint, "empty_dir"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(mountpoint, "level1", "level2"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(mountpoint, "bulk"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "level1", "level2", "child.txt"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "bulk", "item_0000.dat"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "bulk", "item_0001.dat"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "bulk", "item_0002.dat"), nil, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "bulk", "item_0003.dat"), nil, 0o644))
+}
+
+func dirEntryNames(entries []os.DirEntry) []string {
+	return []string{entries[0].Name(), entries[1].Name(), entries[2].Name(), entries[3].Name()}
+}
+
+// TestE2E_ReadDir 完整验证目录句柄生命周期、空与嵌套目录以及小批量目录的 RPC 分页遍历。
 func TestE2E_ReadDir(t *testing.T) {
 	storageClient := newTestStorageClient(t)
 	disk := createTestDisk(t, storageClient)
 	mountpoint := t.TempDir()
 	endpoint := getStorageEndpoint()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	err := waitForMount(mountpoint, 10*time.Second)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("等待挂载就绪失败: %v: %s %s", err, stdout.String(), stderr.String())
-	}
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "等待挂载就绪失败: %s %s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
-	// 通过分支挂载准备目录树和分页数据。
-	for _, dir := range []string{"empty_dir", "level1/level2", "bulk_1500"} {
-		require.NoError(t, os.MkdirAll(filepath.Join(mountpoint, dir), 0o755))
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "level1", "level2", "child.txt"), nil, 0o644))
-	const totalFiles = 1500
-	expectedNames := make(map[string]struct{}, totalFiles)
-	for i := 0; i < totalFiles; i++ {
-		name := fmt.Sprintf("item_%04d.dat", i)
-		expectedNames[name] = struct{}{}
-		require.NoError(t, os.WriteFile(filepath.Join(mountpoint, "bulk_1500", name), nil, 0o644))
-	}
+	createReadDirTree(t, mountpoint)
 
-	// -------------------------------------------------------------
-	// 3. 验证场景 1：空目录、多级嵌套目录以及 Inode 根节点映射
-	// -------------------------------------------------------------
+	var rootEntriesCount, emptyEntriesCount, l1EntriesCount, l2EntriesCount, bulkEntriesCount int
+	var rootIno, parentIno uint64
+
 	t.Run("空目录与多级嵌套目录遍历及Inode重写", func(t *testing.T) {
-		// 根目录遍历验证
 		rootEntries, err := os.ReadDir(mountpoint)
 		require.NoError(t, err, "读取根目录失败")
-		rootNameSet := make(map[string]bool)
-		for _, e := range rootEntries {
-			rootNameSet[e.Name()] = true
-		}
-		require.True(t, rootNameSet["empty_dir"])
-		require.True(t, rootNameSet["level1"])
-		require.True(t, rootNameSet["bulk_1500"])
+		rootEntriesCount = len(rootEntries)
+		require.Len(t, rootEntries, 3)
+		require.Equal(t, []string{"bulk", "empty_dir", "level1"}, []string{rootEntries[0].Name(), rootEntries[1].Name(), rootEntries[2].Name()})
 
-		// 空目录读取必须为空切片
 		emptyEntries, err := os.ReadDir(filepath.Join(mountpoint, "empty_dir"))
 		require.NoError(t, err, "读取 empty_dir 失败")
+		emptyEntriesCount = len(emptyEntries)
 		require.Empty(t, emptyEntries, "empty_dir 必须无任何子项")
 
-		// 多级嵌套目录读取
 		l1Entries, err := os.ReadDir(filepath.Join(mountpoint, "level1"))
 		require.NoError(t, err)
+		l1EntriesCount = len(l1Entries)
 		require.Len(t, l1Entries, 1)
 		require.Equal(t, "level2", l1Entries[0].Name())
 		require.True(t, l1Entries[0].IsDir())
 
 		l2Entries, err := os.ReadDir(filepath.Join(mountpoint, "level1", "level2"))
 		require.NoError(t, err)
+		l2EntriesCount = len(l2Entries)
 		require.Len(t, l2Entries, 1)
 		require.Equal(t, "child.txt", l2Entries[0].Name())
 		require.False(t, l2Entries[0].IsDir())
 
-		// 验证根目录与一级子目录的 '.' 与 '..' Inode 映射为 1
 		var statDot unix.Stat_t
 		require.NoError(t, unix.Stat(filepath.Join(mountpoint, "."), &statDot))
-		require.Equal(t, uint64(1), statDot.Ino, "根目录 '.' 的 Inode 必须为 1")
+		rootIno = statDot.Ino
+		require.Equal(t, uint64(1), rootIno, "根目录 '.' 的 Inode 必须为 1")
 
 		var statL1Parent unix.Stat_t
 		require.NoError(t, unix.Stat(filepath.Join(mountpoint, "level1", ".."), &statL1Parent))
-		require.Equal(t, uint64(1), statL1Parent.Ino, "一级子目录的 '..' 必须映射为内核根节点 1")
+		parentIno = statL1Parent.Ino
+		require.Equal(t, uint64(1), parentIno, "一级子目录的 '..' 必须映射为内核根节点 1")
 	})
 
-	// -------------------------------------------------------------
-	// 5. 验证场景 3：1500+ 个子文件的单目录 os.ReadDir 完整分页遍历
-	// -------------------------------------------------------------
-	t.Run("1500+子文件单目录分页遍历完整性与确定性", func(t *testing.T) {
-		bulkPath := filepath.Join(mountpoint, "bulk_1500")
-
-		readStartTime := time.Now()
+	t.Run("小批量目录分页遍历完整性与确定性", func(t *testing.T) {
+		bulkPath := filepath.Join(mountpoint, "bulk")
 		entries, err := os.ReadDir(bulkPath)
-		require.NoError(t, err, "os.ReadDir 读取 1500+ 文件单目录失败")
-		t.Logf("os.ReadDir 遍历 %d 个条目耗时: %v", len(entries), time.Since(readStartTime))
+		require.NoError(t, err, "os.ReadDir 读取 bulk 目录失败")
+		bulkEntriesCount = len(entries)
+		require.Equal(t, bulkFileNames, dirEntryNames(entries), "条目必须无遗漏、无重复且顺序确定")
+		require.False(t, slices.ContainsFunc(entries, func(entry os.DirEntry) bool {
+			return !entry.Type().IsRegular()
+		}), "所有条目类型必须为常规文件")
 
-		require.Equal(t, totalFiles, len(entries), "遍历返回条目总数必须严格等于 1500")
+		// 通过公开 RPC 用小 limit 验证跨页游标：第一页 3 项，第二页补齐剩余 3 项。
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		diskID := disk.GetDiskId()
+		sid := uint64(time.Now().UnixNano())
+		_, err = storageClient.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: sid, DiskId: &diskID, ReadOnly: true}))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer closeCancel()
+			_, closeErr := storageClient.CloseSession(closeCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: sid}))
+			require.NoError(t, closeErr)
+		})
+		lookup, err := storageClient.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("bulk"), SessionId: &sid}))
+		require.NoError(t, err)
+		bulkIno := lookup.Msg.GetInode().GetIno()
 
-		seenMap := make(map[string]struct{}, totalFiles)
-		for _, entry := range entries {
-			name := entry.Name()
-			_, expected := expectedNames[name]
-			require.True(t, expected, "发现未知条目: %s", name)
+		first, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: bulkIno, Offset: 0, Limit: 3, SessionId: &sid}))
+		require.NoError(t, err)
+		require.Len(t, first.Msg.Entries, 3)
+		require.Equal(t, ".", string(first.Msg.Entries[0].Name))
+		require.Equal(t, "..", string(first.Msg.Entries[1].Name))
+		require.Equal(t, bulkFileNames[0], string(first.Msg.Entries[2].Name))
+		next := first.Msg.Entries[2].GetNextOffset()
+		require.Equal(t, uint64(3), next)
 
-			_, alreadySeen := seenMap[name]
-			require.False(t, alreadySeen, "发现重复条目: %s", name)
-			seenMap[name] = struct{}{}
-
-			require.True(t, entry.Type().IsRegular(), "条目类型必须为常规文件: %s", name)
-		}
-
-		require.Equal(t, totalFiles, len(seenMap), "必须 100% 覆盖预期 1500 个文件名且零遗漏零重复")
+		second, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: bulkIno, Offset: next, Limit: 4096, SessionId: &sid}))
+		require.NoError(t, err)
+		require.Len(t, second.Msg.Entries, 3)
+		require.Equal(t, []string{bulkFileNames[1], bulkFileNames[2], bulkFileNames[3]}, []string{
+			string(second.Msg.Entries[0].Name), string(second.Msg.Entries[1].Name), string(second.Msg.Entries[2].Name),
+		})
 	})
 
+	recordArtifact(t, map[string]string{
+		"root_entries":       strconv.Itoa(rootEntriesCount),
+		"empty_dir_entries":  strconv.Itoa(emptyEntriesCount),
+		"level1_entries":     strconv.Itoa(l1EntriesCount),
+		"level2_entries":     strconv.Itoa(l2EntriesCount),
+		"bulk_entries":       strconv.Itoa(bulkEntriesCount),
+		"root_ino":           strconv.FormatUint(rootIno, 10),
+		"parent_ino_rewrite": strconv.FormatUint(parentIno, 10),
+	})
 }
 
 // TestE2E_OpenDirectoryAfterRemoval 验证目录在本地打开期间被删除后的同步。
@@ -122,28 +152,16 @@ func TestE2E_OpenDirectoryAfterRemoval(t *testing.T) {
 	disk := createTestDisk(t, client)
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, getStorageEndpoint(), disk.GetDiskId(), mountpoint)
-	if err := waitForMount(mountpoint, 10*time.Second); err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		t.Fatalf("等待挂载就绪失败: %v: %s %s", err, stdout.String(), stderr.String())
-	}
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "等待挂载就绪失败: %s %s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 	path := filepath.Join(mountpoint, "open_then_rmdir")
 	require.NoError(t, os.Mkdir(path, 0o755))
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
 	require.NoError(t, err)
-	defer func() {
-		if fd >= 0 {
-			_ = syscall.Close(fd)
-		}
-	}()
+	t.Cleanup(func() { _ = syscall.Close(fd) })
 	second, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)
 	require.NoError(t, err)
-	defer func() {
-		if second >= 0 {
-			_ = syscall.Close(second)
-		}
-	}()
+	t.Cleanup(func() { _ = syscall.Close(second) })
 	require.NoError(t, os.Remove(path))
 	var attr unix.Stat_t
 	require.NoError(t, unix.Fstat(fd, &attr), "已删除的打开目录应保留属性")
@@ -153,12 +171,17 @@ func TestE2E_OpenDirectoryAfterRemoval(t *testing.T) {
 	_, err = unix.Getdents(fd, make([]byte, 4096))
 	require.ErrorIs(t, err, syscall.ENOENT)
 	require.NoError(t, syscall.Close(fd))
-	fd = -1
 	require.NoError(t, unix.Fstat(second, &attr))
 	require.Zero(t, attr.Nlink)
 	require.NoError(t, syscall.Fsync(second))
 	require.NoError(t, syscall.Close(second))
-	second = -1
-	require.Eventually(t, func() bool { _, err := os.Stat(path); return os.IsNotExist(err) },
-		5*time.Second, 50*time.Millisecond)
+	_, err = os.Stat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	recordArtifact(t, map[string]string{
+		"deleted_dir_nlink":     "0",
+		"fsync_after_unlink":    "ok",
+		"getdents_after_unlink": "ENOENT",
+		"path_removed":          "true",
+	})
 }

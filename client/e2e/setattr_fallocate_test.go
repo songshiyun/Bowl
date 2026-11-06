@@ -24,8 +24,8 @@ func TestE2E_SetAttr(t *testing.T) {
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "priv-test.txt")
 		require.NoError(t, os.WriteFile(filePath, []byte("privileged content"), 0644))
@@ -63,8 +63,8 @@ func TestE2E_SetAttr(t *testing.T) {
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "time-test.txt")
 		require.NoError(t, os.WriteFile(filePath, []byte("time stamps"), 0644))
@@ -100,8 +100,8 @@ func TestE2E_SetAttr(t *testing.T) {
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "trunc-test.txt")
 
@@ -124,11 +124,7 @@ func TestE2E_SetAttr(t *testing.T) {
 		// 2. 打开句柄通过 f.Truncate 进行句柄绑定的缩容截断
 		f, err := os.OpenFile(filePath, os.O_RDWR, 0644)
 		require.NoError(t, err)
-		defer func() {
-			if f != nil {
-				_ = f.Close()
-			}
-		}()
+		t.Cleanup(func() { _ = f.Close() })
 
 		require.NoError(t, f.Truncate(2048))
 		infoShrink, err := f.Stat()
@@ -153,7 +149,6 @@ func TestE2E_SetAttr(t *testing.T) {
 		require.Equal(t, make([]byte, 8192-2048), bufGrow[2048:])
 
 		require.NoError(t, f.Close())
-		f = nil
 	})
 
 	t.Run("fallocate_modes_and_punch_hole", func(t *testing.T) {
@@ -161,17 +156,13 @@ func TestE2E_SetAttr(t *testing.T) {
 		mountpoint := t.TempDir()
 
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "falloc-test.bin")
 		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 		require.NoError(t, err)
-		defer func() {
-			if f != nil {
-				_ = f.Close()
-			}
-		}()
+		t.Cleanup(func() { _ = f.Close() })
 
 		// 构造 32 KiB 测试数据（前 8 KiB 为 'A'，中 8 KiB 为 'B'，后 16 KiB 为 'C'）
 		partA := bytes.Repeat([]byte{'A'}, 8192)
@@ -227,7 +218,6 @@ func TestE2E_SetAttr(t *testing.T) {
 		require.True(t, errors.Is(errPunchSolo, syscall.EOPNOTSUPP) || errors.Is(errPunchSolo, unix.EOPNOTSUPP), "单独 PUNCH_HOLE 必须返回 EOPNOTSUPP")
 
 		require.NoError(t, f.Close())
-		f = nil
 	})
 
 	t.Run("readonly_mount_blocks_mutations", func(t *testing.T) {
@@ -240,8 +230,8 @@ func TestE2E_SetAttr(t *testing.T) {
 		// 2. 以 --ro 挂载
 		mountpoint := t.TempDir()
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug", "--ro")
-		require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载点就绪")
-		defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+		waitForMount(t, mountpoint, "挂载点就绪")
+		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "ro-test.txt")
 
@@ -255,13 +245,23 @@ func TestE2E_SetAttr(t *testing.T) {
 		require.Error(t, errTrunc)
 		require.True(t, errors.Is(errTrunc, syscall.EROFS), "只读模式下 truncate 必须返回 EROFS")
 
-		// 5. 只读挂载下打开常规文件并尝试 fallocate 必须被拦截返回 EROFS 或写句柄拒绝
+		// 5. 只读挂载下以只读句柄尝试 fallocate，内核按非写句柄拒绝返回 EBADF
 		fRO, errOpenRO := os.Open(filePath)
 		require.NoError(t, errOpenRO)
 		defer fRO.Close()
 
 		errFalloc := unix.Fallocate(int(fRO.Fd()), 0, 0, 4096)
-		require.Error(t, errFalloc)
-		require.True(t, errors.Is(errFalloc, syscall.EROFS) || errors.Is(errFalloc, syscall.EBADF), "只读模式下 fallocate 必须返回 EROFS 或 EBADF")
+		require.ErrorIs(t, errFalloc, syscall.EBADF, "只读句柄上的 fallocate 必须返回 EBADF, 实际: %v", errFalloc)
+	})
+
+	recordArtifact(t, map[string]string{
+		"truncate_expand":      "16384",
+		"truncate_shrink":      "2048",
+		"handle_truncate_grow": "8192",
+		"fallocate_default":    "65536",
+		"punch_hole":           "ok",
+		"readonly_chmod":       "EROFS",
+		"readonly_truncate":    "EROFS",
+		"readonly_fallocate":   "EBADF",
 	})
 }

@@ -5,10 +5,10 @@ package e2e_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -22,8 +22,8 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 1. 创建常规目标文件用于链接验证
 	regPath := filepath.Join(mountpoint, "real_file.txt")
@@ -107,6 +107,14 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 	err = os.Symlink("conflict_target", regPath)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EEXIST, "与已有文件同名创建符号链接必须返回 EEXIST")
+	recordArtifact(t, map[string]string{
+		"symlink_create":    targetRel,
+		"readlink":          targetRel,
+		"readlink_dangling": targetDangling,
+		"readlink_long_len": strconv.Itoa(len(targetLong)),
+		"readlink_on_file":  "EINVAL",
+		"symlink_conflict":  "EEXIST",
+	})
 }
 
 // TestE2E_Link_Hardlink 验证同盘多硬链接创建、Nlink 递增、解链后剩余硬链接存活与 Ino 一致性，以及目录硬链接 EPERM 与同名冲突 EEXIST。
@@ -117,8 +125,8 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 1. 创建源常规文件
 	origPath := filepath.Join(mountpoint, "orig_file.txt")
@@ -161,6 +169,8 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, origIno, stat2.Ino)
 	require.Equal(t, uint64(3), uint64(stat2.Nlink), "创建第 2 个硬链接后 nlink 必须递增为 3")
+	maxNlink := stat2.Nlink
+	hardlinkSameIno := stat1.Ino == origIno && stat2.Ino == origIno
 
 	// 4. 删除原文件 orig_file.txt，验证剩余硬链接依然存活可读且 nlink 递减为 2
 	err = os.Remove(origPath)
@@ -206,6 +216,13 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 	err = os.Link(filepath.Join(mountpoint, "ghost_file.txt"), filepath.Join(mountpoint, "ghost_link.txt"))
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.ENOENT, "源文件不存在创建硬链接必须返回 ENOENT")
+	recordArtifact(t, map[string]string{
+		"hardlink_nlink":    strconv.FormatUint(uint64(maxNlink), 10),
+		"hardlink_same_ino": strconv.FormatBool(hardlinkSameIno),
+		"dir_link":          "EPERM",
+		"link_conflict":     "EEXIST",
+		"link_missing_src":  "ENOENT",
+	})
 }
 
 // TestE2E_Link_Symlink_ReadOnly 验证只读挂载模式下拦截 Symlink 与 Link 返回 EROFS，但允许 Readlink。
@@ -223,8 +240,8 @@ func TestE2E_Link_Symlink_ReadOnly(t *testing.T) {
 	// 2. 以只读挂载模式启动 bowl mount
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--ro", "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载只读失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载只读失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 3. 验证只读挂载下 Symlink 拦截并返回 EROFS
 	err = os.Symlink("target", filepath.Join(mountpoint, "new_symlink"))
@@ -240,4 +257,9 @@ func TestE2E_Link_Symlink_ReadOnly(t *testing.T) {
 	target, err := os.Readlink(filepath.Join(mountpoint, "pre_symlink"))
 	require.NoError(t, err, "只读模式下 Readlink 必须正常工作")
 	require.Equal(t, "/existing/pre_target", target)
+	recordArtifact(t, map[string]string{
+		"readonly_symlink":  "EROFS",
+		"readonly_link":     "EROFS",
+		"readonly_readlink": "/existing/pre_target",
+	})
 }

@@ -9,95 +9,82 @@ import (
 	"github.com/starsrc/bowl/client/internal/cli"
 )
 
-func TestParseSize_Valid(t *testing.T) {
-	cases := []struct {
-		name     string
-		raw      string
-		expected uint64
-	}{
-		{name: "plain bytes", raw: "1", expected: 1},
-		{name: "plain bytes with spaces", raw: "  4096  ", expected: 4096},
-		{name: "unit B", raw: "512B", expected: 512},
-		{name: "unit b lowercase", raw: "512b", expected: 512},
-		{name: "unit B with inner space", raw: "512 B", expected: 512},
-		{name: "unit K", raw: "1K", expected: 1024},
-		{name: "unit KB", raw: "2KB", expected: 2 * 1024},
-		{name: "unit KiB", raw: "4KiB", expected: 4 * 1024},
-		{name: "unit kib lowercase", raw: "4kib", expected: 4 * 1024},
-		{name: "unit M", raw: "1M", expected: 1024 * 1024},
-		{name: "unit MB", raw: "10MB", expected: 10 * 1024 * 1024},
-		{name: "unit MiB", raw: "128MiB", expected: 128 * 1024 * 1024},
-		{name: "unit G", raw: "1G", expected: 1024 * 1024 * 1024},
-		{name: "unit GB", raw: "5GB", expected: 5 * 1024 * 1024 * 1024},
-		{name: "unit GiB", raw: "10GiB", expected: 10 * 1024 * 1024 * 1024},
-		{name: "unit gib lowercase", raw: "10gib", expected: 10 * 1024 * 1024 * 1024},
-		{name: "unit T", raw: "1T", expected: 1024 * 1024 * 1024 * 1024},
-		{name: "unit TB", raw: "2TB", expected: 2 * 1024 * 1024 * 1024 * 1024},
-		{name: "unit TiB", raw: "3TiB", expected: 3 * 1024 * 1024 * 1024 * 1024},
-		{name: "unit P", raw: "1P", expected: 1024 * 1024 * 1024 * 1024 * 1024},
-		{name: "unit PB", raw: "2PB", expected: 2 * 1024 * 1024 * 1024 * 1024 * 1024},
-		{name: "unit PiB", raw: "4PiB", expected: 4 * 1024 * 1024 * 1024 * 1024 * 1024},
-		{name: "max PiB without int64 overflow", raw: "8191PiB", expected: 8191 * 1024 * 1024 * 1024 * 1024 * 1024},
-		{name: "exact math.MaxInt64", raw: "9223372036854775807", expected: uint64(math.MaxInt64)},
-	}
+func requireParseSize(t *testing.T, name, raw string, expected uint64) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		got, err := cli.ParseSize(raw)
+		require.NoError(t, err)
+		require.Equal(t, expected, got)
+	})
+}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := cli.ParseSize(tc.raw)
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, got)
-		})
-	}
+func requireParseSizeError(t *testing.T, name, raw string) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		_, err := cli.ParseSize(raw)
+		require.Error(t, err, "expected error for input %q", raw)
+	})
+}
+
+func requireFormatSize(t *testing.T, bytes uint64, expected string) {
+	t.Helper()
+	t.Run(expected, func(t *testing.T) {
+		require.Equal(t, expected, cli.FormatSize(bytes))
+	})
+}
+
+func TestParseSize_Valid(t *testing.T) {
+	requireParseSize(t, "plain bytes", "1", 1)
+	requireParseSize(t, "plain bytes with spaces", "  4096  ", 4096)
+	requireParseSize(t, "unit B", "512B", 512)
+	requireParseSize(t, "unit b lowercase", "512b", 512)
+	requireParseSize(t, "unit B with inner space", "512 B", 512)
+	requireParseSize(t, "unit K", "1K", 1024)
+	requireParseSize(t, "unit KB", "2KB", 2*1024)
+	requireParseSize(t, "unit KiB", "4KiB", 4*1024)
+	requireParseSize(t, "unit kib lowercase", "4kib", 4*1024)
+	requireParseSize(t, "unit M", "1M", 1024*1024)
+	requireParseSize(t, "unit MB", "10MB", 10*1024*1024)
+	requireParseSize(t, "unit MiB", "128MiB", 128*1024*1024)
+	requireParseSize(t, "unit G", "1G", 1024*1024*1024)
+	requireParseSize(t, "unit GB", "5GB", 5*1024*1024*1024)
+	requireParseSize(t, "unit GiB", "10GiB", 10*1024*1024*1024)
+	requireParseSize(t, "unit gib lowercase", "10gib", 10*1024*1024*1024)
+	requireParseSize(t, "unit T", "1T", 1024*1024*1024*1024)
+	requireParseSize(t, "unit TB", "2TB", 2*1024*1024*1024*1024)
+	requireParseSize(t, "unit TiB", "3TiB", 3*1024*1024*1024*1024)
+	requireParseSize(t, "unit P", "1P", 1024*1024*1024*1024*1024)
+	requireParseSize(t, "unit PB", "2PB", 2*1024*1024*1024*1024*1024)
+	requireParseSize(t, "unit PiB", "4PiB", 4*1024*1024*1024*1024*1024)
+	requireParseSize(t, "max PiB without int64 overflow", "8191PiB", 8191*1024*1024*1024*1024*1024)
+	requireParseSize(t, "exact math.MaxInt64", "9223372036854775807", uint64(math.MaxInt64))
 }
 
 func TestParseSize_Invalid(t *testing.T) {
-	cases := []struct {
-		name string
-		raw  string
-	}{
-		{name: "empty", raw: ""},
-		{name: "whitespace only", raw: "   "},
-		{name: "zero plain", raw: "0"},
-		{name: "zero with unit", raw: "0GiB"},
-		{name: "negative plain", raw: "-10"},
-		{name: "negative with unit", raw: "-10GiB"},
-		{name: "unit only", raw: "GiB"},
-		{name: "decimal float", raw: "1.5GiB"},
-		{name: "unknown unit", raw: "10EiB"},
-		{name: "unknown unit xyz", raw: "100xyz"},
-		{name: "exceeds math.MaxInt64 by 1", raw: "9223372036854775808"},
-		{name: "exceeds math.MaxInt64 in PiB", raw: "8192PiB"},
-		{name: "uint64 overflow in PiB", raw: "20000PiB"},
-		{name: "exceeds uint64 digits", raw: "99999999999999999999999999999"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := cli.ParseSize(tc.raw)
-			require.Error(t, err, "expected error for input %q", tc.raw)
-		})
-	}
+	requireParseSizeError(t, "empty", "")
+	requireParseSizeError(t, "whitespace only", "   ")
+	requireParseSizeError(t, "zero plain", "0")
+	requireParseSizeError(t, "zero with unit", "0GiB")
+	requireParseSizeError(t, "negative plain", "-10")
+	requireParseSizeError(t, "negative with unit", "-10GiB")
+	requireParseSizeError(t, "unit only", "GiB")
+	requireParseSizeError(t, "decimal float", "1.5GiB")
+	requireParseSizeError(t, "unknown unit", "10EiB")
+	requireParseSizeError(t, "unknown unit xyz", "100xyz")
+	requireParseSizeError(t, "exceeds math.MaxInt64 by 1", "9223372036854775808")
+	requireParseSizeError(t, "exceeds math.MaxInt64 in PiB", "8192PiB")
+	requireParseSizeError(t, "uint64 overflow in PiB", "20000PiB")
+	requireParseSizeError(t, "exceeds uint64 digits", "99999999999999999999999999999")
 }
 
 func TestFormatSize(t *testing.T) {
-	cases := []struct {
-		bytes    uint64
-		expected string
-	}{
-		{bytes: 0, expected: "0 B"},
-		{bytes: 512, expected: "512 B"},
-		{bytes: 1023, expected: "1023 B"},
-		{bytes: 1024, expected: "1.00 KiB"},
-		{bytes: 1536, expected: "1.50 KiB"},
-		{bytes: 1024 * 1024, expected: "1.00 MiB"},
-		{bytes: 10 * 1024 * 1024 * 1024, expected: "10.00 GiB"},
-		{bytes: 2 * 1024 * 1024 * 1024 * 1024, expected: "2.00 TiB"},
-		{bytes: 3 * 1024 * 1024 * 1024 * 1024 * 1024, expected: "3.00 PiB"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.expected, func(t *testing.T) {
-			require.Equal(t, tc.expected, cli.FormatSize(tc.bytes))
-		})
-	}
+	requireFormatSize(t, 0, "0 B")
+	requireFormatSize(t, 512, "512 B")
+	requireFormatSize(t, 1023, "1023 B")
+	requireFormatSize(t, 1024, "1.00 KiB")
+	requireFormatSize(t, 1536, "1.50 KiB")
+	requireFormatSize(t, 1024*1024, "1.00 MiB")
+	requireFormatSize(t, 10*1024*1024*1024, "10.00 GiB")
+	requireFormatSize(t, 2*1024*1024*1024*1024, "2.00 TiB")
+	requireFormatSize(t, 3*1024*1024*1024*1024*1024, "3.00 PiB")
 }

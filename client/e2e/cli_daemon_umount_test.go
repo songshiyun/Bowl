@@ -3,90 +3,16 @@
 package e2e_test
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
-
-// findBowlDaemonPID 扫描 /proc 查找与指定 diskID 和 mountpoint 绑定的后台 bowl 守护进程 PID。
-func findBowlDaemonPID(diskID, mountpoint string) (int, error) {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return 0, fmt.Errorf("读取 /proc 失败: %w", err)
-	}
-
-	cleanMP := filepath.Clean(mountpoint)
-	myPID := os.Getpid()
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == myPID {
-			continue
-		}
-
-		cmdlineBytes, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
-		if err != nil {
-			continue
-		}
-
-		cmdline := string(bytes.ReplaceAll(cmdlineBytes, []byte{0}, []byte(" ")))
-		if strings.Contains(cmdline, "bowl") && strings.Contains(cmdline, "mount") &&
-			strings.Contains(cmdline, diskID) && strings.Contains(cmdline, cleanMP) {
-			return pid, nil
-		}
-	}
-
-	return 0, fmt.Errorf("未找到挂载点 %s (diskID: %s) 的后台守护进程", mountpoint, diskID)
-}
-
-// isProcessTerminated 检查进程是否已退出或已进入僵尸/死亡状态（容器内无 init 收集）。
-func isProcessTerminated(pid int) bool {
-	statusBytes, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
-	if err != nil {
-		return true
-	}
-	for _, line := range strings.Split(string(statusBytes), "\n") {
-		if strings.HasPrefix(line, "State:") {
-			if strings.Contains(line, "Z") || strings.Contains(line, "X") {
-				return true
-			}
-			return false
-		}
-	}
-	return false
-}
-
-// waitForProcessExit 轮询等待指定 PID 的进程从系统完全退出或进入终止状态。
-func waitForProcessExit(t *testing.T, pid int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if isProcessTerminated(pid) {
-			return nil
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	// 打印调试信息
-	stack, _ := os.ReadFile(fmt.Sprintf("/proc/%d/stack", pid))
-	status, _ := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
-	wchan, _ := os.ReadFile(fmt.Sprintf("/proc/%d/wchan", pid))
-	t.Logf("PID %d 未退出调试信息:\nwchan: %s\nstack:\n%s\nstatus:\n%s", pid, string(wchan), string(stack), string(status))
-
-	return fmt.Errorf("进程 PID %d 在 %v 内未退出", pid, timeout)
-}
 
 // TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection 验证默认后台模式挂载零延迟访问、重复挂载拦截与 umount 卸载及守护进程退出。
 func TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection(t *testing.T) {
@@ -121,8 +47,7 @@ func TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection(t *testing.T) {
 	require.Contains(t, string(dupOut), "已挂载")
 
 	// 4. 定位后台守护进程 PID 并确保其正常活跃
-	daemonPID, err := findBowlDaemonPID(disk.GetDiskId(), mountpoint)
-	require.NoError(t, err, "必须能探测到活跃的后台守护进程")
+	daemonPID := findBowlDaemonPID(t, mountpoint)
 	require.Greater(t, daemonPID, 0)
 	t.Logf("已检测到活跃守护进程 PID: %d", daemonPID)
 
@@ -132,16 +57,17 @@ func TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection(t *testing.T) {
 	require.NoError(t, umountErr, "卸载失败: %s", string(umountOut))
 
 	// 6. 验证 mountinfo 挂载表已清理，且后台守护进程退出零残留
-	require.NoError(t, waitForUnmount(mountpoint, 5*time.Second))
-	if err := waitForProcessExit(t, daemonPID, 5*time.Second); err != nil {
-		expectedLog := filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
-		logData, _ := os.ReadFile(expectedLog)
-		t.Logf("守护进程日志内容:\n%s", string(logData))
-		t.Fatal(err)
-	}
+	waitForUnmount(t, mountpoint)
+	waitForProcessExit(t, daemonPID)
+	recordArtifact(t, map[string]string{
+		"mount_ready_zero_delay":  "true",
+		"duplicate_mount_blocked": "true",
+		"umount_alias":            "umount",
+		"daemon_exited":           "true",
+	})
 }
 
-// TestE2E_CLI_LogFiles 验证显式 --log-file 落盘与系统日志文件落盘。
+// TestE2E_CLI_LogFiles 验证显式 --log-file 落盘、系统日志落盘与 /var/log 不可写时的用户目录回退。
 func TestE2E_CLI_LogFiles(t *testing.T) {
 	client := newTestStorageClient(t)
 	endpoint := getStorageEndpoint()
@@ -151,43 +77,123 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 		mountpoint := t.TempDir()
 		customLog := filepath.Join(t.TempDir(), "logs", "custom-mount.log")
 
-		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, "--log-file", customLog, disk.GetDiskId(), mountpoint)
+		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, "--log-file", customLog, "--debug", disk.GetDiskId(), mountpoint)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "挂载失败: %s", string(out))
+		_, err = os.Stat(mountpoint)
+		require.NoError(t, err, "触发一次 FUSE 请求以产生调试日志")
 
-		daemonPID, err := findBowlDaemonPID(disk.GetDiskId(), mountpoint)
-		require.NoError(t, err)
+		daemonPID := findBowlDaemonPID(t, mountpoint)
 
-		// 卸载
 		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)
 		require.NoError(t, umountCmd.Run())
-		require.NoError(t, waitForProcessExit(t, daemonPID, 5*time.Second))
+		waitForProcessExit(t, daemonPID)
 
-		// 验证日志文件已落盘且非空
 		fi, err := os.Stat(customLog)
 		require.NoError(t, err, "自定义日志文件必须存在")
-		require.GreaterOrEqual(t, fi.Size(), int64(0))
+		require.Greater(t, fi.Size(), int64(0), "自定义日志文件必须包含实际写入内容")
 	})
 
 	t.Run("default system log /var/log/bowl/mount-<disk-id>.log is written", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 		mountpoint := t.TempDir()
 
-		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)
+		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, "--debug", disk.GetDiskId(), mountpoint)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "挂载失败: %s", string(out))
+		_, err = os.Stat(mountpoint)
+		require.NoError(t, err, "触发一次 FUSE 请求以产生调试日志")
 
-		daemonPID, err := findBowlDaemonPID(disk.GetDiskId(), mountpoint)
-		require.NoError(t, err)
+		daemonPID := findBowlDaemonPID(t, mountpoint)
 
-		// 卸载
 		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)
 		require.NoError(t, umountCmd.Run())
-		require.NoError(t, waitForProcessExit(t, daemonPID, 5*time.Second))
+		waitForProcessExit(t, daemonPID)
 
 		expectedLog := filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
-		_, err = os.Stat(expectedLog)
+		fi, err := os.Stat(expectedLog)
 		require.NoError(t, err, "默认系统日志文件必须存在: %s", expectedLog)
+		require.Greater(t, fi.Size(), int64(0), "默认系统日志文件必须包含实际写入内容")
+	})
+
+	t.Run("falls back to XDG_STATE_HOME when /var/log/bowl is not writable", func(t *testing.T) {
+		disk := createTestDisk(t, client)
+		require.NoError(t, os.MkdirAll("/var/log/bowl", 0o755))
+		xdgState, err := os.MkdirTemp("", "bowl-xdg-")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(xdgState) })
+		require.NoError(t, os.Chmod(xdgState, 0o777))
+		mountpoint, err := os.MkdirTemp("", "bowl-mount-")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(mountpoint) })
+		require.NoError(t, os.Chmod(mountpoint, 0o777))
+		t.Setenv("XDG_STATE_HOME", xdgState)
+
+		exitCode, stdout, stderr := runAs(t, 65534, 65534, getBowlBin(),
+			"mount", "--endpoint", endpoint, "--debug", disk.GetDiskId(), mountpoint)
+		require.Zero(t, exitCode, "非 root 挂载失败: stdout=%s stderr=%s", stdout, stderr)
+		t.Cleanup(func() { _ = exec.Command(getBowlBin(), "umount", mountpoint).Run() })
+		probeCode, probeOut, probeErr := runAs(t, 65534, 65534, "ls", mountpoint)
+		require.Zero(t, probeCode, "非 root 访问挂载点失败: stdout=%s stderr=%s", probeOut, probeErr)
+
+		daemonPID := findBowlDaemonPID(t, mountpoint)
+		waitForMount(t, mountpoint)
+
+		fallbackLog := filepath.Join(xdgState, "bowl", "logs", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
+		fi, err := os.Stat(fallbackLog)
+		require.NoError(t, err, "系统日志目录不可写时必须回退到 XDG_STATE_HOME: %s", fallbackLog)
+		require.Greater(t, fi.Size(), int64(0), "回退日志文件必须包含实际写入内容")
+
+		_, err = os.Stat(filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId())))
+		require.ErrorIs(t, err, os.ErrNotExist, "回退后不得在 /var/log/bowl 留下日志")
+
+		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)
+		require.NoError(t, umountCmd.Run())
+		waitForProcessExit(t, daemonPID)
+	})
+
+	t.Run("falls back to HOME/.local/state when XDG_STATE_HOME is empty", func(t *testing.T) {
+		disk := createTestDisk(t, client)
+		require.NoError(t, os.MkdirAll("/var/log/bowl", 0o755))
+		home, err := os.MkdirTemp("", "bowl-home-")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(home) })
+		require.NoError(t, os.Chmod(home, 0o777))
+		mountpoint, err := os.MkdirTemp("", "bowl-mount-")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(mountpoint) })
+		require.NoError(t, os.Chmod(mountpoint, 0o777))
+		t.Setenv("XDG_STATE_HOME", "")
+		t.Setenv("HOME", home)
+
+		exitCode, stdout, stderr := runAs(t, 65534, 65534, getBowlBin(),
+			"mount", "--endpoint", endpoint, "--debug", disk.GetDiskId(), mountpoint)
+		require.Zero(t, exitCode, "非 root 挂载失败: stdout=%s stderr=%s", stdout, stderr)
+		t.Cleanup(func() { _ = exec.Command(getBowlBin(), "umount", mountpoint).Run() })
+		probeCode, probeOut, probeErr := runAs(t, 65534, 65534, "ls", mountpoint)
+		require.Zero(t, probeCode, "非 root 访问挂载点失败: stdout=%s stderr=%s", probeOut, probeErr)
+
+		daemonPID := findBowlDaemonPID(t, mountpoint)
+		waitForMount(t, mountpoint)
+
+		fallbackLog := filepath.Join(home, ".local", "state", "bowl", "logs", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
+		fi, err := os.Stat(fallbackLog)
+		require.NoError(t, err, "XDG_STATE_HOME 为空时必须回退到 HOME/.local/state: %s", fallbackLog)
+		require.Greater(t, fi.Size(), int64(0), "回退日志文件必须包含实际写入内容")
+
+		_, err = os.Stat(filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId())))
+		require.ErrorIs(t, err, os.ErrNotExist, "回退后不得在 /var/log/bowl 留下日志")
+
+		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)
+		require.NoError(t, umountCmd.Run())
+		waitForProcessExit(t, daemonPID)
+	})
+
+	recordArtifact(t, map[string]string{
+		"explicit_log_written":  "true",
+		"system_log_written":    "true",
+		"xdg_fallback_written":  "true",
+		"home_fallback_written": "true",
 	})
 }
 
@@ -203,16 +209,14 @@ func TestE2E_CLI_Umount_AliasAndForceLazy(t *testing.T) {
 		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)
 		require.NoError(t, cmd.Run())
 
-		daemonPID, err := findBowlDaemonPID(disk.GetDiskId(), mountpoint)
-		require.NoError(t, err)
+		daemonPID := findBowlDaemonPID(t, mountpoint)
 
-		// 使用 unmount 别名卸载
 		unmountCmd := exec.Command(getBowlBin(), "unmount", mountpoint)
 		out, err := unmountCmd.CombinedOutput()
 		require.NoError(t, err, "unmount 别名执行失败: %s", string(out))
 
-		require.NoError(t, waitForUnmount(mountpoint, 5*time.Second))
-		require.NoError(t, waitForProcessExit(t, daemonPID, 5*time.Second))
+		waitForUnmount(t, mountpoint)
+		waitForProcessExit(t, daemonPID)
 	})
 
 	t.Run("force lazy unmount detaches busy directory and daemon exits cleanly", func(t *testing.T) {
@@ -222,13 +226,15 @@ func TestE2E_CLI_Umount_AliasAndForceLazy(t *testing.T) {
 		cmd := exec.Command(getBowlBin(), "mount", "--endpoint", endpoint, disk.GetDiskId(), mountpoint)
 		require.NoError(t, cmd.Run())
 
-		daemonPID, err := findBowlDaemonPID(disk.GetDiskId(), mountpoint)
-		require.NoError(t, err)
+		daemonPID := findBowlDaemonPID(t, mountpoint)
 
-		// 启动一个保持占用 mountpoint 目录的子进程 (sleep 30)
-		occupier := exec.Command("sleep", "30")
+		// 启动一个保持占用 mountpoint 目录的子进程（阻塞读取 stdin，不依赖固定时长）。
+		occupier := exec.Command("cat")
 		occupier.Dir = mountpoint
+		occupierStdin, err := occupier.StdinPipe()
+		require.NoError(t, err, "创建目录占用进程 stdin 失败")
 		require.NoError(t, occupier.Start(), "启动目录占用进程失败")
+		defer func() { _ = occupierStdin.Close() }()
 
 		// 常规卸载在忙碌目录下应失败
 		normalUmount := exec.Command(getBowlBin(), "umount", mountpoint)
@@ -241,13 +247,19 @@ func TestE2E_CLI_Umount_AliasAndForceLazy(t *testing.T) {
 		require.NoError(t, forceErr, "懒卸载必须成功: %s", string(forceOut))
 
 		// 挂载点在 mountinfo 中被立刻摘除
-		require.NoError(t, waitForUnmount(mountpoint, 5*time.Second))
+		waitForUnmount(t, mountpoint)
 
 		// 杀死占用目录的进程，内核释放最后的活跃引用
 		_ = occupier.Process.Signal(syscall.SIGKILL)
 		_ = occupier.Wait()
 
 		// 释放后后台守护进程必须安全退出，无孤儿进程残留
-		require.NoError(t, waitForProcessExit(t, daemonPID, 5*time.Second))
+		waitForProcessExit(t, daemonPID)
+	})
+
+	recordArtifact(t, map[string]string{
+		"unmount_alias":       "unmount",
+		"force_lazy_unmount":  "detached",
+		"daemon_exited_clean": "true",
 	})
 }

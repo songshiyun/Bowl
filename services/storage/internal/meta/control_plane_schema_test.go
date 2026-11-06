@@ -1,105 +1,114 @@
 package meta_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"strings"
-	"sync"
+	"slices"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
 )
 
-func TestControlPlaneDiskDefaultBranch(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "control_plane_default")
-	_, err := pool.Exec(ctx, `INSERT INTO disks (disk_id, name, root_ino, max_bytes)
-		VALUES ('00000000-0000-0000-0000-000000000001', 'disk', 100, 1024)`)
-	require.NoError(t, err)
-
-	var storageDir string
-	var rawBranches []byte
-	err = pool.QueryRow(ctx, `SELECT storage_dir, branches FROM disks WHERE root_ino = 100`).Scan(&storageDir, &rawBranches)
-	require.NoError(t, err)
-	require.Empty(t, storageDir)
-
-	var branches []struct {
-		BranchID     uuid.UUID `json:"branch_id"`
-		Name         string    `json:"name"`
-		ParentBranch *string   `json:"parent_branch"`
-		ForkCommitID *string   `json:"fork_commit_id"`
-		HeadCommitID *string   `json:"head_commit_id"`
-		State        string    `json:"state"`
-		MergeState   any       `json:"merge_state"`
-	}
-	require.NoError(t, json.Unmarshal(rawBranches, &branches))
-	require.Len(t, branches, 1)
-	require.NotEqual(t, uuid.Nil, branches[0].BranchID)
-	require.Equal(t, "main", branches[0].Name)
-	require.Nil(t, branches[0].ParentBranch)
-	require.Nil(t, branches[0].ForkCommitID)
-	require.Nil(t, branches[0].HeadCommitID)
-	require.Equal(t, "NORMAL", branches[0].State)
-	require.Nil(t, branches[0].MergeState)
+type controlPlaneExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
-func TestControlPlaneBranchUpdates(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "control_plane_branch")
-	var diskID pgtype.UUID
-	require.NoError(t, diskID.Scan("00000000-0000-0000-0000-000000000001"))
-	_, err := pool.Exec(ctx, `INSERT INTO disks (disk_id, root_ino, max_bytes) VALUES ($1, 100, 1024)`, diskID)
-	require.NoError(t, err)
+func controlPlaneUUID(t *testing.T, value string) pgtype.UUID {
+	t.Helper()
+	var id pgtype.UUID
+	require.NoError(t, id.Scan(value))
+	return id
+}
 
-	q := db.New(pool)
-	disk, err := q.GetDiskControlPlane(ctx, diskID)
-	require.NoError(t, err)
+func requireCommitAncestors(t *testing.T, ancestors []db.Commit, base, left, right, merge pgtype.UUID) {
+	t.Helper()
+	require.Len(t, ancestors, 4)
+	require.True(t, slices.ContainsFunc(ancestors, func(commit db.Commit) bool { return commit.CommitID == base }))
+	require.True(t, slices.ContainsFunc(ancestors, func(commit db.Commit) bool { return commit.CommitID == left }))
+	require.True(t, slices.ContainsFunc(ancestors, func(commit db.Commit) bool { return commit.CommitID == right }))
+	require.True(t, slices.ContainsFunc(ancestors, func(commit db.Commit) bool { return commit.CommitID == merge }))
+}
+
+func controlPlaneBranchVariants(t *testing.T, raw []byte) [][]byte {
+	t.Helper()
 	var branches []map[string]any
-	require.NoError(t, json.Unmarshal(disk.Branches, &branches))
-	branches = append(branches, map[string]any{
-		"branch_id": "00000000-0000-0000-0000-000000000002", "name": "feature",
-		"parent_branch": "main", "fork_commit_id": nil, "head_commit_id": nil,
-		"state": "NORMAL", "merge_state": nil,
-	})
-	added, err := json.Marshal(branches)
+	require.NoError(t, json.Unmarshal(raw, &branches))
+	one, err := json.Marshal(append(append([]map[string]any{}, branches...), map[string]any{
+		"branch_id": "10000000-0000-0000-0000-000000000001", "name": "one", "parent_branch": "main", "state": "NORMAL",
+	}))
 	require.NoError(t, err)
-	_, err = q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-		DiskID: diskID, ExpectedBranches: disk.Branches, Branches: added,
-	})
+	two, err := json.Marshal(append(append([]map[string]any{}, branches...), map[string]any{
+		"branch_id": "10000000-0000-0000-0000-000000000002", "name": "two", "parent_branch": "main", "state": "NORMAL",
+	}))
 	require.NoError(t, err)
+	return [][]byte{one, two}
+}
 
-	_, err = q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-		DiskID: diskID, ExpectedBranches: disk.Branches, Branches: disk.Branches,
-	})
-	require.ErrorIs(t, err, pgx.ErrNoRows)
+func casRaceHasSingleWinner(first, second error) bool {
+	firstWon := first == nil && errors.Is(second, pgx.ErrNoRows)
+	secondWon := second == nil && errors.Is(first, pgx.ErrNoRows)
+	return firstWon || secondWon
+}
 
-	branches[1]["state"] = "MERGING"
-	branches[1]["merge_state"] = map[string]any{"conflicts": []string{"file.txt"}}
-	merging, err := json.Marshal(branches)
-	require.NoError(t, err)
-	_, err = q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-		DiskID: diskID, ExpectedBranches: added, Branches: merging,
-	})
-	require.NoError(t, err)
-	disk, err = q.GetDiskControlPlane(ctx, diskID)
-	require.NoError(t, err)
-	require.JSONEq(t, string(merging), string(disk.Branches))
+func renewSessionsConcurrently(t *testing.T, q *db.Queries, ctx context.Context, diskID pgtype.UUID) (error, error) {
+	t.Helper()
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+			SessionID: 1, DiskID: diskID, BranchName: "main",
+			LeaseMicros: int64(time.Minute / time.Microsecond),
+		})
+		errs <- err
+	}()
+	go func() {
+		<-start
+		_, err := q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+			SessionID: 2, DiskID: diskID, BranchName: "main",
+			LeaseMicros: int64(time.Minute / time.Microsecond),
+		})
+		errs <- err
+	}()
+	close(start)
+	return <-errs, <-errs
+}
 
-	_, err = q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-		DiskID: diskID, ExpectedBranches: merging, Branches: diskRootBranch(t, branches),
-	})
+func requireSingleWriter(t *testing.T, first, second error) {
+	t.Helper()
+	require.NotEqual(t, first == nil, second == nil, "并发续约必须恰好一个成功")
+	conflict := cmp.Or(first, second)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, conflict, &pgErr)
+	require.Equal(t, "23505", pgErr.Code)
+	require.Equal(t, "uq_client_sessions_managed_writer", pgErr.ConstraintName)
+}
+
+func expireControlPlaneSession(t *testing.T, ctx context.Context, execer controlPlaneExecer, sessionID int64) {
+	t.Helper()
+	_, err := execer.Exec(ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE session_id = $1`, sessionID)
 	require.NoError(t, err)
-	_, err = q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-		DiskID: diskID, ExpectedBranches: merging, Branches: merging,
-	})
-	require.True(t, errors.Is(err, pgx.ErrNoRows))
+}
+
+// awaitBlockedLease 等待竞争写端真正阻塞在 PostgreSQL 锁上，而不是用固定时长猜测。
+func awaitBlockedLease(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var blocked int
+		return pool.QueryRow(ctx, `SELECT count(*) FROM pg_locks
+			WHERE NOT granted AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&blocked) == nil && blocked > 0
+	}, 5*time.Second, 10*time.Millisecond, "竞争写端必须在数据库锁上等待")
 }
 
 func TestControlPlaneBranchConcurrentUpdates(t *testing.T) {
@@ -110,31 +119,26 @@ func TestControlPlaneBranchConcurrentUpdates(t *testing.T) {
 	q := db.New(pool)
 	disk, err := q.GetDiskControlPlane(ctx, diskID)
 	require.NoError(t, err)
-	var branches []map[string]any
-	require.NoError(t, json.Unmarshal(disk.Branches, &branches))
-	variants := make([][]byte, 2)
-	for i, name := range []string{"one", "two"} {
-		variant := append(append([]map[string]any{}, branches...), map[string]any{
-			"branch_id": []string{"10000000-0000-0000-0000-000000000001", "10000000-0000-0000-0000-000000000002"}[i],
-			"name":      name, "parent_branch": "main", "state": "NORMAL",
-		})
-		variants[i], err = json.Marshal(variant)
-		require.NoError(t, err)
-	}
+	variants := controlPlaneBranchVariants(t, disk.Branches)
 	start := make(chan struct{})
 	errs := make(chan error, 2)
-	for _, variant := range variants {
-		go func(variant []byte) {
-			<-start
-			_, err := q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
-				DiskID: diskID, ExpectedBranches: disk.Branches, Branches: variant,
-			})
-			errs <- err
-		}(variant)
-	}
+	go func() {
+		<-start
+		_, casErr := q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
+			DiskID: diskID, ExpectedBranches: disk.Branches, Branches: variants[0],
+		})
+		errs <- casErr
+	}()
+	go func() {
+		<-start
+		_, casErr := q.CompareAndSetDiskBranches(ctx, db.CompareAndSetDiskBranchesParams{
+			DiskID: diskID, ExpectedBranches: disk.Branches, Branches: variants[1],
+		})
+		errs <- casErr
+	}()
 	close(start)
 	first, second := <-errs, <-errs
-	require.True(t, (first == nil && errors.Is(second, pgx.ErrNoRows)) || (second == nil && errors.Is(first, pgx.ErrNoRows)))
+	require.True(t, casRaceHasSingleWinner(first, second), "并发 CAS 必须恰好一个成功、另一个返回 ErrNoRows")
 	disk, err = q.GetDiskControlPlane(ctx, diskID)
 	require.NoError(t, err)
 	var stored []map[string]any
@@ -149,54 +153,6 @@ func TestControlPlaneBranchConcurrentUpdates(t *testing.T) {
 	require.Equal(t, "23514", constraint.Code)
 }
 
-func TestControlPlaneMigrationRoundTrip(t *testing.T) {
-	pool, ctx := setupIsolatedMetaTestDB(t, "control_plane_migration")
-	raw, err := os.ReadFile("../../db/migrations/20261104000000_add_adr0029_control_plane_schema.sql")
-	require.NoError(t, err)
-	parts := strings.SplitN(string(raw), "-- +goose Down", 2)
-	require.Len(t, parts, 2)
-	_, err = pool.Exec(ctx, parts[1])
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO disks (disk_id, root_ino, max_bytes) VALUES
-		('00000000-0000-0000-0000-000000000001', 100, 1024),
-		('00000000-0000-0000-0000-000000000002', 200, 1024)`)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, disk_id, expires_at) VALUES
-		(1, '00000000-0000-0000-0000-000000000001', clock_timestamp() + interval '1 minute'),
-		(2, '00000000-0000-0000-0000-000000000001', clock_timestamp() + interval '1 minute')`)
-	require.NoError(t, err)
-	_, err = pool.Exec(ctx, parts[0])
-	require.NoError(t, err)
-	var rootCount, rootIDs, legacyCount int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*), count(DISTINCT branches->0->>'branch_id')
-		FROM disks WHERE branches->0->>'name' = 'main' AND storage_dir = ''`).Scan(&rootCount, &rootIDs))
-	require.Equal(t, 2, rootCount)
-	require.Equal(t, 2, rootIDs)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions
-		WHERE branch_name = 'main' AND NOT read_only AND commit_id IS NULL AND NOT lease_managed`).Scan(&legacyCount))
-	require.Equal(t, 2, legacyCount)
-	_, err = pool.Exec(ctx, parts[1])
-	require.NoError(t, err)
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions`).Scan(&legacyCount))
-	require.Equal(t, 2, legacyCount)
-	_, err = pool.Exec(ctx, parts[0])
-	require.NoError(t, err)
-}
-
-func diskRootBranch(t *testing.T, branches []map[string]any) []byte {
-	t.Helper()
-	root, err := json.Marshal(branches[:1])
-	require.NoError(t, err)
-	return root
-}
-
-func controlPlaneUUID(t *testing.T, value string) pgtype.UUID {
-	t.Helper()
-	var id pgtype.UUID
-	require.NoError(t, id.Scan(value))
-	return id
-}
-
 func TestControlPlaneCommitAncestry(t *testing.T) {
 	pool, ctx := setupIsolatedMetaTestDB(t, "control_plane_commit")
 	diskID := controlPlaneUUID(t, "00000000-0000-0000-0000-000000000001")
@@ -208,16 +164,18 @@ func TestControlPlaneCommitAncestry(t *testing.T) {
 	left := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000002")
 	right := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000003")
 	merge := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000004")
-	for _, c := range []db.CreateCommitParams{
-		{CommitID: base, DiskID: diskID, BranchName: "main", Message: "base", CheckpointDir: "/base"},
-		{CommitID: left, DiskID: diskID, BranchName: "main", ParentCommitID: base, Message: "left", CheckpointDir: "/left"},
-		{CommitID: right, DiskID: diskID, BranchName: "feature", ParentCommitID: base, Message: "right", CheckpointDir: "/right"},
-		{CommitID: merge, DiskID: diskID, BranchName: "main", ParentCommitID: left, MergeParentCommitID: right, Message: "merge", CheckpointDir: "/merge"},
-	} {
-		created, err := q.CreateCommit(ctx, c)
-		require.NoError(t, err)
-		require.True(t, created.CreatedAt.Valid)
-	}
+	createdBase, err := q.CreateCommit(ctx, db.CreateCommitParams{CommitID: base, DiskID: diskID, BranchName: "main", Message: "base", CheckpointDir: "/base"})
+	require.NoError(t, err)
+	require.True(t, createdBase.CreatedAt.Valid)
+	createdLeft, err := q.CreateCommit(ctx, db.CreateCommitParams{CommitID: left, DiskID: diskID, BranchName: "main", ParentCommitID: base, Message: "left", CheckpointDir: "/left"})
+	require.NoError(t, err)
+	require.True(t, createdLeft.CreatedAt.Valid)
+	createdRight, err := q.CreateCommit(ctx, db.CreateCommitParams{CommitID: right, DiskID: diskID, BranchName: "feature", ParentCommitID: base, Message: "right", CheckpointDir: "/right"})
+	require.NoError(t, err)
+	require.True(t, createdRight.CreatedAt.Valid)
+	createdMerge, err := q.CreateCommit(ctx, db.CreateCommitParams{CommitID: merge, DiskID: diskID, BranchName: "main", ParentCommitID: left, MergeParentCommitID: right, Message: "merge", CheckpointDir: "/merge"})
+	require.NoError(t, err)
+	require.True(t, createdMerge.CreatedAt.Valid)
 
 	got, err := q.GetCommit(ctx, merge)
 	require.NoError(t, err)
@@ -230,11 +188,7 @@ func TestControlPlaneCommitAncestry(t *testing.T) {
 	require.Equal(t, right, branch[0].CommitID)
 	ancestors, err := q.ListCommitAncestors(ctx, db.ListCommitAncestorsParams{DiskID: diskID, CommitID: merge})
 	require.NoError(t, err)
-	var ids []pgtype.UUID
-	for _, ancestor := range ancestors {
-		ids = append(ids, ancestor.CommitID)
-	}
-	require.ElementsMatch(t, []pgtype.UUID{base, left, right, merge}, ids)
+	requireCommitAncestors(t, ancestors, base, left, right, merge)
 	_, err = q.CreateCommit(ctx, db.CreateCommitParams{CommitID: controlPlaneUUID(t, "20000000-0000-0000-0000-000000000001"), DiskID: otherDiskID, BranchName: "main", ParentCommitID: base, CheckpointDir: "/invalid"})
 	var foreignKey *pgconn.PgError
 	require.ErrorAs(t, err, &foreignKey)
@@ -264,47 +218,23 @@ func TestControlPlaneSessionLeases(t *testing.T) {
 	_, err = q.CreateCommit(ctx, db.CreateCommitParams{CommitID: commitID, DiskID: diskID, BranchName: "main", CheckpointDir: "/base"})
 	require.NoError(t, err)
 
-	start := make(chan struct{})
-	errs := make(chan error, 8)
-	var wg sync.WaitGroup
-	for i := range 8 {
-		wg.Add(1)
-		go func(id int64) {
-			defer wg.Done()
-			<-start
-			_, err := q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
-				SessionID: id, DiskID: diskID, BranchName: "main", LeaseMicros: int64(time.Minute / time.Microsecond),
-			})
-			errs <- err
-		}(int64(i + 1))
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-	winners := 0
-	for err := range errs {
-		if err == nil {
-			winners++
-			continue
-		}
-		var pgErr *pgconn.PgError
-		require.ErrorAs(t, err, &pgErr)
-		require.Equal(t, "23505", pgErr.Code)
-		require.Equal(t, "uq_client_sessions_managed_writer", pgErr.ConstraintName)
-	}
-	require.Equal(t, 1, winners)
+	firstRenew, secondRenew := renewSessionsConcurrently(t, q, ctx, diskID)
+	requireSingleWriter(t, firstRenew, secondRenew)
 
 	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 100, DiskID: diskID, BranchName: "feature", LeaseMicros: int64(time.Minute / time.Microsecond),
 	})
 	require.NoError(t, err)
-	for _, id := range []int64{101, 102} {
-		_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
-			SessionID: id, DiskID: diskID, BranchName: "main", ReadOnly: true, CommitID: commitID,
-			LeaseMicros: int64(time.Minute / time.Microsecond),
-		})
-		require.NoError(t, err)
-	}
+	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+		SessionID: 101, DiskID: diskID, BranchName: "main", ReadOnly: true, CommitID: commitID,
+		LeaseMicros: int64(time.Minute / time.Microsecond),
+	})
+	require.NoError(t, err)
+	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+		SessionID: 102, DiskID: diskID, BranchName: "main", ReadOnly: true, CommitID: commitID,
+		LeaseMicros: int64(time.Minute / time.Microsecond),
+	})
+	require.NoError(t, err)
 	readers, err := q.ListActiveCommitSessions(ctx, db.ListActiveCommitSessionsParams{DiskID: diskID, CommitID: commitID})
 	require.NoError(t, err)
 	require.Len(t, readers, 2)
@@ -313,7 +243,7 @@ func TestControlPlaneSessionLeases(t *testing.T) {
 		SessionID: 200, DiskID: diskID, BranchName: "short", LeaseMicros: int64(30 * time.Millisecond / time.Microsecond),
 	})
 	require.NoError(t, err)
-	time.Sleep(60 * time.Millisecond)
+	expireControlPlaneSession(t, ctx, pool, 200)
 	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 201, DiskID: diskID, BranchName: "short", LeaseMicros: int64(time.Minute / time.Microsecond),
 	})
@@ -336,7 +266,7 @@ func TestControlPlaneSessionLeases(t *testing.T) {
 		LeaseMicros: int64(30 * time.Millisecond / time.Microsecond),
 	})
 	require.NoError(t, err)
-	time.Sleep(60 * time.Millisecond)
+	expireControlPlaneSession(t, ctx, pool, 300)
 	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 300, DiskID: diskID, BranchName: "reader", ReadOnly: true, CommitID: commitID,
 		LeaseMicros: int64(time.Minute / time.Microsecond),
@@ -347,7 +277,7 @@ func TestControlPlaneSessionLeases(t *testing.T) {
 		SessionID: 400, DiskID: diskID, BranchName: "same-writer", LeaseMicros: int64(30 * time.Millisecond / time.Microsecond),
 	})
 	require.NoError(t, err)
-	time.Sleep(60 * time.Millisecond)
+	expireControlPlaneSession(t, ctx, pool, 400)
 	_, err = q.RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 400, DiskID: diskID, BranchName: "same-writer", LeaseMicros: int64(time.Minute / time.Microsecond),
 	})
@@ -379,7 +309,7 @@ func TestControlPlaneLeaseLocksArePerBranch(t *testing.T) {
 	require.NoError(t, err)
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	_, err = db.New(tx).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 1, DiskID: diskID, BranchName: "main", LeaseMicros: int64(time.Minute / time.Microsecond),
 	})
@@ -400,7 +330,7 @@ func TestControlPlaneLeaseStartsAfterConflictingTransaction(t *testing.T) {
 	require.NoError(t, err)
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	_, err = db.New(tx).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 1, DiskID: diskID, BranchName: "main", LeaseMicros: int64(time.Minute / time.Microsecond),
 	})
@@ -411,20 +341,19 @@ func TestControlPlaneLeaseStartsAfterConflictingTransaction(t *testing.T) {
 	}
 	results := make(chan result, 1)
 	go func() {
-		session, err := db.New(pool).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+		session, renewErr := db.New(pool).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 			SessionID: 2, DiskID: diskID, BranchName: "main", LeaseMicros: int64(time.Second / time.Microsecond),
 		})
-		results <- result{session: session, err: err}
+		results <- result{session: session, err: renewErr}
 	}()
-	select {
-	case r := <-results:
-		t.Fatalf("冲突事务尚未结束，写端不应获得租约：%v", r.err)
-	case <-time.After(1200 * time.Millisecond):
-	}
+	awaitBlockedLease(t, pool, ctx)
 	require.NoError(t, tx.Rollback(ctx))
 	r := <-results
 	require.NoError(t, r.err)
-	require.Greater(t, time.Until(r.session.ExpiresAt.Time), 700*time.Millisecond)
+	var leaseStartsAfterWait bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT expires_at > clock_timestamp() + interval '700 milliseconds'
+		FROM client_sessions WHERE session_id = 2`).Scan(&leaseStartsAfterWait))
+	require.True(t, leaseStartsAfterWait, "租约必须从冲突事务结束后开始计时")
 }
 
 func TestControlPlaneLeaseTakesOverWriterExpiredWhileWaiting(t *testing.T) {
@@ -434,26 +363,107 @@ func TestControlPlaneLeaseTakesOverWriterExpiredWhileWaiting(t *testing.T) {
 	require.NoError(t, err)
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	_, err = db.New(tx).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 		SessionID: 1, DiskID: diskID, BranchName: "main", LeaseMicros: int64(100 * time.Millisecond / time.Microsecond),
 	})
 	require.NoError(t, err)
 	errs := make(chan error, 1)
 	go func() {
-		_, err := db.New(pool).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
+		_, renewErr := db.New(pool).RenewControlPlaneSession(ctx, db.RenewControlPlaneSessionParams{
 			SessionID: 2, DiskID: diskID, BranchName: "main", LeaseMicros: int64(time.Minute / time.Microsecond),
 		})
-		errs <- err
+		errs <- renewErr
 	}()
-	select {
-	case err := <-errs:
-		t.Fatalf("冲突事务尚未结束，写端不应获得租约：%v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
+	awaitBlockedLease(t, pool, ctx)
+	expireControlPlaneSession(t, ctx, tx, 1)
 	require.NoError(t, tx.Commit(ctx))
 	require.NoError(t, <-errs)
 	writer, err := db.New(pool).GetActiveBranchWriter(ctx, db.GetActiveBranchWriterParams{DiskID: diskID, BranchName: "main"})
 	require.NoError(t, err)
 	require.EqualValues(t, 2, writer.SessionID)
+}
+
+func TestControlPlaneSchemaMigrationDownUpRoundtrip(t *testing.T) {
+	pool, ctx := setupIsolatedMetaTestDB(t, "control_plane_migration")
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, goose.DownToContext(ctx, sqlDB, ".", 20261101000000), "回滚控制面迁移必须成功")
+	version, err := goose.GetDBVersionContext(ctx, sqlDB)
+	require.NoError(t, err)
+	require.Equal(t, int64(20261101000000), version)
+
+	var legacyTables, controlTables int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name IN ('inodes', 'entries', 'chunks')`).Scan(&legacyTables))
+	require.Equal(t, 3, legacyTables, "回滚后必须恢复旧 POSIX 表")
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name = 'commits'`).Scan(&controlTables))
+	require.Zero(t, controlTables, "回滚后控制面 commits 表必须消失")
+
+	require.NoError(t, goose.UpContext(ctx, sqlDB, "."), "重新应用控制面迁移必须成功")
+	version, err = goose.GetDBVersionContext(ctx, sqlDB)
+	require.NoError(t, err)
+	require.Equal(t, int64(20261104010000), version)
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = 'public' AND table_name IN ('inodes', 'entries', 'chunks')`).Scan(&legacyTables))
+	require.Zero(t, legacyTables, "重新升级后旧 POSIX 表必须再次删除")
+
+	diskID := controlPlaneUUID(t, "00000000-0000-0000-0000-000000000001")
+	otherDiskID := controlPlaneUUID(t, "00000000-0000-0000-0000-000000000002")
+	_, err = pool.Exec(ctx, `INSERT INTO disks (disk_id, root_ino, max_bytes) VALUES ($1, 100, 1024), ($2, 200, 1024)`, diskID, otherDiskID)
+	require.NoError(t, err)
+
+	base := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000001")
+	_, err = pool.Exec(ctx, `INSERT INTO commits (commit_id, disk_id, branch_name, checkpoint_dir)
+		VALUES ($1, $2, 'main', '/base')`, base, diskID)
+	require.NoError(t, err)
+
+	foreign := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000002")
+	_, err = pool.Exec(ctx, `INSERT INTO commits (commit_id, disk_id, branch_name, parent_commit_id, checkpoint_dir)
+		VALUES ($1, $2, 'main', $3, '/foreign')`, foreign, otherDiskID, base)
+	var foreignKey *pgconn.PgError
+	require.ErrorAs(t, err, &foreignKey)
+	require.Equal(t, "23503", foreignKey.Code)
+
+	self := controlPlaneUUID(t, "10000000-0000-0000-0000-000000000003")
+	_, err = pool.Exec(ctx, `INSERT INTO commits (commit_id, disk_id, branch_name, parent_commit_id, checkpoint_dir)
+		VALUES ($1, $2, 'main', $1, '/self')`, self, diskID)
+	var selfParent *pgconn.PgError
+	require.ErrorAs(t, err, &selfParent)
+	require.Equal(t, "23514", selfParent.Code)
+
+	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, expires_at, disk_id, branch_name, lease_managed)
+		VALUES (1, clock_timestamp() + interval '1 minute', $1, 'main', true)`, diskID)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, expires_at, disk_id, branch_name, lease_managed)
+		VALUES (2, clock_timestamp() + interval '1 minute', $1, 'main', true)`, diskID)
+	var uniqueWriter *pgconn.PgError
+	require.ErrorAs(t, err, &uniqueWriter)
+	require.Equal(t, "23505", uniqueWriter.Code)
+	require.Equal(t, "uq_client_sessions_managed_writer", uniqueWriter.ConstraintName)
+
+	_, err = pool.Exec(ctx, `INSERT INTO client_sessions (session_id, expires_at, disk_id, branch_name, read_only, lease_managed)
+		VALUES (3, clock_timestamp() + interval '1 minute', $1, 'main', true, true)`, diskID)
+	var sessionCheck *pgconn.PgError
+	require.ErrorAs(t, err, &sessionCheck)
+	require.Equal(t, "23514", sessionCheck.Code)
+
+	_, err = pool.Exec(ctx, `UPDATE disks SET branches = '[]'::jsonb WHERE disk_id = $1`, diskID)
+	var branchCheck *pgconn.PgError
+	require.ErrorAs(t, err, &branchCheck)
+	require.Equal(t, "23514", branchCheck.Code)
+
+	var renewed int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM renew_control_plane_session(1, $1, 'main', false, NULL::uuid, 60000000)`, diskID).Scan(&renewed))
+	require.Equal(t, 1, renewed, "迁移往返后 renew_control_plane_session 必须可用")
+
+	_, err = pool.Exec(ctx, `DELETE FROM disks WHERE disk_id = $1`, diskID)
+	require.NoError(t, err)
+	var commitCount, sessionCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM commits WHERE disk_id = $1`, diskID).Scan(&commitCount))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM client_sessions WHERE disk_id = $1`, diskID).Scan(&sessionCount))
+	require.Zero(t, commitCount)
+	require.Zero(t, sessionCount)
 }

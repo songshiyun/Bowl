@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
@@ -21,8 +20,8 @@ func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	// 1. 获取根目录初始状态
 	var rootStatBefore unix.Stat_t
@@ -76,6 +75,11 @@ func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 	err = syscall.Rmdir(dir1)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.ENOENT, "移除不存在的目录必须返回 ENOENT")
+	recordArtifact(t, map[string]string{
+		"mkdir_rmdir":        "ok",
+		"root_nlink_restore": "true",
+		"missing_rmdir":      "ENOENT",
+	})
 }
 
 // TestE2E_Topology_SgidInheritance 验证父目录包含 S_ISGID 时，通过 FUSE 创建子目录自动继承父目录 GID 与 S_ISGID 位。
@@ -86,8 +90,8 @@ func TestE2E_Topology_SgidInheritance(t *testing.T) {
 
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	parentName := "sgid_parent"
 	require.NoError(t, os.Mkdir(filepath.Join(mountpoint, parentName), 0o755))
@@ -117,6 +121,10 @@ func TestE2E_Topology_SgidInheritance(t *testing.T) {
 	// 清理
 	require.NoError(t, syscall.Rmdir(childDir))
 	require.NoError(t, syscall.Rmdir(parentDir))
+	recordArtifact(t, map[string]string{
+		"sgid_inherited": "true",
+		"gid_inherited":  "2000",
+	})
 }
 
 // TestE2E_Topology_MknodUnlink 验证 FIFO 特殊节点创建、stat 校验、重复创建 EEXIST、EISDIR 与 ENOTDIR 边界及解链。
@@ -127,8 +135,8 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 	endpoint := getStorageEndpoint()
 
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
-	require.NoError(t, waitForMount(mountpoint, 10*time.Second), "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint, 5*time.Second)
+	waitForMount(t, mountpoint, "挂载失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 	fifoPath := filepath.Join(mountpoint, "test_fifo")
 
@@ -174,6 +182,12 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 	err = syscall.Unlink(fifoPath)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.ENOENT, "解链不存在文件必须返回 ENOENT")
+	recordArtifact(t, map[string]string{
+		"mknod_fifo":        "ok",
+		"unlink_fifo":       "ok",
+		"stat_after_unlink": "ENOENT",
+		"unlink_missing":    "ENOENT",
+	})
 }
 
 // TestE2E_Topology_ReadOnly 验证 --ro 只读挂载下 Mkdir、Mknod、Rmdir、Unlink 均直接被客户端拦截返回 EROFS。
@@ -185,7 +199,7 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	// 1. 读写模式挂载准备已有目录与文件
 	initMountpoint := t.TempDir()
 	cmdRW, stdoutRW, stderrRW := startBowlMount(t, endpoint, disk.GetDiskId(), initMountpoint, "--debug")
-	require.NoError(t, waitForMount(initMountpoint, 10*time.Second), "RW挂载失败: stdout=%s stderr=%s", stdoutRW.String(), stderrRW.String())
+	waitForMount(t, initMountpoint, "RW挂载失败: stdout=%s stderr=%s", stdoutRW.String(), stderrRW.String())
 
 	existDir := filepath.Join(initMountpoint, "exist_dir")
 	require.NoError(t, os.Mkdir(existDir, 0755))
@@ -194,13 +208,13 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	require.NoError(t, unix.Mkfifo(existFifo, 0644))
 
 	commitMain(t, client, disk.GetDiskId())
-	stopBowlMountGracefully(t, cmdRW, initMountpoint, 5*time.Second)
+	stopBowlMountGracefully(t, cmdRW, initMountpoint)
 
 	// 2. 以 --ro 只读模式重新挂载
 	roMountpoint := t.TempDir()
 	cmdRO, stdoutRO, stderrRO := startBowlMount(t, endpoint, disk.GetDiskId(), roMountpoint, "--ro", "--debug")
-	require.NoError(t, waitForMount(roMountpoint, 10*time.Second), "RO挂载失败: stdout=%s stderr=%s", stdoutRO.String(), stderrRO.String())
-	defer stopBowlMountGracefully(t, cmdRO, roMountpoint, 5*time.Second)
+	waitForMount(t, roMountpoint, "RO挂载失败: stdout=%s stderr=%s", stdoutRO.String(), stderrRO.String())
+	defer stopBowlMountGracefully(t, cmdRO, roMountpoint)
 
 	// 3. 验证 Mkdir 返回 EROFS
 	err := os.Mkdir(filepath.Join(roMountpoint, "new_dir"), 0755)
@@ -221,4 +235,10 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	err = syscall.Unlink(filepath.Join(roMountpoint, "exist_fifo"))
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EROFS, "只读挂载下 Unlink 必须返回 EROFS")
+	recordArtifact(t, map[string]string{
+		"readonly_mkdir":  "EROFS",
+		"readonly_mknod":  "EROFS",
+		"readonly_rmdir":  "EROFS",
+		"readonly_unlink": "EROFS",
+	})
 }

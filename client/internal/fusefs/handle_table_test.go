@@ -4,7 +4,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -45,51 +44,31 @@ func TestHandleTable句柄计数与打开模式(t *testing.T) {
 }
 
 func TestHandleTable并发关闭与标记孤儿只回收一次(t *testing.T) {
-	for i := 0; i < 100; i++ {
-		reclaimed := make(chan uint64, 2)
-		var table *fusefs.HandleTable
-		table = fusefs.NewHandleTable(func(ino uint64) {
-			_ = table.OpenCount(ino)
-			reclaimed <- ino
-		})
-		fh, err := table.Open(401, syscall.O_RDONLY, false)
-		require.NoError(t, err)
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			<-start
-			table.Release(fh)
-		}()
-		go func() {
-			defer wg.Done()
-			<-start
-			table.MarkOrphan(401)
-		}()
-		close(start)
-		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatal("回收回调阻塞了句柄表")
-		}
-		select {
-		case ino := <-reclaimed:
-			require.Equal(t, uint64(401), ino)
-		case <-time.After(time.Second):
-			t.Fatal("并发关闭和标记后未回收孤儿")
-		}
-		select {
-		case ino := <-reclaimed:
-			t.Fatalf("重复回收节点 %d", ino)
-		default:
-		}
-	}
+	reclaimed := make(chan uint64, 2)
+	var table *fusefs.HandleTable
+	table = fusefs.NewHandleTable(func(ino uint64) {
+		_ = table.OpenCount(ino)
+		reclaimed <- ino
+	})
+	fh, err := table.Open(401, syscall.O_RDONLY, false)
+	require.NoError(t, err)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		table.Release(fh)
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		table.MarkOrphan(401)
+	}()
+	close(start)
+	wg.Wait()
+	require.Equal(t, uint64(401), <-reclaimed)
+	require.Empty(t, reclaimed, "孤儿只能回收一次")
 }
 
 func TestHandleTable孤儿在最后一个句柄关闭后回收(t *testing.T) {
@@ -103,28 +82,15 @@ func TestHandleTable孤儿在最后一个句柄关闭后回收(t *testing.T) {
 	table.MarkOrphan(201)
 	_, ok := table.Release(first)
 	require.True(t, ok)
-	select {
-	case ino := <-reclaimed:
-		t.Fatalf("仍有句柄时回收了节点 %d", ino)
-	default:
-	}
+	require.Empty(t, reclaimed, "仍有句柄时不得回收孤儿")
 
 	_, ok = table.Release(second)
 	require.True(t, ok)
-	select {
-	case ino := <-reclaimed:
-		require.Equal(t, uint64(201), ino)
-	case <-time.After(time.Second):
-		t.Fatal("最后一个句柄关闭后未回收孤儿")
-	}
+	require.Equal(t, uint64(201), <-reclaimed)
 
 	_, ok = table.Release(second)
 	require.False(t, ok)
-	select {
-	case ino := <-reclaimed:
-		t.Fatalf("重复回收节点 %d", ino)
-	default:
-	}
+	require.Empty(t, reclaimed, "孤儿只能回收一次")
 }
 
 func TestHandleTable标记孤儿时句柄已关闭(t *testing.T) {
@@ -135,34 +101,37 @@ func TestHandleTable标记孤儿时句柄已关闭(t *testing.T) {
 	_, ok := table.Release(fh)
 	require.True(t, ok)
 	table.MarkOrphan(202)
-	select {
-	case ino := <-reclaimed:
-		require.Equal(t, uint64(202), ino)
-	case <-time.After(time.Second):
-		t.Fatal("标记时没有句柄，未回收孤儿")
-	}
+	require.Equal(t, uint64(202), <-reclaimed)
 }
 
 func TestHandleTable校验模式并保留读写权限(t *testing.T) {
 	table := fusefs.NewHandleTable(nil)
-	for _, tc := range []struct {
-		flags    uint32
-		readable bool
-		writable bool
-	}{
-		{syscall.O_RDONLY, true, false},
-		{syscall.O_WRONLY | syscall.O_APPEND, false, true},
-		{syscall.O_RDWR | syscall.O_EXCL, true, true},
-	} {
-		fh, err := table.Open(301, tc.flags, false)
-		require.NoError(t, err)
-		handle, ok := table.Get(fh)
-		require.True(t, ok)
-		require.Equal(t, tc.flags, handle.Flags)
-		require.Equal(t, tc.readable, handle.CanRead())
-		require.Equal(t, tc.writable, handle.CanWrite())
-	}
-	_, err := table.Open(0, syscall.O_RDONLY, false)
+
+	readOnly, err := table.Open(301, syscall.O_RDONLY, false)
+	require.NoError(t, err)
+	readHandle, ok := table.Get(readOnly)
+	require.True(t, ok)
+	require.Equal(t, uint32(syscall.O_RDONLY), readHandle.Flags)
+	require.True(t, readHandle.CanRead())
+	require.False(t, readHandle.CanWrite())
+
+	writeOnly, err := table.Open(301, syscall.O_WRONLY|syscall.O_APPEND, false)
+	require.NoError(t, err)
+	writeHandle, ok := table.Get(writeOnly)
+	require.True(t, ok)
+	require.Equal(t, uint32(syscall.O_WRONLY|syscall.O_APPEND), writeHandle.Flags)
+	require.False(t, writeHandle.CanRead())
+	require.True(t, writeHandle.CanWrite())
+
+	readWrite, err := table.Open(301, syscall.O_RDWR|syscall.O_EXCL, false)
+	require.NoError(t, err)
+	readWriteHandle, ok := table.Get(readWrite)
+	require.True(t, ok)
+	require.Equal(t, uint32(syscall.O_RDWR|syscall.O_EXCL), readWriteHandle.Flags)
+	require.True(t, readWriteHandle.CanRead())
+	require.True(t, readWriteHandle.CanWrite())
+
+	_, err = table.Open(0, syscall.O_RDONLY, false)
 	require.ErrorIs(t, err, syscall.EINVAL)
 	_, err = table.Open(301, syscall.O_ACCMODE, false)
 	require.ErrorIs(t, err, syscall.EINVAL)

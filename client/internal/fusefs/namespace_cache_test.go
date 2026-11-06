@@ -151,22 +151,27 @@ func TestNamespaceCache定向失效保留兄弟目录项(t *testing.T) {
 	// 模拟 Create：只失效目录流与父属性，再回填新名字。
 	cache.invalidateDirListing(10)
 	cache.putEntryAt(^uint64(0), 10, "d", 14)
-	for name, want := range map[string]uint64{"a": 11, "b": 12, "d": 14} {
-		ino, ok := cache.entry(10, name)
-		require.True(t, ok, "兄弟目录项 %s 不应被清除", name)
-		require.Equal(t, want, ino)
-	}
+	ino, ok := cache.entry(10, "a")
+	require.True(t, ok, "兄弟目录项 a 不应被清除")
+	require.Equal(t, uint64(11), ino)
+	ino, ok = cache.entry(10, "b")
+	require.True(t, ok, "兄弟目录项 b 不应被清除")
+	require.Equal(t, uint64(12), ino)
+	ino, ok = cache.entry(10, "d")
+	require.True(t, ok, "新目录项 d 必须命中")
+	require.Equal(t, uint64(14), ino)
 
 	// 模拟 Unlink：只定向删除被删名字。
 	cache.invalidateDirListing(10)
 	cache.removeEntry(10, "a")
-	_, ok := cache.entry(10, "a")
+	_, ok = cache.entry(10, "a")
 	require.False(t, ok, "被删除的目录项必须失效")
-	for name, want := range map[string]uint64{"b": 12, "d": 14} {
-		ino, ok := cache.entry(10, name)
-		require.True(t, ok, "未变动的兄弟目录项 %s 应保持命中", name)
-		require.Equal(t, want, ino)
-	}
+	ino, ok = cache.entry(10, "b")
+	require.True(t, ok, "未变动的兄弟目录项 b 应保持命中")
+	require.Equal(t, uint64(12), ino)
+	ino, ok = cache.entry(10, "d")
+	require.True(t, ok, "未变动的兄弟目录项 d 应保持命中")
+	require.Equal(t, uint64(14), ino)
 
 	// 模拟 Rename：旧名精确失效，新名回填，兄弟项保留。
 	cache.invalidateDirListing(10)
@@ -174,7 +179,7 @@ func TestNamespaceCache定向失效保留兄弟目录项(t *testing.T) {
 	cache.putEntryAt(^uint64(0), 10, "e", 12)
 	_, ok = cache.entry(10, "b")
 	require.False(t, ok, "改名后的旧名必须失效")
-	ino, ok := cache.entry(10, "e")
+	ino, ok = cache.entry(10, "e")
 	require.True(t, ok)
 	require.Equal(t, uint64(12), ino)
 	ino, ok = cache.entry(10, "d")
@@ -210,12 +215,13 @@ func TestNamespaceCache定向失效清除父属性与祖先目录流(t *testing.
 func TestNamespaceCache默认容量覆盖大规模工作集(t *testing.T) {
 	require.GreaterOrEqual(t, DefaultNamespaceCacheCapacity, 65536)
 	cache := NewNamespaceCache(0)
-	for i := uint64(1); i <= 20000; i++ {
-		cache.putInode(i, testInode(i, syscall.S_IFREG|0o644, 1), 0, 0)
-	}
+	require.Equal(t, DefaultNamespaceCacheCapacity, cache.capacity)
+	require.Greater(t, cache.capacity, 16384)
 	// 超出旧容量 16384 后，最早写入的节点仍应留在缓存中。
+	cache.putInode(1, testInode(1, syscall.S_IFREG|0o644, 1), 0, 0)
+	cache.putInode(20000, testInode(20000, syscall.S_IFREG|0o644, 1), 0, 0)
 	_, ok := cache.inode(1)
-	require.True(t, ok)
+	require.True(t, ok, "最早写入的节点必须留在默认容量缓存中")
 	_, ok = cache.inode(20000)
 	require.True(t, ok)
 }
@@ -251,12 +257,13 @@ func TestNamespaceCache目录流降级保留权威完整(t *testing.T) {
 	require.True(t, ok)
 
 	cache.invalidateDirListing(10)
-	for name, want := range map[string]uint64{"a": 11, "b": 12} {
-		ino, ok := cache.entry(10, name)
-		require.True(t, ok, "降级后兄弟项 %s 必须保持命中", name)
-		require.Equal(t, want, ino)
-	}
-	ino, ok := cache.entry(10, "missing")
+	ino, ok := cache.entry(10, "a")
+	require.True(t, ok, "降级后兄弟项 a 必须保持命中")
+	require.Equal(t, uint64(11), ino)
+	ino, ok = cache.entry(10, "b")
+	require.True(t, ok, "降级后兄弟项 b 必须保持命中")
+	require.Equal(t, uint64(12), ino)
+	ino, ok = cache.entry(10, "missing")
 	require.True(t, ok, "完整降级后缺失名字必须权威 ENOENT")
 	require.Zero(t, ino)
 

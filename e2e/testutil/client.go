@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"cmp"
 	"net/http"
 	"os"
 	"testing"
@@ -22,10 +23,7 @@ const (
 
 // GetStorageServiceAddr 返回 storage-service 服务地址，默认值为 http://localhost:9000。
 func GetStorageServiceAddr() string {
-	if addr := os.Getenv("STORAGE_SERVICE_ADDR"); addr != "" {
-		return addr
-	}
-	return defaultStorageServiceAddr
+	return cmp.Or(os.Getenv("STORAGE_SERVICE_ADDR"), defaultStorageServiceAddr)
 }
 
 // NewStorageClient 创建指向 storage-service 地址的 ConnectRPC StorageService 客户端。

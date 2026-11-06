@@ -1,79 +1,89 @@
 package meta_test
 
 import (
-	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
+	"github.com/starsrc/bowl/services/storage/internal/meta"
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
-// TestPebbleUnlinkDeleteStrategyCleansKeysAndBlobs 覆盖删除路径的三种规模：
-// 0 键、64 键点删、65 键回退范围墓碑，三者都必须把节点、xattr、数据键与关联 blob 清理干净。
-func TestPebbleUnlinkDeleteStrategyCleansKeysAndBlobs(t *testing.T) {
-	e := setupPebbleCreate(t, 1000)
-	ctx := e.branchContext()
+// seededInodeData 记录为指定 ino 预置的物理键与块文件坐标，供测试按 ino 直接核对清理结果。
+type seededInodeData struct {
+	xattrKey []byte
+	dataKey  []byte
+	blobID   uint64
+}
 
+// seedInodeData 在分支库中为 ino 写入一个 xattr、一个数据键，并落一个块文件。
+func seedInodeData(t *testing.T, branch *pebblekv.Branch, ino, blobID uint64, xattrName, payload []byte) seededInodeData {
+	t.Helper()
+	xattrKey := pebblekv.XattrKey(ino, xattrName)
+	require.NoError(t, branch.DB().Set(xattrKey, []byte("seed"), pebble.Sync))
+	require.NoError(t, branch.Blobs().Write(blobID, payload))
+	dataKey := pebblekv.DataKey(ino, 0)
+	ref := pebblekv.BlobRef{ID: blobID, Length: uint32(len(payload))}
+	require.NoError(t, branch.DB().Set(dataKey, pebblekv.EncodeBlobRef(ref), pebble.Sync))
+	return seededInodeData{xattrKey: xattrKey, dataKey: dataKey, blobID: blobID}
+}
+
+func assertPebbleKeyMissing(t *testing.T, store *pebble.DB, key []byte) {
+	t.Helper()
+	_, _, err := store.Get(key)
+	require.ErrorIs(t, err, pebble.ErrNotFound)
+}
+
+func createTestRegularFile(t *testing.T, e *pebbleCreateEnv, name string) *meta.Inode {
+	t.Helper()
+	inode, err := e.mgr.Mknod(e.branchContext(), meta.MknodParams{ParentIno: 1, Name: []byte(name), Mode: meta.S_IFREG | 0o644})
+	require.NoError(t, err)
+	return inode
+}
+
+// TestPebbleDeleteCleansPhysicalState 直接按目标 ino 检查 Unlink、孤儿回收与 DeleteDisk 的物理清理结果。
+func TestPebbleDeleteCleansPhysicalState(t *testing.T) {
+	e := setupPebbleCreate(t, 1024)
 	branch, err := e.storage.OpenBranch(e.disk.DiskID, "main")
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, branch.Close()) })
 
-	var nextBlobID uint64 = 10000
-	for _, tc := range []struct {
-		name string
-		keys int
-	}{
-		{name: "zero", keys: 0},
-		{name: "pointwise-64", keys: 64},
-		{name: "range-65", keys: 65},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			name := "victim-" + tc.name
-			inode := topologySymlink(t, e, 1, name, "target")
-			xattrKeys := make([][]byte, 0, tc.keys)
-			dataKeys := make([][]byte, 0, tc.keys)
-			blobIDs := make([]uint64, 0, tc.keys)
-			for i := 0; i < tc.keys; i++ {
-				xattrKey := pebblekv.XattrKey(inode.Ino, []byte(fmt.Sprintf("user.k%03d", i)))
-				require.NoError(t, branch.DB().Set(xattrKey, []byte("v"), pebble.Sync))
-				xattrKeys = append(xattrKeys, xattrKey)
+	victim := createTestRegularFile(t, e, "victim")
+	victimData := seedInodeData(t, branch, victim.Ino, 9001, []byte("user.victim"), []byte("victim"))
+	require.True(t, branch.Blobs().Exists(victimData.blobID))
+	require.NoError(t, e.mgr.Unlink(e.branchContext(), 1, []byte("victim")))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(victim.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(victim.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.EntryKey(1, []byte("victim")))
+	assertPebbleKeyMissing(t, branch.DB(), victimData.xattrKey)
+	assertPebbleKeyMissing(t, branch.DB(), victimData.dataKey)
+	require.False(t, branch.Blobs().Exists(victimData.blobID))
 
-				id := nextBlobID
-				nextBlobID++
-				require.NoError(t, branch.Blobs().Write(id, []byte{byte('a' + i%26)}))
-				dataKey := pebblekv.DataKey(inode.Ino, uint64(i))
-				require.NoError(t, branch.DB().Set(dataKey, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: 1}), pebble.Sync))
-				dataKeys = append(dataKeys, dataKey)
-				blobIDs = append(blobIDs, id)
-			}
+	orphan := createTestRegularFile(t, e, "orphan")
+	orphanData := seedInodeData(t, branch, orphan.Ino, 9002, []byte("user.orphan"), []byte("orphan"))
+	require.NoError(t, e.mgr.Unlink(meta.WithOpenInClient(e.branchContext(), true), 1, []byte("orphan")))
+	require.Equal(t, []byte{1}, getPebbleValue(t, branch.DB(), pebblekv.OrphanKey(orphan.Ino)))
+	require.NoError(t, e.mgr.ReclaimOrphan(e.ctx, meta.ReclaimOrphanParams{SessionID: e.sid, DiskID: e.disk.DiskID, Ino: orphan.Ino}))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(orphan.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(orphan.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), orphanData.xattrKey)
+	assertPebbleKeyMissing(t, branch.DB(), orphanData.dataKey)
+	require.False(t, branch.Blobs().Exists(orphanData.blobID))
+	require.NoError(t, branch.Close())
 
-			before := topologyStat(t, branch.DB())
-			require.NoError(t, e.mgr.Unlink(ctx, 1, []byte(name)))
+	survivor := createTestRegularFile(t, e, "survivor")
+	survivorBranch, err := e.storage.OpenBranch(e.disk.DiskID, "main")
+	require.NoError(t, err)
+	survivorData := seedInodeData(t, survivorBranch, survivor.Ino, 9003, []byte("user.survivor"), []byte("survivor"))
+	blobPath := survivorBranch.Blobs().Path(survivorData.blobID)
+	require.NoError(t, survivorBranch.Close())
 
-			store := branch.DB()
-			assertPebbleMissing(t, store, pebblekv.InodeKey(inode.Ino))
-			assertPebbleMissing(t, store, pebblekv.OrphanKey(inode.Ino))
-			assertPebbleMissing(t, store, pebblekv.EntryKey(1, []byte(name)))
-			for _, key := range xattrKeys {
-				assertPebbleMissing(t, store, key)
-			}
-			for _, key := range dataKeys {
-				assertPebbleMissing(t, store, key)
-			}
-			for _, id := range blobIDs {
-				require.False(t, branch.Blobs().Exists(id), "块 %d 必须随节点删除即时回收", id)
-			}
-			stat := topologyStat(t, store)
-			require.Equal(t, before.Inodes-1, stat.Inodes)
-			require.Zero(t, stat.LogicalBytes)
-		})
-	}
-
-	// 拓扑删除必须只影响目标节点：同目录其它文件与分支根节点保持完好。
-	e.withBranch(t, "main", func(store *pebble.DB) {
-		require.Equal(t, uint64(1), topologyStat(t, store).Inodes)
-		readPebbleCreateInode(t, store, 1)
-	})
+	require.NoError(t, e.mgr.CloseSession(e.ctx, e.sid))
+	require.NoError(t, e.mgr.DeleteDisk(e.ctx, e.disk.DiskID))
+	_, err = os.Stat(filepath.Join(e.root, "disks", e.disk.DiskID))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(blobPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

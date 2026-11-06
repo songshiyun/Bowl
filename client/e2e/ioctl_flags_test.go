@@ -4,7 +4,6 @@ package e2e_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -52,69 +51,112 @@ func prepareFlagFile(t *testing.T, client storagev1connect.StorageServiceClient,
 	require.NoError(t, err)
 }
 
+func requireIoctlFlagCase(t *testing.T, client storagev1connect.StorageServiceClient, endpoint, name string, proto uint32, vfs int, afterOpen func(*testing.T, string)) {
+	t.Helper()
+	disk := createTestDisk(t, client)
+	prepareFlagFile(t, client, disk.GetDiskId(), "target.txt", proto)
+	mp := t.TempDir()
+	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mp, "--debug")
+	waitForMount(t, mp, "挂载失败: %s %s", stdout.String(), stderr.String())
+	defer stopBowlMountGracefully(t, cmd, mp)
+	path := filepath.Join(mp, "target.txt")
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	got, err := getIoctlFlags(int(f.Fd()))
+	require.NoError(t, err)
+	require.Equal(t, vfs, got)
+	require.NoError(t, f.Close())
+	afterOpen(t, path)
+}
+
+func requireWriteDenied(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("denied")
+	require.ErrorIs(t, err, syscall.EPERM)
+	require.NoError(t, f.Close())
+}
+
+func requireTruncateDenied(t *testing.T, path string) {
+	t.Helper()
+	require.ErrorIs(t, os.Truncate(path, 0), syscall.EPERM)
+}
+
+func requireRenameDenied(t *testing.T, path string) {
+	t.Helper()
+	require.ErrorIs(t, os.Rename(path, path+".renamed"), syscall.EPERM)
+}
+
+func requireUnlinkDenied(t *testing.T, path string) {
+	t.Helper()
+	require.ErrorIs(t, os.Remove(path), syscall.EPERM)
+}
+
+func verifyImmutable(t *testing.T, path string) {
+	t.Helper()
+	requireWriteDenied(t, path)
+	requireTruncateDenied(t, path)
+	requireRenameDenied(t, path)
+	requireUnlinkDenied(t, path)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "line 1\n", string(data))
+}
+
+func verifyAppendWrite(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("line 2\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "line 1\nline 2\n", string(data))
+
+	requireWriteDenied(t, path)
+	requireTruncateDenied(t, path)
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "line 1\nline 2\n", string(data))
+}
+
 func TestE2E_Ioctl(t *testing.T) {
 	client := newTestStorageClient(t)
 	endpoint := getStorageEndpoint()
-	for _, tc := range []struct {
-		name  string
-		proto uint32
-		vfs   int
-	}{
-		{"immutable", protoFlagImmutable, fsImmutableFl},
-		{"append", protoFlagAppend, fsAppendFl},
-		{"both", protoFlagImmutable | protoFlagAppend, fsImmutableFl | fsAppendFl},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			disk := createTestDisk(t, client)
-			prepareFlagFile(t, client, disk.GetDiskId(), "target.txt", tc.proto)
-			mp := t.TempDir()
-			cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mp, "--debug")
-			require.NoError(t, waitForMount(mp, 10*time.Second), "挂载失败: %s %s", stdout.String(), stderr.String())
-			defer stopBowlMountGracefully(t, cmd, mp, 5*time.Second)
-			path := filepath.Join(mp, "target.txt")
-			f, err := os.Open(path)
-			require.NoError(t, err)
-			got, err := getIoctlFlags(int(f.Fd()))
-			require.NoError(t, err)
-			require.Equal(t, tc.vfs, got)
-			require.NoError(t, f.Close())
-			if tc.proto == protoFlagAppend {
-				f, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-				require.NoError(t, err)
-				_, err = f.WriteString("line 2\n")
-				require.NoError(t, err)
-				require.NoError(t, f.Close())
-				data, err := os.ReadFile(path)
-				require.NoError(t, err)
-				require.Equal(t, "line 1\nline 2\n", string(data))
-			}
-		})
-	}
+
+	t.Run("immutable", func(t *testing.T) {
+		requireIoctlFlagCase(t, client, endpoint, "immutable", protoFlagImmutable, fsImmutableFl, verifyImmutable)
+	})
+	t.Run("append", func(t *testing.T) {
+		requireIoctlFlagCase(t, client, endpoint, "append", protoFlagAppend, fsAppendFl, verifyAppendWrite)
+	})
+	t.Run("both", func(t *testing.T) {
+		requireIoctlFlagCase(t, client, endpoint, "both", protoFlagImmutable|protoFlagAppend, fsImmutableFl|fsAppendFl, verifyImmutable)
+	})
+
 	t.Run("设置与不支持的命令", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 		mp := t.TempDir()
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mp)
-		require.NoError(t, waitForMount(mp, 10*time.Second))
-		defer stopBowlMountGracefully(t, cmd, mp, 5*time.Second)
+		waitForMount(t, mp)
+		defer stopBowlMountGracefully(t, cmd, mp)
 		path := filepath.Join(mp, "target.txt")
 		require.NoError(t, os.WriteFile(path, []byte("data"), 0o644))
 		f, err := os.OpenFile(path, os.O_RDWR, 0)
 		require.NoError(t, err)
 		defer f.Close()
-		err = setIoctlFlags(int(f.Fd()), fsImmutableFl)
-		if errors.Is(err, syscall.EPERM) {
-			t.Log("环境缺少设置 immutable 标志所需的权限")
-		} else {
-			require.NoError(t, err)
-			flags, err := getIoctlFlags(int(f.Fd()))
-			require.NoError(t, err)
-			require.Equal(t, fsImmutableFl, flags)
-			require.NoError(t, setIoctlFlags(int(f.Fd()), 0))
-		}
+		require.NoError(t, setIoctlFlags(int(f.Fd()), fsImmutableFl))
+		flags, err := getIoctlFlags(int(f.Fd()))
+		require.NoError(t, err)
+		require.Equal(t, fsImmutableFl, flags)
+		require.NoError(t, setIoctlFlags(int(f.Fd()), 0))
 		require.ErrorIs(t, setIoctlFlags(int(f.Fd()), 0x40), syscall.EOPNOTSUPP)
 		_, err = unix.IoctlGetInt(int(f.Fd()), unix.TIOCGWINSZ)
 		require.ErrorIs(t, err, syscall.ENOTTY)
 	})
+
 	t.Run("只读挂载", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
@@ -122,8 +164,8 @@ func TestE2E_Ioctl(t *testing.T) {
 		})
 		mp := t.TempDir()
 		cmd, _, _ := startBowlMount(t, endpoint, disk.GetDiskId(), mp, "--ro")
-		require.NoError(t, waitForMount(mp, 10*time.Second))
-		defer stopBowlMountGracefully(t, cmd, mp, 5*time.Second)
+		waitForMount(t, mp)
+		defer stopBowlMountGracefully(t, cmd, mp)
 		f, err := os.Open(filepath.Join(mp, "ro-test.txt"))
 		require.NoError(t, err)
 		defer f.Close()
@@ -131,5 +173,26 @@ func TestE2E_Ioctl(t *testing.T) {
 		flags, err := getIoctlFlags(int(f.Fd()))
 		require.NoError(t, err)
 		require.Zero(t, flags)
+	})
+
+	recordArtifact(t, map[string]string{
+		"immutable_getflags": "0x10",
+		"append_getflags":    "0x20",
+		"both_getflags":      "0x30",
+		"append_write":       "line 1\\nline 2\\n",
+		"immutable_write":    "EPERM",
+		"immutable_truncate": "EPERM",
+		"immutable_rename":   "EPERM",
+		"immutable_unlink":   "EPERM",
+		"append_overwrite":   "EPERM",
+		"append_truncate":    "EPERM",
+		"both_write":         "EPERM",
+		"both_truncate":      "EPERM",
+		"both_rename":        "EPERM",
+		"both_unlink":        "EPERM",
+		"set_immutable":      "ok",
+		"unknown_flag":       "EOPNOTSUPP",
+		"unsupported_ioctl":  "ENOTTY",
+		"readonly_setflag":   "EROFS",
 	})
 }

@@ -15,184 +15,53 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-func TestToStatus_All24SentinelErrors(t *testing.T) {
-	testCases := []struct {
-		name           string
-		err            error
-		expectedCode   codes.Code
-		expectedReason string
-	}{
-		{
-			name:           "ErrInvalidShrink 映射为 FailedPrecondition 与 EINVAL",
-			err:            meta.ErrInvalidShrink,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "EINVAL",
-		},
-		{
-			name:           "ErrInvalidArgument 映射为 InvalidArgument 与 EINVAL",
-			err:            meta.ErrInvalidArgument,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "EINVAL",
-		},
-		{
-			name:           "ErrNameTooLong 映射为 InvalidArgument 与 ENAMETOOLONG",
-			err:            meta.ErrNameTooLong,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "ENAMETOOLONG",
-		},
-		{
-			name:           "ErrRange 映射为 InvalidArgument 与 ERANGE",
-			err:            meta.ErrRange,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "ERANGE",
-		},
-		{
-			name:           "ErrTooBig 映射为 InvalidArgument 与 E2BIG",
-			err:            meta.ErrTooBig,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "E2BIG",
-		},
-		{
-			name:           "ErrNotFound 映射为 NotFound 与 ENOENT",
-			err:            meta.ErrNotFound,
-			expectedCode:   codes.NotFound,
-			expectedReason: "ENOENT",
-		},
-		{
-			name:           "ErrNoData 映射为 NotFound 与 ENODATA",
-			err:            meta.ErrNoData,
-			expectedCode:   codes.NotFound,
-			expectedReason: "ENODATA",
-		},
-		{
-			name:           "ErrAlreadyExists 映射为 AlreadyExists 与 EEXIST",
-			err:            meta.ErrAlreadyExists,
-			expectedCode:   codes.AlreadyExists,
-			expectedReason: "EEXIST",
-		},
-		{
-			name:           "ErrPerm 映射为 PermissionDenied 与 EPERM",
-			err:            meta.ErrPerm,
-			expectedCode:   codes.PermissionDenied,
-			expectedReason: "EPERM",
-		},
-		{
-			name:           "ErrNotDir 映射为 FailedPrecondition 与 ENOTDIR",
-			err:            meta.ErrNotDir,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "ENOTDIR",
-		},
-		{
-			name:           "ErrIsDir 映射为 FailedPrecondition 与 EISDIR",
-			err:            meta.ErrIsDir,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "EISDIR",
-		},
-		{
-			name:           "ErrNotEmpty 映射为 FailedPrecondition 与 ENOTEMPTY",
-			err:            meta.ErrNotEmpty,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "ENOTEMPTY",
-		},
-		{
-			name:           "ErrBadFileHandle 映射为 FailedPrecondition 与 EBADF",
-			err:            meta.ErrBadFileHandle,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "EBADF",
-		},
-		{
-			name:           "ErrNoSpace 映射为 ResourceExhausted 与 ENOSPC",
-			err:            meta.ErrNoSpace,
-			expectedCode:   codes.ResourceExhausted,
-			expectedReason: "ENOSPC",
-		},
-		{
-			name:           "ErrAgain 映射为 ResourceExhausted 与 EAGAIN",
-			err:            meta.ErrAgain,
-			expectedCode:   codes.ResourceExhausted,
-			expectedReason: "EAGAIN",
-		},
-		{
-			name:           "ErrDeadlock 映射为 Aborted 与 EDEADLK",
-			err:            meta.ErrDeadlock,
-			expectedCode:   codes.Aborted,
-			expectedReason: "EDEADLK",
-		},
-		{
-			name:           "ErrInterrupted 映射为 Canceled 与 EINTR",
-			err:            meta.ErrInterrupted,
-			expectedCode:   codes.Canceled,
-			expectedReason: "EINTR",
-		},
-		{
-			name:           "ErrNotSupported 映射为 Unimplemented 与 EOPNOTSUPP",
-			err:            meta.ErrNotSupported,
-			expectedCode:   codes.Unimplemented,
-			expectedReason: "EOPNOTSUPP",
-		},
-		{
-			name:           "ErrTooManyLinks 映射为 ResourceExhausted 与 EMLINK",
-			err:            meta.ErrTooManyLinks,
-			expectedCode:   codes.ResourceExhausted,
-			expectedReason: "EMLINK",
-		},
-		{
-			name:           "ErrFileTooLarge 映射为 InvalidArgument 与 EFBIG",
-			err:            meta.ErrFileTooLarge,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "EFBIG",
-		},
-		{
-			name:           "ErrIllegalSeek 映射为 InvalidArgument 与 ESPIPE",
-			err:            meta.ErrIllegalSeek,
-			expectedCode:   codes.InvalidArgument,
-			expectedReason: "ESPIPE",
-		},
-		{
-			name:           "ErrIO 映射为 Internal 与 EIO",
-			err:            meta.ErrIO,
-			expectedCode:   codes.Internal,
-			expectedReason: "EIO",
-		},
-		{
-			name:           "ErrAccess 映射为 PermissionDenied 与 EACCES",
-			err:            meta.ErrAccess,
-			expectedCode:   codes.PermissionDenied,
-			expectedReason: "EACCES",
-		},
-		{
-			name:           "ErrCrossDevice 映射为 FailedPrecondition 与 EXDEV",
-			err:            meta.ErrCrossDevice,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "EXDEV",
-		},
-		{
-			name:           "ErrBusy 映射为 FailedPrecondition 与 EBUSY",
-			err:            meta.ErrBusy,
-			expectedCode:   codes.FailedPrecondition,
-			expectedReason: "EBUSY",
-		},
-	}
+func requireStatusMapping(t *testing.T, err error, wantCode codes.Code, wantMessage, wantReason string) {
+	t.Helper()
+	st := meta.ToStatus(err)
+	require.NotNil(t, st)
+	require.Equal(t, wantCode, st.Code())
+	require.Equal(t, wantMessage, st.Message())
 
-	require.Equal(t, 25, len(testCases), "必须完整覆盖全部 25 个领域哨兵错误")
+	details := st.Details()
+	require.Len(t, details, 1, "必须恰好包含一个 Detail (ErrorInfo)")
+	info, ok := details[0].(*errdetails.ErrorInfo)
+	require.True(t, ok, "Detail 必须为 *errdetails.ErrorInfo 类型")
+	require.Equal(t, meta.ErrorDomain, info.GetDomain())
+	require.Equal(t, "bowl.storage", info.GetDomain())
+	require.Equal(t, wantReason, info.GetReason())
+}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			st := meta.ToStatus(tc.err)
-			require.NotNil(t, st)
-			assert.Equal(t, tc.expectedCode, st.Code())
-			assert.Equal(t, tc.err.Error(), st.Message())
+func requireSentinelMapping(t *testing.T, err error, wantCode codes.Code, wantReason string) {
+	t.Helper()
+	requireStatusMapping(t, err, wantCode, err.Error(), wantReason)
+}
 
-			details := st.Details()
-			require.Len(t, details, 1, "必须恰好包含一个 Detail (ErrorInfo)")
-
-			info, ok := details[0].(*errdetails.ErrorInfo)
-			require.True(t, ok, "Detail 必须为 *errdetails.ErrorInfo 类型")
-			assert.Equal(t, meta.ErrorDomain, info.GetDomain())
-			assert.Equal(t, "bowl.storage", info.GetDomain())
-			assert.Equal(t, tc.expectedReason, info.GetReason())
-		})
-	}
+func TestToStatus_AllSentinelErrors(t *testing.T) {
+	requireSentinelMapping(t, meta.ErrInvalidShrink, codes.FailedPrecondition, "EINVAL")
+	requireSentinelMapping(t, meta.ErrInvalidArgument, codes.InvalidArgument, "EINVAL")
+	requireSentinelMapping(t, meta.ErrNameTooLong, codes.InvalidArgument, "ENAMETOOLONG")
+	requireSentinelMapping(t, meta.ErrRange, codes.InvalidArgument, "ERANGE")
+	requireSentinelMapping(t, meta.ErrTooBig, codes.InvalidArgument, "E2BIG")
+	requireSentinelMapping(t, meta.ErrNotFound, codes.NotFound, "ENOENT")
+	requireSentinelMapping(t, meta.ErrNoData, codes.NotFound, "ENODATA")
+	requireSentinelMapping(t, meta.ErrAlreadyExists, codes.AlreadyExists, "EEXIST")
+	requireSentinelMapping(t, meta.ErrPerm, codes.PermissionDenied, "EPERM")
+	requireSentinelMapping(t, meta.ErrNotDir, codes.FailedPrecondition, "ENOTDIR")
+	requireSentinelMapping(t, meta.ErrIsDir, codes.FailedPrecondition, "EISDIR")
+	requireSentinelMapping(t, meta.ErrNotEmpty, codes.FailedPrecondition, "ENOTEMPTY")
+	requireSentinelMapping(t, meta.ErrBadFileHandle, codes.FailedPrecondition, "EBADF")
+	requireSentinelMapping(t, meta.ErrNoSpace, codes.ResourceExhausted, "ENOSPC")
+	requireSentinelMapping(t, meta.ErrAgain, codes.ResourceExhausted, "EAGAIN")
+	requireSentinelMapping(t, meta.ErrDeadlock, codes.Aborted, "EDEADLK")
+	requireSentinelMapping(t, meta.ErrInterrupted, codes.Canceled, "EINTR")
+	requireSentinelMapping(t, meta.ErrNotSupported, codes.Unimplemented, "EOPNOTSUPP")
+	requireSentinelMapping(t, meta.ErrTooManyLinks, codes.ResourceExhausted, "EMLINK")
+	requireSentinelMapping(t, meta.ErrFileTooLarge, codes.InvalidArgument, "EFBIG")
+	requireSentinelMapping(t, meta.ErrIllegalSeek, codes.InvalidArgument, "ESPIPE")
+	requireSentinelMapping(t, meta.ErrIO, codes.Internal, "EIO")
+	requireSentinelMapping(t, meta.ErrAccess, codes.PermissionDenied, "EACCES")
+	requireSentinelMapping(t, meta.ErrCrossDevice, codes.FailedPrecondition, "EXDEV")
+	requireSentinelMapping(t, meta.ErrBusy, codes.FailedPrecondition, "EBUSY")
 }
 
 func TestErrInvalidShrink_HierarchyAndStatus(t *testing.T) {
@@ -325,42 +194,20 @@ func TestToGRPCError_Conversion(t *testing.T) {
 	assert.Equal(t, "ENOSPC", info.GetReason())
 }
 
-type mockGRPCStatusError struct {
-	msg    string
-	reason string
-}
-
-func (e *mockGRPCStatusError) Error() string { return e.msg }
-
-func (e *mockGRPCStatusError) GRPCStatus() *status.Status {
-	st := status.New(codes.InvalidArgument, e.msg)
-	withDetails, err := st.WithDetails(&errdetails.ErrorInfo{
-		Reason: e.reason,
+func validatorStatusError(t *testing.T, reason string) error {
+	t.Helper()
+	message := "validation failure: " + reason
+	st, err := status.New(codes.InvalidArgument, message).WithDetails(&errdetails.ErrorInfo{
+		Reason: reason,
 		Domain: meta.ErrorDomain,
 	})
-	if err == nil {
-		return withDetails
-	}
-	return st
+	require.NoError(t, err)
+	return st.Err()
 }
 
 func TestToStatus_PreservesValidatorGRPCStatus(t *testing.T) {
-	for _, reason := range []string{"ERANGE", "E2BIG", "ENAMETOOLONG", "EINVAL"} {
-		t.Run(reason, func(t *testing.T) {
-			valErr := &mockGRPCStatusError{
-				msg:    "validation failure: " + reason,
-				reason: reason,
-			}
-			st := meta.ToStatus(valErr)
-			require.NotNil(t, st)
-			assert.Equal(t, codes.InvalidArgument, st.Code())
-
-			details := st.Details()
-			require.Len(t, details, 1)
-			info, ok := details[0].(*errdetails.ErrorInfo)
-			require.True(t, ok)
-			assert.Equal(t, meta.ErrorDomain, info.GetDomain())
-			assert.Equal(t, reason, info.GetReason())
-		})
-	}
+	requireStatusMapping(t, validatorStatusError(t, "ERANGE"), codes.InvalidArgument, "validation failure: ERANGE", "ERANGE")
+	requireStatusMapping(t, validatorStatusError(t, "E2BIG"), codes.InvalidArgument, "validation failure: E2BIG", "E2BIG")
+	requireStatusMapping(t, validatorStatusError(t, "ENAMETOOLONG"), codes.InvalidArgument, "validation failure: ENAMETOOLONG", "ENAMETOOLONG")
+	requireStatusMapping(t, validatorStatusError(t, "EINVAL"), codes.InvalidArgument, "validation failure: EINVAL", "EINVAL")
 }

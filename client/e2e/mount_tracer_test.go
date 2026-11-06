@@ -3,12 +3,12 @@
 package e2e_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -51,6 +51,12 @@ func TestE2E_Mount_ValidationFailures(t *testing.T) {
 		require.Equal(t, 1, exitErr.ExitCode(), "不存在的 Disk 退出码必须为 1")
 		require.Contains(t, string(output), "不存在")
 	})
+
+	recordArtifact(t, map[string]string{
+		"invalid_uuid_exit":     "2",
+		"nil_uuid_exit":         "2",
+		"nonexistent_disk_exit": "1",
+	})
 }
 
 // TestE2E_Mount_TracerBullet 验证分支根目录、Statfs 配额与优雅卸载。
@@ -66,18 +72,12 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
 
 	// 2. 轮询等待挂载点生效
-	err := waitForMount(mountpoint, 10*time.Second)
-	if err != nil {
-		t.Logf("stdout: %s", stdout.String())
-		t.Logf("stderr: %s", stderr.String())
-		_ = cmd.Process.Kill()
-		t.Fatalf("等待挂载就绪失败: %v", err)
-	}
+	waitForMount(t, mountpoint, "等待挂载就绪失败: stdout=%s stderr=%s", stdout.String(), stderr.String())
 	t.Logf("挂载点已就绪: %s", mountpoint)
 
 	// 3. 验证根目录 Stat: 内核观察到的 Ino 必须被重写为 1 (fuse.FUSE_ROOT_ID)
 	var stat unix.Stat_t
-	err = unix.Stat(mountpoint, &stat)
+	err := unix.Stat(mountpoint, &stat)
 	require.NoError(t, err, "根目录 unix.Stat 必须成功")
 	require.Equal(t, uint64(1), stat.Ino, "分支根节点必须为 1")
 	require.Equal(t, uint32(syscall.S_IFDIR), stat.Mode&syscall.S_IFMT, "根目录类型必须为目录")
@@ -99,6 +99,15 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	require.GreaterOrEqual(t, stfs.Files, uint64(1), "已用 Inode 数至少为 1 (根目录)")
 
 	// 6. 发送 SIGTERM 优雅卸载并断言退出码 0 且无残留
-	stopBowlMountGracefully(t, cmd, mountpoint, 10*time.Second)
+	stopBowlMountGracefully(t, cmd, mountpoint)
 	t.Logf("优雅卸载完成，验证退出码为 0 且 mountinfo 无残留")
+
+	recordArtifact(t, map[string]string{
+		"root_ino":         "1",
+		"block_size":       "4096",
+		"blocks":           fmt.Sprintf("%d", expectedBlocks),
+		"avail_positive":   "true",
+		"missing_path":     "ENOENT",
+		"graceful_unmount": "true",
+	})
 }
