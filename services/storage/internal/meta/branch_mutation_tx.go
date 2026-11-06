@@ -2,6 +2,7 @@ package meta
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -250,6 +251,95 @@ func (tx *BranchMutationTx) TrackRemovedBlobs(ids ...uint64) {
 			tx.removedBlobs = append(tx.removedBlobs, id)
 		}
 	}
+}
+
+// ReclaimInode 在批次中移除指定节点的 InodeKey、OrphanKey、XattrRange 与 DataRange，
+// 收集需在提交后删除的数据块文件编号，并扣减 BranchStat 节点数与逻辑字节数。
+func (tx *BranchMutationTx) ReclaimInode(inode pebblekv.Inode) error {
+	if err := tx.LoadStat(); err != nil {
+		return err
+	}
+	var removed []uint64
+	if err := removeTopologyInode(tx.store, tx.batch, &tx.stat, inode, &removed); err != nil {
+		return err
+	}
+	tx.TrackRemovedBlobs(removed...)
+	return nil
+}
+
+// ReclaimOrphanInode 按节点编号回收孤儿节点的全部物理键、数据块与配额统计；
+// 若 InodeKey 已被移除但仍残留 OrphanKey/Xattr/Data，则仅清理残留键与块文件而不重复扣减 BranchStat。
+func (tx *BranchMutationTx) ReclaimOrphanInode(ino uint64) error {
+	value, closer, err := tx.store.Get(pebblekv.InodeKey(ino))
+	if err == nil {
+		inode, decodeErr := pebblekv.DecodeInode(value)
+		closeErr := closer.Close()
+		if err := errors.Join(decodeErr, closeErr); err != nil {
+			return err
+		}
+		if inode.Ino != ino {
+			return fmt.Errorf("Inode 编号与键不一致")
+		}
+		return tx.ReclaimInode(inode)
+	}
+	if !errors.Is(err, pebble.ErrNotFound) {
+		return err
+	}
+	var removed []uint64
+	if err := deleteTopologyInodeKeys(tx.store, tx.batch, ino, &removed); err != nil {
+		return err
+	}
+	tx.TrackRemovedBlobs(removed...)
+	return nil
+}
+
+// SetOrphanedOrReclaim 在节点链接数大于 0 时持久化节点；链接数归零时，若客户端仍持有打开句柄则标记为孤儿，否则直接物理回收。
+// 返回 removed=true 表示该节点已在本次批次中物理移除，提交时需同步通过 CommitReclaim 释放配额。
+func (tx *BranchMutationTx) SetOrphanedOrReclaim(inode *pebblekv.Inode, openInClient bool) (bool, error) {
+	if inode.Nlink > 0 {
+		return false, tx.PutInode(inode)
+	}
+	if !openInClient {
+		tx.MarkDirty(inode.Ino)
+		return true, tx.ReclaimInode(*inode)
+	}
+	if err := tx.PutInode(inode); err != nil {
+		return false, err
+	}
+	return false, tx.batch.Set(pebblekv.OrphanKey(inode.Ino), []byte{1}, nil)
+}
+
+func deleteTopologyInodeKeys(store *pebble.DB, batch *pebble.Batch, ino uint64, removed *[]uint64) error {
+	if err := batch.Delete(pebblekv.InodeKey(ino), nil); err != nil {
+		return err
+	}
+	if err := batch.Delete(pebblekv.OrphanKey(ino), nil); err != nil {
+		return err
+	}
+	lower, upper := pebblekv.XattrRange(ino)
+	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
+		return err
+	}
+	return deletePebbleDataKeys(store, batch, ino, removed)
+}
+
+// removeTopologyInode 在变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
+func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
+	if err := deleteTopologyInodeKeys(store, batch, inode.Ino, removed); err != nil {
+		return err
+	}
+	stat.Inodes -= min(stat.Inodes, 1)
+	stat.LogicalBytes -= min(stat.LogicalBytes, inode.Size)
+	return nil
+}
+
+func reclaimBranchOrphan(store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, branch string, ino uint64) error {
+	return RunBranchReclaimTx(nil, "", branch, store, blobs, quota, func(tx *BranchMutationTx) error {
+		if err := tx.ReclaimOrphanInode(ino); err != nil {
+			return err
+		}
+		return tx.CommitReclaim(ino)
+	})
 }
 
 // SetBeforeCommit 注册在配额校验通过后、Pebble 批次真正提交前执行的钩子（如窗口内脏块原地补丁）。

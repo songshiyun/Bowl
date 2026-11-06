@@ -163,8 +163,6 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	unlockMeta := m.branchMetaLock(disk, branchName)
-	defer unlockMeta()
 	lower, upper := pebblekv.OrphanRange()
 	iter, err := branch.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -179,7 +177,12 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		if err != nil {
 			return err
 		}
-		if err := reclaimBranchOrphan(branch.DB(), branch.Blobs(), quota, branchName, ino); err != nil {
+		if err := m.withBranchReclaimTx(disk, branchName, branch.DB(), branch.Blobs(), quota, func(tx *BranchMutationTx) error {
+			if err := tx.ReclaimOrphanInode(ino); err != nil {
+				return err
+			}
+			return tx.CommitReclaim(ino)
+		}); err != nil {
 			return fmt.Errorf("回收分支 %s 的孤儿节点 %d: %w", branchName, ino, err)
 		}
 	}
@@ -188,61 +191,6 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 	}
 	m.pebble.MarkBranchDirty(disk, branchName)
 	return nil
-}
-
-func reclaimBranchOrphan(store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, branch string, ino uint64) (err error) {
-	var size uint64
-	value, closer, err := store.Get(pebblekv.InodeKey(ino))
-	exists := err == nil
-	if exists {
-		inode, decodeErr := pebblekv.DecodeInode(value)
-		closeErr := closer.Close()
-		if err := errors.Join(decodeErr, closeErr); err != nil {
-			return err
-		}
-		if inode.Ino != ino {
-			return fmt.Errorf("Inode 编号与键不一致")
-		}
-		size = inode.Size
-	} else if !errors.Is(err, pebble.ErrNotFound) {
-		return err
-	}
-	var ids []uint64
-	batch := store.NewBatch()
-	defer func() { err = errors.Join(err, batch.Close()) }()
-	if err := batch.Delete(pebblekv.InodeKey(ino), nil); err != nil {
-		return err
-	}
-	lower, upper := pebblekv.XattrRange(ino)
-	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
-		return err
-	}
-	if err := deletePebbleDataKeys(store, batch, ino, &ids); err != nil {
-		return err
-	}
-	if err := batch.Delete(pebblekv.OrphanKey(ino), nil); err != nil {
-		return err
-	}
-	if exists {
-		value, closer, err := store.Get(pebblekv.StatKey())
-		if err != nil {
-			return err
-		}
-		stat, decodeErr := pebblekv.DecodeBranchStat(value)
-		closeErr := closer.Close()
-		if err := errors.Join(decodeErr, closeErr); err != nil {
-			return err
-		}
-		stat.Inodes -= min(stat.Inodes, 1)
-		stat.LogicalBytes -= min(stat.LogicalBytes, size)
-		if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-			return err
-		}
-	}
-	if err := quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.NoSync) }); err != nil {
-		return err
-	}
-	return pebbleRemoveBlobs(blobs, ids)
 }
 
 func (m *manager) closeBranchSession(ctx context.Context, sessionID uint64) (bool, error) {

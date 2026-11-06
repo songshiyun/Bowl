@@ -231,61 +231,6 @@ func deletePebbleDataKeys(store *pebble.DB, batch *pebble.Batch, ino uint64, rem
 	return nil
 }
 
-// removeTopologyInode 在目录变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
-func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
-	if err := batch.Delete(pebblekv.InodeKey(inode.Ino), nil); err != nil {
-		return err
-	}
-	if err := batch.Delete(pebblekv.OrphanKey(inode.Ino), nil); err != nil {
-		return err
-	}
-	lower, upper := pebblekv.XattrRange(inode.Ino)
-	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
-		return err
-	}
-	if err := deletePebbleDataKeys(store, batch, inode.Ino, removed); err != nil {
-		return err
-	}
-	stat.Inodes -= min(stat.Inodes, 1)
-	stat.LogicalBytes -= min(stat.LogicalBytes, inode.Size)
-	return nil
-}
-
-func saveTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, open bool, removed *[]uint64) (bool, error) {
-	if inode.Nlink > 0 {
-		return false, setCreateInode(batch, inode)
-	}
-	if !open {
-		return true, removeTopologyInode(store, batch, stat, inode, removed)
-	}
-	if err := setCreateInode(batch, inode); err != nil {
-		return false, err
-	}
-	return false, batch.Set(pebblekv.OrphanKey(inode.Ino), []byte{1}, nil)
-}
-
-func finishTopologyBatch(batch *pebble.Batch, stat pebblekv.BranchStat, dirty ...uint64) error {
-	for _, ino := range dirty {
-		if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
-			return err
-		}
-	}
-	stat.NextWriteSeq++
-	return batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil)
-}
-
-func commitTopologyBatch(batch *pebble.Batch, quota *TreeQuota, branch string, removed uint64) error {
-	quota.mu.Lock()
-	defer quota.mu.Unlock()
-	if removed != 0 {
-		return quota.applyLocked(branch, removed, 0, false, func() error { return batch.Commit(pebble.NoSync) }, false)
-	}
-	if quota.closed {
-		return ErrNotFound
-	}
-	return batch.Commit(pebble.NoSync)
-}
-
 func (m *manager) Unlink(ctx context.Context, sid *uint64, parentIno uint64, name []byte, openInClient bool) error {
 	if parentIno == 0 || parentIno > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -359,75 +304,58 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 			return err
 		}
 		defer unlockInodes()
-		unlockMeta := m.branchMetaLock(disk, branch)
-		defer unlockMeta()
-		parent, err := readTopologyParent(store, parentIno)
-		if err != nil {
-			return err
-		}
-		child, err := readTopologyTarget(store, parentIno, name)
-		if err != nil {
-			return err
-		}
-		if child.Flags&FlagImmutable != 0 {
-			return ErrPerm
-		}
-		if directory {
-			if child.Mode&S_IFMT != S_IFDIR {
-				return ErrNotDir
-			}
-			empty, err := pebbleDirEmpty(store, child.Ino)
+		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
+			parent, err := readTopologyParent(store, parentIno)
 			if err != nil {
 				return err
 			}
-			if !empty {
-				return ErrNotEmpty
+			child, err := readTopologyTarget(store, parentIno, name)
+			if err != nil {
+				return err
 			}
-		} else if child.Mode&S_IFMT == S_IFDIR {
-			return ErrIsDir
-		}
-		stat, err := readCreateStat(store)
-		if err != nil {
-			return err
-		}
-		if stat.NextWriteSeq == math.MaxUint64 {
-			return ErrNoSpace
-		}
-		now, seq := time.Now().UTC(), stat.NextWriteSeq
-		if directory {
-			child.Nlink = 0
-			if parent.Nlink > 0 {
-				parent.Nlink--
+			if child.Flags&FlagImmutable != 0 {
+				return ErrPerm
 			}
-		} else {
-			child.Nlink--
-		}
-		touchTopologyInode(&child, now, seq)
-		touchCreateParent(&parent, now, seq)
-		batch := store.NewBatch()
-		defer func() { err = errors.Join(err, batch.Close()) }()
-		if err := batch.Delete(pebblekv.EntryKey(parentIno, name), nil); err != nil {
-			return err
-		}
-		if err := setCreateInode(batch, parent); err != nil {
-			return err
-		}
-		var removedBlobs []uint64
-		removed, err := saveTopologyInode(store, batch, &stat, child, openInClient, &removedBlobs)
-		if err != nil {
-			return err
-		}
-		if err := finishTopologyBatch(batch, stat, parentIno, child.Ino); err != nil {
-			return err
-		}
-		var removedIno uint64
-		if removed {
-			removedIno = child.Ino
-		}
-		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
-			return err
-		}
-		return pebbleRemoveBlobs(blobs, removedBlobs)
+			if directory {
+				if child.Mode&S_IFMT != S_IFDIR {
+					return ErrNotDir
+				}
+				empty, err := pebbleDirEmpty(store, child.Ino)
+				if err != nil {
+					return err
+				}
+				if !empty {
+					return ErrNotEmpty
+				}
+			} else if child.Mode&S_IFMT == S_IFDIR {
+				return ErrIsDir
+			}
+			now, seq := tx.Now(), tx.WriteSeq()
+			if directory {
+				child.Nlink = 0
+				if parent.Nlink > 0 {
+					parent.Nlink--
+				}
+			} else {
+				child.Nlink--
+			}
+			touchTopologyInode(&child, now, seq)
+			touchCreateParent(&parent, now, seq)
+			if err := tx.DeleteEntry(parentIno, name); err != nil {
+				return err
+			}
+			if err := tx.PutInode(&parent); err != nil {
+				return err
+			}
+			removed, err := tx.SetOrphanedOrReclaim(&child, openInClient)
+			if err != nil {
+				return err
+			}
+			if removed {
+				return tx.CommitReclaim(child.Ino)
+			}
+			return tx.CommitWithQuota(false)
+		})
 	})
 }
 
@@ -453,194 +381,175 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 			return err
 		}
 		defer unlockInodes()
-		unlockMeta := m.branchMetaLock(disk, branch)
-		defer unlockMeta()
-		oldParent, err := readTopologyParent(store, params.OldParentIno)
-		if err != nil {
-			return err
-		}
-		newParent := &oldParent
-		if params.OldParentIno != params.NewParentIno {
-			parent, err := readTopologyParent(store, params.NewParentIno)
+		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
+			oldParent, err := readTopologyParent(store, params.OldParentIno)
 			if err != nil {
 				return err
 			}
-			newParent = &parent
-		}
-		oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
-		if err != nil {
-			return err
-		}
-		if params.OldParentIno == params.NewParentIno && bytes.Equal(params.OldName, params.NewName) {
-			if params.Flags == RenameNoReplace {
-				return ErrAlreadyExists
-			}
-			return nil
-		}
-		if oldInode.Flags&FlagImmutable != 0 {
-			return ErrPerm
-		}
-		newInode, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
-		hasNew := err == nil
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if hasNew && newInode.Flags&FlagImmutable != 0 {
-			return ErrPerm
-		}
-		if !hasNew && params.Flags == RenameExchange {
-			return ErrNotFound
-		}
-		if hasNew && params.Flags == RenameNoReplace {
-			return ErrAlreadyExists
-		}
-		if hasNew && oldInode.Ino == newInode.Ino {
-			return nil
-		}
-		oldIsDir := oldInode.Mode&S_IFMT == S_IFDIR
-		newIsDir := hasNew && newInode.Mode&S_IFMT == S_IFDIR
-		crossParent := params.OldParentIno != params.NewParentIno
-		if oldIsDir && crossParent {
-			isSub, err := isPebbleSubdirectory(store, params.NewParentIno, oldInode.Ino)
-			if err != nil {
-				return err
-			}
-			if isSub {
-				return ErrInvalidArgument
-			}
-		}
-		if params.Flags == RenameExchange && newIsDir && crossParent {
-			isSub, err := isPebbleSubdirectory(store, params.OldParentIno, newInode.Ino)
-			if err != nil {
-				return err
-			}
-			if isSub {
-				return ErrInvalidArgument
-			}
-		}
-		if params.Flags == RenameExchange {
-			if crossParent && oldIsDir && !newIsDir && newParent.Nlink >= MaxNlink ||
-				crossParent && !oldIsDir && newIsDir && oldParent.Nlink >= MaxNlink {
-				return ErrTooManyLinks
-			}
-		} else {
-			if hasNew {
-				if oldIsDir && !newIsDir {
-					return ErrNotDir
-				}
-				if !oldIsDir && newIsDir {
-					return ErrIsDir
-				}
-				if newIsDir {
-					empty, err := pebbleDirEmpty(store, newInode.Ino)
-					if err != nil {
-						return err
-					}
-					if !empty {
-						return ErrNotEmpty
-					}
-				}
-			}
-			if oldIsDir && crossParent && !hasNew && newParent.Nlink >= MaxNlink {
-				return ErrTooManyLinks
-			}
-		}
-		stat, err := readCreateStat(store)
-		if err != nil {
-			return err
-		}
-		if stat.NextWriteSeq == math.MaxUint64 {
-			return ErrNoSpace
-		}
-		now, seq := time.Now().UTC(), stat.NextWriteSeq
-		batch := store.NewBatch()
-		defer func() { err = errors.Join(err, batch.Close()) }()
-		oldKey := pebblekv.EntryKey(params.OldParentIno, params.OldName)
-		newKey := pebblekv.EntryKey(params.NewParentIno, params.NewName)
-		if params.Flags == RenameExchange {
-			if err := batch.Set(oldKey, pebblekv.EncodeEntry(pebblekv.Entry{Ino: newInode.Ino, Mode: newInode.Mode}), nil); err != nil {
-				return err
-			}
-		} else if err := batch.Delete(oldKey, nil); err != nil {
-			return err
-		}
-		if err := batch.Set(newKey, pebblekv.EncodeEntry(pebblekv.Entry{Ino: oldInode.Ino, Mode: oldInode.Mode}), nil); err != nil {
-			return err
-		}
-		if oldIsDir && crossParent {
-			oldInode.ParentIno = params.NewParentIno
-		}
-		touchTopologyInode(&oldInode, now, seq)
-		if err := setCreateInode(batch, oldInode); err != nil {
-			return err
-		}
-		var removedBlobs []uint64
-		var removedIno uint64
-		if params.Flags == RenameExchange {
-			if newIsDir && crossParent {
-				newInode.ParentIno = params.OldParentIno
-			}
-			touchTopologyInode(&newInode, now, seq)
-			if err := setCreateInode(batch, newInode); err != nil {
-				return err
-			}
-			if crossParent && oldIsDir != newIsDir {
-				if oldIsDir {
-					oldParent.Nlink--
-					newParent.Nlink++
-				} else {
-					oldParent.Nlink++
-					newParent.Nlink--
-				}
-			}
-		} else {
-			if oldIsDir {
-				if crossParent {
-					oldParent.Nlink--
-					if !hasNew {
-						newParent.Nlink++
-					}
-				} else if hasNew {
-					oldParent.Nlink--
-				}
-			}
-			if hasNew {
-				if newIsDir {
-					newInode.Nlink = 0
-				} else {
-					newInode.Nlink--
-				}
-				touchTopologyInode(&newInode, now, seq)
-				removed, err := saveTopologyInode(store, batch, &stat, newInode, params.TargetOpenInClient, &removedBlobs)
+			newParent := &oldParent
+			if params.OldParentIno != params.NewParentIno {
+				parent, err := readTopologyParent(store, params.NewParentIno)
 				if err != nil {
 					return err
 				}
-				if removed {
-					removedIno = newInode.Ino
-				}
+				newParent = &parent
 			}
-		}
-		touchCreateParent(&oldParent, now, seq)
-		if err := setCreateInode(batch, oldParent); err != nil {
-			return err
-		}
-		if crossParent {
-			touchCreateParent(newParent, now, seq)
-			if err := setCreateInode(batch, *newParent); err != nil {
+			oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
+			if err != nil {
 				return err
 			}
-		}
-		dirty := []uint64{params.OldParentIno, params.NewParentIno, oldInode.Ino}
-		if hasNew {
-			dirty = append(dirty, newInode.Ino)
-		}
-		if err := finishTopologyBatch(batch, stat, dirty...); err != nil {
-			return err
-		}
-		if err := commitTopologyBatch(batch, quota, branch, removedIno); err != nil {
-			return err
-		}
-		return pebbleRemoveBlobs(blobs, removedBlobs)
+			if params.OldParentIno == params.NewParentIno && bytes.Equal(params.OldName, params.NewName) {
+				if params.Flags == RenameNoReplace {
+					return ErrAlreadyExists
+				}
+				return nil
+			}
+			if oldInode.Flags&FlagImmutable != 0 {
+				return ErrPerm
+			}
+			newInode, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
+			hasNew := err == nil
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			if hasNew && newInode.Flags&FlagImmutable != 0 {
+				return ErrPerm
+			}
+			if !hasNew && params.Flags == RenameExchange {
+				return ErrNotFound
+			}
+			if hasNew && params.Flags == RenameNoReplace {
+				return ErrAlreadyExists
+			}
+			if hasNew && oldInode.Ino == newInode.Ino {
+				return nil
+			}
+			oldIsDir := oldInode.Mode&S_IFMT == S_IFDIR
+			newIsDir := hasNew && newInode.Mode&S_IFMT == S_IFDIR
+			crossParent := params.OldParentIno != params.NewParentIno
+			if oldIsDir && crossParent {
+				isSub, err := isPebbleSubdirectory(store, params.NewParentIno, oldInode.Ino)
+				if err != nil {
+					return err
+				}
+				if isSub {
+					return ErrInvalidArgument
+				}
+			}
+			if params.Flags == RenameExchange && newIsDir && crossParent {
+				isSub, err := isPebbleSubdirectory(store, params.OldParentIno, newInode.Ino)
+				if err != nil {
+					return err
+				}
+				if isSub {
+					return ErrInvalidArgument
+				}
+			}
+			if params.Flags == RenameExchange {
+				if crossParent && oldIsDir && !newIsDir && newParent.Nlink >= MaxNlink ||
+					crossParent && !oldIsDir && newIsDir && oldParent.Nlink >= MaxNlink {
+					return ErrTooManyLinks
+				}
+			} else {
+				if hasNew {
+					if oldIsDir && !newIsDir {
+						return ErrNotDir
+					}
+					if !oldIsDir && newIsDir {
+						return ErrIsDir
+					}
+					if newIsDir {
+						empty, err := pebbleDirEmpty(store, newInode.Ino)
+						if err != nil {
+							return err
+						}
+						if !empty {
+							return ErrNotEmpty
+						}
+					}
+				}
+				if oldIsDir && crossParent && !hasNew && newParent.Nlink >= MaxNlink {
+					return ErrTooManyLinks
+				}
+			}
+			now, seq := tx.Now(), tx.WriteSeq()
+			if params.Flags == RenameExchange {
+				if err := tx.PutEntry(params.OldParentIno, params.OldName, newInode.Ino, newInode.Mode); err != nil {
+					return err
+				}
+			} else if err := tx.DeleteEntry(params.OldParentIno, params.OldName); err != nil {
+				return err
+			}
+			if err := tx.PutEntry(params.NewParentIno, params.NewName, oldInode.Ino, oldInode.Mode); err != nil {
+				return err
+			}
+			if oldIsDir && crossParent {
+				oldInode.ParentIno = params.NewParentIno
+			}
+			touchTopologyInode(&oldInode, now, seq)
+			if err := tx.PutInode(&oldInode); err != nil {
+				return err
+			}
+			var removedIno uint64
+			if params.Flags == RenameExchange {
+				if newIsDir && crossParent {
+					newInode.ParentIno = params.OldParentIno
+				}
+				touchTopologyInode(&newInode, now, seq)
+				if err := tx.PutInode(&newInode); err != nil {
+					return err
+				}
+				if crossParent && oldIsDir != newIsDir {
+					if oldIsDir {
+						oldParent.Nlink--
+						newParent.Nlink++
+					} else {
+						oldParent.Nlink++
+						newParent.Nlink--
+					}
+				}
+			} else {
+				if oldIsDir {
+					if crossParent {
+						oldParent.Nlink--
+						if !hasNew {
+							newParent.Nlink++
+						}
+					} else if hasNew {
+						oldParent.Nlink--
+					}
+				}
+				if hasNew {
+					if newIsDir {
+						newInode.Nlink = 0
+					} else {
+						newInode.Nlink--
+					}
+					touchTopologyInode(&newInode, now, seq)
+					removed, err := tx.SetOrphanedOrReclaim(&newInode, params.TargetOpenInClient)
+					if err != nil {
+						return err
+					}
+					if removed {
+						removedIno = newInode.Ino
+					}
+				}
+			}
+			touchCreateParent(&oldParent, now, seq)
+			if err := tx.PutInode(&oldParent); err != nil {
+				return err
+			}
+			if crossParent {
+				touchCreateParent(newParent, now, seq)
+				if err := tx.PutInode(newParent); err != nil {
+					return err
+				}
+			}
+			if removedIno != 0 {
+				return tx.CommitReclaim(removedIno)
+			}
+			return tx.CommitWithQuota(false)
+		})
 	})
 }
 
@@ -672,15 +581,18 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 	}, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		unlockInode := m.lockInodeWrite(disk, branch, params.Ino)
 		defer unlockInode()
-		unlockMeta := m.branchMetaLock(disk, branch)
-		defer unlockMeta()
-		inode, err := readPebbleInode(store, params.Ino)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
-		}
-		if err == nil && inode.Nlink > 0 {
-			return ErrInvalidArgument
-		}
-		return reclaimBranchOrphan(store, blobs, quota, branch, params.Ino)
+		return m.withBranchReclaimTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
+			inode, err := readPebbleInode(store, params.Ino)
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return err
+			}
+			if err == nil && inode.Nlink > 0 {
+				return ErrInvalidArgument
+			}
+			if err := tx.ReclaimOrphanInode(params.Ino); err != nil {
+				return err
+			}
+			return tx.CommitReclaim(params.Ino)
+		})
 	})
 }
