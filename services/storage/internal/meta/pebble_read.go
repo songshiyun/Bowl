@@ -333,6 +333,7 @@ func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, nam
 				return err
 			}
 			if parentIno == RootIno {
+				m.applyDirtyPebbleAtime(session, &parent)
 				result = m.newPebbleInode(parent)
 				return nil
 			}
@@ -346,6 +347,7 @@ func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, nam
 			if err := checkPebbleSessionInodeLive(session, store, grandparent); err != nil {
 				return err
 			}
+			m.applyDirtyPebbleAtime(session, &grandparent)
 			result = m.newPebbleInode(grandparent)
 			return nil
 		}
@@ -353,6 +355,7 @@ func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, nam
 			return ErrNotFound
 		}
 		if bytes.Equal(name, []byte(".")) {
+			m.applyDirtyPebbleAtime(session, &parent)
 			result = m.newPebbleInode(parent)
 			return nil
 		}
@@ -377,6 +380,7 @@ func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, nam
 		if child.Nlink == 0 {
 			return ErrNotFound
 		}
+		m.applyDirtyPebbleAtime(session, &child)
 		result = m.newPebbleInode(child)
 		return nil
 	})

@@ -85,6 +85,7 @@ func (s *WorkspaceSwap) Commit() error {
 	}
 	if s.invalidateSessions {
 		s.mgr.invalidatePebbleBranchSessions(s.disk, s.branch)
+		s.mgr.atimes.DiscardBranch(s.disk, s.branch)
 	}
 	s.ReleaseUnlock()
 	if s.evictBranchLocks {

@@ -646,9 +646,11 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 		now := time.Now().UTC()
 		if input.AtimeNow {
 			inode.AtimeSec, inode.AtimeNsec = now.Unix(), uint32(now.Nanosecond())
+			m.atimes.DiscardInode(disk, branch, ino)
 		} else if input.Atime != nil {
 			atime := input.Atime.UTC()
 			inode.AtimeSec, inode.AtimeNsec = atime.Unix(), uint32(atime.Nanosecond())
+			m.atimes.DiscardInode(disk, branch, ino)
 		}
 		if input.MtimeNow || input.Size != nil && input.Mtime == nil {
 			inode.MtimeSec, inode.MtimeNsec = now.Unix(), uint32(now.Nanosecond())
@@ -875,7 +877,7 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 			return nil
 		}
 		// 显式持久化屏障顺带合并内存中的脏访问时间。
-		if err := m.flushPebbleAtimeInodeLocked(disk, branch, store, ino); err != nil {
+		if err := m.atimes.FlushInodeLocked(disk, branch, store, ino); err != nil {
 			return err
 		}
 		// 先取脏标记：块同步期间的新写入会重新置脏，不能被本次屏障吞掉。

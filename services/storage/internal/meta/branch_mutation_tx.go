@@ -15,6 +15,7 @@ import (
 // Inode/Entry/Xattr 批次暂存、DirtyKey 自动登记、TreeQuota 原子预留回调、MarkBranchDirty 通知以及新旧 Blob 文件清理。
 type BranchMutationTx struct {
 	pebble       *pebblekv.Manager
+	atimes       *PebbleAtimeTracker
 	disk         string
 	branch       string
 	store        *pebble.DB
@@ -28,6 +29,7 @@ type BranchMutationTx struct {
 	batch        *pebble.Batch
 	dirty        []uint64
 	dirtySeen    map[uint64]struct{}
+	reclaimed    []uint64
 	newBlobs     []uint64
 	removedBlobs []uint64
 	beforeCommit func() error
@@ -78,8 +80,14 @@ func runBranchMutationTx(m *manager, pebbleMgr *pebblekv.Manager, disk, branch s
 		seq = stat.NextWriteSeq
 	}
 	batch := store.NewBatch()
+	var atimeTracker *PebbleAtimeTracker
+	if m != nil {
+		atimes := m.atimes
+		atimeTracker = atimes
+	}
 	tx := &BranchMutationTx{
 		pebble:     pebbleMgr,
+		atimes:     atimeTracker,
 		disk:       disk,
 		branch:     branch,
 		store:      store,
@@ -101,6 +109,11 @@ func runBranchMutationTx(m *manager, pebbleMgr *pebblekv.Manager, disk, branch s
 	}()
 	if err := fn(tx); err != nil {
 		return err
+	}
+	if tx.committed && tx.atimes != nil {
+		for _, ino := range tx.reclaimed {
+			tx.atimes.DiscardInode(disk, branch, ino)
+		}
 	}
 	if tx.committed && tx.blobs != nil && len(tx.removedBlobs) > 0 {
 		if err := pebbleRemoveBlobs(tx.blobs, tx.removedBlobs); err != nil {
@@ -263,6 +276,7 @@ func (tx *BranchMutationTx) ReclaimInode(inode pebblekv.Inode) error {
 	if err := removeTopologyInode(tx.store, tx.batch, &tx.stat, inode, &removed); err != nil {
 		return err
 	}
+	tx.reclaimed = append(tx.reclaimed, inode.Ino)
 	tx.TrackRemovedBlobs(removed...)
 	return nil
 }
@@ -289,6 +303,7 @@ func (tx *BranchMutationTx) ReclaimOrphanInode(ino uint64) error {
 	if err := deleteTopologyInodeKeys(tx.store, tx.batch, ino, &removed); err != nil {
 		return err
 	}
+	tx.reclaimed = append(tx.reclaimed, ino)
 	tx.TrackRemovedBlobs(removed...)
 	return nil
 }
