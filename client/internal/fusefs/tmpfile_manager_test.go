@@ -3,16 +3,22 @@ package fusefs_test
 import (
 	"bytes"
 	"context"
+	"reflect"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
+	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
+	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 func TestTmpFileManager_CreateGetAttrAndInodeMapping(t *testing.T) {
@@ -611,4 +617,443 @@ func TestTmpFileManager_BoundaryAndErrorPaths(t *testing.T) {
 	require.True(t, mgr.OnHandleReleased(orphanIno, true, func(uint64) bool { return false }))
 	_, st = mgr.ToServerIno(orphanIno)
 	require.Equal(t, fuse.ENOENT, st)
+}
+
+type fakeStorageClientForTmpFS struct {
+	storagev1connect.UnimplementedStorageServiceHandler
+	mu            sync.Mutex
+	nextIno       uint64
+	inodes        map[uint64]*storagev1.Inode
+	data          map[uint64][]byte
+	entries       map[uint64]map[string]uint64
+	writeSizes    []int
+	fsyncInodes   []uint64
+	reclaimedInos []uint64
+}
+
+func newFakeStorageClientForTmpFS(rootIno uint64) *fakeStorageClientForTmpFS {
+	return &fakeStorageClientForTmpFS{
+		nextIno: 500,
+		inodes: map[uint64]*storagev1.Inode{
+			rootIno: {
+				Ino:  rootIno,
+				Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFDIR | 0o755, Nlink: 2},
+			},
+		},
+		data:    make(map[uint64][]byte),
+		entries: map[uint64]map[string]uint64{rootIno: {}},
+	}
+}
+
+func (f *fakeStorageClientForTmpFS) cloneInodeLocked(ino uint64) *storagev1.Inode {
+	orig := f.inodes[ino]
+	if orig == nil {
+		return nil
+	}
+	attrCopy := *orig.GetAttr()
+	return &storagev1.Inode{
+		Ino:        orig.GetIno(),
+		Generation: orig.GetGeneration(),
+		Attr:       &attrCopy,
+	}
+}
+
+func (f *fakeStorageClientForTmpFS) Mknod(_ context.Context, req *connect.Request[storagev1.MknodRequest]) (*connect.Response[storagev1.MknodResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nextIno++
+	ino := f.nextIno
+	inode := &storagev1.Inode{
+		Ino:        ino,
+		Generation: 0,
+		Attr: &storagev1.InodeAttribute{
+			Mode:  req.Msg.GetMode(),
+			Uid:   req.Msg.GetUid(),
+			Gid:   req.Msg.GetGid(),
+			Nlink: 1,
+		},
+	}
+	f.inodes[ino] = inode
+	if f.entries[req.Msg.GetParentIno()] == nil {
+		f.entries[req.Msg.GetParentIno()] = make(map[string]uint64)
+	}
+	f.entries[req.Msg.GetParentIno()][string(req.Msg.GetName())] = ino
+	return connect.NewResponse(&storagev1.MknodResponse{
+		Inode:               f.cloneInodeLocked(ino),
+		EntryTimeoutSeconds: 1.0,
+		AttrTimeoutSeconds:  1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Create(_ context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	parent := req.Msg.GetParentIno()
+	name := string(req.Msg.GetName())
+	ino, ok := f.entries[parent][name]
+	if !ok {
+		f.nextIno++
+		ino = f.nextIno
+		f.inodes[ino] = &storagev1.Inode{
+			Ino:        ino,
+			Generation: 0,
+			Attr: &storagev1.InodeAttribute{
+				Mode:  syscall.S_IFREG | (req.Msg.GetMode() & 0o7777),
+				Uid:   req.Msg.GetUid(),
+				Gid:   req.Msg.GetGid(),
+				Nlink: 1,
+			},
+		}
+		if f.entries[parent] == nil {
+			f.entries[parent] = make(map[string]uint64)
+		}
+		f.entries[parent][name] = ino
+	}
+	return connect.NewResponse(&storagev1.CreateResponse{
+		Inode:               f.cloneInodeLocked(ino),
+		EntryTimeoutSeconds: 1.0,
+		AttrTimeoutSeconds:  1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Write(_ context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ino := req.Msg.GetIno()
+	off := int(req.Msg.GetOffset())
+	payload := req.Msg.GetData()
+	f.writeSizes = append(f.writeSizes, len(payload))
+	cur := f.data[ino]
+	if off+len(payload) > len(cur) {
+		grown := make([]byte, off+len(payload))
+		copy(grown, cur)
+		cur = grown
+	}
+	copy(cur[off:off+len(payload)], payload)
+	f.data[ino] = cur
+	if inode := f.inodes[ino]; inode != nil {
+		inode.Attr.Size = uint64(len(cur))
+	}
+	return connect.NewResponse(&storagev1.WriteResponse{
+		Size:  uint32(len(payload)),
+		Inode: f.cloneInodeLocked(ino),
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Read(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cur := f.data[req.Msg.GetIno()]
+	off := int(req.Msg.GetOffset())
+	size := int(req.Msg.GetSize())
+	if off >= len(cur) {
+		return connect.NewResponse(&storagev1.ReadResponse{}), nil
+	}
+	end := min(off+size, len(cur))
+	return connect.NewResponse(&storagev1.ReadResponse{
+		Data: append([]byte(nil), cur[off:end]...),
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) SetAttr(_ context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ino := req.Msg.GetIno()
+	inode := f.inodes[ino]
+	if inode != nil && req.Msg.Size != nil {
+		newSize := int(req.Msg.GetSize())
+		cur := f.data[ino]
+		if newSize < len(cur) {
+			f.data[ino] = cur[:newSize]
+		} else if newSize > len(cur) {
+			grown := make([]byte, newSize)
+			copy(grown, cur)
+			f.data[ino] = grown
+		}
+		inode.Attr.Size = uint64(newSize)
+	}
+	return connect.NewResponse(&storagev1.SetAttrResponse{
+		Inode:              f.cloneInodeLocked(ino),
+		AttrTimeoutSeconds: 1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) GetAttr(_ context.Context, req *connect.Request[storagev1.GetAttrRequest]) (*connect.Response[storagev1.GetAttrResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inode := f.cloneInodeLocked(req.Msg.GetIno())
+	if inode == nil {
+		return nil, connect.NewError(connect.CodeNotFound, syscall.ENOENT)
+	}
+	return connect.NewResponse(&storagev1.GetAttrResponse{
+		Inode:              inode,
+		AttrTimeoutSeconds: 1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Lookup(_ context.Context, req *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ino, ok := f.entries[req.Msg.GetParentIno()][string(req.Msg.GetName())]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, syscall.ENOENT)
+	}
+	return connect.NewResponse(&storagev1.LookupResponse{
+		Inode:               f.cloneInodeLocked(ino),
+		EntryTimeoutSeconds: 1.0,
+		AttrTimeoutSeconds:  1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) ReadDirPlus(_ context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if req.Msg.GetOffset() > 0 {
+		return connect.NewResponse(&storagev1.ReadDirPlusResponse{}), nil
+	}
+	var entries []*storagev1.DirEntryPlus
+	var idx uint64
+	for name, ino := range f.entries[req.Msg.GetIno()] {
+		idx++
+		entries = append(entries, &storagev1.DirEntryPlus{
+			Ino:                 ino,
+			Name:                []byte(name),
+			NextOffset:          idx,
+			Inode:               f.cloneInodeLocked(ino),
+			EntryTimeoutSeconds: 1.0,
+			AttrTimeoutSeconds:  1.0,
+		})
+	}
+	return connect.NewResponse(&storagev1.ReadDirPlusResponse{Entries: entries}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Link(_ context.Context, req *connect.Request[storagev1.LinkRequest]) (*connect.Response[storagev1.LinkResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ino := req.Msg.GetIno()
+	inode := f.inodes[ino]
+	if inode == nil {
+		return nil, connect.NewError(connect.CodeNotFound, syscall.ENOENT)
+	}
+	inode.Attr.Nlink++
+	parent := req.Msg.GetNewParentIno()
+	if f.entries[parent] == nil {
+		f.entries[parent] = make(map[string]uint64)
+	}
+	f.entries[parent][string(req.Msg.GetNewName())] = ino
+	return connect.NewResponse(&storagev1.LinkResponse{
+		Inode:               f.cloneInodeLocked(ino),
+		EntryTimeoutSeconds: 1.0,
+		AttrTimeoutSeconds:  1.0,
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Unlink(_ context.Context, req *connect.Request[storagev1.UnlinkRequest]) (*connect.Response[storagev1.UnlinkResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	parent := req.Msg.GetParentIno()
+	name := string(req.Msg.GetName())
+	ino, ok := f.entries[parent][name]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, syscall.ENOENT)
+	}
+	delete(f.entries[parent], name)
+	if inode := f.inodes[ino]; inode != nil && inode.Attr.Nlink > 0 {
+		inode.Attr.Nlink--
+	}
+	return connect.NewResponse(&storagev1.UnlinkResponse{}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) Fsync(_ context.Context, req *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fsyncInodes = append(f.fsyncInodes, req.Msg.GetIno())
+	return connect.NewResponse(&storagev1.FsyncResponse{}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) ReclaimOrphan(_ context.Context, req *connect.Request[storagev1.ReclaimOrphanRequest]) (*connect.Response[storagev1.ReclaimOrphanResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reclaimedInos = append(f.reclaimedInos, req.Msg.GetIno())
+	return connect.NewResponse(&storagev1.ReclaimOrphanResponse{}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) RenewSession(_ context.Context, _ *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+	return connect.NewResponse(&storagev1.RenewSessionResponse{
+		ExpiresAt: timestamppb.New(time.Now().Add(30 * time.Second)),
+	}), nil
+}
+
+func (f *fakeStorageClientForTmpFS) CloseSession(_ context.Context, _ *connect.Request[storagev1.CloseSessionRequest]) (*connect.Response[storagev1.CloseSessionResponse], error) {
+	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
+}
+
+func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
+	// 1. 结构体反射守卫：RawFS 根结构体不得再保留 tmpMu, tmpFiles, serverToLocal, nextTmp
+	rawFSType := reflect.TypeOf(fusefs.RawFS{})
+	for _, forbidden := range []string{"tmpMu", "tmpFiles", "serverToLocal", "nextTmp"} {
+		_, exists := rawFSType.FieldByName(forbidden)
+		require.False(t, exists, "RawFS 不得保留旧字段 %s", forbidden)
+	}
+
+	const rootIno = uint64(100)
+	client := newFakeStorageClientForTmpFS(rootIno)
+	sessMgr, err := session.New(context.Background(), client, session.Config{DiskID: "disk-tmp"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sessMgr.Close() })
+
+	fs := fusefs.NewRawFS(client, sessMgr, fusefs.Config{DiskID: "disk-tmp", RootIno: rootIno})
+	t.Cleanup(fs.OnUnmount)
+
+	// 2. Tmpfile -> 本地 Write / SetAttr / Fallocate / GetAttr / Read（全部在 4 KiB 稀疏页纯内存完成，零服务端写 RPC）
+	var createOut fuse.CreateOut
+	st := fs.Tmpfile(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID, Caller: fuse.Caller{Owner: fuse.Owner{Uid: 1000, Gid: 1000}}},
+		Flags:    syscall.O_RDWR,
+		Mode:     0o640,
+	}, &createOut)
+	require.Equal(t, fuse.OK, st)
+	localIno := createOut.NodeId
+	fh := createOut.Fh
+	require.NotZero(t, localIno&(uint64(1)<<63))
+	require.Equal(t, uint32(4096), createOut.Attr.Blksize, "Tmpfile 必须走 TmpFileManager 4 KiB 稀疏页")
+
+	// 写入 1.25 MiB 连续数据，随后通过 Fallocate 打洞 [4096, 8192)，再通过 SetAttr 截断为 1.25 MiB
+	payload := bytes.Repeat([]byte("T"), 1280*1024)
+	written, st := fs.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: localIno},
+		Fh:       fh,
+		Offset:   0,
+		Size:     uint32(len(payload)),
+	}, payload)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, uint32(len(payload)), written)
+
+	// 本地 Fallocate 打洞不触发上云
+	st = fs.Fallocate(nil, &fuse.FallocateIn{
+		InHeader: fuse.InHeader{NodeId: localIno},
+		Fh:       fh,
+		Offset:   4096,
+		Length:   4096,
+		Mode:     unix.FALLOC_FL_PUNCH_HOLE | unix.FALLOC_FL_KEEP_SIZE,
+	})
+	require.Equal(t, fuse.OK, st)
+	client.mu.Lock()
+	require.Empty(t, client.writeSizes, "未具名化的本地匿名文件 Fallocate 打洞必须在本地完成而非提前上云")
+	client.mu.Unlock()
+
+	var attrOut fuse.AttrOut
+	st = fs.GetAttr(nil, &fuse.GetAttrIn{InHeader: fuse.InHeader{NodeId: localIno}}, &attrOut)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, uint64(len(payload)), attrOut.Attr.Size)
+
+	readBuf := make([]byte, 12288)
+	res, st := fs.Read(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: localIno},
+		Fh:       fh,
+		Offset:   0,
+		Size:     uint32(len(readBuf)),
+	}, readBuf)
+	require.Equal(t, fuse.OK, st)
+	gotBytes, st := res.Bytes(readBuf)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, bytes.Repeat([]byte("T"), 4096), gotBytes[:4096])
+	require.Equal(t, make([]byte, 4096), gotBytes[4096:8192])
+	require.Equal(t, bytes.Repeat([]byte("T"), 4096), gotBytes[8192:12288])
+
+	// 3. Link 具名化上云：通过 RawFS 实现的 TmpMaterializer 按最大 1 MiB 聚合写入服务端并安装双向别名
+	var linkOut fuse.EntryOut
+	st = fs.Link(nil, &fuse.LinkIn{
+		InHeader:  fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID},
+		Oldnodeid: localIno,
+	}, "materialized.bin", &linkOut)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, localIno, linkOut.NodeId)
+
+	srvIno, st := fs.ToServerIno(localIno)
+	require.Equal(t, fuse.OK, st)
+	require.NotEqual(t, localIno, srvIno)
+	require.Equal(t, localIno, fs.ToKernelIno(srvIno))
+
+	// 4. Lookup、ReadDirPlus 与 Create 命中已具名化节点时通过 ObserveKernelLookup 递增内核引用计数
+	var lookupOut fuse.EntryOut
+	st = fs.Lookup(nil, &fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID}, "materialized.bin", &lookupOut)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, localIno, lookupOut.NodeId)
+
+	var dirOpenOut fuse.OpenOut
+	st = fs.OpenDir(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID}}, &dirOpenOut)
+	require.Equal(t, fuse.OK, st)
+	dirBuf := make([]byte, 4096)
+	dirList := fuse.NewDirEntryList(dirBuf, 0)
+	st = fs.ReadDirPlus(nil, &fuse.ReadIn{
+		InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID},
+		Fh:       dirOpenOut.Fh,
+		Offset:   0,
+		Size:     4096,
+	}, dirList)
+	require.Equal(t, fuse.OK, st)
+	fs.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID}, Fh: dirOpenOut.Fh})
+
+	var createExistingOut fuse.CreateOut
+	st = fs.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID},
+		Flags:    syscall.O_RDWR,
+		Mode:     0o640,
+	}, "materialized.bin", &createExistingOut)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, localIno, createExistingOut.NodeId)
+
+	// 5. Release 与 Forget 双重归零回收：
+	// 当前 localIno 打开了 2 个句柄（fh 与 createExistingOut.Fh），
+	// 且 lookups = 1(Tmpfile) + 1(Link) + 1(Lookup) + 1(ReadDirPlus) + 1(Create) = 5。
+	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: localIno}, Fh: fh})
+	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: localIno}, Fh: createExistingOut.Fh})
+
+	// 句柄已全部关闭，但 lookups = 5 > 0，别名映射必须保留
+	require.Equal(t, localIno, fs.ToKernelIno(srvIno))
+	fs.Forget(localIno, 4)
+	require.Equal(t, localIno, fs.ToKernelIno(srvIno), "lookups 剩余 1 时不得提前回收别名")
+
+	// 最后 1 次 Forget 使 lookups 归零，触发双重归零回收
+	fs.Forget(localIno, 1)
+	_, st = fs.ToServerIno(localIno)
+	require.Equal(t, fuse.ENOENT, st, "双重归零后本地高位 Inode 必须失效")
+	require.Equal(t, srvIno, fs.ToKernelIno(srvIno), "双重归零后服务端 Inode 不再映射回旧本地 Inode")
+
+	// 6. 匿名文件未 Link 直接 Fsync + Release：通过 Sync 上云解链为孤儿，并在最后句柄关闭时触发孤儿回收与本地映射清理
+	var syncTmpOut fuse.CreateOut
+	st = fs.Tmpfile(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID, Caller: fuse.Caller{Owner: fuse.Owner{Uid: 1000, Gid: 1000}}},
+		Flags:    syscall.O_RDWR,
+		Mode:     0o600,
+	}, &syncTmpOut)
+	require.Equal(t, fuse.OK, st)
+	orphanLocalIno := syncTmpOut.NodeId
+	orphanFh := syncTmpOut.Fh
+
+	_, st = fs.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: orphanLocalIno},
+		Fh:       orphanFh,
+		Offset:   0,
+		Size:     5,
+	}, []byte("hello"))
+	require.Equal(t, fuse.OK, st)
+
+	st = fs.Fsync(nil, &fuse.FsyncIn{
+		InHeader: fuse.InHeader{NodeId: orphanLocalIno},
+		Fh:       orphanFh,
+	})
+	require.Equal(t, fuse.OK, st)
+
+	orphanSrvIno, st := fs.ToServerIno(orphanLocalIno)
+	require.Equal(t, fuse.OK, st)
+	require.NotEqual(t, orphanLocalIno, orphanSrvIno)
+
+	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: orphanLocalIno}, Fh: orphanFh})
+	_, st = fs.ToServerIno(orphanLocalIno)
+	require.Equal(t, fuse.ENOENT, st, "孤儿匿名文件在最后一个句柄 Release 后必须立即回收本地映射")
+	client.mu.Lock()
+	require.Contains(t, client.reclaimedInos, orphanSrvIno, "孤儿匿名文件释放最后句柄时必须向服务端发起 ReclaimOrphan")
+	client.mu.Unlock()
 }
