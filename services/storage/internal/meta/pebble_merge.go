@@ -10,7 +10,6 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -40,17 +39,12 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
 	disk := diskID.String()
-	branchDir := filepath.Join(m.storageRoot, "disks", disk, "branches")
-	targetPath := filepath.Join(branchDir, params.TargetBranch)
-	staging := ".merge-" + uuid.Must(uuid.NewV7()).String()
-	stagePath := filepath.Join(branchDir, staging)
-	backupPath := filepath.Join(branchDir, ".backup-"+uuid.Must(uuid.NewV7()).String())
+	swapper := newWorkspaceSwapper(m)
+	controlStore := newBranchControlStore(m.store)
 	var source, target *pebblekv.Branch
 	var unlockSource, unlockTarget func()
+	var swap *WorkspaceSwap
 	var created []string
-	var quota *TreeQuota
-	var oldSizes map[uint64]uint64
-	var quotaLocked, quotaChanged, moved, installed bool
 	var sourcePinned, targetPinned bool
 	var workspaceCloseErr error
 	defer func() {
@@ -60,9 +54,7 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if target != nil {
 			err = errors.Join(err, target.Close())
 		}
-		if quotaLocked {
-			quota.mu.Unlock()
-		}
+		swap.ReleaseUnlock()
 		if unlockTarget != nil {
 			unlockTarget()
 		}
@@ -71,33 +63,32 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		}
 	}()
 	err = m.store.ExecTx(ctx, func(q db.Querier) (txErr error) {
-		control, branches, err := lockedBranches(ctx, q, diskID)
+		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
 		if err != nil {
 			return err
 		}
-		si, ti := branchIndex(branches, params.SourceBranch), branchIndex(branches, params.TargetBranch)
-		if si < 0 || ti < 0 {
+		sourceBranch, _ := controlStore.FindBranch(branches, params.SourceBranch)
+		targetBranch, _ := controlStore.FindBranch(branches, params.TargetBranch)
+		if sourceBranch == nil || targetBranch == nil {
 			return ErrNotFound
 		}
-		if branches[si].State == "MERGING" || branches[ti].State == "MERGING" {
+		if sourceBranch.State == "MERGING" || targetBranch.State == "MERGING" {
 			return ErrBusy
 		}
-		raw := q.(interface{ RawDBTX() db.DBTX }).RawDBTX()
-		if err := lockBranchWriter(ctx, raw, diskID, params.TargetBranch); err != nil {
+		if err := controlStore.LockBranchWriter(ctx, q, diskID, params.TargetBranch); err != nil {
 			return err
 		}
-		_, err = q.GetActiveBranchWriter(ctx, db.GetActiveBranchWriterParams{DiskID: diskID, BranchName: params.TargetBranch})
-		if err == nil {
+		hasTargetWriter, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.TargetBranch)
+		if err != nil {
+			return err
+		}
+		if hasTargetWriter {
 			return ErrBusy
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		if _, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.SourceBranch); err != nil {
 			return err
 		}
-		_, err = q.GetActiveBranchWriter(ctx, db.GetActiveBranchWriterParams{DiskID: diskID, BranchName: params.SourceBranch})
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		quota, err = m.versionQuota(ctx, q, diskID, control)
+		quota, err := m.versionQuota(ctx, q, diskID, control)
 		if err != nil {
 			return err
 		}
@@ -124,19 +115,19 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			_, err = m.createVersion(ctx, q, diskID, stored, branch, id, "")
 			return err == nil, err
 		}
-		sourcePinned, err = pin(source, &branches[si])
+		sourcePinned, err = pin(source, sourceBranch)
 		if err != nil {
 			return err
 		}
-		targetPinned, err = pin(target, &branches[ti])
+		targetPinned, err = pin(target, targetBranch)
 		if err != nil {
 			return err
 		}
-		sourceID, err := parseDiskID(*branches[si].HeadCommitID)
+		sourceID, err := parseDiskID(*sourceBranch.HeadCommitID)
 		if err != nil {
 			return err
 		}
-		targetID, err := parseDiskID(*branches[ti].HeadCommitID)
+		targetID, err := parseDiskID(*targetBranch.HeadCommitID)
 		if err != nil {
 			return err
 		}
@@ -147,7 +138,7 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if targetAncestors[sourceID] {
 			id := targetID.String()
 			result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
-			return saveBranches(ctx, q, diskID, control.Branches, branches)
+			return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
 		}
 		baseID, err := graph.lowestMergeBase(sourceID, targetID)
 		if err != nil {
@@ -157,10 +148,9 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if err != nil {
 			return err
 		}
-		if err := m.pebble.Fork(disk, targetID.String(), staging); err != nil {
-			return err
-		}
-		workspace, err := m.pebble.OpenBranch(disk, staging)
+		var workspace *pebblekv.Branch
+		swap, workspace, err = swapper.PrepareStaging(disk, params.TargetBranch, targetID.String(), ".merge-", unlockTarget)
+		unlockTarget = nil
 		if err != nil {
 			return err
 		}
@@ -170,9 +160,6 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 				txErr = errors.Join(txErr, workspaceCloseErr)
 			}
 		}()
-		if err := prepareBranch(workspace.DB(), workspace.Blobs(), staging); err != nil {
-			return err
-		}
 		var snapshots [3]*pebblekv.Commit
 		for i, id := range []pgtype.UUID{baseID, targetID, sourceID} {
 			snapshots[i], err = m.pebble.OpenCommit(disk, id.String())
@@ -216,11 +203,11 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		materialized := len(conflicts) != 0 && params.Strategy == ConflictStrategyMaterialize
 		if materialized {
 			state := storedMergeState{BaseCommitID: baseID.String(), SourceBranch: params.SourceBranch, SourceCommitID: sourceID.String(), TargetCommitID: targetID.String(), SidecarPaths: sidecarPaths, SidecarInodes: sidecarInodes, Conflicts: conflicts}
-			branches[ti].MergeState, err = json.Marshal(state)
+			targetBranch.MergeState, err = json.Marshal(state)
 			if err != nil {
 				return err
 			}
-			branches[ti].State = "MERGING"
+			targetBranch.State = "MERGING"
 			result = &MergeResult{Result: MergeResultMaterialized, Conflicts: conflicts}
 		} else {
 			mergeID := uuid.Must(uuid.NewV7())
@@ -240,8 +227,8 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 				return err
 			}
 			id := mergeID.String()
-			branches[ti].HeadCommitID = &id
-			branches[ti].State, branches[ti].MergeState = "NORMAL", nil
+			targetBranch.HeadCommitID = &id
+			targetBranch.State, targetBranch.MergeState = "NORMAL", nil
 			result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
 		}
 		for _, ino := range sidecarInodes {
@@ -258,57 +245,33 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			return err
 		}
 		target = nil
-		if err := m.pebble.EvictBranch(disk, params.TargetBranch); err != nil {
+		if err := swap.InstallStaged(); err != nil {
 			return err
 		}
-		if err := os.Rename(targetPath, backupPath); err != nil {
+		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
 			return err
 		}
-		moved = true
-		if err := os.Rename(stagePath, targetPath); err != nil {
-			return err
-		}
-		installed = true
-		if err := saveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
-			return err
-		}
-		quota.mu.Lock()
-		quotaLocked = true
-		oldSizes = quota.branches[params.TargetBranch]
-		sizes := make(map[uint64]uint64, len(oldSizes)+len(changedSizes))
-		for ino, size := range oldSizes {
-			if !dirty[ino] {
-				sizes[ino] = size
-			}
-		}
-		for ino, size := range changedSizes {
-			sizes[ino] = size
-		}
-		if err := quota.replaceBranchLocked(params.TargetBranch, sizes, materialized); err != nil {
-			return err
-		}
-		quotaChanged = true
-		return nil
+		return swap.StagePatch(quota, dirty, changedSizes, materialized)
 	})
 	conflicted := errors.Is(err, errMergeConflicts) && workspaceCloseErr == nil
-	var cleanupErr error
-	if err != nil {
-		if quotaLocked && quotaChanged {
-			cleanupErr = errors.Join(cleanupErr, quota.replaceBranchLocked(params.TargetBranch, oldSizes, false))
-		}
-		if moved {
-			if installed {
-				cleanupErr = errors.Join(cleanupErr, os.RemoveAll(targetPath))
-			}
-			cleanupErr = errors.Join(cleanupErr, os.Rename(backupPath, targetPath))
-		}
+	if conflicted {
+		cleanupErr := swap.Rollback()
 		for _, id := range created {
 			cleanupErr = errors.Join(cleanupErr, os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "commits", id)))
 		}
-	} else {
-		if moved {
-			err = errors.Join(err, os.RemoveAll(backupPath))
+		if cleanupErr == nil {
+			return result, nil
 		}
+		err = errors.Join(err, cleanupErr)
+	} else {
+		err = swap.Finalize(err)
+		if err != nil {
+			for _, id := range created {
+				err = errors.Join(err, os.RemoveAll(filepath.Join(m.storageRoot, "disks", disk, "commits", id)))
+			}
+		}
+	}
+	if err == nil {
 		if sourcePinned {
 			err = errors.Join(err, clearBranchDirty(source.DB()))
 		}
@@ -316,11 +279,6 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			err = errors.Join(err, clearBranchDirty(target.DB()))
 		}
 	}
-	cleanupErr = errors.Join(cleanupErr, os.RemoveAll(stagePath))
-	if conflicted && cleanupErr == nil {
-		return result, nil
-	}
-	err = errors.Join(err, cleanupErr)
 	if err != nil {
 		return nil, fmt.Errorf("合并分支: %w", err)
 	}

@@ -211,3 +211,130 @@ func TestWorkspaceSwapperCreateDiskRollbackCleansStorage(t *testing.T) {
 	require.Len(t, entries, 1, "失败的 CreateDisk 不得残留第二个磁盘目录")
 	require.Equal(t, e.disk.DiskID, entries[0].Name())
 }
+
+// Merge 在无冲突合并、冲突中止、MATERIALIZE 配额超限回滚及控制面保存失败回滚时，
+// 必须通过 WorkspaceSwapper 与 TreeQuota 保持目标分支目录与逻辑用量严格守恒，且不残留临时目录。
+func TestWorkspaceSwapperMergeQuotaAndDirectoryConservation(t *testing.T) {
+	e := setupPebbleCreate(t, 4096)
+	shared, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("shared.txt"), Mode: 0o644, SessionID: &e.sid})
+	require.NoError(t, err)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: shared.Inode.Ino, Data: bytes.Repeat([]byte("b"), 512), SessionID: &e.sid})
+	require.NoError(t, err)
+	baseCommit, err := e.mgr.Commit(e.ctx, meta.CommitParams{DiskID: e.disk.DiskID, BranchName: "main"})
+	require.NoError(t, err)
+
+	// 派生 feature 分支并在其上新增 extra.txt (512B)，首先验证无冲突合并的切换与回滚守恒。
+	_, err = e.mgr.CreateBranch(e.ctx, meta.CreateBranchParams{DiskID: e.disk.DiskID, Name: "feature", SourceCommitID: &baseCommit.CommitID})
+	require.NoError(t, err)
+	featSID := uint64(401)
+	featBranch := "feature"
+	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: featSID, DiskID: e.disk.DiskID, BranchName: &featBranch})
+	require.NoError(t, err)
+	extra, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("extra.txt"), Mode: 0o644, SessionID: &featSID})
+	require.NoError(t, err)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: extra.Inode.Ino, Data: bytes.Repeat([]byte("e"), 512), SessionID: &featSID})
+	require.NoError(t, err)
+	require.NoError(t, e.mgr.CloseSession(e.ctx, featSID))
+	require.NoError(t, e.mgr.CloseSession(e.ctx, e.sid))
+
+	quota, err := e.mgr.TreeQuota(e.ctx, e.disk.DiskID)
+	require.NoError(t, err)
+	require.Equal(t, meta.TreeQuotaUsage{Bytes: 1024, Inodes: 3}, quota.Usage())
+
+	// 1. 注入控制面触发器拦截 disks.branches 更新，验证无冲突 Merge 失败时恢复 main 目录与配额。
+	_, err = e.pool.Exec(e.ctx, `CREATE OR REPLACE FUNCTION reject_merge_branch_update() RETURNS trigger AS $$
+	BEGIN
+		RAISE EXCEPTION 'simulated merge branch save failure' USING ERRCODE = '23514';
+	END;
+	$$ LANGUAGE plpgsql;
+	CREATE TRIGGER trg_reject_merge_branch_update BEFORE UPDATE OF branches ON disks FOR EACH ROW EXECUTE FUNCTION reject_merge_branch_update();`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = e.pool.Exec(e.ctx, `DROP TRIGGER IF EXISTS trg_reject_merge_branch_update ON disks; DROP FUNCTION IF EXISTS reject_merge_branch_update();`)
+	})
+
+	_, err = e.mgr.Merge(e.ctx, meta.MergeParams{
+		DiskID: e.disk.DiskID, SourceBranch: "feature", TargetBranch: "main", Strategy: meta.ConflictStrategyAbortOnConflict,
+	})
+	require.Error(t, err)
+	assertNoTemporaryBranchDirs(t, e.root, e.disk.DiskID)
+	require.Equal(t, meta.TreeQuotaUsage{Bytes: 1024, Inodes: 3}, quota.Usage())
+
+	// 验证 main 分支尚未出现 extra.txt（目录已从 .backup-* 还原且常驻句柄缓存已驱逐）。
+	mainSID := uint64(402)
+	mainBranch := "main"
+	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: mainSID, DiskID: e.disk.DiskID, BranchName: &mainBranch})
+	require.NoError(t, err)
+	_, err = e.mgr.Lookup(e.ctx, &mainSID, 1, []byte("extra.txt"))
+	require.ErrorIs(t, err, meta.ErrNotFound)
+	require.NoError(t, e.mgr.CloseSession(e.ctx, mainSID))
+
+	// 2. 移除触发器后，无冲突 Merge 正常完成目录切换且清理 .backup-* 与 .merge-*。
+	_, err = e.pool.Exec(e.ctx, `DROP TRIGGER trg_reject_merge_branch_update ON disks`)
+	require.NoError(t, err)
+	cleanRes, err := e.mgr.Merge(e.ctx, meta.MergeParams{
+		DiskID: e.disk.DiskID, SourceBranch: "feature", TargetBranch: "main", Strategy: meta.ConflictStrategyAbortOnConflict,
+	})
+	require.NoError(t, err)
+	require.Equal(t, meta.MergeResultMerged, cleanRes.Result)
+	assertNoTemporaryBranchDirs(t, e.root, e.disk.DiskID)
+	require.Equal(t, meta.TreeQuotaUsage{Bytes: 1024, Inodes: 3}, quota.Usage())
+
+	// 3. 在 main 与 feature 上对 shared.txt 写入不同内容制造冲突：
+	//    main: 1024B，feature: 1536B；去重后 shared.txt 计 max(1024, 1536)=1536B，总用量 = 1536 + 512(extra) = 2048B。
+	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: mainSID, DiskID: e.disk.DiskID, BranchName: &mainBranch})
+	require.NoError(t, err)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: shared.Inode.Ino, Data: bytes.Repeat([]byte("m"), 1024), SessionID: &mainSID})
+	require.NoError(t, err)
+	require.NoError(t, e.mgr.CloseSession(e.ctx, mainSID))
+
+	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: featSID, DiskID: e.disk.DiskID, BranchName: &featBranch})
+	require.NoError(t, err)
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: shared.Inode.Ino, Data: bytes.Repeat([]byte("f"), 1536), SessionID: &featSID})
+	require.NoError(t, err)
+	require.NoError(t, e.mgr.CloseSession(e.ctx, featSID))
+
+	preConflictUsage := meta.TreeQuotaUsage{Bytes: 2048, Inodes: 3}
+	require.Equal(t, preConflictUsage, quota.Usage())
+
+	// 冲突中止（ConflictStrategyAbortOnConflict）返回冲突列表且不残留 .merge-* 目录，配额不变。
+	abortRes, err := e.mgr.Merge(e.ctx, meta.MergeParams{
+		DiskID: e.disk.DiskID, SourceBranch: "feature", TargetBranch: "main", Strategy: meta.ConflictStrategyAbortOnConflict,
+	})
+	require.NoError(t, err)
+	require.Equal(t, meta.MergeResultConflicts, abortRes.Result)
+	require.Len(t, abortRes.Conflicts, 1)
+	assertNoTemporaryBranchDirs(t, e.root, e.disk.DiskID)
+	require.Equal(t, preConflictUsage, quota.Usage())
+
+	// 4. 将磁盘容量上限缩至 2560B：
+	//    MATERIALIZE 会生成 shared.txt.theirs (1536B) 与 shared.txt.base (512B) 两个新 Inode，
+	//    使总用量达到 2048 + 1536 + 512 = 4096B > 2560B，必须在 StagePatch 时触发 ErrNoSpace 并回滚目录切换与配额。
+	limit := uint64(2560)
+	_, err = e.mgr.UpdateDisk(e.ctx, meta.UpdateDiskParams{DiskID: e.disk.DiskID, MaxBytes: &limit})
+	require.NoError(t, err)
+
+	_, err = e.mgr.Merge(e.ctx, meta.MergeParams{
+		DiskID: e.disk.DiskID, SourceBranch: "feature", TargetBranch: "main", Strategy: meta.ConflictStrategyMaterialize,
+	})
+	require.ErrorIs(t, err, meta.ErrNoSpace)
+	assertNoTemporaryBranchDirs(t, e.root, e.disk.DiskID)
+	require.Equal(t, preConflictUsage, quota.Usage())
+
+	// 验证 main 分支仍为 NORMAL 状态且无旁路冲突文件残留。
+	branches, err := e.mgr.ListBranches(e.ctx, e.disk.DiskID)
+	require.NoError(t, err)
+	for _, b := range branches {
+		if b.Name == "main" {
+			require.Equal(t, "NORMAL", b.State)
+		}
+	}
+	_, err = e.mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: mainSID, DiskID: e.disk.DiskID, BranchName: &mainBranch})
+	require.NoError(t, err)
+	_, err = e.mgr.Lookup(e.ctx, &mainSID, 1, []byte("shared.txt.theirs"))
+	require.ErrorIs(t, err, meta.ErrNotFound)
+	readMain, err := e.mgr.Read(e.ctx, &meta.ReadRequest{Ino: shared.Inode.Ino, Size: 2048, SessionID: &mainSID})
+	require.NoError(t, err)
+	require.Equal(t, bytes.Repeat([]byte("m"), 1024), readMain.Data)
+	require.NoError(t, e.mgr.CloseSession(e.ctx, mainSID))
+}

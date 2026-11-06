@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
@@ -45,20 +44,7 @@ func (m *manager) findPebbleSession(ctx context.Context, sid *uint64) (pebbleRea
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return pebbleReadSession{}, ErrInvalidArgument
 	}
-	pp, ok := m.store.(poolProvider)
-	if !ok || pp == nil || pp.Pool() == nil {
-		return pebbleReadSession{}, ErrBadFileHandle
-	}
-	var session pebbleReadSession
-	session.id = *sid
-	err := pp.Pool().QueryRow(ctx, `SELECT disk_id, branch_name, read_only, commit_id, lease_managed,
-		expires_at > clock_timestamp(), created_at FROM client_sessions WHERE session_id = $1`, int64(*sid)).Scan(
-		&session.diskID, &session.branch, &session.readOnly, &session.commitID,
-		&session.managed, &session.active, &session.createdAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return pebbleReadSession{}, ErrBadFileHandle
-	}
-	return session, err
+	return newBranchControlStore(m.store).FindSession(ctx, *sid)
 }
 
 // loadPebbleSession 命中内存缓存时直接返回，避免每次数据面 RPC 查询 PostgreSQL。
