@@ -12,6 +12,148 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
+func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (*Inode, error) {
+	// 事务前入参边界防御
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	// 至少包含一项有效待更新属性
+	if input.Mode == nil && input.UID == nil && input.GID == nil && input.Size == nil &&
+		input.Atime == nil && input.Mtime == nil && !input.AtimeNow && !input.MtimeNow &&
+		!input.CtimeNow && input.Flags == nil {
+		return nil, ErrInvalidArgument
+	}
+
+	// 可选文件句柄与客户端会话标识静态边界防御
+	if input.Fh != nil && (*input.Fh == 0 || *input.Fh > math.MaxInt64) {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(input.SessionID); err != nil {
+		return nil, err
+	}
+
+	// 时间戳策略互斥防御
+	if (input.Atime != nil && input.AtimeNow) || (input.Mtime != nil && input.MtimeNow) {
+		return nil, ErrInvalidArgument
+	}
+
+	// Mode 范围边界防御（不超过 16 位 0o177777 = 65535）
+	if input.Mode != nil && *input.Mode > 0o177777 {
+		return nil, ErrInvalidArgument
+	}
+
+	// UID 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.UID != nil && *input.UID > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+
+	// GID 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.GID != nil && *input.GID > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+
+	// Size 范围边界防御（防止转换为 PostgreSQL BIGINT 符号位溢出）
+	if input.Size != nil && *input.Size > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	// Flags 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.Flags != nil && *input.Flags > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+	return m.pebbleSetAttr(ctx, input.SessionID, ino, input)
+}
+
+func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
+	// 1. 入参边界与整型溢出防御
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Length == 0 || params.Length > math.MaxInt64 ||
+		params.Offset > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Offset > uint64(math.MaxInt64)-params.Length {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleFallocate(ctx, params.SessionID, params)
+}
+
+func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+	if req == nil {
+		return nil, ErrInvalidArgument
+	}
+	if req.Ino == 0 || req.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Fh > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Size > BlockSize {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(req.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleRead(ctx, view, req)
+}
+
+func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error) {
+	if req == nil {
+		return nil, ErrInvalidArgument
+	}
+	if req.Ino == 0 || req.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Fh > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	dataLen := len(req.Data)
+	if dataLen > BlockSize {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > uint64(math.MaxInt64)-uint64(dataLen) {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(req.SessionID); err != nil {
+		return nil, err
+	}
+	return m.pebbleWrite(ctx, req.SessionID, req)
+}
+
+func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleSync(ctx, params.SessionID, params.Ino, false)
+}
+
+func (m *manager) FsyncDir(ctx context.Context, params FsyncDirParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleSync(ctx, params.SessionID, params.Ino, true)
+}
+
 // readPebbleBlock 读取块引用指向的完整块内容。
 func readPebbleBlock(blobs *pebblekv.BlobStore, ref pebblekv.BlobRef) ([]byte, error) {
 	return blobs.Read(ref.ID, int(ref.Length))
@@ -79,59 +221,27 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 	return result, err
 }
 
-// commitPebbleData 在同分支元数据锁内读取 BranchStat、构建批次并记账提交。
+// commitPebbleData 在同分支工作区变更事务内读取 BranchStat、构建批次并记账提交。
 // beforeCommit 在配额与序列校验全部通过、批次真正提交前执行，用于把不可回滚的块文件
 // 原地补丁放到“已确定不会 ErrNoSpace”之后，保证失败写入不触碰旧块内容。
-func (m *manager) commitPebbleData(disk string, store *pebble.DB, quota *TreeQuota, branch string, inode *pebblekv.Inode, oldSize uint64, enforce bool, edit func(*pebble.Batch) error, beforeCommit func() error) (err error) {
-	unlockMeta := m.branchMetaLock(disk, branch)
-	defer unlockMeta()
-	stat, err := readCreateStat(store)
-	if err != nil {
-		return err
-	}
-	if stat.NextWriteSeq == math.MaxUint64 {
-		return ErrNoSpace
-	}
-	if inode.Size > oldSize {
-		delta := inode.Size - oldSize
-		if delta > math.MaxUint64-stat.LogicalBytes {
-			return ErrNoSpace
-		}
-		stat.LogicalBytes += delta
-	} else {
-		stat.LogicalBytes -= min(stat.LogicalBytes, oldSize-inode.Size)
-	}
-	inode.WriteSeq = stat.NextWriteSeq
-	stat.NextWriteSeq++
-	batch := store.NewBatch()
-	defer func() { err = errors.Join(err, batch.Close()) }()
-	if edit != nil {
-		if err := edit(batch); err != nil {
+func (m *manager) commitPebbleData(disk string, store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, branch string, inode *pebblekv.Inode, oldSize uint64, enforce bool, edit func(*BranchMutationTx) error, beforeCommit func() error) error {
+	return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
+		if err := tx.AdjustLogicalBytes(oldSize, inode.Size); err != nil {
 			return err
 		}
-	}
-	if err := setCreateInode(batch, *inode); err != nil {
-		return err
-	}
-	if err := batch.Set(pebblekv.DirtyKey(inode.Ino), []byte{1}, nil); err != nil {
-		return err
-	}
-	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-		return err
-	}
-	quota.mu.Lock()
-	defer quota.mu.Unlock()
-	if err := quota.applyLocked(branch, inode.Ino, inode.Size, true, func() error {
 		if beforeCommit != nil {
-			if err := beforeCommit(); err != nil {
+			tx.SetBeforeCommit(beforeCommit)
+		}
+		if edit != nil {
+			if err := edit(tx); err != nil {
 				return err
 			}
 		}
-		return batch.Commit(pebble.NoSync)
-	}, enforce); err != nil {
-		return err
-	}
-	return nil
+		if err := tx.PutInode(inode); err != nil {
+			return err
+		}
+		return tx.CommitApplyChange(inode.Ino, inode.Size, true, enforce)
+	})
 }
 
 // buildWriteBlock 通过写时复制生成新的不可变块；整块为零时返回不保留实体。
@@ -337,28 +447,23 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 	now := time.Now().UTC()
 	current.MtimeSec, current.MtimeNsec = now.Unix(), uint32(now.Nanosecond())
 	current.CtimeSec, current.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
-	oldIDs := make([]uint64, 0, len(plans))
-	for _, plan := range plans {
-		if plan.oldOK {
-			oldIDs = append(oldIDs, plan.oldRef.ID)
-		}
-	}
-	err = m.commitPebbleData(disk, store, quota, branch, &current, oldSize, true, func(batch *pebble.Batch) error {
-		if err := deleteSecurityCapability(batch, req.Ino); err != nil {
+	err = m.commitPebbleData(disk, store, blobs, quota, branch, &current, oldSize, true, func(tx *BranchMutationTx) error {
+		tx.TrackNewBlobs(newIDs...)
+		if err := deleteSecurityCapability(tx.Batch(), req.Ino); err != nil {
 			return err
 		}
 		for _, plan := range plans {
+			if plan.oldOK {
+				tx.TrackRemovedBlobs(plan.oldRef.ID)
+			}
 			ref := pebblekv.BlobRef{ID: plan.newID, Length: pebblekv.BlobSize}
-			if err := batch.Set(pebblekv.DataKey(req.Ino, plan.block), pebblekv.EncodeBlobRef(ref), nil); err != nil {
+			if err := tx.Batch().Set(pebblekv.DataKey(req.Ino, plan.block), pebblekv.EncodeBlobRef(ref), nil); err != nil {
 				return err
 			}
 		}
 		return nil
 	}, nil)
 	if err != nil {
-		return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
-	}
-	if err := pebbleRemoveBlobs(blobs, oldIDs); err != nil {
 		return nil, false, err
 	}
 	return &WriteResponse{Size: uint32(len(req.Data)), Inode: m.newPebbleInode(current)}, false, nil
@@ -441,7 +546,10 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 		pos += uint64(length)
 		consumed += length
 	}
-	err = m.commitPebbleData(disk, store, quota, branch, &inode, oldSize, true, func(batch *pebble.Batch) error {
+	err = m.commitPebbleData(disk, store, blobs, quota, branch, &inode, oldSize, true, func(tx *BranchMutationTx) error {
+		tx.TrackNewBlobs(newIDs...)
+		tx.TrackRemovedBlobs(oldIDs...)
+		batch := tx.Batch()
 		if err := deleteSecurityCapability(batch, req.Ino); err != nil {
 			return err
 		}
@@ -478,9 +586,6 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 		return nil
 	})
 	if err != nil {
-		return nil, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
-	}
-	if err := pebbleRemoveBlobs(blobs, oldIDs); err != nil {
 		return nil, err
 	}
 	return &WriteResponse{Size: uint32(len(req.Data)), Inode: m.newPebbleInode(inode)}, nil
@@ -552,8 +657,8 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 			inode.MtimeSec, inode.MtimeNsec = mtime.Unix(), uint32(mtime.Nanosecond())
 		}
 		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
-		var oldIDs, newIDs []uint64
-		err = m.commitPebbleData(disk, store, quota, branch, &inode, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
+		err = m.commitPebbleData(disk, store, blobs, quota, branch, &inode, oldSize, inode.Size > oldSize, func(tx *BranchMutationTx) error {
+			batch := tx.Batch()
 			if input.Size != nil || input.UID != nil || input.GID != nil || input.Mode != nil {
 				if err := deleteSecurityCapability(batch, ino); err != nil {
 					return err
@@ -567,7 +672,7 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 				if err != nil {
 					return err
 				}
-				oldIDs = append(oldIDs, ids...)
+				tx.TrackRemovedBlobs(ids...)
 				lower, upper := pebblekv.DataRange(ino, 0)
 				return batch.DeleteRange(lower, upper, nil)
 			}
@@ -577,7 +682,7 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 			if err != nil {
 				return err
 			}
-			oldIDs = append(oldIDs, ids...)
+			tx.TrackRemovedBlobs(ids...)
 			lower, upper := pebblekv.DataRange(ino, tail+1)
 			if err := batch.DeleteRange(lower, upper, nil); err != nil {
 				return err
@@ -595,7 +700,7 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 				return err
 			}
 			data = data[:length]
-			oldIDs = append(oldIDs, ref.ID)
+			tx.TrackRemovedBlobs(ref.ID)
 			if allZeroBytes(data) {
 				return batch.Delete(key, nil)
 			}
@@ -606,13 +711,10 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 			if err := blobs.WriteForInode(ino, id, data); err != nil {
 				return err
 			}
-			newIDs = append(newIDs, id)
+			tx.TrackNewBlobs(id)
 			return batch.Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: length}), nil)
 		}, nil)
 		if err != nil {
-			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
-		}
-		if err := pebbleRemoveBlobs(blobs, oldIDs); err != nil {
 			return err
 		}
 		result = m.newPebbleInode(inode)
@@ -622,7 +724,8 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 }
 
 // zeroPebbleRange 用局部补丁和整块删除清除区间，并登记需回收的块编号。
-func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv.BlobStore, batch *pebble.Batch, ino, start, end uint64, oldIDs, newIDs *[]uint64) error {
+func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv.BlobStore, tx *BranchMutationTx, ino, start, end uint64) error {
+	batch := tx.Batch()
 	for pos := start; pos < end; {
 		block := pos / pebblekv.BlobSize
 		inBlock := int(pos % pebblekv.BlobSize)
@@ -637,7 +740,7 @@ func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv
 			continue
 		}
 		if inBlock == 0 && length == pebblekv.BlobSize {
-			*oldIDs = append(*oldIDs, ref.ID)
+			tx.TrackRemovedBlobs(ref.ID)
 			if err := batch.Delete(key, nil); err != nil {
 				return err
 			}
@@ -665,7 +768,7 @@ func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv
 			pos += uint64(length)
 			continue
 		}
-		*oldIDs = append(*oldIDs, ref.ID)
+		tx.TrackRemovedBlobs(ref.ID)
 		if allZeroBytes(data) {
 			if err := batch.Delete(key, nil); err != nil {
 				return err
@@ -680,7 +783,7 @@ func (m *manager) zeroPebbleRange(disk string, store *pebble.DB, blobs *pebblekv
 		if err := blobs.WriteForInode(ino, id, data); err != nil {
 			return err
 		}
-		*newIDs = append(*newIDs, id)
+		tx.TrackNewBlobs(id)
 		if err := batch.Set(key, pebblekv.EncodeBlobRef(pebblekv.BlobRef{ID: id, Length: uint32(len(data))}), nil); err != nil {
 			return err
 		}
@@ -732,20 +835,15 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 			inode.MtimeSec, inode.MtimeNsec = now.Unix(), uint32(now.Nanosecond())
 		}
 		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
-		var oldIDs, newIDs []uint64
-		err = m.commitPebbleData(disk, store, quota, branch, &inode, oldSize, inode.Size > oldSize, func(batch *pebble.Batch) error {
-			if err := deleteSecurityCapability(batch, params.Ino); err != nil {
+		return m.commitPebbleData(disk, store, blobs, quota, branch, &inode, oldSize, inode.Size > oldSize, func(tx *BranchMutationTx) error {
+			if err := deleteSecurityCapability(tx.Batch(), params.Ino); err != nil {
 				return err
 			}
 			if !zero {
 				return nil
 			}
-			return m.zeroPebbleRange(disk, store, blobs, batch, params.Ino, params.Offset, min(end, inode.Size), &oldIDs, &newIDs)
+			return m.zeroPebbleRange(disk, store, blobs, tx, params.Ino, params.Offset, min(end, inode.Size))
 		}, nil)
-		if err != nil {
-			return errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
-		}
-		return pebbleRemoveBlobs(blobs, oldIDs)
 	})
 }
 

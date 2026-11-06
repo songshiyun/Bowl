@@ -10,38 +10,11 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
-
-type sessionIDContextKey struct{}
-
-type openInClientContextKey struct{}
-
-// WithOpenInClient 将客户端本地打开状态放入请求上下文。
-func WithOpenInClient(ctx context.Context, open bool) context.Context {
-	return context.WithValue(ctx, openInClientContextKey{}, open)
-}
-
-// OpenInClientFromContext 返回客户端是否设置了本地打开状态。
-func OpenInClientFromContext(ctx context.Context) (bool, bool) {
-	open, ok := ctx.Value(openInClientContextKey{}).(bool)
-	return open, ok
-}
-
-// WithSessionID 将客户端会话标识放入请求上下文。
-func WithSessionID(ctx context.Context, sessionID *uint64) context.Context {
-	return context.WithValue(ctx, sessionIDContextKey{}, sessionID)
-}
-
-// SessionIDFromContext 返回请求上下文中设置的客户端会话标识。
-func SessionIDFromContext(ctx context.Context) (*uint64, bool) {
-	id, ok := ctx.Value(sessionIDContextKey{}).(*uint64)
-	return id, ok
-}
 
 type branchLockKey struct{ disk, branch string }
 
@@ -190,8 +163,6 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		return err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	unlockMeta := m.branchMetaLock(disk, branchName)
-	defer unlockMeta()
 	lower, upper := pebblekv.OrphanRange()
 	iter, err := branch.DB().NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -206,7 +177,12 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 		if err != nil {
 			return err
 		}
-		if err := reclaimBranchOrphan(branch.DB(), branch.Blobs(), quota, branchName, ino); err != nil {
+		if err := m.withBranchReclaimTx(disk, branchName, branch.DB(), branch.Blobs(), quota, func(tx *BranchMutationTx) error {
+			if err := tx.ReclaimOrphanInode(ino); err != nil {
+				return err
+			}
+			return tx.CommitReclaim(ino)
+		}); err != nil {
 			return fmt.Errorf("回收分支 %s 的孤儿节点 %d: %w", branchName, ino, err)
 		}
 	}
@@ -217,103 +193,14 @@ func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID p
 	return nil
 }
 
-func reclaimBranchOrphan(store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, branch string, ino uint64) (err error) {
-	var size uint64
-	value, closer, err := store.Get(pebblekv.InodeKey(ino))
-	exists := err == nil
-	if exists {
-		inode, decodeErr := pebblekv.DecodeInode(value)
-		closeErr := closer.Close()
-		if err := errors.Join(decodeErr, closeErr); err != nil {
-			return err
-		}
-		if inode.Ino != ino {
-			return fmt.Errorf("Inode 编号与键不一致")
-		}
-		size = inode.Size
-	} else if !errors.Is(err, pebble.ErrNotFound) {
-		return err
-	}
-	var ids []uint64
-	batch := store.NewBatch()
-	defer func() { err = errors.Join(err, batch.Close()) }()
-	if err := batch.Delete(pebblekv.InodeKey(ino), nil); err != nil {
-		return err
-	}
-	lower, upper := pebblekv.XattrRange(ino)
-	if err := deletePebbleRangePointwise(store, batch, lower, upper); err != nil {
-		return err
-	}
-	if err := deletePebbleDataKeys(store, batch, ino, &ids); err != nil {
-		return err
-	}
-	if err := batch.Delete(pebblekv.OrphanKey(ino), nil); err != nil {
-		return err
-	}
-	if exists {
-		value, closer, err := store.Get(pebblekv.StatKey())
-		if err != nil {
-			return err
-		}
-		stat, decodeErr := pebblekv.DecodeBranchStat(value)
-		closeErr := closer.Close()
-		if err := errors.Join(decodeErr, closeErr); err != nil {
-			return err
-		}
-		stat.Inodes -= min(stat.Inodes, 1)
-		stat.LogicalBytes -= min(stat.LogicalBytes, size)
-		if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-			return err
-		}
-	}
-	if err := quota.Apply(branch, ino, 0, false, func() error { return batch.Commit(pebble.NoSync) }); err != nil {
-		return err
-	}
-	return pebbleRemoveBlobs(blobs, ids)
-}
-
-func lockSession(ctx context.Context, conn db.DBTX, sessionID uint64) error {
-	_, err := conn.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('bowl:session:' || $1::bigint::text, 0))`, int64(sessionID))
-	return err
-}
-
-func lockBranchWriter(ctx context.Context, conn db.DBTX, diskID pgtype.UUID, branch string) error {
-	_, err := conn.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('bowl:writer:' || $1::uuid::text || ':' || $2::text, 0))`, diskID, branch)
-	return err
-}
-
 func (m *manager) closeBranchSession(ctx context.Context, sessionID uint64) (bool, error) {
+	controlStore := newBranchControlStore(m.store)
 	managed := false
 	needsSweep := false
 	err := m.store.ExecTx(ctx, func(q db.Querier) error {
-		raw := q.(interface{ RawDBTX() db.DBTX }).RawDBTX()
-		if err := lockSession(ctx, raw, sessionID); err != nil {
-			return err
-		}
-		var diskID pgtype.UUID
-		var branch string
-		var readOnly bool
-		err := raw.QueryRow(ctx, `SELECT disk_id, branch_name, read_only FROM client_sessions WHERE session_id = $1 AND lease_managed`, int64(sessionID)).Scan(&diskID, &branch, &readOnly)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		managed = true
-		if !readOnly {
-			if err := lockBranchWriter(ctx, raw, diskID, branch); err != nil {
-				return err
-			}
-			// 先持久化写端失效，再清扫 Pebble；后续事务失败时旧写端不会复活。
-			_, err := raw.Exec(ctx, `UPDATE client_sessions SET expires_at = LEAST(expires_at, clock_timestamp()) WHERE session_id = $1 AND lease_managed`, int64(sessionID))
-			needsSweep = err == nil
-			return err
-		}
-		if _, err := raw.Exec(ctx, `DELETE FROM client_sessions WHERE session_id = $1 AND lease_managed`, int64(sessionID)); err != nil {
-			return err
-		}
-		return nil
+		var err error
+		managed, needsSweep, err = controlStore.DeactivateOrDeleteManagedSession(ctx, q, sessionID)
+		return err
 	})
 	if err == nil && needsSweep {
 		err = m.sweepExpiredBranchSession(ctx, sessionID)
@@ -323,26 +210,8 @@ func (m *manager) closeBranchSession(ctx context.Context, sessionID uint64) (boo
 
 // sweepExpiredBranchSessions 保留写端租约记录，直到该分支的清扫成功。
 func (m *manager) sweepExpiredBranchSessions(ctx context.Context) error {
-	pp, ok := m.store.(poolProvider)
-	if !ok || pp == nil || pp.Pool() == nil {
-		return nil
-	}
-	rows, err := pp.Pool().Query(ctx, `SELECT session_id FROM client_sessions
-		WHERE lease_managed AND expires_at <= clock_timestamp() ORDER BY session_id`)
-	if err != nil {
-		return err
-	}
-	var sessions []uint64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		sessions = append(sessions, uint64(id))
-	}
-	err = rows.Err()
-	rows.Close()
+	controlStore := newBranchControlStore(m.store)
+	sessions, err := controlStore.ListExpiredManagedSessionIDs(ctx)
 	if err != nil {
 		return err
 	}
@@ -355,45 +224,22 @@ func (m *manager) sweepExpiredBranchSessions(ctx context.Context) error {
 }
 
 func (m *manager) sweepExpiredBranchSession(ctx context.Context, sessionID uint64) error {
+	controlStore := newBranchControlStore(m.store)
 	deleted := false
 	err := m.store.ExecTx(ctx, func(q db.Querier) error {
-		raw := q.(interface{ RawDBTX() db.DBTX }).RawDBTX()
-		if err := lockSession(ctx, raw, sessionID); err != nil {
-			return err
-		}
-		var diskID pgtype.UUID
-		var branch string
-		var readOnly bool
-		err := raw.QueryRow(ctx, `SELECT disk_id, branch_name, read_only FROM client_sessions
-			WHERE session_id = $1 AND lease_managed AND expires_at <= clock_timestamp()`, int64(sessionID)).Scan(&diskID, &branch, &readOnly)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if !readOnly {
-			if err := lockBranchWriter(ctx, raw, diskID, branch); err != nil {
-				return err
-			}
-		}
-		tag, err := raw.Exec(ctx, `DELETE FROM client_sessions WHERE session_id = $1
-			AND lease_managed AND expires_at <= clock_timestamp()`, int64(sessionID))
-		if err != nil || tag.RowsAffected() == 0 {
+		expired, err := controlStore.DeleteExpiredManagedSession(ctx, q, sessionID)
+		if err != nil || !expired.deleted {
 			return err
 		}
 		deleted = true
-		if readOnly {
+		if expired.readOnly {
 			return nil
 		}
-		_, err = q.GetActiveBranchWriter(ctx, db.GetActiveBranchWriterParams{DiskID: diskID, BranchName: branch})
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		hasWriter, err := controlStore.HasActiveBranchWriter(ctx, q, expired.diskID, expired.branch)
+		if err != nil || hasWriter {
 			return err
 		}
-		return m.sweepBranchOrphans(ctx, q, diskID, branch)
+		return m.sweepBranchOrphans(ctx, q, expired.diskID, expired.branch)
 	})
 	if err == nil && deleted {
 		m.invalidatePebbleSession(sessionID)

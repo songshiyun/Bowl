@@ -39,7 +39,7 @@ func assertPebbleKeyMissing(t *testing.T, store *pebble.DB, key []byte) {
 
 func createTestRegularFile(t *testing.T, e *pebbleCreateEnv, name string) *meta.Inode {
 	t.Helper()
-	inode, err := e.mgr.Mknod(e.branchContext(), meta.MknodParams{ParentIno: 1, Name: []byte(name), Mode: meta.S_IFREG | 0o644})
+	inode, err := e.mgr.Mknod(e.ctx, meta.MknodParams{SessionID: &e.sid, ParentIno: 1, Name: []byte(name), Mode: meta.S_IFREG | 0o644})
 	require.NoError(t, err)
 	return inode
 }
@@ -53,7 +53,7 @@ func TestPebbleDeleteCleansPhysicalState(t *testing.T) {
 	victim := createTestRegularFile(t, e, "victim")
 	victimData := seedInodeData(t, branch, victim.Ino, 9001, []byte("user.victim"), []byte("victim"))
 	require.True(t, branch.Blobs().Exists(victimData.blobID))
-	require.NoError(t, e.mgr.Unlink(e.branchContext(), 1, []byte("victim")))
+	require.NoError(t, e.mgr.Unlink(e.ctx, &e.sid, 1, []byte("victim"), false))
 	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(victim.Ino))
 	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(victim.Ino))
 	assertPebbleKeyMissing(t, branch.DB(), pebblekv.EntryKey(1, []byte("victim")))
@@ -63,7 +63,7 @@ func TestPebbleDeleteCleansPhysicalState(t *testing.T) {
 
 	orphan := createTestRegularFile(t, e, "orphan")
 	orphanData := seedInodeData(t, branch, orphan.Ino, 9002, []byte("user.orphan"), []byte("orphan"))
-	require.NoError(t, e.mgr.Unlink(meta.WithOpenInClient(e.branchContext(), true), 1, []byte("orphan")))
+	require.NoError(t, e.mgr.Unlink(e.ctx, &e.sid, 1, []byte("orphan"), true))
 	require.Equal(t, []byte{1}, getPebbleValue(t, branch.DB(), pebblekv.OrphanKey(orphan.Ino)))
 	require.NoError(t, e.mgr.ReclaimOrphan(e.ctx, meta.ReclaimOrphanParams{SessionID: e.sid, DiskID: e.disk.DiskID, Ino: orphan.Ino}))
 	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(orphan.Ino))
@@ -71,6 +71,59 @@ func TestPebbleDeleteCleansPhysicalState(t *testing.T) {
 	assertPebbleKeyMissing(t, branch.DB(), orphanData.xattrKey)
 	assertPebbleKeyMissing(t, branch.DB(), orphanData.dataKey)
 	require.False(t, branch.Blobs().Exists(orphanData.blobID))
+
+	renameSrc := createTestRegularFile(t, e, "rename_src")
+	renameDst := createTestRegularFile(t, e, "rename_dst")
+	renameDstData := seedInodeData(t, branch, renameDst.Ino, 9004, []byte("user.rename"), []byte("rename"))
+	require.NoError(t, e.mgr.Rename(e.ctx, meta.RenameParams{
+		SessionID:          &e.sid,
+		OldParentIno:       1,
+		OldName:            []byte("rename_src"),
+		NewParentIno:       1,
+		NewName:            []byte("rename_dst"),
+		TargetOpenInClient: true,
+	}))
+	require.Equal(t, []byte{1}, getPebbleValue(t, branch.DB(), pebblekv.OrphanKey(renameDst.Ino)))
+	require.NoError(t, e.mgr.ReclaimOrphan(e.ctx, meta.ReclaimOrphanParams{SessionID: e.sid, DiskID: e.disk.DiskID, Ino: renameDst.Ino}))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(renameDst.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(renameDst.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), renameDstData.xattrKey)
+	assertPebbleKeyMissing(t, branch.DB(), renameDstData.dataKey)
+	require.False(t, branch.Blobs().Exists(renameDstData.blobID))
+
+	renameClosedTarget := createTestRegularFile(t, e, "rename_closed_target")
+	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{
+		Ino: renameClosedTarget.Ino, Offset: 0, Data: []byte("closed-target-payload"), SessionID: &e.sid,
+	})
+	require.NoError(t, err)
+	require.NoError(t, e.mgr.SetXattr(e.ctx, meta.SetXattrParams{
+		SessionID: &e.sid, Ino: renameClosedTarget.Ino, Name: []byte("user.closed"), Value: []byte("1"),
+	}))
+	closedXattrKey := pebblekv.XattrKey(renameClosedTarget.Ino, []byte("user.closed"))
+	closedDataKey := pebblekv.DataKey(renameClosedTarget.Ino, 0)
+	closedRef, err := pebblekv.DecodeBlobRef(getPebbleValue(t, branch.DB(), closedDataKey))
+	require.NoError(t, err)
+	require.True(t, branch.Blobs().Exists(closedRef.ID))
+	require.NoError(t, e.mgr.Rename(e.ctx, meta.RenameParams{
+		SessionID:          &e.sid,
+		OldParentIno:       1,
+		OldName:            []byte("rename_dst"),
+		NewParentIno:       1,
+		NewName:            []byte("rename_closed_target"),
+		TargetOpenInClient: false,
+	}))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(renameClosedTarget.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(renameClosedTarget.Ino))
+	assertPebbleKeyMissing(t, branch.DB(), closedXattrKey)
+	assertPebbleKeyMissing(t, branch.DB(), closedDataKey)
+	require.False(t, branch.Blobs().Exists(closedRef.ID))
+	fsStat, err := e.mgr.StatFS(e.ctx, &e.sid, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), fsStat.UsedBytes, "Rename 直接覆盖未打开目标后应立即释放其配额字节")
+	require.Equal(t, uint64(2), fsStat.Files, "Rename 直接覆盖未打开目标后存活节点应只剩根目录与 rename_src")
+
+	require.NoError(t, e.mgr.Unlink(e.ctx, &e.sid, 1, []byte("rename_closed_target"), false))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(renameSrc.Ino))
 	require.NoError(t, branch.Close())
 
 	survivor := createTestRegularFile(t, e, "survivor")
@@ -86,4 +139,45 @@ func TestPebbleDeleteCleansPhysicalState(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(blobPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestBranchMutationTxReclaimsInodePhysicalState(t *testing.T) {
+	root := t.TempDir()
+	storage := newTestStorage(t, root)
+	branch, err := storage.OpenBranch("disk-reclaim", "main")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, branch.Close()) }()
+
+	require.NoError(t, branch.DB().Set(
+		pebblekv.StatKey(),
+		pebblekv.EncodeBranchStat(pebblekv.BranchStat{Inodes: 2, LogicalBytes: 6, NextWriteSeq: 5}),
+		pebble.Sync,
+	))
+	inode := pebblekv.Inode{Ino: 42, Mode: meta.S_IFREG | 0o644, Nlink: 0, Size: 6}
+	encodedInode, err := pebblekv.EncodeInode(inode)
+	require.NoError(t, err)
+	require.NoError(t, branch.DB().Set(pebblekv.InodeKey(42), encodedInode, pebble.Sync))
+	require.NoError(t, branch.DB().Set(pebblekv.OrphanKey(42), []byte{1}, pebble.Sync))
+	seeded := seedInodeData(t, branch, 42, 9100, []byte("user.reclaim"), []byte("123456"))
+
+	quota := meta.NewTreeQuota(1024)
+	require.NoError(t, quota.ReplaceBranch("main", map[uint64]uint64{1: 0, 42: 6}))
+
+	err = meta.RunBranchReclaimTx(storage, "disk-reclaim", "main", branch.DB(), branch.Blobs(), quota, func(tx *meta.BranchMutationTx) error {
+		if err := tx.ReclaimInode(inode); err != nil {
+			return err
+		}
+		return tx.CommitReclaim(inode.Ino)
+	})
+	require.NoError(t, err)
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.InodeKey(42))
+	assertPebbleKeyMissing(t, branch.DB(), pebblekv.OrphanKey(42))
+	assertPebbleKeyMissing(t, branch.DB(), seeded.xattrKey)
+	assertPebbleKeyMissing(t, branch.DB(), seeded.dataKey)
+	require.False(t, branch.Blobs().Exists(seeded.blobID))
+	require.Equal(t, meta.TreeQuotaUsage{Bytes: 0, Inodes: 1}, quota.Usage())
+	stat, err := pebblekv.DecodeBranchStat(getPebbleValue(t, branch.DB(), pebblekv.StatKey()))
+	require.NoError(t, err)
+	require.Equal(t, pebblekv.BranchStat{Inodes: 1, LogicalBytes: 0, NextWriteSeq: 5}, stat)
+	require.True(t, storage.BranchDirty("disk-reclaim", "main"))
 }

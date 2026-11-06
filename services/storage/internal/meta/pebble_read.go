@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
@@ -45,20 +44,7 @@ func (m *manager) findPebbleSession(ctx context.Context, sid *uint64) (pebbleRea
 	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
 		return pebbleReadSession{}, ErrInvalidArgument
 	}
-	pp, ok := m.store.(poolProvider)
-	if !ok || pp == nil || pp.Pool() == nil {
-		return pebbleReadSession{}, ErrBadFileHandle
-	}
-	var session pebbleReadSession
-	session.id = *sid
-	err := pp.Pool().QueryRow(ctx, `SELECT disk_id, branch_name, read_only, commit_id, lease_managed,
-		expires_at > clock_timestamp(), created_at FROM client_sessions WHERE session_id = $1`, int64(*sid)).Scan(
-		&session.diskID, &session.branch, &session.readOnly, &session.commitID,
-		&session.managed, &session.active, &session.createdAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return pebbleReadSession{}, ErrBadFileHandle
-	}
-	return session, err
+	return newBranchControlStore(m.store).FindSession(ctx, *sid)
 }
 
 // loadPebbleSession 命中内存缓存时直接返回，避免每次数据面 RPC 查询 PostgreSQL。
@@ -319,7 +305,16 @@ func (m *manager) newPebbleInodeWithTimeout(target pebblekv.Inode, entryTimeout,
 	}
 }
 
-func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint64, name []byte) (*Inode, error) {
+func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, name []byte) (*Inode, error) {
+	if parentIno == 0 || parentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if len(name) > MaxFileNameBytes {
+		return nil, ErrNameTooLong
+	}
+	if bytes.IndexByte(name, '/') >= 0 || bytes.IndexByte(name, 0) >= 0 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -388,7 +383,10 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 	return result, err
 }
 
-func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*Inode, error) {
+func (m *manager) GetAttr(ctx context.Context, sid *uint64, ino uint64) (*Inode, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -409,7 +407,10 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 	return result, err
 }
 
-func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) ([]byte, error) {
+func (m *manager) Readlink(ctx context.Context, sid *uint64, ino uint64) ([]byte, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -434,6 +435,40 @@ func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) (
 		return nil
 	})
 	return result, err
+}
+
+func (m *manager) ReadDir(ctx context.Context, params ReadDirParams) ([]DirEntry, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleReadDir(ctx, view, params.Ino, params.Offset, params.Limit)
+}
+
+func (m *manager) ReadDirPlus(ctx context.Context, params ReadDirPlusParams) ([]DirEntryPlus, error) {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Limit == 0 || params.Limit > MaxReadDirLimit ||
+		params.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, params.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleReadDirPlus(ctx, view, params.Ino, params.Offset, params.Limit)
 }
 
 func (m *manager) pebbleReadDir(ctx context.Context, session pebbleReadSession, ino, offset uint64, limit uint32) ([]DirEntry, error) {
@@ -563,7 +598,10 @@ func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, 
 	return entries, nil
 }
 
-func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*StatFSResult, error) {
+func (m *manager) StatFS(ctx context.Context, sid *uint64, ino uint64) (*StatFSResult, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: ino must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), ino)
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err

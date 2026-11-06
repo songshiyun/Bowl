@@ -13,7 +13,7 @@ import (
 // 并发 RPC 必须在同一个常驻分支实例上保持数据一致，不得因重复打开或竞争而丢失写入。
 func TestPebbleConcurrentRPCsKeepBranchConsistent(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
-	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("shared"), Mode: 0o644})
+	file, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("shared"), Mode: 0o644, SessionID: &e.sid})
 	require.NoError(t, err)
 	ino := file.Inode.Ino
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: bytes.Repeat([]byte{0x5a}, 4096), SessionID: &e.sid})
@@ -29,11 +29,11 @@ func TestPebbleConcurrentRPCsKeepBranchConsistent(t *testing.T) {
 		errs <- writeErr
 	}()
 	go func() {
-		_, lookupErr := e.mgr.Lookup(e.branchContext(), 1, []byte("shared"))
+		_, lookupErr := e.mgr.Lookup(e.ctx, &e.sid, 1, []byte("shared"))
 		errs <- lookupErr
 	}()
 	go func() {
-		_, attrErr := e.mgr.GetAttr(e.branchContext(), ino)
+		_, attrErr := e.mgr.GetAttr(e.ctx, &e.sid, ino)
 		errs <- attrErr
 	}()
 	require.NoError(t, errors.Join(<-errs, <-errs, <-errs, <-errs))
@@ -49,7 +49,7 @@ func TestPebbleConcurrentRPCsKeepBranchConsistent(t *testing.T) {
 // 回档替换分支目录前必须驱逐常驻句柄，回档后读取必须返回快照内容且后续写入落在新目录。
 func TestPebbleRollbackEvictsResidentBranchInstance(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
-	file, err := e.mgr.Create(e.branchContext(), meta.CreateParams{ParentIno: 1, Name: []byte("versioned"), Mode: 0o644})
+	file, err := e.mgr.Create(e.ctx, meta.CreateParams{ParentIno: 1, Name: []byte("versioned"), Mode: 0o644, SessionID: &e.sid})
 	require.NoError(t, err)
 	ino := file.Inode.Ino
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{Ino: ino, Data: []byte("before"), SessionID: &e.sid})

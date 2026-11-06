@@ -65,8 +65,10 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	if err != nil {
 		return nil, err
 	}
-	if err := m.createDiskStorage(id.String(), commitID.String()); err != nil {
-		return nil, errors.Join(fmt.Errorf("初始化磁盘存储: %w", err), m.pebble.RemoveDisk(id.String()))
+	swapper := newWorkspaceSwapper(m)
+	swap, err := swapper.StageDiskCreate(id.String(), commitID.String())
+	if err != nil {
+		return nil, fmt.Errorf("初始化磁盘存储: %w", err)
 	}
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 	var created db.GetDiskRow
@@ -80,8 +82,8 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		branches, err = m.registerDiskStorage(ctx, q, created, commitID)
 		return err
 	})
-	if err != nil {
-		return nil, errors.Join(err, m.pebble.RemoveDisk(id.String()))
+	if err = swap.Finalize(err); err != nil {
+		return nil, err
 	}
 	disk := toDomainDisk(created)
 	if err := setDiskBranches(disk, branches); err != nil {
@@ -253,39 +255,38 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	if err != nil {
 		return nil, err
 	}
-	tree.mu.Lock()
 	var updated db.GetDiskRow
-	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		current, err := q.GetDiskForUpdate(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+	err = tree.WithShrinkCheck(func() (uint64, error) {
+		err := m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+			current, err := q.GetDiskForUpdate(ctx, id)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			if err != nil {
+				return err
+			}
+			name, limit := current.Name, uint64(current.MaxBytes)
+			if params.Name != nil {
+				name = *params.Name
+			}
+			if params.MaxBytes != nil {
+				limit = *params.MaxBytes
+			}
+			if err := tree.CheckLimit(limit); err != nil {
+				return err
+			}
+			row, err := q.UpdateDisk(ctx, db.UpdateDiskParams{DiskID: id, Name: name, MaxBytes: int64(limit)})
+			if err != nil {
+				return err
+			}
+			updated = db.GetDiskRow(row)
+			return nil
+		})
 		if err != nil {
-			return err
+			return 0, err
 		}
-		name, limit := current.Name, uint64(current.MaxBytes)
-		if params.Name != nil {
-			name = *params.Name
-		}
-		if params.MaxBytes != nil {
-			limit = *params.MaxBytes
-		}
-		if limit < tree.usage.Bytes {
-			return ErrInvalidShrink
-		}
-		row, err := q.UpdateDisk(ctx, db.UpdateDiskParams{DiskID: id, Name: name, MaxBytes: int64(limit)})
-		if err != nil {
-			return err
-		}
-		updated = db.GetDiskRow(row)
-		return nil
+		return uint64(updated.MaxBytes), nil
 	})
-	if err == nil {
-		tree.mu.Unlock()
-		err = tree.SetMaxBytes(uint64(updated.MaxBytes))
-	} else {
-		tree.mu.Unlock()
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -311,14 +312,11 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		tree = NewTreeQuota(0)
 		m.treeQuotas[diskID] = tree
 	}
-	tree.mu.Lock()
-	if tree.closed {
-		tree.mu.Unlock()
+	rollbackClose, err := tree.BeginClose()
+	if err != nil {
 		m.treeQuotaMu.Unlock()
-		return ErrNotFound
+		return err
 	}
-	tree.closed = true
-	tree.mu.Unlock()
 	m.treeQuotaMu.Unlock()
 	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
 		_, err := q.GetDiskForUpdate(ctx, id)
@@ -346,9 +344,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	})
 	if err != nil {
 		m.treeQuotaMu.Lock()
-		tree.mu.Lock()
-		tree.closed = false
-		tree.mu.Unlock()
+		rollbackClose()
 		if temporary {
 			delete(m.treeQuotas, diskID)
 		}

@@ -19,16 +19,16 @@ import (
 
 // Manager 提供分支存储与控制面操作。
 type Manager interface {
-	Lookup(context.Context, uint64, []byte) (*Inode, error)
-	GetAttr(context.Context, uint64) (*Inode, error)
+	Lookup(context.Context, *uint64, uint64, []byte) (*Inode, error)
+	GetAttr(context.Context, *uint64, uint64) (*Inode, error)
 	SetAttr(context.Context, uint64, SetAttrInput) (*Inode, error)
 	Mknod(context.Context, MknodParams) (*Inode, error)
 	Mkdir(context.Context, MkdirParams) (*Inode, error)
 	Symlink(context.Context, SymlinkParams) (*Inode, error)
-	Readlink(context.Context, uint64) ([]byte, error)
+	Readlink(context.Context, *uint64, uint64) ([]byte, error)
 	Link(context.Context, LinkParams) (*Inode, error)
-	Unlink(context.Context, uint64, []byte) error
-	Rmdir(context.Context, uint64, []byte) error
+	Unlink(context.Context, *uint64, uint64, []byte, bool) error
+	Rmdir(context.Context, *uint64, uint64, []byte) error
 	Rename(context.Context, RenameParams) error
 	ReclaimOrphan(context.Context, ReclaimOrphanParams) error
 	Create(context.Context, CreateParams) (*CreateResult, error)
@@ -38,9 +38,9 @@ type Manager interface {
 	ReadDirPlus(context.Context, ReadDirPlusParams) ([]DirEntryPlus, error)
 	Fallocate(context.Context, FallocateParams) error
 	SetXattr(context.Context, SetXattrParams) error
-	GetXattr(context.Context, uint64, []byte) ([]byte, error)
-	ListXattr(context.Context, uint64) ([][]byte, error)
-	RemoveXattr(context.Context, uint64, []byte) error
+	GetXattr(context.Context, *uint64, uint64, []byte) ([]byte, error)
+	ListXattr(context.Context, *uint64, uint64) ([][]byte, error)
+	RemoveXattr(context.Context, *uint64, uint64, []byte) error
 	RenewBranchSession(context.Context, RenewBranchSessionParams) (RenewSessionResult, error)
 	CloseSession(context.Context, uint64) error
 	CreateDisk(context.Context, CreateDiskParams) (*Disk, error)
@@ -57,7 +57,7 @@ type Manager interface {
 	AbortMerge(context.Context, AbortMergeParams) error
 	Rollback(context.Context, RollbackParams) error
 	Diff(context.Context, DiffParams) ([]DiffEntry, error)
-	StatFS(context.Context, uint64) (*StatFSResult, error)
+	StatFS(context.Context, *uint64, uint64) (*StatFSResult, error)
 	TreeQuota(context.Context, string) (*TreeQuota, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
