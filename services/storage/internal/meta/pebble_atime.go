@@ -140,7 +140,7 @@ func (m *manager) flushPebbleAtimeEntriesLocked(disk, branch string, store *pebb
 func (m *manager) writePebbleAtimes(disk, branch string, store *pebble.DB, entries map[uint64]time.Time) error {
 	wrote := false
 	for ino, value := range entries {
-		unlock := m.lockInodeWrite(disk, branch, ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, ino)
 		inode, err := readPebbleInode(store, ino)
 		if errors.Is(err, ErrNotFound) {
 			unlock()
@@ -235,7 +235,7 @@ func (m *manager) flushPebbleAtimes(ctx context.Context, disk string) error {
 }
 
 func (m *manager) flushPebbleAtimeBranch(disk, branch string, entries map[uint64]time.Time) (err error) {
-	unlock := m.lockBranchRead(disk, branch)
+	unlock := m.locks.LockBranchRead(disk, branch)
 	defer unlock()
 	path := filepath.Join(m.storageRoot, "disks", disk, "branches", branch)
 	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {

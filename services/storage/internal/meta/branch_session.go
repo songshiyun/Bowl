@@ -173,7 +173,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 
 // snapshotBranchSession 为新只读会话固定工作区，且不推进分支头。
 func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskID pgtype.UUID, target *storedBranch) (id pgtype.UUID, checkpointDir string, err error) {
-	unlock := m.lockBranchWrite(diskID.String(), target.Name)
+	unlock := m.locks.LockBranchWrite(diskID.String(), target.Name)
 	defer unlock()
 	branch, err := m.pebble.OpenBranch(diskID.String(), target.Name)
 	if err != nil {

@@ -41,7 +41,7 @@ type storedMergeState struct {
 }
 
 func (m *manager) createDiskStorage(diskID, commitID string) (err error) {
-	unlock := m.lockBranchWrite(diskID, "main")
+	unlock := m.locks.LockBranchWrite(diskID, "main")
 	defer unlock()
 	branch, err := m.pebble.OpenBranch(diskID, "main")
 	if err != nil {
@@ -221,7 +221,7 @@ func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control 
 }
 
 func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]uint64, err error) {
-	unlock := m.lockBranchRead(diskID, branchName)
+	unlock := m.locks.LockBranchRead(diskID, branchName)
 	defer unlock()
 	path := filepath.Join(m.storageRoot, "disks", diskID, "branches", branchName)
 	if _, err := os.Stat(path); err != nil {

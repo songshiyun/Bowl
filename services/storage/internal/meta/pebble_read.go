@@ -144,7 +144,7 @@ func (m *manager) withPebbleReadSession(ctx context.Context, session pebbleReadS
 		defer func() { err = errors.Join(err, commit.Close()) }()
 		return fn(commit.DB(), commit.Blobs())
 	}
-	unlock := m.lockBranchRead(disk, session.branch)
+	unlock := m.locks.LockBranchRead(disk, session.branch)
 	defer unlock()
 	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
@@ -170,7 +170,7 @@ func (m *manager) withPebblePointReadSession(ctx context.Context, session pebble
 		defer func() { err = errors.Join(err, commit.Close()) }()
 		return fn(commit.DB(), commit.Blobs())
 	}
-	unlock := m.lockBranchRead(disk, session.branch)
+	unlock := m.locks.LockBranchRead(disk, session.branch)
 	defer unlock()
 	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
@@ -194,7 +194,7 @@ func (m *manager) withPebbleWriteSession(ctx context.Context, session pebbleRead
 		defer func() { err = errors.Join(err, commit.Close()) }()
 		return fn(commit.DB(), commit.Blobs())
 	}
-	unlock := m.lockBranchRead(disk, session.branch)
+	unlock := m.locks.LockBranchRead(disk, session.branch)
 	defer unlock()
 	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
 		return ErrBadFileHandle
