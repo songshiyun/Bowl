@@ -100,7 +100,7 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 		return ErrRange
 	}
 	return m.withWritablePebbleBranch(ctx, params.SessionID, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
-		unlock := m.lockInodeWrite(disk, branch, params.Ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, params.Ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil {
@@ -207,7 +207,7 @@ func (m *manager) RemoveXattr(ctx context.Context, sid *uint64, ino uint64, name
 		return err
 	}
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
-		unlock := m.lockInodeWrite(disk, branch, ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {

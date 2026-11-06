@@ -204,7 +204,7 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 		if requireMerge && (target.State != "MERGING" || len(target.MergeState) == 0) {
 			return ErrInvalidArgument
 		}
-		unlock = m.lockBranchWrite(diskID.String(), params.BranchName)
+		unlock = m.locks.LockBranchWrite(diskID.String(), params.BranchName)
 		branch, err = m.pebble.OpenBranch(diskID.String(), params.BranchName)
 		if err != nil {
 			return err
@@ -308,7 +308,7 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			if sourceBranch.State == "MERGING" {
 				return ErrBusy
 			}
-			unlockSource = m.lockBranchWrite(disk, parent)
+			unlockSource = m.locks.LockBranchWrite(disk, parent)
 			source, err = m.pebble.OpenBranch(disk, parent)
 			if err != nil {
 				return err

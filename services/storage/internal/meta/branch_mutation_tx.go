@@ -62,7 +62,7 @@ func (m *manager) withBranchReclaimTx(disk, branch string, store *pebble.DB, blo
 
 func runBranchMutationTx(m *manager, pebbleMgr *pebblekv.Manager, disk, branch string, store *pebble.DB, blobs *pebblekv.BlobStore, quota *TreeQuota, requireSeq bool, fn func(*BranchMutationTx) error) (err error) {
 	if m != nil {
-		unlockMeta := m.branchMetaLock(disk, branch)
+		unlockMeta := m.locks.LockBranchMeta(disk, branch)
 		defer unlockMeta()
 	}
 	var stat pebblekv.BranchStat
