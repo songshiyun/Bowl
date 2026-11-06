@@ -41,21 +41,22 @@ DRIVE9_REPO="${DRIVE9_REPO:-/Users/fanxing/code/other/filesystem/drive9}"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 SUMMARY_JSON="${RESULTS_DIR}/summary.json"
-BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/.build_linux_amd64}"
 
-REGION="us-west-1"
-ZONE="us-west-1a"
+REGION_ID="${REGION_ID:-${REGION:-us-west-1}}"
+ZONE_ID="${ZONE_ID:-${ZONE:-us-west-1a}}"
 VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
 VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
 SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.c9i.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
-SYSTEM_DISK_CATEGORY="cloud_essd"
-SYSTEM_DISK_SIZE="120"
+SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
+SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-120}"
+KEEP_INSTANCES="${KEEP_INSTANCES:-0}"
 
-RUN_TS="$(date +%Y%m%d%H%M%S)"
-KEY_PAIR_NAME="bowl-d9-bench-kp-${RUN_TS}"
-KEY_FILE="${BUILD_DIR}/${KEY_PAIR_NAME}.pem"
+RUN_TS="$(date -u +%Y%m%d-%H%M%S)"
+KEY_PAIR_NAME="bowl-d9bench-kp-${RUN_TS}"
+WORK_DIR="$(mktemp -d "/tmp/bowl-d9bench-${RUN_TS}-XXXXXX")"
+KEY_FILE="${WORK_DIR}/id_rsa"
 
 SERVER_INSTANCE_ID=""
 CLIENT_INSTANCE_ID=""
@@ -89,13 +90,19 @@ cleanup() {
     ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
   fi
 
+  if [[ "${KEEP_INSTANCES}" == "1" ]]; then
+    log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
+    log "Temporary workdir preserved at: ${WORK_DIR}"
+    exit "${exit_code}"
+  fi
+
   local instance_ids=()
   [[ -n "${SERVER_INSTANCE_ID}" ]] && instance_ids+=("${SERVER_INSTANCE_ID}")
   [[ -n "${CLIENT_INSTANCE_ID}" ]] && instance_ids+=("${CLIENT_INSTANCE_ID}")
 
   if [[ ${#instance_ids[@]} -gt 0 ]]; then
-    log "Deleting temporary ECS instances in ${REGION}: ${instance_ids[*]}"
-    local del_args=(ecs DeleteInstances --RegionId "${REGION}" --Force true)
+    log "Deleting temporary ECS instances in ${REGION_ID}: ${instance_ids[*]}"
+    local del_args=(ecs DeleteInstances --RegionId "${REGION_ID}" --Force true)
     local idx=1
     for id in "${instance_ids[@]}"; do
       del_args+=("--InstanceId.${idx}" "${id}")
@@ -116,18 +123,18 @@ cleanup() {
   if [[ -n "${KEY_PAIR_NAME}" ]]; then
     log "Deleting temporary SSH KeyPair: ${KEY_PAIR_NAME}"
     aliyun ecs DeleteKeyPairs \
-      --RegionId "${REGION}" \
+      --RegionId "${REGION_ID}" \
       --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null 2>&1 || true
   fi
 
-  rm -f "${KEY_FILE}"
+  rm -rf "${WORK_DIR}"
   log "=== Cloud Resource Cleanup Finished ==="
   exit "${exit_code}"
 }
 
 trap cleanup EXIT INT TERM
 
-mkdir -p "${RESULTS_DIR}" "${BUILD_DIR}"
+mkdir -p "${RESULTS_DIR}"
 rm -f "${RESULTS_DIR}/stage_timings.jsonl"
 
 record_stage() {
@@ -146,14 +153,14 @@ record_stage() {
 STAGE_START=$(date +%s)
 log "Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64..."
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-s -w" -o "${BUILD_DIR}/storage-service" ./cmd
+  go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-s -w" -o "${WORK_DIR}/storage-service" ./cmd
 
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-s -w" -o "${BUILD_DIR}/bowl" ./cmd/bowl
+  go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-s -w" -o "${WORK_DIR}/bowl" ./cmd/bowl
 
-GOOSE_CACHE_BIN="/tmp/bowl-pjdfstest-goose-linux-amd64"
+GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
 if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
-  GOOSE_TMP_GOPATH="${BUILD_DIR}/gopath"
+  GOOSE_TMP_GOPATH="${WORK_DIR}/gopath"
   GOWORK=off GOPATH="${GOOSE_TMP_GOPATH}" GOMODCACHE="$(go env GOMODCACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go install -trimpath -ldflags="-w -s" github.com/pressly/goose/v3/cmd/goose@v3.28.0
   if [[ -f "${GOOSE_TMP_GOPATH}/bin/linux_amd64/goose" ]]; then
@@ -165,45 +172,27 @@ if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
   chmod -R u+w "${GOOSE_TMP_GOPATH}" 2>/dev/null || true
   rm -rf "${GOOSE_TMP_GOPATH}"
 fi
-cp "${GOOSE_CACHE_BIN}" "${BUILD_DIR}/goose"
-chmod +x "${BUILD_DIR}/storage-service" "${BUILD_DIR}/bowl" "${BUILD_DIR}/goose"
+cp "${GOOSE_CACHE_BIN}" "${WORK_DIR}/goose"
+chmod +x "${WORK_DIR}/storage-service" "${WORK_DIR}/bowl" "${WORK_DIR}/goose"
 
 BOWL_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 
 log "Cross-compiling Drive9 binaries (drive9-server, drive9) from ${DRIVE9_REPO} for linux/amd64..."
 DRIVE9_GO_TAGS="nogspt,noredis,nosqlite,nomysql,nopg,notikv,nobadger,noetcd,nocos,nobos,nohdfs,noibmcos,noobs,nooss,noqingstor,nosftp,noswift,noazure,nogs,noufile,nob2,nonfs,nodragonfly,nocifs,nostorj,noqiniu,notos,noks3,nowebdav,nogateway"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${DRIVE9_REPO}" build -tags "${DRIVE9_GO_TAGS}" -trimpath -ldflags="-s -w" -o "${BUILD_DIR}/drive9-server" ./cmd/drive9-server
+  go -C "${DRIVE9_REPO}" build -tags "${DRIVE9_GO_TAGS}" -trimpath -ldflags="-s -w" -o "${WORK_DIR}/drive9-server" ./cmd/drive9-server
 
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${DRIVE9_REPO}" build -tags "${DRIVE9_GO_TAGS}" -trimpath -ldflags="-s -w" -o "${BUILD_DIR}/drive9" ./cmd/drive9
+  go -C "${DRIVE9_REPO}" build -tags "${DRIVE9_GO_TAGS}" -trimpath -ldflags="-s -w" -o "${WORK_DIR}/drive9" ./cmd/drive9
 
-chmod +x "${BUILD_DIR}/drive9-server" "${BUILD_DIR}/drive9"
+chmod +x "${WORK_DIR}/drive9-server" "${WORK_DIR}/drive9"
 DRIVE9_GIT_COMMIT="$(git -C "${DRIVE9_REPO}" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 
-# 记录本轮实际上传的四个二进制文件，避免复跑后沿用旧哈希。
-python3 - "${BUILD_DIR}" "${RESULTS_DIR}/binary_sha256.json" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
+cp "${SCRIPT_DIR}/drive9_fuse_bench.py" "${WORK_DIR}/drive9_fuse_bench.py"
+cp "${SCRIPT_DIR}/fuse_perf_baseline.py" "${WORK_DIR}/fuse_perf_baseline.py"
 
-build = Path(sys.argv[1])
-hashes = {}
-for name in ("drive9", "storage-service", "bowl", "drive9-server"):
-    digest = hashlib.sha256()
-    with (build / name).open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    hashes[name] = digest.hexdigest()
-Path(sys.argv[2]).write_text(json.dumps(hashes, indent=2) + "\n")
-PY
-
-cp "${SCRIPT_DIR}/drive9_fuse_bench.py" "${BUILD_DIR}/drive9_fuse_bench.py"
-cp "${SCRIPT_DIR}/fuse_perf_baseline.py" "${BUILD_DIR}/fuse_perf_baseline.py"
-
-tar -czf "${BUILD_DIR}/server-bins.tar.gz" -C "${BUILD_DIR}" storage-service goose drive9-server
-tar -czf "${BUILD_DIR}/client-bins.tar.gz" -C "${BUILD_DIR}" bowl drive9 drive9_fuse_bench.py fuse_perf_baseline.py
+tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" storage-service goose drive9-server
+tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl drive9 drive9_fuse_bench.py fuse_perf_baseline.py
 
 STAGE_END=$(date +%s)
 record_stage "cross_compile_binaries" "$((STAGE_END - STAGE_START))"
@@ -213,17 +202,17 @@ log "Binaries compiled & packaged (Bowl=${BOWL_GIT_COMMIT}, Drive9=${DRIVE9_GIT_
 # Step 2: Create SSH KeyPair & Provision 2 ECS Instances (Server + Client)
 # ------------------------------------------------------------------------------
 STAGE_START=$(date +%s)
-log "Creating temporary SSH KeyPair ${KEY_PAIR_NAME} in ${REGION}..."
+log "Creating temporary SSH KeyPair ${KEY_PAIR_NAME} in ${REGION_ID}..."
 aliyun ecs CreateKeyPair \
-  --RegionId "${REGION}" \
+  --RegionId "${REGION_ID}" \
   --KeyPairName "${KEY_PAIR_NAME}" \
   | jq -r '.PrivateKeyBody' > "${KEY_FILE}"
 chmod 600 "${KEY_FILE}"
 
-log "Launching 2 PostPaid ECS instances (${INSTANCE_TYPE}, ${IMAGE_ID}, ${SYSTEM_DISK_SIZE}GiB ${SYSTEM_DISK_CATEGORY}) in ${ZONE}..."
+log "Launching 2 PostPaid ECS instances (${INSTANCE_TYPE}, ${IMAGE_ID}, ${SYSTEM_DISK_SIZE}GiB ${SYSTEM_DISK_CATEGORY}) in ${ZONE_ID}..."
 RUN_RESP="$(aliyun ecs RunInstances \
-  --RegionId "${REGION}" \
-  --ZoneId "${ZONE}" \
+  --RegionId "${REGION_ID}" \
+  --ZoneId "${ZONE_ID}" \
   --ImageId "${IMAGE_ID}" \
   --InstanceType "${INSTANCE_TYPE}" \
   --SecurityGroupId "${SECURITY_GROUP_ID}" \
@@ -250,11 +239,11 @@ wait_for_instances_running() {
   log "Waiting for instances ${ids_json} to reach Running status..."
   for _ in $(seq 1 60); do
     local info
-    info=$(aliyun ecs DescribeInstances --RegionId "${REGION}" --InstanceIds "${ids_json}")
+    info=$(aliyun ecs DescribeInstances --RegionId "${REGION_ID}" --InstanceIds "${ids_json}")
     local running_count
     running_count=$(echo "${info}" | jq '[.Instances.Instance[] | select(.Status == "Running")] | length')
     if [[ "${running_count}" -eq 2 ]]; then
-      echo "${info}" > "${BUILD_DIR}/instances_info.json"
+      echo "${info}" > "${WORK_DIR}/instances_info.json"
       return 0
     fi
     sleep 5
@@ -265,10 +254,10 @@ wait_for_instances_running() {
 
 wait_for_instances_running
 
-SERVER_PUB_IP=$(jq -r --arg id "${SERVER_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .PublicIpAddress.IpAddress[0]' "${BUILD_DIR}/instances_info.json")
-SERVER_PRIV_IP=$(jq -r --arg id "${SERVER_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .VpcAttributes.PrivateIpAddress.IpAddress[0]' "${BUILD_DIR}/instances_info.json")
-CLIENT_PUB_IP=$(jq -r --arg id "${CLIENT_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .PublicIpAddress.IpAddress[0]' "${BUILD_DIR}/instances_info.json")
-CLIENT_PRIV_IP=$(jq -r --arg id "${CLIENT_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .VpcAttributes.PrivateIpAddress.IpAddress[0]' "${BUILD_DIR}/instances_info.json")
+SERVER_PUB_IP=$(jq -r --arg id "${SERVER_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .PublicIpAddress.IpAddress[0]' "${WORK_DIR}/instances_info.json")
+SERVER_PRIV_IP=$(jq -r --arg id "${SERVER_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .VpcAttributes.PrivateIpAddress.IpAddress[0]' "${WORK_DIR}/instances_info.json")
+CLIENT_PUB_IP=$(jq -r --arg id "${CLIENT_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .PublicIpAddress.IpAddress[0]' "${WORK_DIR}/instances_info.json")
+CLIENT_PRIV_IP=$(jq -r --arg id "${CLIENT_INSTANCE_ID}" '.Instances.Instance[] | select(.InstanceId == $id) | .VpcAttributes.PrivateIpAddress.IpAddress[0]' "${WORK_DIR}/instances_info.json")
 
 log "Server Node: Public=${SERVER_PUB_IP}, Private=${SERVER_PRIV_IP}"
 log "Client Node: Public=${CLIENT_PUB_IP}, Private=${CLIENT_PRIV_IP}"
@@ -300,7 +289,7 @@ STAGE_START=$(date +%s)
 log "Uploading server-bins.tar.gz and migrations to Server (${SERVER_PUB_IP})..."
 ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data /opt/drive9 /var/lib/drive9/s3 /var/lib/tidb"
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
-  "${BUILD_DIR}/server-bins.tar.gz" \
+  "${WORK_DIR}/server-bins.tar.gz" \
   "root@${SERVER_PUB_IP}:/tmp/server-bins.tar.gz"
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
   "${REPO_ROOT}/services/storage/db/migrations/"*.sql \
@@ -476,9 +465,9 @@ record_stage "deploy_server_node" "$((STAGE_END - STAGE_START))"
 # ------------------------------------------------------------------------------
 STAGE_START=$(date +%s)
 log "Uploading client-bins.tar.gz to Client (${CLIENT_PUB_IP})..."
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "mkdir -p /opt/bench /mnt/bowl /mnt/drive9_default /mnt/drive9_sync /var/cache/drive9_default /var/cache/drive9_sync"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "mkdir -p /opt/bench /tmp/bench_results /mnt/bowl /mnt/drive9_default /mnt/drive9_sync /var/cache/drive9_default /var/cache/drive9_sync"
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
-  "${BUILD_DIR}/client-bins.tar.gz" \
+  "${WORK_DIR}/client-bins.tar.gz" \
   "root@${CLIENT_PUB_IP}:/tmp/client-bins.tar.gz"
 
 log "Installing benchmark tools and mounting Bowl + Drive9 on Client..."
@@ -511,7 +500,7 @@ fi
 ENDPOINT="http://${SERVER_PRIV_IP}:9000"
 CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "d9-bench-disk" --endpoint "${ENDPOINT}" --json)"
 DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
-echo "${CREATE_JSON}" > /opt/bench/bowl_disk.json
+echo "${CREATE_JSON}" > /tmp/bench_results/bowl_disk.json
 /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
 
 # 2. Provision two isolated Drive9 tenants (one for drive9_default, one for drive9_sync)
@@ -787,43 +776,45 @@ run_perf_baseline_for_target "drive9_sync" "/mnt/drive9_sync"
 # ------------------------------------------------------------------------------
 log "Downloading raw benchmark results to ${RESULTS_DIR}..."
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/"
-scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}:/tmp/server_disk_write.json" "${RESULTS_DIR}/server_disk_write.json"
-scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}:/tmp/server_disk_read.json" "${RESULTS_DIR}/server_disk_read.json"
-
-log "Destroying temporary ECS instances now that benchmarks are complete..."
-IDS_JSON=$(printf '%s\n' "${SERVER_INSTANCE_ID}" "${CLIENT_INSTANCE_ID}" | jq -R . | jq -s -c .)
-aliyun ecs DeleteInstances \
-  --RegionId "${REGION}" \
-  --Force true \
-  --InstanceId.1 "${SERVER_INSTANCE_ID}" \
-  --InstanceId.2 "${CLIENT_INSTANCE_ID}" >/dev/null
-INSTANCES_DELETED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 DELETED_SERVER_ID="${SERVER_INSTANCE_ID}"
 DELETED_CLIENT_ID="${CLIENT_INSTANCE_ID}"
-REMAINING_COUNT=2
-for poll in {1..30}; do
-  REMAINING_COUNT=$(aliyun ecs DescribeInstances --RegionId "${REGION}" --InstanceIds "${IDS_JSON}" | jq '.Instances.Instance | length')
-  [[ "${REMAINING_COUNT}" == "0" ]] && break
-  sleep 5
-done
-log "Verified remaining target ECS instances count after DeleteInstances: ${REMAINING_COUNT}"
-if [[ "${REMAINING_COUNT}" != "0" ]]; then
-  log "ERROR: 仍有 ${REMAINING_COUNT} 台测试实例，清理钩子将继续尝试。"
-  exit 1
-fi
-SERVER_INSTANCE_ID=""
-CLIENT_INSTANCE_ID=""
-
-aliyun ecs DeleteKeyPairs \
-  --RegionId "${REGION}" \
-  --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
 DELETED_KEY_PAIR="${KEY_PAIR_NAME}"
-KEY_PAIR_NAME=""
+REMAINING_COUNT=0
+
+if [[ "${KEEP_INSTANCES}" != "1" ]]; then
+  log "Destroying temporary ECS instances now that benchmarks are complete..."
+  IDS_JSON=$(printf '%s\n' "${SERVER_INSTANCE_ID}" "${CLIENT_INSTANCE_ID}" | jq -R . | jq -s -c .)
+  aliyun ecs DeleteInstances \
+    --RegionId "${REGION_ID}" \
+    --Force true \
+    --InstanceId.1 "${SERVER_INSTANCE_ID}" \
+    --InstanceId.2 "${CLIENT_INSTANCE_ID}" >/dev/null
+  INSTANCES_DELETED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+  REMAINING_COUNT=2
+  for poll in {1..30}; do
+    REMAINING_COUNT=$(aliyun ecs DescribeInstances --RegionId "${REGION_ID}" --InstanceIds "${IDS_JSON}" | jq '.Instances.Instance | length')
+    [[ "${REMAINING_COUNT}" == "0" ]] && break
+    sleep 5
+  done
+  log "Verified remaining target ECS instances count after DeleteInstances: ${REMAINING_COUNT}"
+  if [[ "${REMAINING_COUNT}" != "0" ]]; then
+    log "ERROR: 仍有 ${REMAINING_COUNT} 台测试实例，清理钩子将继续尝试。"
+    exit 1
+  fi
+  SERVER_INSTANCE_ID=""
+  CLIENT_INSTANCE_ID=""
+
+  aliyun ecs DeleteKeyPairs \
+    --RegionId "${REGION_ID}" \
+    --KeyPairNames "[\"${KEY_PAIR_NAME}\"]" >/dev/null
+  KEY_PAIR_NAME=""
+fi
 
 jq -n \
-  --arg region "${REGION}" \
-  --arg zone "${ZONE}" \
+  --arg region "${REGION_ID}" \
+  --arg zone "${ZONE_ID}" \
   --arg vpc_id "${VPC_ID}" \
   --arg vswitch_id "${VSWITCH_ID}" \
   --arg sg_id "${SECURITY_GROUP_ID}" \
@@ -838,7 +829,7 @@ jq -n \
   --arg cli_pub "${CLIENT_PUB_IP}" \
   --arg cli_priv "${CLIENT_PRIV_IP}" \
   --arg created_at "${INSTANCES_CREATED_AT}" \
-  --arg deleted_at "${INSTANCES_DELETED_AT}" \
+  --arg deleted_at "${INSTANCES_DELETED_AT:-kept}" \
   --arg key_pair "${DELETED_KEY_PAIR}" \
   --argjson remaining "${REMAINING_COUNT}" \
   --arg ping_stats "${PING_STATS}" \
@@ -914,7 +905,7 @@ jq -n \
   }' > "${RESULTS_DIR}/env_metadata.json"
 
 log "Generating summary.json and REPORT.md via parse_results.py..."
-python3 "${SCRIPT_DIR}/parse_results.py" \
+PYTHONDONTWRITEBYTECODE=1 python3 "${SCRIPT_DIR}/parse_results.py" \
   --results-dir "${RESULTS_DIR}" \
   --summary-out "${SUMMARY_JSON}" \
   --report-out "${REPORT_FILE}"

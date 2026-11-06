@@ -17,7 +17,7 @@ Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK
 | 文件 / 目录 | 说明 |
 | :--- | :--- |
 | [`REPORT.md`](./REPORT.md) | 阿里云硅谷（`us-west-1a`）双机内网 Bowl vs JuiceFS 完整性能基准测试报告（含环境拓扑、内网与磁盘基线、`juicefs bench`、`fio` 8 组负载、`mdtest` 单流与多并发对比、性能观测、比较边界及云资源销毁审计） |
-| [`run_aliyun_benchmark.sh`](./run_aliyun_benchmark.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云硅谷双机按量开通 -> 部署 Bowl / PostgreSQL / Redis / rclone S3 / JuiceFS -> 串行执行三大基准测试套件 -> 回传日志生成报告 -> 自动强制释放云服务器 |
+| [`run_benchmark.sh`](./run_benchmark.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云硅谷双机按量开通 -> 部署 Bowl / PostgreSQL / Redis / rclone S3 / JuiceFS -> 串行执行三大基准测试套件 -> 回传日志生成报告 -> 自动强制释放云服务器 |
 | [`parse_results.py`](./parse_results.py) | `juicefs bench`、`fio` JSON 与 `mdtest` 输出解析器及 `REPORT.md` 渲染工具 |
 | [`results/summary.json`](./results/summary.json) | 结构化测试汇总数据（三大存储栈在全部测试套件中的吞吐量、IOPS、延迟及相对倍数） |
 | [`results/env_metadata.json`](./results/env_metadata.json) | 双机硬件规格、软件版本、VPC 内网 RTT / `iperf3` 带宽基线、云盘本地基线及云资源销毁审计元数据 |
@@ -34,7 +34,7 @@ Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK
 
 ### 2. 一键运行阿里云硅谷双机实测
 ```bash
-bash benchmark/juicefs/run_aliyun_benchmark.sh
+bash benchmark/juicefs/run_benchmark.sh
 ```
 
 支持通过环境变量覆盖默认云资源参数：

@@ -38,8 +38,6 @@ services/storage/vendor/
 __pycache__/
 *.pyc
 
-# 压测交叉编译产物（由 run_aliyun_drive9_benchmark.sh 生成）
-benchmark/drive9/.build_linux_amd64/
 .r3-export/
 .r3-ui/
 

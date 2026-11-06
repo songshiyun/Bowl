@@ -253,9 +253,22 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
     lines.append("")
-    lines.append("被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端把分支锁降为拓扑生命周期 `RLock`，常规读写按 inode 细粒度加锁，完整 1 MiB 块在 Inode 锁外并行落盘；`GetAttr`/`GetXattr`/`Readlink` 单键点查免 Snapshot；读路径 atime 先登记内存并按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。")
+    lines.append(
+        "被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；"
+        "每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，"
+        "文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，"
+        "截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。"
+        "服务端把分支锁降为拓扑生命周期 `RLock`，常规读写按 inode 细粒度加锁，完整 1 MiB 块在 Inode 锁外并行落盘；"
+        "`GetAttr`/`GetXattr`/`Readlink` 单键点查免 Snapshot；读路径 atime 先登记内存并按 1 秒周期合并；"
+        "常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。"
+    )
     lines.append("")
-    lines.append("客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，避免 4 KiB 脏页回写与写前尺寸核对；保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，以覆盖真实元数据路径。")
+    lines.append(
+        "客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，避免 4 KiB 脏页回写与写前尺寸核对；"
+        "保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，"
+        "并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
+        "测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，以覆盖真实元数据路径。"
+    )
     lines.append("")
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
@@ -430,28 +443,30 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Parse pjdfstest logs and generate REPORT.md")
-    parser.add_argument("--log", required=True, type=Path, help="Path to pjdfstest.log")
-    parser.add_argument("--timings", required=True, type=Path, help="Path to dir_timings.jsonl")
-    parser.add_argument("--env-meta", required=True, type=Path, help="Path to env_metadata.json")
-    parser.add_argument("--summary-out", required=True, type=Path, help="Output path for summary.json")
-    parser.add_argument("--report-out", required=True, type=Path, help="Output path for REPORT.md")
+    parser = argparse.ArgumentParser(description="Parse pjdfstest results into summary.json and REPORT.md.")
+    parser.add_argument("--results-dir", type=Path, required=True, help="Directory containing raw benchmark results")
+    parser.add_argument("--summary-out", type=Path, required=True, help="Output path for summary.json")
+    parser.add_argument("--report-out", type=Path, required=True, help="Output path for REPORT.md")
     args = parser.parse_args()
 
-    log_text = args.log.read_text(encoding="utf-8", errors="replace") if args.log.exists() else ""
+    log_path = args.results_dir / "pjdfstest.log"
+    timings_path = args.results_dir / "stage_timings.jsonl"
+    env_meta_path = args.results_dir / "env_metadata.json"
 
-    dir_timings: list[dict[str, Any]] = []
-    if args.timings.exists():
-        for line in args.timings.read_text(encoding="utf-8").splitlines():
+    log_text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+
+    stage_timings: list[dict[str, Any]] = []
+    if timings_path.exists():
+        for line in timings_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line:
-                dir_timings.append(json.loads(line))
+                stage_timings.append(json.loads(line))
 
     env_meta: dict[str, Any] = {}
-    if args.env_meta.exists():
-        env_meta = json.loads(args.env_meta.read_text(encoding="utf-8"))
+    if env_meta_path.exists():
+        env_meta = json.loads(env_meta_path.read_text(encoding="utf-8"))
 
-    summary = parse_tap_log(log_text, dir_timings)
+    summary = parse_tap_log(log_text, stage_timings)
     summary["environment"] = env_meta
 
     args.summary_out.parent.mkdir(parents=True, exist_ok=True)

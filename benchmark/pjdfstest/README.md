@@ -15,11 +15,11 @@
 | 文件 / 目录 | 说明 |
 | :--- | :--- |
 | [`REPORT.md`](./REPORT.md) | 阿里云硅谷（`us-west-1a`）双机内网 `pjdfstest` 完整测试报告（含环境拓扑、内网基线、17 个系统调用目录汇总、238 个 `.t` 用例明细及云资源清理审计） |
-| [`run_aliyun_pjdfstest.sh`](./run_aliyun_pjdfstest.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云双机按量开通 -> 内网部署挂载 -> 执行 `pjdfstest` -> 回传日志并生成报告 -> 自动强制释放云服务器 |
+| [`run_benchmark.sh`](./run_benchmark.sh) | 端到端自动化脚本：本地交叉编译 -> 阿里云双机按量开通 -> 内网部署挂载 -> 执行 `pjdfstest` -> 回传日志并生成报告 -> 自动强制释放云服务器 |
 | [`parse_results.py`](./parse_results.py) | `prove --timer -rv` TAP 输出解析器与 `REPORT.md` 渲染工具 |
 | [`results/summary.json`](./results/summary.json) | 结构化测试汇总数据（总体通过率、耗时、17 个目录与 238 个脚本明细） |
 | [`results/env_metadata.json`](./results/env_metadata.json) | 双机硬件规格、内核版本、VPC 内网 ICMP RTT 与 `iperf3` 带宽基线、云资源销毁审计元数据 |
-| [`results/dir_timings.jsonl`](./results/dir_timings.jsonl) | 17 个系统调用目录的分项执行耗时与退出码记录 |
+| [`results/stage_timings.jsonl`](./results/stage_timings.jsonl) | 17 个系统调用目录的分项执行耗时与退出码记录 |
 | [`results/pjdfstest.log`](./results/pjdfstest.log) | 全量 238 个 `.t` 测试脚本的原始 TAP 输出日志 |
 
 ## 快速复现
@@ -33,7 +33,7 @@
 
 ### 2. 一键运行阿里云硅谷双机实测
 ```bash
-bash benchmark/pjdfstest/run_aliyun_pjdfstest.sh
+bash benchmark/pjdfstest/run_benchmark.sh
 ```
 
 支持通过环境变量覆盖默认云资源参数：
@@ -45,9 +45,7 @@ bash benchmark/pjdfstest/run_aliyun_pjdfstest.sh
 ### 3. 基于已有日志重新生成报告
 ```bash
 python3 benchmark/pjdfstest/parse_results.py \
-  --log benchmark/pjdfstest/results/pjdfstest.log \
-  --timings benchmark/pjdfstest/results/dir_timings.jsonl \
-  --env-meta benchmark/pjdfstest/results/env_metadata.json \
+  --results-dir benchmark/pjdfstest/results \
   --summary-out benchmark/pjdfstest/results/summary.json \
   --report-out benchmark/pjdfstest/REPORT.md
 ```

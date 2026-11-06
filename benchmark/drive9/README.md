@@ -24,7 +24,7 @@ Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK
 
 ## 2. 目录结构
 
-- [`run_aliyun_drive9_benchmark.sh`](run_aliyun_drive9_benchmark.sh)：端到端自动化脚本（交叉编译 Bowl 与 Drive9 -> 创建阿里云按量双机 -> 部署 PG 16 / Bowl / TiDB v8.5.5 / Drive9 Server -> 挂载并运行三大测试套件 -> 拉取结果 -> 销毁云主机与密钥对 -> 生成报告）。
+- [`run_benchmark.sh`](run_benchmark.sh)：端到端自动化脚本（交叉编译 Bowl 与 Drive9 -> 创建阿里云按量双机 -> 部署 PG 16 / Bowl / TiDB v8.5.5 / Drive9 Server -> 挂载并运行三大测试套件 -> 拉取结果 -> 销毁云主机与密钥对 -> 生成报告）。
 - [`drive9_fuse_bench.py`](drive9_fuse_bench.py)：同步自 `drive9/tools/bench/drive9_fuse_bench.py` 的无依赖 FUSE 微观/宏观基准测试工具。
 - [`fuse_perf_baseline.py`](fuse_perf_baseline.py)：提取自 `drive9/e2e/fuse-performance-baseline.sh` 的 SHA-256 文件读写与 SQLite `DELETE`/`WAL` 基准测试脚本。
 - [`parse_results.py`](parse_results.py)：解析三套基准原始日志与 JSON 数据，生成 [`results/summary.json`](results/summary.json) 与 [`REPORT.md`](REPORT.md)。
@@ -34,5 +34,13 @@ Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK
 
 ```bash
 # 默认从 /Users/fanxing/code/other/filesystem/drive9 编译 Drive9，可通过 DRIVE9_REPO 指定路径
-bash benchmark/drive9/run_aliyun_drive9_benchmark.sh
+bash benchmark/drive9/run_benchmark.sh
+```
+
+### 基于已有日志重新生成报告
+```bash
+python3 benchmark/drive9/parse_results.py \
+  --results-dir benchmark/drive9/results \
+  --summary-out benchmark/drive9/results/summary.json \
+  --report-out benchmark/drive9/REPORT.md
 ```

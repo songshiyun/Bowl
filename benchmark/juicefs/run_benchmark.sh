@@ -138,7 +138,7 @@ if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
     go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
     -o "${WORK_DIR}/bowl" ./cmd/bowl
 
-  GOOSE_CACHE_BIN="/tmp/bowl-pjdfstest-goose-linux-amd64"
+  GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
   if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
     GOOSE_TMP_GOPATH="${WORK_DIR}/gopath"
     GOWORK=off GOPATH="${GOOSE_TMP_GOPATH}" GOMODCACHE="$(go env GOMODCACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \

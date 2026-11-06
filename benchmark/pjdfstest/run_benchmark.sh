@@ -127,7 +127,7 @@ GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
   -o "${WORK_DIR}/bowl" ./cmd/bowl
 
-GOOSE_CACHE_BIN="/tmp/bowl-pjdfstest-goose-linux-amd64"
+GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
 if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
   GOOSE_TMP_GOPATH="${WORK_DIR}/gopath"
   GOWORK=off GOPATH="${GOOSE_TMP_GOPATH}" GOMODCACHE="$(go env GOMODCACHE)" CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -443,7 +443,7 @@ work_dir = Path("/mnt/bowl/work")
 work_dir.mkdir(parents=True, exist_ok=True)
 
 log_path = Path("/tmp/pjdfstest.log")
-timings_path = Path("/tmp/dir_timings.jsonl")
+timings_path = Path("/tmp/stage_timings.jsonl")
 
 env = os.environ.copy()
 env["PATH"] = f"/opt/pjdfstest:/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')}"
@@ -493,7 +493,7 @@ log "pjdfstest execution finished at ${TEST_COMPLETED_AT}."
 # Unmount cleanly and fetch logs
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "/usr/local/bin/bowl umount /mnt/bowl || umount /mnt/bowl || true"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log"
-scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/dir_timings.jsonl" "${RESULTS_DIR}/dir_timings.jsonl"
+scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
 
 # ==============================================================================
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
@@ -604,9 +604,7 @@ jq -n \
   }' > "${RESULTS_DIR}/env_metadata.json"
 
 PYTHONDONTWRITEBYTECODE=1 python3 "${SCRIPT_DIR}/parse_results.py" \
-  --log "${RESULTS_DIR}/pjdfstest.log" \
-  --timings "${RESULTS_DIR}/dir_timings.jsonl" \
-  --env-meta "${RESULTS_DIR}/env_metadata.json" \
+  --results-dir "${RESULTS_DIR}" \
   --summary-out "${RESULTS_DIR}/summary.json" \
   --report-out "${REPORT_FILE}"
 
