@@ -49,7 +49,7 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 }
 
 func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse.Status) {
-	if inode, ok := fs.localTmpInode(ino); ok {
+	if inode, ok := fs.tmpMgr.LocalInode(ino); ok {
 		return cachedInode{inode: inode}, fuse.OK
 	}
 	if cached, ok := fs.cache.inode(ino); ok {
@@ -88,7 +88,8 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	cached, status := fs.lookupInode(cancel, header.NodeId, name)
 	if status == fuse.OK {
 		fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
-		fs.addTmpLookup(out.NodeId)
+		out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
+		out.Attr.Ino = out.NodeId
 	}
 	return status
 }
@@ -103,6 +104,10 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 	if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
 		fs.FillAttrOut(out, inode, 0)
 		return fuse.OK
+	}
+	if handled, status := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
+		out.SetTimeout(0)
+		return status
 	}
 	cached, status := fs.getInode(cancel, in.NodeId)
 	if status == fuse.OK {

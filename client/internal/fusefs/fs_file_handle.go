@@ -77,12 +77,12 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	if status != fuse.OK {
 		return status
 	}
+	ino = fs.tmpMgr.ObserveKernelLookup(inode.GetIno())
 	fs.cache.invalidateDirListingTouchParentAt(epoch, input.NodeId, inode, 0, resp.Msg.GetAttrTimeoutSeconds())
 	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
 	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.caps.markAbsent(ino)
 	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
-	fs.addTmpLookup(ino)
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()
 	if fs.cfg.DirectIO {
@@ -126,7 +126,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 		set := &fuse.SetAttrIn{}
 		set.NodeId = input.NodeId
 		set.Valid = fuse.FATTR_SIZE
-		if status, local := fs.setTmpAttr(set, &fuse.AttrOut{}); local {
+		if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, set, nil, &fuse.Attr{}); local {
 			if status != fuse.OK {
 				return status
 			}
@@ -229,5 +229,7 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	if fs.sessions != nil {
 		fs.sessions.UnbindHandle(input.Fh)
 	}
-	fs.dropTmpIfUnused(input.NodeId, orphan)
+	if fs.tmpMgr.OnHandleReleased(input.NodeId, orphan, fs.handles.IsOpen) {
+		fs.cache.invalidateInode(input.NodeId)
+	}
 }

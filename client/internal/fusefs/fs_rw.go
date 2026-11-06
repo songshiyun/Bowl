@@ -10,14 +10,6 @@ import (
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-func makeReadResult(data []byte, buf []byte) fuse.ReadResult {
-	if len(buf) >= len(data) {
-		copy(buf, data)
-		return fuse.ReadResultData(buf[:len(data)])
-	}
-	return fuse.ReadResultData(data)
-}
-
 // Read 实现常规文件数据读取，对应 Linux FUSE FUSE_READ 协议。
 // 校验本地句柄与访问模式，并在服务端请求中省略旧版句柄：
 //  1. 映射内核 Inode 为服务端 Inode，并校验句柄所属活跃会话；
@@ -51,12 +43,6 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 	if want == 0 {
 		return fuse.ReadResultData(nil), fuse.OK
 	}
-	if result, local := fs.readTmp(input.NodeId, input.Offset, want, buf); local {
-		return result, fuse.OK
-	}
-
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
 
 	dest := buf
 	if len(dest) < want {
@@ -64,6 +50,13 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 	} else {
 		dest = dest[:want]
 	}
+
+	if n, local, st := fs.tmpMgr.Read(input.NodeId, input.Offset, dest); local {
+		return fuse.ReadResultData(dest[:n]), st
+	}
+
+	ctx, cancelFunc := fs.RPCContext(cancel)
+	defer cancelFunc()
 
 	n, err := fs.readAhead.Read(ctx, input.Fh, ino, sid, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) ([]byte, error) {
 		resp, rpcErr := fs.client.Read(fetchCtx, connect.NewRequest(&storagev1.ReadRequest{
@@ -124,7 +117,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	}
 
 	appendMode := handle.Flags&syscall.O_APPEND != 0
-	if n, st, local := fs.writeTmp(input.NodeId, input.Offset, data, appendMode); local {
+	if n, local, st := fs.tmpMgr.Write(input.NodeId, input.Offset, data, appendMode); local {
 		return n, st
 	}
 	if appendMode {
