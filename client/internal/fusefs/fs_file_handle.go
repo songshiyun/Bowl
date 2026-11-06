@@ -139,7 +139,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 			zero := uint64(0)
 			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Size: &zero, SessionId: fs.currentSession()}))
 			done()
-			fs.invalidateReadAheadByIno(ino)
+			fs.readAhead.InvalidateInode(ino)
 			if err != nil {
 				fs.cache.invalidateInode(input.NodeId)
 				return fs.ToStatus(err, cancel)
@@ -223,7 +223,7 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	}
 	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)
 	fs.locks.ForgetHandle(input.Fh)
-	fs.removeReadAheadByFh(input.Fh)
+	fs.readAhead.RemoveHandle(input.Fh)
 	orphan := fs.handles.IsOrphan(input.NodeId)
 	fs.handles.Release(input.Fh)
 	if fs.sessions != nil {
