@@ -4,9 +4,10 @@
 
 - **根模块（[`go.mod`](../../go.mod)）**：包含 `proto/storage/v1/`（Protobuf 源文件）、`gen/go/`（ConnectRPC 生成代码）、[`pkg/validator`](../../pkg/validator)（请求校验器）、[`tests/contract`](../../tests/contract)（跨模块契约测试）及 [`e2e`](../../e2e)（跨服务黑盒 E2E 测试）。
 - **Storage 子模块（[`services/storage/go.mod`](../../services/storage/go.mod)）**：代码位于 `services/storage/internal/{config,db,meta,server}` 与 `services/storage/db/{migrations,queries}`。
-  - `services/storage/internal/meta/` 文件职责索引：`entity.go` 与 `status.go` 定义领域实体和错误映射；`manager.go`、`manager_disk.go` 提供管理器和公开操作；`branch_control_store.go`、`workspace_swapper.go`、`branch_mutation_tx.go`、`pebble_*.go`、`disk_tree.go`、`tree_quota.go` 实现分支控制面存储、工作区目录切换、工作区变更事务、分支数据/版本和配额；`branch_session.go` 管理分支会话。PostgreSQL 集成测试通过 `testdb_helper_test.go` 的辅助函数建立隔离数据库并调用 goose 执行迁移。
+  - `services/storage/internal/meta/` 文件职责索引：`entity.go` 与 `status.go` 定义领域实体和错误映射；`manager.go`、`manager_disk.go` 提供管理器和公开操作；`branch_control_store.go`、`workspace_swapper.go`、`branch_mutation_tx.go`、`branch_lock_table.go`（`BranchLockTable` 锁表）、`branch_workspace_gate.go`（`BranchWorkspaceGate` 会话锁内二次校验与开库控制流）、`pebble_atime.go`（`PebbleAtimeTracker` 延迟 atime 刷盘）、`pebble_*.go`、`disk_tree.go`、`tree_quota.go` 实现分支控制面存储、工作区目录切换、工作区变更事务、分支级锁、会话锁与开库门控、延迟 atime、分支数据/版本和配额；`branch_session.go` 管理分支会话。PostgreSQL 集成测试通过 `testdb_helper_test.go` 的辅助函数建立隔离数据库并调用 goose 执行迁移。
 
 - **Client 子模块（[`client/go.mod`](../../client/go.mod)）**：Linux FUSE 客户端 CLI，代码位于 `client/{cmd/bowl,internal,e2e}`；macOS 宿主机下须通过 `task test:client` 与 `task test:client:e2e` 在 Linux 容器内完成构建与挂载测试。
+  - `client/internal/fusefs/` 文件职责索引：`fs.go` 与 `fs_*.go` 实现 `RawFS` FUSE 协议分发与各操作入口；`namespace_cache.go` 维护路径/目录/属性缓存与代际失效；`handle_table.go` 管理打开文件与目录句柄；`lock_table.go` 与 `inode_lock.go` 管理本地字节范围锁与 inode 并发锁；`read_ahead.go`（`ReadAheadCoordinator`）封装顺序预读缓存、流水线调度与失效；`tmpfile_manager.go`（`TmpFileManager`）管理 `O_TMPFILE` 匿名临时文件句柄、本地缓冲与 `Link` 具名化。
 - **ADR 查阅约定**：查阅 [`docs/adr/`](../adr) 时，先列出目录获取准确文件名，切勿盲猜文件名。
 
 ## Worktree 与模块隔离红线
