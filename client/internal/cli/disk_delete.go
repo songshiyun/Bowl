@@ -18,8 +18,6 @@ import (
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-var defaultStdin io.Reader = os.Stdin
-
 const diskDeleteUsageHelp = `用法:
   bowl disk delete <disk-id> [flags]
 
@@ -155,7 +153,7 @@ func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
 	// 步骤 2：交互式二次确认
 	if !yes {
 		fmt.Fprintf(stderr, "确认删除虚拟磁盘 %s？此操作不可逆 [y/N]: ", diskIDStr)
-		line, readErr := bufio.NewReader(defaultStdin).ReadString('\n')
+		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
 			fmt.Fprintf(stderr, "错误: 读取终端确认输入失败: %v\n", readErr)
 			return 1

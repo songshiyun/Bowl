@@ -44,11 +44,6 @@ const mountUsageHelp = `用法:
   -h, --help           查看帮助信息
 `
 
-// MountServerRunner 抽象挂载运行逻辑，方便测试环境注入与替代。
-type MountServerRunner func(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, stdout, stderr io.Writer) error
-
-var defaultMountRunner MountServerRunner = runForegroundMount
-
 func mountSessionConfig(cfg fusefs.Config) session.Config {
 	return session.Config{DiskID: cfg.DiskID, BranchName: cfg.BranchName, ReadOnly: cfg.ReadOnly, CommitID: cfg.CommitID}
 }
@@ -342,7 +337,7 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
 	defer runnerCancel()
 
-	if err := defaultMountRunner(runnerCtx, client, cfg, absMountpoint, stdout, stderr); err != nil {
+	if err := runForegroundMount(runnerCtx, client, cfg, absMountpoint, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "错误: 挂载执行失败: %v\n", err)
 		return 1
 	}

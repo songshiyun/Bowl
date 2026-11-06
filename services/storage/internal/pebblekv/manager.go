@@ -75,18 +75,6 @@ type pooledDB struct {
 	dirty bool
 }
 
-// Stats 是句柄池的累计打开与复用次数，用于诊断与测试。
-type Stats struct {
-	BranchOpens      int64
-	BranchReuses     int64
-	CommitOpens      int64
-	CommitReuses     int64
-	ResidentBranches int
-	ResidentCommits  int
-	// WALFlushes 是后台兜底刷盘的累计次数。
-	WALFlushes int64
-}
-
 // Manager 管理本进程内的分支和快照实例。同一存储根目录必须共用一个 Manager。
 // 分支与快照实例按引用计数常驻句柄池，调用方应在结束使用后关闭所有句柄。
 type Manager struct {
@@ -95,12 +83,9 @@ type Manager struct {
 	mu         sync.Mutex
 	closed     bool
 	clock      uint64
-	stats      Stats
 	branches   map[instanceID]*pooledDB
 	commits    map[instanceID]*pooledDB
 	allocators map[allocatorID]*inodeAllocator
-	// link 是块文件硬链接实现，测试可注入 EMLINK 验证回退拷贝。
-	link func(string, string) error
 
 	flushInterval time.Duration
 	stopFlush     chan struct{}
@@ -108,50 +93,21 @@ type Manager struct {
 	stopOnce      sync.Once
 }
 
-// Option 配置句柄池管理器。
-type Option func(*Manager)
-
-// WithWALFlushInterval 覆盖后台兜底刷盘周期，主要用于测试缩短等待时间。
-func WithWALFlushInterval(interval time.Duration) Option {
-	return func(m *Manager) {
-		if interval > 0 {
-			m.flushInterval = interval
-		}
-	}
-}
-
-// WithLinkFunc 覆盖块文件硬链接实现，主要用于测试注入 EMLINK 验证回退拷贝。
-func WithLinkFunc(link func(string, string) error) Option {
-	return func(m *Manager) {
-		if link != nil {
-			m.link = link
-		}
-	}
-}
-
 // NewManager 创建存储实例管理器，并启动后台异步 WAL 兜底刷盘协程。
-func NewManager(root string, opts ...Option) *Manager {
+func NewManager(root string) *Manager {
 	m := &Manager{
 		root: root, cache: pebble.NewCache(sharedCacheSize),
 		branches: make(map[instanceID]*pooledDB), commits: make(map[instanceID]*pooledDB),
 		allocators:    make(map[allocatorID]*inodeAllocator),
 		flushInterval: defaultWALFlushInterval, stopFlush: make(chan struct{}), flushDone: make(chan struct{}),
 	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(m)
-		}
-	}
-	if m.link == nil {
-		m.link = os.Link
-	}
 	go m.walFlushLoop()
 	return m
 }
 
-// newBlobStore 创建与句柄池共享硬链接实现的块文件存储。
+// newBlobStore 创建分支或快照目录下的块文件存储。
 func (m *Manager) newBlobStore(base string) *BlobStore {
-	return newBlobStore(base, m.link)
+	return newBlobStore(base)
 }
 
 // walFlushLoop 周期把有脏写的分支 WAL 同步到磁盘，收敛机器断电的丢失窗口。
@@ -208,9 +164,6 @@ func (m *Manager) FlushWAL() {
 			m.mu.Unlock()
 			continue
 		}
-		m.mu.Lock()
-		m.stats.WALFlushes++
-		m.mu.Unlock()
 	}
 }
 
@@ -281,15 +234,6 @@ func (m *Manager) path(disk, kind, id string) (string, error) {
 func (m *Manager) tick() uint64 {
 	m.clock++
 	return m.clock
-}
-
-// Stats 返回句柄池的累计打开与复用次数。
-func (m *Manager) Stats() Stats {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	stats := m.stats
-	stats.ResidentBranches, stats.ResidentCommits = len(m.branches), len(m.commits)
-	return stats
 }
 
 // close 关闭底层实例并与后台 WAL 刷盘互斥，重复关闭是幂等的。
@@ -420,7 +364,6 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 	if entry := m.branches[key]; entry != nil {
 		entry.refs++
 		entry.lastUsed = m.tick()
-		m.stats.BranchReuses++
 		return &Branch{manager: m, key: key, entry: entry, db: entry.db, blobs: entry.blobs}, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -432,7 +375,6 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 	}
 	entry := &pooledDB{db: db, blobs: m.newBlobStore(path), refs: 1, lastUsed: m.tick()}
 	m.branches[key] = entry
-	m.stats.BranchOpens++
 	m.evictIdleLocked()
 	return &Branch{manager: m, key: key, entry: entry, db: db, blobs: entry.blobs}, nil
 }
@@ -517,9 +459,6 @@ func (m *Manager) OpenCommit(disk, commit string) (*Commit, error) {
 		}
 		entry = &pooledDB{db: db, blobs: m.newBlobStore(path)}
 		m.commits[key] = entry
-		m.stats.CommitOpens++
-	} else {
-		m.stats.CommitReuses++
 	}
 	entry.refs++
 	entry.lastUsed = m.tick()

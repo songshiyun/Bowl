@@ -8,9 +8,9 @@ import (
 	"syscall"
 )
 
-var defaultSystemLogDir = "/var/log/bowl"
+const defaultSystemLogDir = "/var/log/bowl"
 
-var tryOpenSystemLog = func(diskID string) (*os.File, string, error) {
+func openSystemLog(diskID string) (*os.File, string, error) {
 	systemPath := filepath.Join(defaultSystemLogDir, fmt.Sprintf("mount-%s.log", diskID))
 	mkdirErr := os.MkdirAll(defaultSystemLogDir, 0o755)
 	if mkdirErr == nil {
@@ -61,7 +61,7 @@ func ResolveLogFile(explicitPath, diskID string) (*os.File, string, error) {
 	}
 
 	// 1. 尝试系统默认路径 /var/log/bowl/mount-<disk-id>.log
-	f, systemPath, err := tryOpenSystemLog(diskID)
+	f, systemPath, err := openSystemLog(diskID)
 	if err == nil {
 		return f, systemPath, nil
 	}

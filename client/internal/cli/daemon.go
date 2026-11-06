@@ -19,18 +19,6 @@ import (
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
-// ProcessLauncher 抽象后台进程启动方式，便于单元测试模拟进程启动。
-type ProcessLauncher func(cmd *exec.Cmd) error
-
-var defaultProcessLauncher ProcessLauncher = func(cmd *exec.Cmd) error {
-	devNull, err := os.Open(os.DevNull)
-	if err == nil {
-		cmd.Stdin = devNull
-		defer devNull.Close()
-	}
-	return cmd.Start()
-}
-
 // readDaemonHandshake 阻塞读取守护进程回传的挂载就绪状态。
 func readDaemonHandshake(r io.Reader, stderr io.Writer) int {
 	scanner := bufio.NewScanner(r)
@@ -71,7 +59,12 @@ func spawnDaemonProcess(args []string, stderr io.Writer) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Env = append(os.Environ(), "BOWL_DAEMON_WORKER=1")
 
-	if err := defaultProcessLauncher(cmd); err != nil {
+	devNull, devNullErr := os.Open(os.DevNull)
+	if devNullErr == nil {
+		cmd.Stdin = devNull
+		defer devNull.Close()
+	}
+	if err := cmd.Start(); err != nil {
 		_ = w.Close()
 		fmt.Fprintf(stderr, "错误: 启动后台守护进程失败: %v\n", err)
 		return 1

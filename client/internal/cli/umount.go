@@ -19,15 +19,10 @@ const umountUsageHelp = `用法:
   -h, --help      查看帮助信息
 `
 
-type toolLooker func(file string) (string, error)
-type commandRunner func(name string, args ...string) ([]byte, error)
-
-var (
-	defaultToolLooker toolLooker    = exec.LookPath
-	defaultCmdRunner  commandRunner = func(name string, args ...string) ([]byte, error) {
-		return exec.Command(name, args...).CombinedOutput()
-	}
-)
+// runCommand 执行系统卸载工具并返回合并输出。
+func runCommand(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
 
 // executeUmount 解析 umount / unmount 命令参数并调用系统卸载工具。
 func executeUmount(args []string, stdout, stderr io.Writer) int {
@@ -89,12 +84,12 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 
 	// 2. 按优先级查找并执行系统卸载工具
 	// 优先级 1: fusermount3 (-u, force: -uz)
-	if path, err := defaultToolLooker("fusermount3"); err == nil {
+	if path, err := exec.LookPath("fusermount3"); err == nil {
 		cmdArgs := []string{"-u", absMountpoint}
 		if force {
 			cmdArgs = []string{"-uz", absMountpoint}
 		}
-		if out, err := defaultCmdRunner(path, cmdArgs...); err != nil {
+		if out, err := runCommand(path, cmdArgs...); err != nil {
 			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
 			return 1
 		}
@@ -102,12 +97,12 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 优先级 2: fusermount (-u, force: -uz)
-	if path, err := defaultToolLooker("fusermount"); err == nil {
+	if path, err := exec.LookPath("fusermount"); err == nil {
 		cmdArgs := []string{"-u", absMountpoint}
 		if force {
 			cmdArgs = []string{"-uz", absMountpoint}
 		}
-		if out, err := defaultCmdRunner(path, cmdArgs...); err != nil {
+		if out, err := runCommand(path, cmdArgs...); err != nil {
 			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
 			return 1
 		}
@@ -115,14 +110,14 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 优先级 3: umount (常规 <mp>, force: -l <mp>)
-	if path, err := defaultToolLooker("umount"); err == nil {
+	if path, err := exec.LookPath("umount"); err == nil {
 		var cmdArgs []string
 		if force {
 			cmdArgs = []string{"-l", absMountpoint}
 		} else {
 			cmdArgs = []string{absMountpoint}
 		}
-		if out, err := defaultCmdRunner(path, cmdArgs...); err != nil {
+		if out, err := runCommand(path, cmdArgs...); err != nil {
 			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
 			return 1
 		}

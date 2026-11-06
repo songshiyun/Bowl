@@ -12,7 +12,12 @@ import (
 	"strings"
 )
 
-var defaultMountInfoPath = "/proc/self/mountinfo"
+const mountInfoPath = "/proc/self/mountinfo"
+
+type mountPoint struct {
+	path   string
+	source string
+}
 
 // unescapeMountInfo 解析 /proc/self/mountinfo 中被八进制转义的字符（例如 \040 为空格）。
 func unescapeMountInfo(s string) string {
@@ -41,89 +46,87 @@ func isOctal(b byte) bool {
 	return b >= '0' && b <= '7'
 }
 
+// parseMountPointsFromReader 解析 mountinfo 文本，跳过空行与字段不足的畸形行。
+func parseMountPointsFromReader(r io.Reader) ([]mountPoint, error) {
+	var points []mountPoint
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		fields := strings.Fields(strings.TrimSpace(scanner.Text()))
+		if len(fields) < 5 {
+			continue
+		}
+		source := ""
+		for i, field := range fields {
+			if field == "-" && i+2 < len(fields) {
+				source = unescapeMountInfo(fields[i+2])
+				break
+			}
+		}
+		points = append(points, mountPoint{
+			path:   filepath.Clean(unescapeMountInfo(fields[4])),
+			source: source,
+		})
+	}
+	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("扫描挂载信息失败: %w", err)
+	}
+	return points, nil
+}
+
+func readMountPoints() ([]mountPoint, error) {
+	file, err := os.Open(mountInfoPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// 在非 procfs 环境（如宿主机单元测试无 /proc 时）视为未挂载
+			return nil, nil
+		}
+		return nil, fmt.Errorf("读取挂载信息文件失败: %w", err)
+	}
+	defer file.Close()
+	return parseMountPointsFromReader(file)
+}
+
+func containsMountPoint(points []mountPoint, target string) bool {
+	for _, point := range points {
+		if point.path == target {
+			return true
+		}
+	}
+	return false
+}
+
+func findDiskMountpoint(points []mountPoint, diskID string) (string, bool) {
+	expectedSource := "bowl:" + strings.TrimSpace(diskID)
+	for _, point := range points {
+		if strings.EqualFold(point.source, expectedSource) {
+			return point.path, true
+		}
+	}
+	return "", false
+}
+
 // IsMountPoint 检查指定路径在当前系统 (/proc/self/mountinfo) 中是否为已生效的活跃挂载点。
 func IsMountPoint(path string) (bool, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return false, fmt.Errorf("解析绝对路径失败: %w", err)
 	}
-	target := filepath.Clean(absPath)
-
-	file, err := os.Open(defaultMountInfoPath)
+	points, err := readMountPoints()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			// 在非 procfs 环境（如宿主机单元测试无 /proc 时）视为未挂载
-			return false, nil
-		}
-		return false, fmt.Errorf("读取挂载信息文件失败: %w", err)
+		return false, err
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
-			continue
-		}
-		mountpoint := filepath.Clean(unescapeMountInfo(fields[4]))
-		if mountpoint == target {
-			return true, nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("扫描挂载信息失败: %w", err)
-	}
-
-	return false, nil
+	return containsMountPoint(points, filepath.Clean(absPath)), nil
 }
 
 // FindDiskMountpoint 扫描 /proc/self/mountinfo 检查指定 diskID 是否在当前机器处于活跃挂载状态。
-// 挂载时 FUSE fsname 固定为 "bowl:<disk-id>"（位于 mountinfo "-" 分隔符后的第 2 个字段，即 fields[sepIdx+2]）。
+// 挂载时 FUSE fsname 固定为 "bowl:<disk-id>"（位于 mountinfo "-" 分隔符后的第 2 个字段）。
 // 若处于挂载状态，返回其挂载点路径（unescaped & cleaned）、true, nil。
 // 若 /proc/self/mountinfo 不存在（如非 Linux 环境），返回 "", false, nil。
 func FindDiskMountpoint(diskID string) (string, bool, error) {
-	expectedSource := "bowl:" + strings.TrimSpace(diskID)
-
-	file, err := os.Open(defaultMountInfoPath)
+	points, err := readMountPoints()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", false, nil
-		}
-		return "", false, fmt.Errorf("读取挂载信息文件失败: %w", err)
+		return "", false, err
 	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		sepIdx := -1
-		for i, f := range fields {
-			if f == "-" {
-				sepIdx = i
-				break
-			}
-		}
-		if sepIdx < 4 || sepIdx+2 >= len(fields) {
-			continue
-		}
-		mountSource := unescapeMountInfo(fields[sepIdx+2])
-		if strings.EqualFold(mountSource, expectedSource) {
-			return filepath.Clean(unescapeMountInfo(fields[4])), true, nil
-		}
-	}
-
-	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
-		return "", false, fmt.Errorf("扫描挂载信息失败: %w", err)
-	}
-
-	return "", false, nil
+	mountpoint, mounted := findDiskMountpoint(points, diskID)
+	return mountpoint, mounted, nil
 }
