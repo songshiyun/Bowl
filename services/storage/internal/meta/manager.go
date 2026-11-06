@@ -80,8 +80,7 @@ type manager struct {
 	sessionCacheMu                             sync.Mutex
 	sessionCache                               map[uint64]pebbleSessionCacheEntry
 	sessionCacheTTL                            time.Duration
-	atimeMu                                    sync.Mutex
-	dirtyAtimes                                map[pebbleAtimeKey]time.Time
+	atimes                                     *PebbleAtimeTracker
 }
 
 // pebbleSessionCacheEntry 是会话内存写透缓存条目，fresh 之后重新读取控制面。
@@ -163,8 +162,7 @@ func New(store db.Store, opts ...Option) Manager {
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
 		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
-		locks:       NewBranchLockTable(),
-		dirtyAtimes: make(map[pebbleAtimeKey]time.Time)}
+		locks: NewBranchLockTable()}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
@@ -173,6 +171,7 @@ func New(store db.Store, opts ...Option) Manager {
 	if m.pebble == nil {
 		m.pebble = pebblekv.NewManager(m.storageRoot)
 	}
+	m.atimes = NewPebbleAtimeTracker(m.atimeMode, m.pebble, m.locks, m.storageRoot)
 	return m
 }
 
@@ -202,16 +201,6 @@ func validateOptionalSessionID(id *uint64) error {
 		return ErrInvalidArgument
 	}
 	return nil
-}
-func (m *manager) shouldTouchAtime(atime, mtime, ctime, now time.Time) bool {
-	switch m.atimeMode {
-	case AtimeModeStrictAtime:
-		return now.Sub(atime) >= time.Second
-	case AtimeModeRelAtime:
-		return atime.Before(mtime) || atime.Before(ctime) || now.Sub(atime) >= 24*time.Hour
-	default:
-		return false
-	}
 }
 func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(db.Querier) error) error {
 	return tx.Retry(ctx, func(ctx context.Context) error { return m.store.ExecTx(ctx, fn) }, tx.WithDefaultRetry())
@@ -295,7 +284,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 								slog.Error("清理过期分支会话失败", "error", err)
 							}
 						case <-atimeTicker.C:
-							if err := m.flushAllPebbleAtimes(ctx); err != nil && ctx.Err() == nil {
+							if err := m.atimes.FlushAll(ctx); err != nil && ctx.Err() == nil {
 								slog.Error("合并访问时间失败", "error", err)
 							}
 						}
@@ -315,7 +304,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 					}
 				}
 				// 停机前把内存中尚未合并的访问时间刷入 Pebble。
-				if err := m.flushAllPebbleAtimes(context.WithoutCancel(ctx)); err != nil {
+				if err := m.atimes.FlushAll(context.WithoutCancel(ctx)); err != nil {
 					return err
 				}
 				return m.pebble.Close()
