@@ -67,14 +67,11 @@ type manager struct {
 	store                                      db.Store
 	storageRoot                                string
 	pebble                                     *pebblekv.Manager
+	locks                                      *BranchLockTable
 	entryTimeout, attrTimeout, dirEntryTimeout float64
 	openKeepCache                              bool
 	atimeMode                                  AtimeMode
 	sessionLeaseTTL                            time.Duration
-	branchLocks                                sync.Map
-	branchMetaLocks                            sync.Map
-	inodeLocksMu                               sync.Mutex
-	inodeLocks                                 map[inodeLockKey]*inodeLockEntry
 	writeQuotaMu                               sync.Mutex
 	treeQuotaMu                                sync.Mutex
 	treeQuotas                                 map[string]*TreeQuota
@@ -151,13 +148,22 @@ func WithPebbleManager(pool *pebblekv.Manager) Option {
 	}
 }
 
+// WithBranchLockTable 注入自定义分支与节点锁表。
+func WithBranchLockTable(locks *BranchLockTable) Option {
+	return func(m *manager) {
+		if locks != nil {
+			m.locks = locks
+		}
+	}
+}
+
 // New 创建存储管理器。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
 		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
-		inodeLocks:  make(map[inodeLockKey]*inodeLockEntry),
+		locks:       NewBranchLockTable(),
 		dirtyAtimes: make(map[pebbleAtimeKey]time.Time)}
 	for _, opt := range opts {
 		if opt != nil {

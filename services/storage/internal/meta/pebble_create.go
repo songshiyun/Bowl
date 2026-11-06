@@ -162,7 +162,7 @@ func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, 
 	if err != nil {
 		return err
 	}
-	unlock := m.lockBranchRead(disk, session.branch)
+	unlock := m.locks.LockBranchRead(disk, session.branch)
 	defer unlock()
 	// 锁内复查会话缓存：CloseSession 等控制面入口驱逐后立即拒绝后续请求。
 	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
@@ -296,7 +296,7 @@ func (m *manager) createdPebbleInode(inode pebblekv.Inode) *Inode {
 
 func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebbleNodeParams) (result *Inode, err error) {
 	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlockInode := m.lockInodeWrite(disk, branch, params.parent)
+		unlockInode := m.locks.LockInodeWrite(disk, branch, params.parent)
 		defer unlockInode()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
 			parent, err := readCreateParent(store, params.parent, params.name)
@@ -374,7 +374,7 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 
 func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkParams) (result *Inode, err error) {
 	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlockInodes := m.lockInodesWrite(disk, branch, params.NewParentIno, params.Ino)
+		unlockInodes := m.locks.LockInodesWrite(disk, branch, params.NewParentIno, params.Ino)
 		defer unlockInodes()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
 			parent, err := readCreateParent(store, params.NewParentIno, params.NewName)

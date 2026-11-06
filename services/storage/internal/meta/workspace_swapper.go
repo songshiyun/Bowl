@@ -33,6 +33,7 @@ type WorkspaceSwap struct {
 	evictTargetOnAbort bool
 	removeDiskOnAbort  bool
 	invalidateSessions bool
+	evictBranchLocks   bool
 	moved              bool
 	installed          bool
 	committed          bool
@@ -86,6 +87,9 @@ func (s *WorkspaceSwap) Commit() error {
 		s.mgr.invalidatePebbleBranchSessions(s.disk, s.branch)
 	}
 	s.ReleaseUnlock()
+	if s.evictBranchLocks {
+		s.mgr.locks.EvictBranch(s.disk, s.branch)
+	}
 	return err
 }
 
@@ -117,6 +121,14 @@ func (s *WorkspaceSwap) Rollback() error {
 		}
 	}
 	s.ReleaseUnlock()
+	if !s.committed {
+		if s.removeDiskOnAbort {
+			s.mgr.locks.EvictDisk(s.disk)
+		}
+		if s.evictTargetOnAbort {
+			s.mgr.locks.EvictBranch(s.disk, s.branch)
+		}
+	}
 	return err
 }
 
@@ -152,7 +164,7 @@ func (w WorkspaceSwapper) StageFork(disk, commitID, branch string) (*WorkspaceSw
 		mgr:        w.mgr,
 		disk:       disk,
 		branch:     branch,
-		unlock:     w.mgr.lockBranchWrite(disk, branch),
+		unlock:     w.mgr.locks.LockBranchWrite(disk, branch),
 		targetPath: targetPath,
 	}
 	if _, err := os.Stat(targetPath); err == nil {
@@ -179,10 +191,11 @@ func (w WorkspaceSwapper) StageDelete(disk, branch string) (*WorkspaceSwap, erro
 		mgr:                w.mgr,
 		disk:               disk,
 		branch:             branch,
-		unlock:             w.mgr.lockBranchWrite(disk, branch),
+		unlock:             w.mgr.locks.LockBranchWrite(disk, branch),
 		targetPath:         targetPath,
 		backupPath:         backupPath,
 		invalidateSessions: true,
+		evictBranchLocks:   true,
 	}
 	if err := w.mgr.pebble.EvictBranch(disk, branch); err != nil {
 		return swap, err
@@ -204,7 +217,7 @@ func (w WorkspaceSwapper) StageRestore(disk, branch, commitID string) (*Workspac
 		mgr:                w.mgr,
 		disk:               disk,
 		branch:             branch,
-		unlock:             w.mgr.lockBranchWrite(disk, branch),
+		unlock:             w.mgr.locks.LockBranchWrite(disk, branch),
 		targetPath:         targetPath,
 		stagePath:          stagePath,
 		backupPath:         backupPath,
