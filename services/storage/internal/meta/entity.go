@@ -142,6 +142,7 @@ type SetAttrInput struct {
 
 // MknodParams 定义创建节点的输入参数。
 type MknodParams struct {
+	SessionID *uint64
 	ParentIno uint64
 	Name      []byte
 	Mode      uint32
@@ -153,6 +154,7 @@ type MknodParams struct {
 
 // MkdirParams 定义创建子目录的输入参数。
 type MkdirParams struct {
+	SessionID *uint64
 	ParentIno uint64
 	Name      []byte
 	Mode      uint32
@@ -163,6 +165,7 @@ type MkdirParams struct {
 
 // SymlinkParams 定义创建符号链接的输入参数。
 type SymlinkParams struct {
+	SessionID *uint64
 	ParentIno uint64
 	Name      []byte
 	Target    []byte
@@ -172,6 +175,7 @@ type SymlinkParams struct {
 
 // LinkParams 定义创建硬链接的输入参数。
 type LinkParams struct {
+	SessionID    *uint64
 	Ino          uint64
 	NewParentIno uint64
 	NewName      []byte
@@ -179,11 +183,13 @@ type LinkParams struct {
 
 // RenameParams 定义重命名、移动与交换操作的输入参数。
 type RenameParams struct {
-	OldParentIno uint64
-	OldName      []byte
-	NewParentIno uint64
-	NewName      []byte
-	Flags        uint32
+	SessionID          *uint64
+	OldParentIno       uint64
+	OldName            []byte
+	NewParentIno       uint64
+	NewName            []byte
+	Flags              uint32
+	TargetOpenInClient bool
 }
 
 // ReclaimOrphanParams 定义回收孤儿节点的输入参数。

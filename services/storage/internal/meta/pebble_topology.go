@@ -286,15 +286,60 @@ func commitTopologyBatch(batch *pebble.Batch, quota *TreeQuota, branch string, r
 	return batch.Commit(pebble.NoSync)
 }
 
-func (m *manager) unlinkPebbleNode(ctx context.Context, sid *uint64, parentIno uint64, name []byte) error {
-	return m.removePebbleEntry(ctx, sid, parentIno, name, false)
+func (m *manager) Unlink(ctx context.Context, sid *uint64, parentIno uint64, name []byte, openInClient bool) error {
+	if parentIno == 0 || parentIno > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateEntryNameAllowEmpty(name); err != nil {
+		return err
+	}
+	return m.unlinkPebbleNode(ctx, sid, parentIno, name, openInClient)
+}
+
+func (m *manager) Rmdir(ctx context.Context, sid *uint64, parentIno uint64, name []byte) error {
+	if parentIno == 0 || parentIno > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateEntryNameAllowEmpty(name); err != nil {
+		return err
+	}
+	return m.rmdirPebbleNode(ctx, sid, parentIno, name)
+}
+
+func (m *manager) Rename(ctx context.Context, params RenameParams) error {
+	if params.OldParentIno == 0 || params.OldParentIno > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.NewParentIno == 0 || params.NewParentIno > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if (params.Flags &^ (RenameNoReplace | RenameExchange | RenameWhiteout)) != 0 {
+		return ErrInvalidArgument
+	}
+	if (params.Flags & (RenameNoReplace | RenameExchange)) == (RenameNoReplace | RenameExchange) {
+		return ErrInvalidArgument
+	}
+	if (params.Flags & RenameWhiteout) != 0 {
+		return ErrNotSupported
+	}
+	if err := validateEntryNameAllowEmpty(params.OldName); err != nil {
+		return err
+	}
+	if err := validateEntryName(params.NewName); err != nil {
+		return err
+	}
+	return m.renamePebbleNode(ctx, params.SessionID, params)
+}
+
+func (m *manager) unlinkPebbleNode(ctx context.Context, sid *uint64, parentIno uint64, name []byte, openInClient bool) error {
+	return m.removePebbleEntry(ctx, sid, parentIno, name, false, openInClient)
 }
 
 func (m *manager) rmdirPebbleNode(ctx context.Context, sid *uint64, parentIno uint64, name []byte) error {
-	return m.removePebbleEntry(ctx, sid, parentIno, name, true)
+	return m.removePebbleEntry(ctx, sid, parentIno, name, true, false)
 }
 
-func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno uint64, name []byte, directory bool) error {
+func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno uint64, name []byte, directory, openInClient bool) error {
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		// 先校验父节点类型，保持与 POSIX 一致：非目录优先于名称错误返回。
 		if _, err := readTopologyParent(store, parentIno); err != nil {
@@ -367,9 +412,8 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 		if err := setCreateInode(batch, parent); err != nil {
 			return err
 		}
-		open, _ := OpenInClientFromContext(ctx)
 		var removedBlobs []uint64
-		removed, err := saveTopologyInode(store, batch, &stat, child, open, &removedBlobs)
+		removed, err := saveTopologyInode(store, batch, &stat, child, openInClient, &removedBlobs)
 		if err != nil {
 			return err
 		}
@@ -567,8 +611,7 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 					newInode.Nlink--
 				}
 				touchTopologyInode(&newInode, now, seq)
-				open, _ := OpenInClientFromContext(ctx)
-				removed, err := saveTopologyInode(store, batch, &stat, newInode, open, &removedBlobs)
+				removed, err := saveTopologyInode(store, batch, &stat, newInode, params.TargetOpenInClient, &removedBlobs)
 				if err != nil {
 					return err
 				}

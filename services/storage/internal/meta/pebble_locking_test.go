@@ -86,12 +86,11 @@ func TestPebbleReadAtimeDeferredUntilBarrier(t *testing.T) {
 	})
 }
 
-// Lookup、GetAttr、Readlink、StatFS 与 Xattr 系列入口必须要求显式 SessionID（忽略上下文中的 SessionID）并校验静态边界。
+// Lookup、GetAttr、Readlink、StatFS 与 Xattr 系列入口必须要求显式 SessionID 并校验静态边界。
 func TestPebbleReadAndXattrRequireExplicitSessionAndValidateBounds(t *testing.T) {
 	e := setupPebbleCreate(t, 1<<20)
-	ctxWithSession := e.branchContext()
-	symlink, err := e.mgr.Symlink(ctxWithSession, meta.SymlinkParams{
-		ParentIno: 1, Name: []byte("ln"), Target: []byte("target"),
+	symlink, err := e.mgr.Symlink(e.ctx, meta.SymlinkParams{
+		SessionID: &e.sid, ParentIno: 1, Name: []byte("ln"), Target: []byte("target"),
 	})
 	require.NoError(t, err)
 	file, err := e.mgr.Create(e.ctx, meta.CreateParams{
@@ -99,23 +98,36 @@ func TestPebbleReadAndXattrRequireExplicitSessionAndValidateBounds(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	// 即使上下文携带 SessionID，显式 sessionID 为 nil 时也必须拒绝。
-	_, err = e.mgr.Lookup(ctxWithSession, nil, 1, []byte("reg"))
+	// 显式 sessionID 为 nil 时必须拒绝。
+	_, err = e.mgr.Lookup(e.ctx, nil, 1, []byte("reg"))
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	_, err = e.mgr.GetAttr(ctxWithSession, nil, file.Inode.Ino)
+	_, err = e.mgr.GetAttr(e.ctx, nil, file.Inode.Ino)
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	_, err = e.mgr.Readlink(ctxWithSession, nil, symlink.Ino)
+	_, err = e.mgr.Readlink(e.ctx, nil, symlink.Ino)
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	_, err = e.mgr.StatFS(ctxWithSession, nil, 1)
+	_, err = e.mgr.StatFS(e.ctx, nil, 1)
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	require.ErrorIs(t, e.mgr.SetXattr(ctxWithSession, meta.SetXattrParams{
+	require.ErrorIs(t, e.mgr.SetXattr(e.ctx, meta.SetXattrParams{
 		Ino: file.Inode.Ino, Name: []byte("user.k"), Value: []byte("v"),
 	}), meta.ErrInvalidArgument)
-	_, err = e.mgr.GetXattr(ctxWithSession, nil, file.Inode.Ino, []byte("user.k"))
+	_, err = e.mgr.GetXattr(e.ctx, nil, file.Inode.Ino, []byte("user.k"))
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	_, err = e.mgr.ListXattr(ctxWithSession, nil, file.Inode.Ino)
+	_, err = e.mgr.ListXattr(e.ctx, nil, file.Inode.Ino)
 	require.ErrorIs(t, err, meta.ErrInvalidArgument)
-	require.ErrorIs(t, e.mgr.RemoveXattr(ctxWithSession, nil, file.Inode.Ino, []byte("user.k")), meta.ErrInvalidArgument)
+	require.ErrorIs(t, e.mgr.RemoveXattr(e.ctx, nil, file.Inode.Ino, []byte("user.k")), meta.ErrInvalidArgument)
+
+	// 节点创建与目录拓扑操作在未提供显式 SessionID 时也必须拒绝。
+	_, err = e.mgr.Mknod(e.ctx, meta.MknodParams{ParentIno: 1, Name: []byte("nod"), Mode: meta.S_IFREG | 0o644})
+	require.ErrorIs(t, err, meta.ErrInvalidArgument)
+	_, err = e.mgr.Mkdir(e.ctx, meta.MkdirParams{ParentIno: 1, Name: []byte("dir"), Mode: 0o755})
+	require.ErrorIs(t, err, meta.ErrInvalidArgument)
+	_, err = e.mgr.Symlink(e.ctx, meta.SymlinkParams{ParentIno: 1, Name: []byte("sym"), Target: []byte("target")})
+	require.ErrorIs(t, err, meta.ErrInvalidArgument)
+	_, err = e.mgr.Link(e.ctx, meta.LinkParams{Ino: file.Inode.Ino, NewParentIno: 1, NewName: []byte("hard")})
+	require.ErrorIs(t, err, meta.ErrInvalidArgument)
+	require.ErrorIs(t, e.mgr.Unlink(e.ctx, nil, 1, []byte("reg"), false), meta.ErrInvalidArgument)
+	require.ErrorIs(t, e.mgr.Rmdir(e.ctx, nil, 1, []byte("dir")), meta.ErrInvalidArgument)
+	require.ErrorIs(t, e.mgr.Rename(e.ctx, meta.RenameParams{OldParentIno: 1, OldName: []byte("reg"), NewParentIno: 1, NewName: []byte("reg2")}), meta.ErrInvalidArgument)
 
 	// 静态入参边界校验。
 	_, err = e.mgr.Lookup(e.ctx, &e.sid, 0, []byte("reg"))

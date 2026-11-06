@@ -79,7 +79,6 @@ func TestBranchMutationTxDirectMechanics(t *testing.T) {
 
 func TestBranchMutationTxWriteSeqDirtyKeyAndBlobCleanup(t *testing.T) {
 	e := setupPebbleCreate(t, 2*pebblekv.BlobSize)
-	ctx := e.branchContext()
 
 	// 1. 创建节点（Create）递增 WriteSeq、Inodes 并记录父子 DirtyKey
 	created, err := e.mgr.Create(e.ctx, meta.CreateParams{
@@ -100,8 +99,8 @@ func TestBranchMutationTxWriteSeqDirtyKeyAndBlobCleanup(t *testing.T) {
 	// 2. 硬链接（Link）递增 WriteSeq 并校验配额
 	_, err = e.mgr.Commit(e.ctx, meta.CommitParams{DiskID: e.disk.DiskID, BranchName: "main", Message: "c1"})
 	require.NoError(t, err)
-	linked, err := e.mgr.Link(ctx, meta.LinkParams{
-		Ino: ino, NewParentIno: 1, NewName: []byte("f1_link"),
+	linked, err := e.mgr.Link(e.ctx, meta.LinkParams{
+		SessionID: &e.sid, Ino: ino, NewParentIno: 1, NewName: []byte("f1_link"),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint32(2), linked.Attr.Nlink)

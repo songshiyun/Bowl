@@ -48,10 +48,6 @@ func setupPebbleCreate(t *testing.T, maxBytes uint64) *pebbleCreateEnv {
 	return &pebbleCreateEnv{pool: pool, ctx: ctx, mgr: mgr, storage: storage, disk: disk, root: root, sid: sid}
 }
 
-func (e *pebbleCreateEnv) branchContext() context.Context {
-	return meta.WithSessionID(e.ctx, &e.sid)
-}
-
 func (e *pebbleCreateEnv) withBranch(t *testing.T, name string, fn func(*pebble.DB)) {
 	t.Helper()
 	branch, err := e.storage.OpenBranch(e.disk.DiskID, name)

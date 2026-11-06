@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -10,6 +11,148 @@ import (
 
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
+
+func (m *manager) SetAttr(ctx context.Context, ino uint64, input SetAttrInput) (*Inode, error) {
+	// 事务前入参边界防御
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	// 至少包含一项有效待更新属性
+	if input.Mode == nil && input.UID == nil && input.GID == nil && input.Size == nil &&
+		input.Atime == nil && input.Mtime == nil && !input.AtimeNow && !input.MtimeNow &&
+		!input.CtimeNow && input.Flags == nil {
+		return nil, ErrInvalidArgument
+	}
+
+	// 可选文件句柄与客户端会话标识静态边界防御
+	if input.Fh != nil && (*input.Fh == 0 || *input.Fh > math.MaxInt64) {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(input.SessionID); err != nil {
+		return nil, err
+	}
+
+	// 时间戳策略互斥防御
+	if (input.Atime != nil && input.AtimeNow) || (input.Mtime != nil && input.MtimeNow) {
+		return nil, ErrInvalidArgument
+	}
+
+	// Mode 范围边界防御（不超过 16 位 0o177777 = 65535）
+	if input.Mode != nil && *input.Mode > 0o177777 {
+		return nil, ErrInvalidArgument
+	}
+
+	// UID 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.UID != nil && *input.UID > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+
+	// GID 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.GID != nil && *input.GID > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+
+	// Size 范围边界防御（防止转换为 PostgreSQL BIGINT 符号位溢出）
+	if input.Size != nil && *input.Size > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+
+	// Flags 范围边界防御（防止转换为 PostgreSQL INTEGER 符号位溢出）
+	if input.Flags != nil && *input.Flags > math.MaxInt32 {
+		return nil, ErrInvalidArgument
+	}
+	return m.pebbleSetAttr(ctx, input.SessionID, ino, input)
+}
+
+func (m *manager) Fallocate(ctx context.Context, params FallocateParams) error {
+	// 1. 入参边界与整型溢出防御
+	if params.Ino == 0 || params.Ino > math.MaxInt64 ||
+		params.Fh > math.MaxInt64 ||
+		params.Length == 0 || params.Length > math.MaxInt64 ||
+		params.Offset > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Offset > uint64(math.MaxInt64)-params.Length {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleFallocate(ctx, params.SessionID, params)
+}
+
+func (m *manager) Read(ctx context.Context, req *ReadRequest) (*ReadResponse, error) {
+	if req == nil {
+		return nil, ErrInvalidArgument
+	}
+	if req.Ino == 0 || req.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Fh > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Size > BlockSize {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(req.SessionID); err != nil {
+		return nil, err
+	}
+	view, err := m.requirePebbleSession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.pebbleRead(ctx, view, req)
+}
+
+func (m *manager) Write(ctx context.Context, req *WriteRequest) (*WriteResponse, error) {
+	if req == nil {
+		return nil, ErrInvalidArgument
+	}
+	if req.Ino == 0 || req.Ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Fh > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	dataLen := len(req.Data)
+	if dataLen > BlockSize {
+		return nil, ErrInvalidArgument
+	}
+	if req.Offset > uint64(math.MaxInt64)-uint64(dataLen) {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(req.SessionID); err != nil {
+		return nil, err
+	}
+	return m.pebbleWrite(ctx, req.SessionID, req)
+}
+
+func (m *manager) Fsync(ctx context.Context, params FsyncParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleSync(ctx, params.SessionID, params.Ino, false)
+}
+
+func (m *manager) FsyncDir(ctx context.Context, params FsyncDirParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 || params.Fh > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateOptionalSessionID(params.SessionID); err != nil {
+		return err
+	}
+	return m.pebbleSync(ctx, params.SessionID, params.Ino, true)
+}
 
 // readPebbleBlock 读取块引用指向的完整块内容。
 func readPebbleBlock(blobs *pebblekv.BlobStore, ref pebblekv.BlobRef) ([]byte, error) {
