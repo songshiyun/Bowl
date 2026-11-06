@@ -244,8 +244,8 @@ func fullBlockWrite(req *WriteRequest) bool {
 	return true
 }
 
-// checkWritableInode 校验目标节点是允许写入的普通文件。
-func checkWritableInode(store pebbleReader, ino uint64, inode pebblekv.Inode) error {
+// checkWritableInode 校验目标节点是允许写入的普通文件，并落实 immutable/append 写语义。
+func checkWritableInode(store pebbleReader, ino uint64, inode pebblekv.Inode, offset uint64, dataLen int) error {
 	if err := checkPebbleInodeLive(store, inode); err != nil {
 		return err
 	}
@@ -256,6 +256,9 @@ func checkWritableInode(store pebbleReader, ino uint64, inode pebblekv.Inode) er
 		return ErrInvalidArgument
 	}
 	if inode.Flags&FlagImmutable != 0 {
+		return ErrPerm
+	}
+	if dataLen > 0 && inode.Flags&FlagAppend != 0 && offset != inode.Size {
 		return ErrPerm
 	}
 	return nil
@@ -277,7 +280,7 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 		unlockRead()
 		return nil, false, err
 	}
-	if err := checkWritableInode(store, req.Ino, inode); err != nil {
+	if err := checkWritableInode(store, req.Ino, inode, req.Offset, len(req.Data)); err != nil {
 		unlockRead()
 		return nil, false, err
 	}
@@ -314,7 +317,7 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 	if err != nil {
 		return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 	}
-	if err := checkWritableInode(store, req.Ino, current); err != nil {
+	if err := checkWritableInode(store, req.Ino, current, req.Offset, len(req.Data)); err != nil {
 		return nil, false, errors.Join(err, pebbleRemoveBlobs(blobs, newIDs))
 	}
 	for _, plan := range plans {
@@ -403,7 +406,7 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 	if err != nil {
 		return nil, err
 	}
-	if err := checkWritableInode(store, req.Ino, inode); err != nil {
+	if err := checkWritableInode(store, req.Ino, inode, req.Offset, len(req.Data)); err != nil {
 		return nil, err
 	}
 	if len(req.Data) == 0 {

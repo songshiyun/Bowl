@@ -324,6 +324,9 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 		if err != nil {
 			return err
 		}
+		if child.Flags&FlagImmutable != 0 {
+			return ErrPerm
+		}
 		if directory {
 			if child.Mode&S_IFMT != S_IFDIR {
 				return ErrNotDir
@@ -430,10 +433,16 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 			}
 			return nil
 		}
+		if oldInode.Flags&FlagImmutable != 0 {
+			return ErrPerm
+		}
 		newInode, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
 		hasNew := err == nil
 		if err != nil && !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		if hasNew && newInode.Flags&FlagImmutable != 0 {
+			return ErrPerm
 		}
 		if !hasNew && params.Flags == RenameExchange {
 			return ErrNotFound

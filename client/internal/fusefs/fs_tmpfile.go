@@ -64,7 +64,9 @@ func (fs *RawFS) Tmpfile(_ <-chan struct{}, input *fuse.CreateIn, out *fuse.Crea
 	defer fs.lifecycleMu.RUnlock()
 	ino := uint64(1)<<63 | fs.nextTmp.Add(1)
 	now := timestamppb.Now()
-	inode := &storagev1.Inode{Ino: ino, Generation: 1, Attr: &storagev1.InodeAttribute{
+	// 服务端新建 Inode 的 Generation 恒为 0；具名化后 LINK/LOOKUP 会复用同一节点编号，
+	// 本地匿名节点必须使用相同代数，否则内核会判定 Inode 失效并以 EIO 拒绝关闭。
+	inode := &storagev1.Inode{Ino: ino, Generation: 0, Attr: &storagev1.InodeAttribute{
 		Mode: syscall.S_IFREG | input.Mode&0o7777, Uid: input.Uid, Gid: input.Gid,
 		Blksize: tmpPageSize, Atime: now, Mtime: now, Ctime: now,
 	}}
