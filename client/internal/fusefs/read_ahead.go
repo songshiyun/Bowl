@@ -3,7 +3,108 @@ package fusefs
 import (
 	"context"
 	"sync"
+	"time"
 )
+
+// MaxRPCChunkSize 定义客户端单次读写 RPC 的最大载荷切片大小 (4 MiB = 4,194,304 字节)。
+const MaxRPCChunkSize = 4 * 1024 * 1024
+
+const defaultPrefetchTimeout = 30 * time.Second
+
+// readAheadMinWant 是触发对齐窗口拉取的最小请求尺寸。
+// 内核 FUSE 的 readahead 请求按 128 KiB 起步（MaxReadAhead=1 MiB），
+// 随机小读通常为 4~64 KiB；用尺寸阈值把“预读流量”和“随机小读”分开，
+// 保持既有契约：非连续随机读严格按请求尺寸直通，绝不放大成 4 MiB。
+const readAheadMinWant = 128 * 1024
+
+type prefetchFuture struct {
+	offset uint64
+	done   chan struct{}
+	data   []byte
+	err    error
+	cancel context.CancelFunc
+}
+
+// windowFetch 是一次单飞的对齐窗口拉取；同窗口内的并发读共享同一个 future。
+type windowFetch struct {
+	offset uint64
+	done   chan struct{}
+	data   []byte
+	err    error
+}
+
+type handleReadAhead struct {
+	mu          sync.Mutex
+	ino         uint64
+	sessionID   uint64
+	gen         uint64
+	lastReadEnd uint64
+	hasLastRead bool
+	seqCount    int
+	// streamEnd 是该句柄已观测到的顺序读高水位（单调递增）。
+	// 内核 readahead 线程与用户线程会并发下发读请求，到达顺序与偏移顺序无关，
+	// 单靠 lastReadEnd 无法判定“是否同一股顺序流”，必须用单调高水位。
+	streamEnd uint64
+	// reads 是该句柄已收到的读请求数；首个请求一律直通，避免一次性大读被放大。
+	reads     int
+	winOffset uint64
+	winData   []byte
+	winValid  bool
+	winEOF    bool
+	prefetch  *prefetchFuture
+	// fetch 是当前在途的 4 MiB 对齐窗口拉取，用于把并发读合并成一次 RPC。
+	fetch *windowFetch
+}
+
+func (hra *handleReadAhead) resetLocked() {
+	hra.gen++
+	hra.lastReadEnd = 0
+	hra.hasLastRead = false
+	hra.seqCount = 0
+	hra.streamEnd = 0
+	hra.fetch = nil
+	hra.winOffset = 0
+	hra.winData = nil
+	hra.winValid = false
+	hra.winEOF = false
+	if hra.prefetch != nil {
+		if hra.prefetch.cancel != nil {
+			hra.prefetch.cancel()
+		}
+		hra.prefetch = nil
+	}
+}
+
+func (hra *handleReadAhead) clearWindowAndPrefetchLocked() {
+	hra.gen++
+	hra.fetch = nil
+	hra.winOffset = 0
+	hra.winData = nil
+	hra.winValid = false
+	hra.winEOF = false
+	if hra.prefetch != nil {
+		if hra.prefetch.cancel != nil {
+			hra.prefetch.cancel()
+		}
+		hra.prefetch = nil
+	}
+}
+
+// requestInWindowLocked 报告请求区间是否与当前活跃窗口、在途窗口拉取或异步预取窗口相交。
+// 调用方必须持有 hra.mu。
+func (hra *handleReadAhead) requestInWindowLocked(offset uint64, want int) bool {
+	end := offset + uint64(want)
+	if hra.winValid && offset < hra.winOffset+uint64(len(hra.winData)) && end > hra.winOffset {
+		return true
+	}
+	if hra.fetch != nil && offset < hra.fetch.offset+MaxRPCChunkSize && end > hra.fetch.offset {
+		return true
+	}
+	if hra.prefetch != nil && offset < hra.prefetch.offset+MaxRPCChunkSize && end > hra.prefetch.offset {
+		return true
+	}
+	return false
+}
 
 // ChunkFetcher 定义在指定字节偏移与期望长度下向底层存储拉取数据块的窄端口适配器。
 type ChunkFetcher func(ctx context.Context, offset uint64, length uint32) ([]byte, error)

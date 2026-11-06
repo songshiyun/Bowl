@@ -113,8 +113,8 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return st
 	}
 
-	fs.invalidateReadAheadByIno(ino)
-	defer fs.invalidateReadAheadByIno(ino)
+	fs.readAhead.InvalidateInode(ino)
+	defer fs.readAhead.InvalidateInode(ino)
 
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
@@ -183,8 +183,8 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		SessionId: optionalSession(sid),
 	}
 
-	fs.invalidateReadAheadByIno(ino)
-	defer fs.invalidateReadAheadByIno(ino)
+	fs.readAhead.InvalidateInode(ino)
+	defer fs.readAhead.InvalidateInode(ino)
 
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	fs.cache.invalidateInode(input.NodeId)

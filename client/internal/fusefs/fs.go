@@ -86,8 +86,7 @@ type RawFS struct {
 	releaseStarted  bool
 	releaseClosed   bool
 
-	readAheadMu      sync.Mutex
-	readAheadHandles map[uint64]*handleReadAhead
+	readAhead *ReadAheadCoordinator
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
@@ -100,20 +99,20 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
-		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
-		client:           client,
-		locks:            NewLockTable(),
-		cache:            NewNamespaceCache(cfg.NamespaceCacheCapacity),
-		caps:             newCapabilityCache(),
-		dirtyInodes:      make(map[uint64]struct{}),
-		tmpFiles:         make(map[uint64]*tmpFile),
-		serverToLocal:    make(map[uint64]uint64),
-		orphanSessions:   make(map[uint64]uint64),
-		sessions:         sessions,
-		cfg:              cfg,
-		releaseCtx:       releaseCtx,
-		releaseCancel:    releaseCancel,
-		readAheadHandles: make(map[uint64]*handleReadAhead),
+		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
+		client:         client,
+		locks:          NewLockTable(),
+		cache:          NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		caps:           newCapabilityCache(),
+		dirtyInodes:    make(map[uint64]struct{}),
+		tmpFiles:       make(map[uint64]*tmpFile),
+		serverToLocal:  make(map[uint64]uint64),
+		orphanSessions: make(map[uint64]uint64),
+		sessions:       sessions,
+		cfg:            cfg,
+		releaseCtx:     releaseCtx,
+		releaseCancel:  releaseCancel,
+		readAhead:      NewReadAheadCoordinator(),
 	}
 	fs.handles = NewHandleTable(fs.reclaimOrphan)
 	if sessions != nil {
@@ -130,21 +129,7 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 
 	fs.cache.clear()
 	fs.caps.reset()
-	fs.readAheadMu.Lock()
-	var targets []*handleReadAhead
-	for fh, hra := range fs.readAheadHandles {
-		if expiredSID == 0 || hra.sessionID == expiredSID {
-			targets = append(targets, hra)
-			delete(fs.readAheadHandles, fh)
-		}
-	}
-	fs.readAheadMu.Unlock()
-
-	for _, hra := range targets {
-		hra.mu.Lock()
-		hra.resetLocked()
-		hra.mu.Unlock()
-	}
+	fs.readAhead.InvalidateSession(expiredSID)
 
 	fs.releaseMu.Lock()
 	remaining := fs.releaseQueue[:0]
@@ -340,7 +325,7 @@ func (fs *RawFS) OnUnmount() {
 	clear(fs.orphanSessions)
 	fs.stateMu.Unlock()
 	fs.lifecycleMu.Unlock()
-	fs.clearAllReadAhead()
+	fs.readAhead.Clear()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {
 		fs.cfg.OnUnmount()

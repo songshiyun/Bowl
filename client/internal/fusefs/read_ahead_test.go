@@ -4,14 +4,23 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
+	"github.com/starsrc/bowl/client/internal/session"
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 func makeDeterministicFile(size int) []byte {
@@ -558,4 +567,356 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 			}
 		}
 	})
+}
+
+type fakeStorageClientForReadAhead struct {
+	storagev1connect.UnimplementedStorageServiceHandler
+	mu            sync.Mutex
+	fileData      []byte
+	readCalls     int
+	readOffsets   []uint64
+	readSizes     []uint32
+	onRead4MiB    func(ctx context.Context, offset uint64)
+	renewRespErr  error
+	sessionExpire bool
+}
+
+func (f *fakeStorageClientForReadAhead) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	offset := req.Msg.GetOffset()
+	size := req.Msg.GetSize()
+	f.mu.Lock()
+	f.readCalls++
+	f.readOffsets = append(f.readOffsets, offset)
+	f.readSizes = append(f.readSizes, size)
+	hook := f.onRead4MiB
+	f.mu.Unlock()
+
+	if size == fusefs.MaxRPCChunkSize && hook != nil {
+		hook(ctx, offset)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if int(offset) >= len(f.fileData) {
+		return connect.NewResponse(&storagev1.ReadResponse{}), nil
+	}
+	end := min(int(offset)+int(size), len(f.fileData))
+	out := append([]byte(nil), f.fileData[offset:end]...)
+	return connect.NewResponse(&storagev1.ReadResponse{Data: out}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) Write(_ context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	off := int(req.Msg.GetOffset())
+	data := req.Msg.GetData()
+	if off+len(data) > len(f.fileData) {
+		grown := make([]byte, off+len(data))
+		copy(grown, f.fileData)
+		f.fileData = grown
+	}
+	copy(f.fileData[off:off+len(data)], data)
+	return connect.NewResponse(&storagev1.WriteResponse{
+		Size: uint32(len(data)),
+		Inode: &storagev1.Inode{
+			Ino:  req.Msg.GetIno(),
+			Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644, Size: uint64(len(f.fileData)), Nlink: 1},
+		},
+	}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) SetAttr(_ context.Context, req *connect.Request[storagev1.SetAttrRequest]) (*connect.Response[storagev1.SetAttrResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if req.Msg.Size != nil {
+		newSize := int(req.Msg.GetSize())
+		if newSize < len(f.fileData) {
+			f.fileData = f.fileData[:newSize]
+		} else if newSize > len(f.fileData) {
+			grown := make([]byte, newSize)
+			copy(grown, f.fileData)
+			f.fileData = grown
+		}
+	}
+	return connect.NewResponse(&storagev1.SetAttrResponse{
+		Inode: &storagev1.Inode{
+			Ino:  req.Msg.GetIno(),
+			Attr: &storagev1.InodeAttribute{Mode: syscall.S_IFREG | 0o644, Size: uint64(len(f.fileData)), Nlink: 1},
+		},
+	}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) Fallocate(_ context.Context, req *connect.Request[storagev1.FallocateRequest]) (*connect.Response[storagev1.FallocateResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	off := int(req.Msg.GetOffset())
+	length := int(req.Msg.GetLength())
+	for i := off; i < min(off+length, len(f.fileData)); i++ {
+		f.fileData[i] = 0
+	}
+	return connect.NewResponse(&storagev1.FallocateResponse{}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) Fsync(_ context.Context, _ *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
+	return connect.NewResponse(&storagev1.FsyncResponse{}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) RenewSession(_ context.Context, _ *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.renewRespErr != nil {
+		return nil, f.renewRespErr
+	}
+	exp := time.Now().Add(30 * time.Second)
+	if f.sessionExpire {
+		exp = time.Now().Add(-time.Second)
+	}
+	return connect.NewResponse(&storagev1.RenewSessionResponse{
+		ExpiresAt: timestamppb.New(exp),
+	}), nil
+}
+
+func (f *fakeStorageClientForReadAhead) CloseSession(_ context.Context, _ *connect.Request[storagev1.CloseSessionRequest]) (*connect.Response[storagev1.CloseSessionResponse], error) {
+	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
+}
+
+func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) {
+	const (
+		chunkSize = fusefs.MaxRPCChunkSize
+		nodeID    = uint64(100)
+		fh        = uint64(11)
+	)
+
+	// 结构体反射守卫：RawFS 不得再暴露旧版 readAheadMu 或 readAheadHandles 字段
+	rawFSType := reflect.TypeOf(fusefs.RawFS{})
+	_, hasOldMu := rawFSType.FieldByName("readAheadMu")
+	require.False(t, hasOldMu, "RawFS 不得保留旧字段 readAheadMu")
+	_, hasOldMap := rawFSType.FieldByName("readAheadHandles")
+	require.False(t, hasOldMap, "RawFS 不得保留旧字段 readAheadHandles")
+
+	client := &fakeStorageClientForReadAhead{
+		fileData: bytes.Repeat([]byte{0x11}, 2*chunkSize),
+	}
+	sessMgr, err := session.New(context.Background(), client, session.Config{DiskID: "disk-1"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sessMgr.Close() })
+
+	fs := fusefs.NewRawFS(client, sessMgr, fusefs.Config{RootIno: 1})
+	t.Cleanup(fs.OnUnmount)
+	fs.PrepareTestFileHandle(t, nodeID, fh, syscall.O_RDWR)
+
+	readAt := func(offset uint64, size uint32) ([]byte, fuse.Status) {
+		buf := make([]byte, size)
+		res, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: nodeID},
+			Fh:       fh,
+			Offset:   offset,
+			Size:     size,
+		}, buf)
+		if st != fuse.OK {
+			return nil, st
+		}
+		out, st := res.Bytes(buf)
+		return append([]byte(nil), out...), st
+	}
+
+	// 1. 首读 [0, 64 KiB) 直通 + 第二次顺序读 [64 KiB, 128 KiB) 建立 4 MiB 活跃窗口
+	data, st := readAt(0, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, bytes.Repeat([]byte{0x11}, 64*1024), data)
+
+	data, st = readAt(64*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, bytes.Repeat([]byte{0x11}, 64*1024), data)
+
+	// 2. Write 失效预读缓存：随后读取 [128 KiB, 192 KiB) 必须穿透拿到新写入的 0x22
+	patchWrite := bytes.Repeat([]byte{0x22}, 64*1024)
+	written, st := fs.Write(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: nodeID},
+		Fh:       fh,
+		Offset:   128 * 1024,
+		Size:     uint32(len(patchWrite)),
+	}, patchWrite)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, uint32(len(patchWrite)), written)
+
+	data, st = readAt(128*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, patchWrite, data, "Write 后读取必须命中最新数据而非旧预读窗口")
+
+	// 再次顺序读建立窗口后，验证 Fallocate 打洞失效预读窗口
+	_, st = readAt(192*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	st = fs.Fallocate(nil, &fuse.FallocateIn{
+		InHeader: fuse.InHeader{NodeId: nodeID},
+		Fh:       fh,
+		Offset:   256 * 1024,
+		Length:   64 * 1024,
+		Mode:     unix.FALLOC_FL_PUNCH_HOLE | unix.FALLOC_FL_KEEP_SIZE,
+	})
+	require.Equal(t, fuse.OK, st)
+	data, st = readAt(256*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, make([]byte, 64*1024), data, "Fallocate 打洞后读取必须返回清零数据而非旧预读窗口")
+
+	// 再次顺序读建立窗口后，验证 SetAttr 截断失效预读窗口
+	_, st = readAt(320*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	var attrOut fuse.AttrOut
+	st = fs.SetAttr(nil, &fuse.SetAttrIn{
+		SetAttrInCommon: fuse.SetAttrInCommon{
+			InHeader: fuse.InHeader{NodeId: nodeID},
+			Valid:    fuse.FATTR_SIZE,
+			Size:     384 * 1024,
+		},
+	}, &attrOut)
+	require.Equal(t, fuse.OK, st)
+	data, st = readAt(384*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	require.Empty(t, data, "SetAttr 截断后越界读取必须返回 EOF 空数据而非旧预读窗口")
+
+	// 3. 验证 Release 立即取消该句柄在途预取
+	const fh1 = uint64(110)
+	fs.PrepareTestFileHandle(t, nodeID, fh1, syscall.O_RDONLY)
+
+	readAtFh := func(targetFh, offset uint64, size uint32) ([]byte, fuse.Status) {
+		buf := make([]byte, size)
+		res, st := fs.Read(nil, &fuse.ReadIn{
+			InHeader: fuse.InHeader{NodeId: nodeID},
+			Fh:       targetFh,
+			Offset:   offset,
+			Size:     size,
+		}, buf)
+		if st != fuse.OK {
+			return nil, st
+		}
+		out, st := res.Bytes(buf)
+		return append([]byte(nil), out...), st
+	}
+
+	client.mu.Lock()
+	client.fileData = bytes.Repeat([]byte{0x33}, 2*chunkSize)
+	prefetchStarted := make(chan struct{})
+	prefetchCanceled := make(chan error, 1)
+	var once1 sync.Once
+	client.onRead4MiB = func(ctx context.Context, offset uint64) {
+		if offset == chunkSize {
+			once1.Do(func() {
+				close(prefetchStarted)
+				<-ctx.Done()
+				prefetchCanceled <- ctx.Err()
+			})
+		}
+	}
+	client.mu.Unlock()
+
+	_, st = readAtFh(fh1, 0, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	_, st = readAtFh(fh1, 64*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+
+	select {
+	case <-prefetchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 RawFS.Read 触发异步预取超时")
+	}
+
+	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: nodeID}, Fh: fh1})
+	select {
+	case cancelErr := <-prefetchCanceled:
+		require.ErrorIs(t, cancelErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RawFS.Release 未及时取消句柄的在途预取")
+	}
+
+	// 4. 验证会话过期回调（onSessionExpired -> ReadAheadCoordinator.InvalidateSession）立即取消在途预取
+	const fh2 = uint64(12)
+	fs.PrepareTestFileHandle(t, nodeID, fh2, syscall.O_RDONLY)
+
+	prefetchStarted2 := make(chan struct{})
+	prefetchCanceled2 := make(chan error, 1)
+	var once2 sync.Once
+	client.mu.Lock()
+	client.onRead4MiB = func(ctx context.Context, offset uint64) {
+		if offset == chunkSize {
+			once2.Do(func() {
+				close(prefetchStarted2)
+				<-ctx.Done()
+				prefetchCanceled2 <- ctx.Err()
+			})
+		}
+	}
+	client.mu.Unlock()
+
+	_, st = readAtFh(fh2, 0, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	_, st = readAtFh(fh2, 64*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+
+	select {
+	case <-prefetchStarted2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 fh2 触发异步预取超时")
+	}
+
+	// 启动后台 renewLoop 并令下一次续约返回已过期时间，触发 onSessionExpired -> InvalidateSession
+	client.mu.Lock()
+	client.sessionExpire = true
+	client.mu.Unlock()
+	require.NoError(t, sessMgr.Start(context.Background()))
+	sessMgr.TriggerRenew()
+
+	select {
+	case cancelErr := <-prefetchCanceled2:
+		require.ErrorIs(t, cancelErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("会话过期未及时通过 InvalidateSession 取消在途预取")
+	}
+
+	// 恢复新会话续约并验证 OnUnmount -> ReadAheadCoordinator.Clear 取消在途预取
+	client.mu.Lock()
+	client.sessionExpire = false
+	client.mu.Unlock()
+	_, err = sessMgr.AcquireSessionID(context.Background())
+	require.NoError(t, err)
+
+	const fh3 = uint64(13)
+	fs.PrepareTestFileHandle(t, nodeID, fh3, syscall.O_RDONLY)
+
+	prefetchStarted3 := make(chan struct{})
+	prefetchCanceled3 := make(chan error, 1)
+	var once3 sync.Once
+	client.mu.Lock()
+	client.onRead4MiB = func(ctx context.Context, offset uint64) {
+		if offset == chunkSize {
+			once3.Do(func() {
+				close(prefetchStarted3)
+				<-ctx.Done()
+				prefetchCanceled3 <- ctx.Err()
+			})
+		}
+	}
+	client.mu.Unlock()
+
+	_, st = readAtFh(fh3, 0, 64*1024)
+	require.Equal(t, fuse.OK, st)
+	_, st = readAtFh(fh3, 64*1024, 64*1024)
+	require.Equal(t, fuse.OK, st)
+
+	select {
+	case <-prefetchStarted3:
+	case <-time.After(2 * time.Second):
+		t.Fatal("等待 fh3 触发异步预取超时")
+	}
+
+	fs.OnUnmount()
+	select {
+	case cancelErr := <-prefetchCanceled3:
+		require.ErrorIs(t, cancelErr, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RawFS.OnUnmount 未及时通过 Clear 取消在途预取")
+	}
 }
