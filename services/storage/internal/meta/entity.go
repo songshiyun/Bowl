@@ -289,10 +289,11 @@ type FallocateParams struct {
 
 // SetXattrParams 定义设置扩展属性的输入参数。
 type SetXattrParams struct {
-	Ino   uint64
-	Name  []byte
-	Value []byte
-	Flags uint32
+	SessionID *uint64
+	Ino       uint64
+	Name      []byte
+	Value     []byte
+	Flags     uint32
 }
 
 // 领域哨兵错误。

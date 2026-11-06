@@ -15,6 +15,26 @@ import (
 // securityCapabilityXattr 是 Linux killpriv 语义要求清除的扩展属性名。
 var securityCapabilityXattr = []byte("security.capability")
 
+func validateXattrName(name []byte) error {
+	if len(name) == 0 {
+		return ErrInvalidArgument
+	}
+	if len(name) > MaxXattrNameBytes {
+		return ErrRange
+	}
+	if bytes.IndexByte(name, 0) >= 0 {
+		return ErrInvalidArgument
+	}
+	return nil
+}
+
+// isAllowedUserXattrFileType 判定文件模式是否允许访问 user.* 命名空间扩展属性。
+// 仅允许常规文件 (S_IFREG)、目录 (S_IFDIR) 与套接字 (S_IFSOCK)。
+func isAllowedUserXattrFileType(mode uint32) bool {
+	fileType := mode & S_IFMT
+	return fileType == S_IFREG || fileType == S_IFDIR || fileType == S_IFSOCK
+}
+
 // deleteSecurityCapability 在同一 Pebble 批次内原子删除 security.capability，
 // 使单次 Write / SetAttr / Fallocate RPC 即满足 Linux killpriv 语义。
 func deleteSecurityCapability(batch *pebble.Batch, ino uint64) error {
@@ -94,8 +114,20 @@ func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode 
 	return batch.Commit(pebble.NoSync)
 }
 
-func (m *manager) pebbleSetXattr(ctx context.Context, sid *uint64, params SetXattrParams) error {
-	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
+func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
+	if params.Ino == 0 || params.Ino > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if params.Flags&^(XattrCreate|XattrReplace) != 0 {
+		return ErrInvalidArgument
+	}
+	if err := validateXattrName(params.Name); err != nil {
+		return err
+	}
+	if len(params.Value) > MaxXattrValueBytes {
+		return ErrRange
+	}
+	return m.withWritablePebbleBranch(ctx, params.SessionID, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
 		unlock := m.lockInodeWrite(disk, branch, params.Ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, params.Ino)
@@ -136,7 +168,13 @@ func (m *manager) pebbleSetXattr(ctx context.Context, sid *uint64, params SetXat
 	})
 }
 
-func (m *manager) pebbleGetXattr(ctx context.Context, sid *uint64, ino uint64, name []byte) ([]byte, error) {
+func (m *manager) GetXattr(ctx context.Context, sid *uint64, ino uint64, name []byte) ([]byte, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if err := validateXattrName(name); err != nil {
+		return nil, err
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -166,7 +204,10 @@ func (m *manager) pebbleGetXattr(ctx context.Context, sid *uint64, ino uint64, n
 	return result, err
 }
 
-func (m *manager) pebbleListXattr(ctx context.Context, sid *uint64, ino uint64) ([][]byte, error) {
+func (m *manager) ListXattr(ctx context.Context, sid *uint64, ino uint64) ([][]byte, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -186,7 +227,13 @@ func (m *manager) pebbleListXattr(ctx context.Context, sid *uint64, ino uint64) 
 	return names, err
 }
 
-func (m *manager) pebbleRemoveXattr(ctx context.Context, sid *uint64, ino uint64, name []byte) error {
+func (m *manager) RemoveXattr(ctx context.Context, sid *uint64, ino uint64, name []byte) error {
+	if ino == 0 || ino > math.MaxInt64 {
+		return ErrInvalidArgument
+	}
+	if err := validateXattrName(name); err != nil {
+		return err
+	}
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, _ *TreeQuota, store *pebble.DB, _ *pebblekv.BlobStore) error {
 		unlock := m.lockInodeWrite(disk, branch, ino)
 		defer unlock()

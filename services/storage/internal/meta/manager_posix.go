@@ -3,62 +3,8 @@ package meta
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math"
 )
-
-func validateXattrName(name []byte) error {
-	if len(name) == 0 {
-		return ErrInvalidArgument
-	}
-	if len(name) > MaxXattrNameBytes {
-		return ErrRange
-	}
-	if bytes.IndexByte(name, 0) >= 0 {
-		return ErrInvalidArgument
-	}
-	return nil
-}
-
-// isAllowedUserXattrFileType 判定文件模式是否允许访问 user.* 命名空间扩展属性。
-// 仅允许常规文件 (S_IFREG)、目录 (S_IFDIR) 与套接字 (S_IFSOCK)。
-func isAllowedUserXattrFileType(mode uint32) bool {
-	fileType := mode & S_IFMT
-	return fileType == S_IFREG || fileType == S_IFDIR || fileType == S_IFSOCK
-}
-
-func (m *manager) Lookup(ctx context.Context, parentIno uint64, name []byte) (*Inode, error) {
-	if parentIno == 0 || parentIno > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	if len(name) > MaxFileNameBytes {
-		return nil, ErrNameTooLong
-	}
-	if bytes.IndexByte(name, '/') >= 0 || bytes.IndexByte(name, 0) >= 0 {
-		return nil, ErrInvalidArgument
-	}
-
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleLookup(ctx, sid, parentIno, name)
-}
-
-func (m *manager) GetAttr(ctx context.Context, ino uint64) (*Inode, error) {
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleGetAttr(ctx, sid, ino)
-}
-
-func (m *manager) Readlink(ctx context.Context, ino uint64) ([]byte, error) {
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleReadlink(ctx, sid, ino)
-}
 
 func (m *manager) Mknod(ctx context.Context, params MknodParams) (*Inode, error) {
 	if params.ParentIno == 0 || params.ParentIno > math.MaxInt64 {
@@ -181,67 +127,6 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	}
 	sid, _ := SessionIDFromContext(ctx)
 	return m.renamePebbleNode(ctx, sid, params)
-}
-
-func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
-	// 第 1 步：入参静态校验（不查库）
-	if params.Ino == 0 || params.Ino > math.MaxInt64 {
-		return ErrInvalidArgument
-	}
-	if params.Flags&^(XattrCreate|XattrReplace) != 0 {
-		return ErrInvalidArgument
-	}
-	if err := validateXattrName(params.Name); err != nil {
-		return err
-	}
-	if len(params.Value) > MaxXattrValueBytes {
-		return ErrRange
-	}
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleSetXattr(ctx, sid, params)
-}
-
-func (m *manager) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error) {
-	// 第 1 步：入参静态校验（不查库）
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	if err := validateXattrName(name); err != nil {
-		return nil, err
-	}
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleGetXattr(ctx, sid, ino, name)
-}
-
-func (m *manager) ListXattr(ctx context.Context, ino uint64) ([][]byte, error) {
-	// 第 1 步：入参静态校验（不查库）
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, ErrInvalidArgument
-	}
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleListXattr(ctx, sid, ino)
-}
-
-func (m *manager) RemoveXattr(ctx context.Context, ino uint64, name []byte) error {
-	// 第 1 步：入参静态校验（不查库）
-	if ino == 0 || ino > math.MaxInt64 {
-		return ErrInvalidArgument
-	}
-	if err := validateXattrName(name); err != nil {
-		return err
-	}
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleRemoveXattr(ctx, sid, ino, name)
-}
-
-func (m *manager) StatFS(ctx context.Context, ino uint64) (*StatFSResult, error) {
-	// 静态参数校验（无需触达数据库）：ino 必须在 [1, math.MaxInt64] 区间内
-	if ino == 0 || ino > math.MaxInt64 {
-		return nil, fmt.Errorf("%w: ino must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), ino)
-	}
-
-	sid, _ := SessionIDFromContext(ctx)
-	return m.pebbleStatFS(ctx, sid, ino)
 }
 
 func (m *manager) Create(ctx context.Context, params CreateParams) (*CreateResult, error) {
