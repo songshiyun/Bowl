@@ -1,8 +1,8 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `8cad512`（`1f7cde9` + chown setid 修复）。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-06，Bowl `a253128`。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮 `prove` 判定 17 个目录、238 个脚本和 8,798 项子测试全部通过；其中 28 项标记为 TODO，9 项为预期失败。全量执行 172.49s，内网综合吞吐 51.01 tests/s（上一轮基线 172.85s / 50.90 tests/s）。首轮在 `1f7cde9` 上发现 `chown/00.t` 32 项失败（声明 `CAP_HANDLE_KILLPRIV` 后服务端未清除非目录节点的 SUID/SGID），修复后重跑全绿。
+本轮在 17 个系统调用目录、238 个 `.t` 脚本、8,798 项 POSIX 断言中通过 `8,789 / 8,798`（通过率 `99.90%`，28 项 TODO 中 9 项预期失败）；全量执行耗时 `169.14s`，内网综合吞吐 `52.01 tests/s`。未通过的 9 项子测试（分布于 `chmod/02.t`、`chown/02.t`、`ftruncate/02.t`、`link/02.t`、`rename/01.t`、`rmdir/02.t`、`truncate/02.t`、`unlink/02.t`）均为 256 字节超长文件名边界断言（预期 `ENAMETOOLONG`，因 `29c2bc3` 引入 `completeDirs` 权威完整目录本地未命中短路提前返回 `ENOENT`）。
 
 本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
 

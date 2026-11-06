@@ -1,90 +1,22 @@
-[2026-11-04T14:21:50Z] Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64...
-[2026-11-04T14:21:51Z] Cross-compiling Drive9 binaries (drive9-server, drive9) from /Users/fanxing/code/other/filesystem/drive9 for linux/amd64...
-[2026-11-04T14:22:02Z] Binaries compiled & packaged (Bowl=1f7cde9, Drive9=b529a36f).
-[2026-11-04T14:22:02Z] Creating temporary SSH KeyPair bowl-d9-bench-kp-20261104222150 in us-west-1...
-[2026-11-04T14:22:04Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
-[2026-11-04T14:22:05Z] Created Server=i-rj9irkcbex24zbqogdao, Client=i-rj9irkcbex24zbqogdap
-[2026-11-04T14:22:05Z] Waiting for instances ["i-rj9irkcbex24zbqogdao","i-rj9irkcbex24zbqogdap"] to reach Running status...
-[2026-11-04T14:22:12Z] Server Node: Public=198.11.180.165, Private=172.16.1.209
-[2026-11-04T14:22:12Z] Client Node: Public=47.251.88.161, Private=172.16.1.208
-[2026-11-04T14:22:12Z] Waiting for SSH readiness on Server (198.11.180.165)...
-[2026-11-04T14:22:30Z] SSH is ready on Server (198.11.180.165).
-[2026-11-04T14:22:30Z] Waiting for SSH readiness on Client (47.251.88.161)...
-[2026-11-04T14:22:33Z] SSH is ready on Client (47.251.88.161).
-[2026-11-04T14:22:33Z] Uploading server-bins.tar.gz and migrations to Server (198.11.180.165)...
-[2026-11-04T14:23:41Z] Configuring PostgreSQL 16, Bowl Storage, TiDB v8.5.5, and Drive9 Server on Server node...
+[2026-11-06T13:53:25Z] Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64...
+[2026-11-06T13:53:28Z] Cross-compiling Drive9 binaries (drive9-server, drive9) from /Users/fanxing/code/other/filesystem/drive9 for linux/amd64...
+[2026-11-06T13:53:50Z] Binaries compiled & packaged (Bowl=a253128, Drive9=b529a36f).
+[2026-11-06T13:53:50Z] Creating temporary SSH KeyPair bowl-d9bench-kp-20261106-135325 in us-west-1...
+[2026-11-06T13:53:51Z] Launching 2 PostPaid ECS instances (ecs.c9i.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 120GiB cloud_essd) in us-west-1a...
+[2026-11-06T13:53:52Z] Created Server=i-rj93j7f2ntjd6mgs48eq, Client=i-rj93j7f2ntjd6mgs48er
+[2026-11-06T13:53:52Z] Waiting for instances ["i-rj93j7f2ntjd6mgs48eq","i-rj93j7f2ntjd6mgs48er"] to reach Running status...
+[2026-11-06T13:54:00Z] Server Node: Public=47.77.203.99, Private=172.16.1.251
+[2026-11-06T13:54:00Z] Client Node: Public=47.251.52.212, Private=172.16.1.250
+[2026-11-06T13:54:00Z] Waiting for SSH readiness on Server (47.77.203.99)...
+[2026-11-06T13:54:19Z] SSH is ready on Server (47.77.203.99).
+[2026-11-06T13:54:19Z] Waiting for SSH readiness on Client (47.251.52.212)...
+[2026-11-06T13:54:30Z] SSH is ready on Client (47.251.52.212).
+[2026-11-06T13:54:30Z] Uploading server-bins.tar.gz and migrations to Server (47.77.203.99)...
+[2026-11-06T13:55:46Z] Configuring PostgreSQL 16, Bowl Storage, TiDB v8.5.5, and Drive9 Server on Server node...
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-locale: Cannot set LC_CTYPE to default locale: No such file or directory
-locale: Cannot set LC_ALL to default locale: No such file or directory
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-locale: Cannot set LC_CTYPE to default locale: No such file or directory
-locale: Cannot set LC_ALL to default locale: No such file or directory
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 
 Running kernel seems to be up-to-date.
 
@@ -97,102 +29,30 @@ No user sessions are running outdated binaries.
 No VM guests are running outdated hypervisor (qemu) binaries on this host.
 Synchronizing state of postgresql.service with SysV service script with /usr/lib/systemd/systemd-sysv-install.
 Executing: /usr/lib/systemd/systemd-sysv-install enable postgresql
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 ALTER ROLE
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 CREATE DATABASE
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 ALTER SYSTEM
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 ALTER SYSTEM
-2026/11/04 22:24:10 OK   20261015165500_create_metadata_tables.sql (3.95ms)
-2026/11/04 22:24:10 OK   20261016180000_add_symlink_target_to_inodes.sql (1.58ms)
-2026/11/04 22:24:10 OK   20261017000000_create_file_handles_table.sql (2.58ms)
-2026/11/04 22:24:10 OK   20261017010000_convert_symlink_target_to_bytea.sql (6.79ms)
-2026/11/04 22:24:10 OK   20261017020000_convert_entries_name_to_bytea.sql (5.94ms)
-2026/11/04 22:24:10 OK   20261017030000_create_inode_xattrs_table.sql (2.55ms)
-2026/11/04 22:24:10 OK   20261018000000_create_file_locks_tables.sql (6.94ms)
-2026/11/04 22:24:10 OK   20261018010000_add_session_id_to_file_handles.sql (1.75ms)
-2026/11/04 22:24:10 OK   20261019000000_align_juicefs_meta_foundation.sql (4.52ms)
-2026/11/04 22:24:10 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.09ms)
-2026/11/04 22:24:10 OK   20261028000000_add_chunks_and_slice_refs.sql (3.55ms)
-2026/11/04 22:24:10 OK   20261029000000_alter_chunks_indx_to_bigint.sql (3.4ms)
-2026/11/04 22:24:10 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.21ms)
-2026/11/04 22:24:10 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.4ms)
-2026/11/04 22:24:10 OK   20261104000000_add_adr0029_control_plane_schema.sql (10.97ms)
-2026/11/04 22:24:10 OK   20261104010000_drop_legacy_posix_tables.sql (7.53ms)
-2026/11/04 22:24:10 goose: successfully migrated database to version: 20261104010000
+2026/11/06 21:56:14 OK   20261015165500_create_metadata_tables.sql (4.36ms)
+2026/11/06 21:56:14 OK   20261016180000_add_symlink_target_to_inodes.sql (2.03ms)
+2026/11/06 21:56:14 OK   20261017000000_create_file_handles_table.sql (2.24ms)
+2026/11/06 21:56:14 OK   20261017010000_convert_symlink_target_to_bytea.sql (7.17ms)
+2026/11/06 21:56:14 OK   20261017020000_convert_entries_name_to_bytea.sql (5.87ms)
+2026/11/06 21:56:14 OK   20261017030000_create_inode_xattrs_table.sql (2.18ms)
+2026/11/06 21:56:14 OK   20261018000000_create_file_locks_tables.sql (7.19ms)
+2026/11/06 21:56:14 OK   20261018010000_add_session_id_to_file_handles.sql (1.74ms)
+2026/11/06 21:56:14 OK   20261019000000_align_juicefs_meta_foundation.sql (4.32ms)
+2026/11/06 21:56:14 OK   20261023000000_add_disks_and_inode_root_ino.sql (6.38ms)
+2026/11/06 21:56:14 OK   20261028000000_add_chunks_and_slice_refs.sql (3.56ms)
+2026/11/06 21:56:14 OK   20261029000000_alter_chunks_indx_to_bigint.sql (3.57ms)
+2026/11/06 21:56:14 OK   20261029010000_add_disk_id_to_client_sessions.sql (1.22ms)
+2026/11/06 21:56:14 OK   20261101000000_drop_disks_quota_columns_and_add_inode_quota_index.sql (2.02ms)
+2026/11/06 21:56:14 OK   20261104000000_add_adr0029_control_plane_schema.sql (10.99ms)
+2026/11/06 21:56:14 OK   20261104010000_drop_legacy_posix_tables.sql (7.4ms)
+2026/11/06 21:56:14 goose: successfully migrated database to version: 20261104010000
   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 4710k  100 4710k    0     0  66.6M      0 --:--:-- --:--:-- --:--:-- 67.6M
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100 4710k  100 4710k    0     0  71.7M      0 --:--:-- --:--:-- --:--:-- 71.8M
 Successfully set mirror to https://tiup-mirrors.pingcap.com
 Detected shell: bash
 Shell profile:  /root/.bashrc
@@ -202,93 +62,27 @@ Installed path: /root/.tiup/bin/tiup
 ===============================================
 Have a try:     tiup playground
 ===============================================
-Checking updates for component telemetry... The component `telemetry` version  is not installed; downloading from repository.
+Checking updates for component telemetry... Timedout (after 2s)
+The component `telemetry` version  is not installed; downloading from repository.
 The component `telemetry` not found (may be deleted from repository); skipped
 Error: use `tiup install telemetry` to install component `telemetry` first: component not installed
-download https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 9.64 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 16.05 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 18.92 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 20.53 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 22.41 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 25.72 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 27.55 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 29.75 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 32.84 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 34.75 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 38.06 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 39.84 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 42.67 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 44.41 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 45.95 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 46.23 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 46.53 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 53.17 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 55.36 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 57.59 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 59.06 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 63.16 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 66.23 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 67.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 71.33 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 71.94 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 76.16 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 76.95 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 79.00 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 82.39 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 85.64 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 86.50 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 88.50 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 90.19 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 94.61 MiB / 94.61 MiBCreated symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
+download https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 13.20 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 16.72 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 18.48 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 21.02 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 22.03 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 22.36 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 28.23 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 29.11 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 31.95 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 34.80 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 37.75 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 40.64 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 41.12 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 43.73 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 44.06 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 50.19 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 51.09 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 52.81 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 55.16 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 58.38 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 61.70 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 63.59 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 66.33 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 67.80 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 71.61 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 73.56 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 75.83 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 77.50 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 78.38 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 82.27 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 84.11 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 84.27 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 90.34 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 90.81 MiB / 94.61 MiBdownload https://tiup-mirrors.pingcap.com/tidb-v8.5.5-linux-amd64.tar.gz 94.61 MiB / 94.61 MiBCreated symlink /etc/systemd/system/multi-user.target.wants/bowl-storage.service → /etc/systemd/system/bowl-storage.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/tidb.service → /etc/systemd/system/tidb.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/drive9-server.service → /etc/systemd/system/drive9-server.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/iperf3-bench.service → /etc/systemd/system/iperf3-bench.service.
 Bowl Storage (:9000) and Drive9 Server (:9009) are healthy.
-[2026-11-04T14:24:59Z] Uploading client-bins.tar.gz to Client (47.251.88.161)...
-[2026-11-04T14:25:24Z] Installing benchmark tools and mounting Bowl + Drive9 on Client...
+[2026-11-06T13:57:05Z] Uploading client-bins.tar.gz to Client (47.251.52.212)...
+[2026-11-06T13:57:34Z] Installing benchmark tools and mounting Bowl + Drive9 on Client...
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-locale: Cannot set LC_CTYPE to default locale: No such file or directory
-locale: Cannot set LC_ALL to default locale: No such file or directory
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-locale: Cannot set LC_CTYPE to default locale: No such file or directory
-locale: Cannot set LC_ALL to default locale: No such file or directory
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
 
 Running kernel seems to be up-to-date.
 
-No services need to be restarted.
+Restarting services...
+ systemctl restart packagekit.service
 
 No containers need to be restarted.
 
@@ -302,73 +96,65 @@ Created symlink /etc/systemd/system/multi-user.target.wants/drive9-sync-fuse.ser
 /mnt/drive9_default is mounted.
 /mnt/drive9_sync is mounted.
 Filesystem                                 Size  Used Avail Use% Mounted on
-bowl:01a1a6f3-a0f0-77ee-9731-b0c2dc68eb27  2.0P     0  2.0P   0% /mnt/bowl
+bowl:01a1b126-d83e-7e22-9899-098099980801  2.0P     0  2.0P   0% /mnt/bowl
 drive9                                     1.0T  4.0K  1.0T   1% /mnt/drive9_default
 drive9                                     1.0T  4.0K  1.0T   1% /mnt/drive9_sync
-[2026-11-04T14:25:52Z] Collecting VPC network RTT & bandwidth baselines...
-perl: warning: Setting locale failed.
-perl: warning: Please check that your locale settings:
-	LANGUAGE = (unset),
-	LC_ALL = (unset),
-	LC_CTYPE = "UTF-8",
-	LANG = "en_US.UTF-8"
-    are supported and installed on your system.
-perl: warning: Falling back to a fallback locale ("en_US.UTF-8").
-[2026-11-04T14:26:10Z] === [Suite 1: juicefs bench -p 4] Target: bowl (/mnt/bowl) ===
-2026/11/04 22:26:12.791687 juicefs[8662] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
+[2026-11-06T13:58:01Z] Collecting VPC network RTT & bandwidth baselines...
+[2026-11-06T13:58:23Z] === [Suite 1: juicefs bench -p 4] Target: bowl (/mnt/bowl) ===
+2026/11/06 21:58:27.773120 juicefs[7994] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-+------------------+-----------------+---------------+
-|       ITEM       |      VALUE      |      COST     |
-+------------------+-----------------+---------------+
-|   Write big file |    295.12 MiB/s |  13.88 s/file |
-|    Read big file |    886.89 MiB/s |   4.62 s/file |
-| Write small file |   377.0 files/s | 10.61 ms/file |
-|  Read small file |  1578.3 files/s |  2.53 ms/file |
-|        Stat file | 30642.2 files/s |  0.13 ms/file |
-+------------------+-----------------+---------------+
-[2026-11-04T14:26:35Z] === [Suite 1: juicefs bench -p 4] Target: drive9_default (/mnt/drive9_default) ===
-2026/11/04 22:26:38.064838 juicefs[8735] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
++------------------+------------------+--------------+
+|       ITEM       |       VALUE      |     COST     |
++------------------+------------------+--------------+
+|   Write big file |     289.14 MiB/s | 14.17 s/file |
+|    Read big file |    1440.70 MiB/s |  2.84 s/file |
+| Write small file |    562.0 files/s | 7.12 ms/file |
+|  Read small file |   4609.9 files/s | 0.87 ms/file |
+|        Stat file | 128315.0 files/s | 0.03 ms/file |
++------------------+------------------+--------------+
+[2026-11-06T13:58:50Z] === [Suite 1: juicefs bench -p 4] Target: drive9_default (/mnt/drive9_default) ===
+2026/11/06 21:58:54.541997 juicefs[8068] <WARNING>: open stats file under mount point /mnt/drive9_default: open /mnt/drive9_default/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
 +------------------+-----------------+--------------+
 |       ITEM       |      VALUE      |     COST     |
 +------------------+-----------------+--------------+
-|   Write big file |    203.01 MiB/s | 20.18 s/file |
-|    Read big file |    215.34 MiB/s | 19.02 s/file |
-| Write small file |  2028.8 files/s | 1.97 ms/file |
-|  Read small file |  6906.1 files/s | 0.58 ms/file |
-|        Stat file | 40279.4 files/s | 0.10 ms/file |
+|   Write big file |    202.97 MiB/s | 20.18 s/file |
+|    Read big file |    200.29 MiB/s | 20.45 s/file |
+| Write small file |  2304.2 files/s | 1.74 ms/file |
+|  Read small file |  6605.0 files/s | 0.61 ms/file |
+|        Stat file | 19287.1 files/s | 0.21 ms/file |
 +------------------+-----------------+--------------+
 component: drive9 mount
 version: dev
 git_hash: unknown
 git_branch: unknown
 build_time: unknown
-go_version: go1.25.1
+go_version: go1.26.10
 drain ok: /mnt/drive9_default duration=0ms
 pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
 native_syncfs_supported=false fuse_protocol=7.39
-[2026-11-04T14:27:41Z] === [Suite 1: juicefs bench -p 4] Target: drive9_sync (/mnt/drive9_sync) ===
-2026/11/04 22:27:44.019554 juicefs[8854] <WARNING>: open stats file under mount point /mnt/drive9_sync: open /mnt/drive9_sync/.stats: no such file or directory [stats.go:349]
+[2026-11-06T14:00:01Z] === [Suite 1: juicefs bench -p 4] Target: drive9_sync (/mnt/drive9_sync) ===
+2026/11/06 22:00:06.742677 juicefs[8191] <WARNING>: open stats file under mount point /mnt/drive9_sync: open /mnt/drive9_sync/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
-+------------------+---------------+---------------+
-|       ITEM       |     VALUE     |      COST     |
-+------------------+---------------+---------------+
-|   Write big file |   61.44 MiB/s |  66.67 s/file |
-|    Read big file |  317.63 MiB/s |  12.90 s/file |
-| Write small file |  98.8 files/s | 40.49 ms/file |
-|  Read small file | 140.4 files/s | 28.49 ms/file |
-|        Stat file | 481.9 files/s |  8.30 ms/file |
-+------------------+---------------+---------------+
-[2026-11-04T14:29:17Z] === [Suite 2: drive9_fuse_bench.py] Running Cold-Cache & Hot-Cache across Bowl, Drive9 Default, and Drive9 Sync ===
++------------------+--------------+----------------+
+|       ITEM       |     VALUE    |      COST      |
++------------------+--------------+----------------+
+|   Write big file |  61.65 MiB/s |   66.44 s/file |
+|    Read big file | 364.35 MiB/s |   11.24 s/file |
+| Write small file | 99.5 files/s |  40.19 ms/file |
+|  Read small file | 19.9 files/s | 201.01 ms/file |
+|        Stat file | 33.3 files/s | 120.18 ms/file |
++------------------+--------------+----------------+
+[2026-11-06T14:02:07Z] === [Suite 2: drive9_fuse_bench.py] Running Cold-Cache & Hot-Cache across Bowl, Drive9 Default, and Drive9 Sync ===
 component: drive9 mount
 version: dev
 git_hash: unknown
 git_branch: unknown
 build_time: unknown
-go_version: go1.25.1
+go_version: go1.26.10
 drain ok: /mnt/drive9_default duration=0ms
 pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
 native_syncfs_supported=false fuse_protocol=7.39
@@ -380,23 +166,23 @@ version: dev
 git_hash: unknown
 git_branch: unknown
 build_time: unknown
-go_version: go1.25.1
-[2026-11-04T14:45:16Z] === [Suite 3: fuse_perf_baseline.py] Target: bowl (/mnt/bowl) ===
-[2026-11-04T14:45:20Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_default (/mnt/drive9_default) ===
+go_version: go1.26.10
+[2026-11-06T14:17:03Z] === [Suite 3: fuse_perf_baseline.py] Target: bowl (/mnt/bowl) ===
+[2026-11-06T14:17:07Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_default (/mnt/drive9_default) ===
+drain ok: /mnt/drive9_default duration=0ms
+pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
+native_syncfs_supported=false fuse_protocol=7.39
 component: drive9 mount
 version: dev
 git_hash: unknown
 git_branch: unknown
 build_time: unknown
-go_version: go1.25.1
-drain ok: /mnt/drive9_default duration=0ms
-pending: open_handles=0 dirty_handles=0 commit_queue=0 commit_bytes=0 commit_in_flight=0 commit_delayed=0 commit_conflicts=0 uploader_queued=0 uploader_in_flight=0 uploader_cached=0
-native_syncfs_supported=false fuse_protocol=7.39
-[2026-11-04T14:45:24Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_sync (/mnt/drive9_sync) ===
-[2026-11-04T14:45:29Z] Downloading raw benchmark results to /Users/fanxing/code/starsrc/bowl/.worktrees/starsrc-597/benchmark/drive9/results...
-[2026-11-04T14:45:55Z] Destroying temporary ECS instances now that benchmarks are complete...
-[2026-11-04T14:45:57Z] Verified remaining target ECS instances count after DeleteInstances: 0
-[2026-11-04T14:45:59Z] Generating summary.json and REPORT.md via parse_results.py...
-[2026-11-04T14:45:59Z] === Benchmark Suite Completed Successfully! Report saved to /Users/fanxing/code/starsrc/bowl/.worktrees/starsrc-597/benchmark/drive9/REPORT.md ===
-[2026-11-04T14:45:59Z] === Triggering Cloud Resource Cleanup Trap (exit_code=0) ===
-[2026-11-04T14:45:59Z] === Cloud Resource Cleanup Finished ===
+go_version: go1.26.10
+[2026-11-06T14:17:12Z] === [Suite 3: fuse_perf_baseline.py] Target: drive9_sync (/mnt/drive9_sync) ===
+[2026-11-06T14:17:17Z] Downloading raw benchmark results to /Users/fanxing/code/starsrc/bowl/benchmark/drive9/results...
+[2026-11-06T14:17:38Z] Destroying temporary ECS instances now that benchmarks are complete...
+[2026-11-06T14:17:40Z] Verified remaining target ECS instances count after DeleteInstances: 0
+[2026-11-06T14:17:41Z] Generating summary.json and REPORT.md via parse_results.py...
+[2026-11-06T14:17:42Z] === Benchmark Suite Completed Successfully! Report saved to /Users/fanxing/code/starsrc/bowl/benchmark/drive9/REPORT.md ===
+[2026-11-06T14:17:42Z] === Triggering Cloud Resource Cleanup Trap (exit_code=0) ===
+[2026-11-06T14:17:42Z] === Cloud Resource Cleanup Finished ===

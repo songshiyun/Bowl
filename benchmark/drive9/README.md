@@ -1,8 +1,8 @@
 # Bowl vs Drive9 (`mem9-ai/drive9`) 性能基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `1f7cde9`（BlobRef + blobs 块文件解耦、生命周期锁与 1 MiB Write-Through），Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹一致。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-06，Bowl `a253128`，Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹完全一致。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮相对 Drive9 默认模式：冷缓存 `mkdir` 3.60x、`rename` 8.99x、`unlink` 7.33x、顺序读 3.23x；`juicefs bench` 大文件写达到 295.12 MiB/s（上一轮 11.63 MiB/s），冷缓存单流 256 MiB 顺序写 183.19 MiB/s。小文件与 `stat` 低于同轮 juicefs 套件的 Bowl 结果，差异未定位，需单独复跑确认。
+本轮相对 Drive9 默认模式（`interactive`）：冷缓存 `mkdir` 15.30x（`3,772.70` vs `246.57 ops/s`）、`rename` 32.18x（`3,080.29` vs `95.71 ops/s`）、`unlink` 29.77x（`2,920.27` vs `98.08 ops/s`）、顺序读 5.45x（`972.40` vs `178.27 MiB/s`）、`git clone` 加速 2.47x（`0.774s` vs `1.910s`）；热缓存 `readdir_large` 22.45x（`1,323,171.38` vs `58,925.85 ops/s`）、`go build` 加速 3.03x（`0.037s` vs `0.113s`）；`juicefs bench` 大文件写 `289.14 MiB/s`（1.42x）、大文件读 `1,440.70 MiB/s`（7.19x）、Stat `128,315.00 files/s`（6.65x）。
 
 本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机 VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
 

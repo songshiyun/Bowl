@@ -1,6 +1,6 @@
 # Bowl vs JuiceFS 阿里云硅谷双机内网存储性能基准测试套件
 
-> 最新复跑：2026-11-04，Bowl `1f7cde9`（BlobRef + blobs 块文件解耦、生命周期锁与 1 MiB Write-Through）。三组均已完成基础测试、8 项 fio（24 份，错误码均为 0）和单进程/四进程 mdtest。相对上一轮基线（`626dd03`）：大文件写 28.6x（336.92 vs 11.78 MiB/s）、fio 16 并发顺序写 15.6x（179.01 vs 11.46 MiB/s）、direct 随机写 31.6x（296.40 vs 9.38 MiB/s）；大文件读与小文件读基本持平，mdtest 单进程文件删除降至 0.46x。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-06，Bowl `a253128`。三组存储栈（`bowl`、`jfs_pg`、`jfs_redis`）同机完成 `juicefs bench`、8 项 `fio`（24 份，错误码均为 0）和单进程/四进程 `mdtest`。本轮 Bowl `juicefs bench` 大文件写 `334.66 MiB/s`、大文件读 `1,701.99 MiB/s`、小文件写 `1,110.80 files/s`、小文件读 `4,570.30 files/s`、Stat `121,621.00 files/s`；单进程 `mdtest` 目录创建 `3,533.74 ops/s`、文件删除 `3,069.28 ops/s`；四进程 `mdtest` 目录创建 `8,885.83 ops/s`、文件创建 `8,142.70 ops/s`、文件 Stat `1,466,449.72 ops/s`、文件删除 `9,511.20 ops/s`。完整结果见 [REPORT.md](REPORT.md)。
 
 本目录包含对标 [JuiceFS 官方常规测试](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 [`juicefs bench`](https://juicefs.com/docs/zh/community/performance_evaluation_guide/#juicefs-bench)、[`fio` 吞吐量测试](https://juicefs.com/docs/zh/community/fio/)、[`mdtest` 元数据 IOPS 测试](https://juicefs.com/docs/zh/community/mdtest/)）的端到端自动化评测脚本、实测原始数据及完整对比报告。
 

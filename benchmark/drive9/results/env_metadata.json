@@ -12,9 +12,9 @@
     "system_disk_size_gib": 120
   },
   "server_node": {
-    "instance_id": "i-rj9irkcbex24zbqogdao",
-    "public_ip": "198.11.180.165",
-    "private_ip": "172.16.1.209",
+    "instance_id": "i-rj93j7f2ntjd6mgs48eq",
+    "public_ip": "47.77.203.99",
+    "private_ip": "172.16.1.251",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -22,13 +22,13 @@
     "os_release": "Ubuntu 24.04.5 LTS",
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "tidb_version": "v8.5.5",
-    "disk_seq_write_mib_s": 192.75,
-    "disk_seq_read_mib_s": 184.16
+    "disk_seq_write_mib_s": 162.54,
+    "disk_seq_read_mib_s": 177.47
   },
   "client_node": {
-    "instance_id": "i-rj9irkcbex24zbqogdap",
-    "public_ip": "47.251.88.161",
-    "private_ip": "172.16.1.208",
+    "instance_id": "i-rj93j7f2ntjd6mgs48er",
+    "public_ip": "47.251.52.212",
+    "private_ip": "172.16.1.250",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "7.4Gi",
@@ -40,15 +40,15 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.074/0.097/0.192/0.031 ms",
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.063/0.088/0.178/0.027 ms",
     "iperf3_gbps": 15.71
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": 192.75,
-    "local_seq_read_mib_s": 184.16
+    "local_seq_write_mib_s": 162.54,
+    "local_seq_read_mib_s": 177.47
   },
   "bowl_config": {
-    "git_commit": "1f7cde9",
+    "git_commit": "a253128",
     "storage_engine": "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
     "blob_layout": "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
     "blob_size_bytes": 1048576,
@@ -73,11 +73,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9-bench-kp-20261104222150",
-    "server_instance_ids": "i-rj9irkcbex24zbqogdao",
-    "client_instance_ids": "i-rj9irkcbex24zbqogdap",
-    "instances_created_at": "2026-11-04T14:22:05Z",
-    "instances_deleted_at": "2026-11-04T14:45:56Z",
+    "key_pair_name": "bowl-d9bench-kp-20261106-135325",
+    "server_instance_ids": "i-rj93j7f2ntjd6mgs48eq",
+    "client_instance_ids": "i-rj93j7f2ntjd6mgs48er",
+    "instances_created_at": "2026-11-06T13:53:52Z",
+    "instances_deleted_at": "2026-11-06T14:17:39Z",
     "remaining_benchmark_instances": 0
   }
 }

@@ -1,0 +1,22 @@
+{
+  "disk_id": "01a1b126-d83e-7e22-9899-098099980801",
+  "name": "d9-bench-disk",
+  "root_ino": 1,
+  "max_bytes": 2251799813685248,
+  "used_bytes": 0,
+  "used_inodes": 1,
+  "created_at": "2026-11-06T13:57:55Z",
+  "updated_at": "2026-11-06T13:57:55Z",
+  "default_branch": "main",
+  "branches": [
+    {
+      "branch_id": "4d57db43-9b43-4122-bbfa-29070fdf87c0",
+      "disk_id": "01a1b126-d83e-7e22-9899-098099980801",
+      "name": "main",
+      "fork_commit_id": "01a1b126-d83e-7e24-bb88-4f089738e4ab",
+      "head_commit_id": "01a1b126-d83e-7e24-bb88-4f089738e4ab",
+      "state": "NORMAL",
+      "created_at": "2026-11-06T13:57:55Z"
+    }
+  ]
+}
