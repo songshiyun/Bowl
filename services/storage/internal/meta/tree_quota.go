@@ -44,9 +44,63 @@ func (q *TreeQuota) Snapshot() (uint64, TreeQuotaUsage) {
 
 // Apply 在配额锁内执行持久化；失败时保持原有用量。回调不能重入此协调器。
 func (q *TreeQuota) Apply(branch string, ino, size uint64, live bool, persist func() error) error {
+	return q.ApplyChange(branch, ino, size, live, true, persist)
+}
+
+// ApplyChange 在配额锁内更新单个节点的用量或存活状态，并在校验通过后执行持久化回调。
+func (q *TreeQuota) ApplyChange(branch string, ino, size uint64, live, enforce bool, persist func() error) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.applyLocked(branch, ino, size, live, persist, true)
+	return q.applyLocked(branch, ino, size, live, persist, enforce)
+}
+
+// Reclaim 在配额锁内回收已无引用的节点，不受当前配额上限阻断。
+func (q *TreeQuota) Reclaim(branch string, ino uint64, persist func() error) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.applyLocked(branch, ino, 0, false, persist, false)
+}
+
+// Create 在配额锁内严格校验剩余容量（usage.Bytes < maxBytes 且可容纳 size），依次执行 prepare 与 persist 并记入新节点。
+func (q *TreeQuota) Create(branch string, ino, size uint64, prepare, persist func() error) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return ErrNotFound
+	}
+	if q.usage.Bytes >= q.maxBytes || size > q.maxBytes-q.usage.Bytes {
+		return ErrNoSpace
+	}
+	if prepare != nil {
+		if err := prepare(); err != nil {
+			return err
+		}
+	}
+	return q.applyLocked(branch, ino, size, true, persist, true)
+}
+
+// CommitWithQuota 在配额锁内执行不改变单节点逻辑字节数的持久化操作（如硬链接、孤儿标记或重命名）。
+// enforce 为 true 时要求当前用量严格小于容量上限（usage.Bytes < maxBytes）。
+func (q *TreeQuota) CommitWithQuota(enforce bool, persist func() error) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return ErrNotFound
+	}
+	if enforce && q.usage.Bytes >= q.maxBytes {
+		return ErrNoSpace
+	}
+	if persist != nil {
+		return persist()
+	}
+	return nil
+}
+
+// InitMaxBytes 无条件设置容量上限（用于从控制面恢复初始配额，不校验当前用量）。
+func (q *TreeQuota) InitMaxBytes(limit uint64) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.maxBytes = limit
 }
 
 func (q *TreeQuota) applyLocked(branch string, ino, size uint64, live bool, persist func() error, enforce bool) error {
@@ -126,6 +180,70 @@ func (q *TreeQuota) ReplaceBranch(branch string, sizes map[uint64]uint64) error 
 	return q.replaceBranch(branch, sizes, true)
 }
 
+// BranchQuotaStage 持有配额锁并记录分支替换前的用量快照，支持两阶段提交或回滚。
+type BranchQuotaStage struct {
+	quota     *TreeQuota
+	branch    string
+	oldSizes  map[uint64]uint64
+	active    bool
+	committed bool
+}
+
+// StageBranchReplace 在配额锁内暂存分支全量替换；失败时立即释放配额锁。
+func (q *TreeQuota) StageBranchReplace(branch string, sizes map[uint64]uint64, enforce bool) (*BranchQuotaStage, error) {
+	q.mu.Lock()
+	oldSizes := q.branches[branch]
+	if err := q.replaceBranchLocked(branch, sizes, enforce); err != nil {
+		q.mu.Unlock()
+		return nil, err
+	}
+	return &BranchQuotaStage{quota: q, branch: branch, oldSizes: oldSizes, active: true}, nil
+}
+
+// StageBranchPatch 在配额锁内基于脏节点集合与变更节点表暂存分支增量替换；失败时立即释放配额锁。
+func (q *TreeQuota) StageBranchPatch(branch string, dirty map[uint64]bool, changed map[uint64]uint64, enforce bool) (*BranchQuotaStage, error) {
+	q.mu.Lock()
+	oldSizes := q.branches[branch]
+	sizes := make(map[uint64]uint64, len(oldSizes)+len(changed))
+	for ino, size := range oldSizes {
+		if !dirty[ino] {
+			sizes[ino] = size
+		}
+	}
+	for ino, size := range changed {
+		sizes[ino] = size
+	}
+	if err := q.replaceBranchLocked(branch, sizes, enforce); err != nil {
+		q.mu.Unlock()
+		return nil, err
+	}
+	return &BranchQuotaStage{quota: q, branch: branch, oldSizes: oldSizes, active: true}, nil
+}
+
+// Commit 确认暂存的分支配额变更并释放配额锁。
+func (s *BranchQuotaStage) Commit() {
+	if s == nil || !s.active {
+		return
+	}
+	s.committed = true
+	s.active = false
+	s.quota.mu.Unlock()
+}
+
+// Rollback 在未提交时恢复分支原有配额并释放配额锁。
+func (s *BranchQuotaStage) Rollback() error {
+	if s == nil || !s.active {
+		return nil
+	}
+	var err error
+	if !s.committed {
+		err = s.quota.replaceBranchLocked(s.branch, s.oldSizes, false)
+	}
+	s.active = false
+	s.quota.mu.Unlock()
+	return err
+}
+
 func (q *TreeQuota) replaceBranch(branch string, sizes map[uint64]uint64, enforce bool) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -202,4 +320,48 @@ func (q *TreeQuota) SetMaxBytes(limit uint64) error {
 	}
 	q.maxBytes = limit
 	return nil
+}
+
+// WithShrinkCheck 在配额锁内校验缩容水位线并执行更新回调（内部可通过 CheckLimit 校验），成功后更新容量上限。
+func (q *TreeQuota) WithShrinkCheck(fn func() (uint64, error)) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return ErrNotFound
+	}
+	limit, err := fn()
+	if err != nil {
+		return err
+	}
+	if limit < q.usage.Bytes {
+		return ErrInvalidShrink
+	}
+	q.maxBytes = limit
+	return nil
+}
+
+// CheckLimit 在配额锁已持有时校验新容量上限是否低于当前用量。
+func (q *TreeQuota) CheckLimit(limit uint64) error {
+	if q.closed {
+		return ErrNotFound
+	}
+	if limit < q.usage.Bytes {
+		return ErrInvalidShrink
+	}
+	return nil
+}
+
+// BeginClose 标记配额协调器已关闭以拒绝后续操作，并返回在删除失败时恢复开启状态的回滚函数。
+func (q *TreeQuota) BeginClose() (func(), error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.closed {
+		return nil, ErrNotFound
+	}
+	q.closed = true
+	return func() {
+		q.mu.Lock()
+		q.closed = false
+		q.mu.Unlock()
+	}, nil
 }

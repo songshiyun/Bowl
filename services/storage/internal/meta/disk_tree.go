@@ -214,7 +214,7 @@ func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control 
 				}
 			}
 		}
-		quota.maxBytes = uint64(row.MaxBytes)
+		quota.InitMaxBytes(uint64(row.MaxBytes))
 		m.treeQuotas[id] = quota
 	}
 	return quota, nil
