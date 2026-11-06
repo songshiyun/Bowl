@@ -51,14 +51,6 @@ func branchHasDirty(store *pebble.DB) (dirty bool, err error) {
 	return dirty, iter.Error()
 }
 
-// branchHasDirtyOrAtime 把内存中待合并的访问时间视为脏写，确保 Fork/Merge 生成快照。
-func (m *manager) branchHasDirtyOrAtime(disk, branch string, store *pebble.DB) (bool, error) {
-	if m.hasPendingAtime(disk, branch) {
-		return true, nil
-	}
-	return branchHasDirty(store)
-}
-
 // 新工作区没有旧写端的打开句柄，快照中的孤儿不能继承到新工作区。
 func prepareBranch(store *pebble.DB, blobs *pebblekv.BlobStore, name string) (err error) {
 	lower, upper := pebblekv.OrphanRange()
@@ -133,10 +125,7 @@ func (m *manager) createVersion(ctx context.Context, q db.Querier, diskID pgtype
 			return nil, err
 		}
 	}
-	if err := m.flushPebbleAtimeEntriesLocked(diskID.String(), b.Name, branch.DB()); err != nil {
-		return nil, err
-	}
-	if err := branch.Checkpoint(id.String()); err != nil {
+	if err := m.checkpointBranchLocked(diskID.String(), b.Name, branch, id.String()); err != nil {
 		return nil, err
 	}
 	row, err := q.CreateCommit(ctx, db.CreateCommitParams{
@@ -204,7 +193,7 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 		if requireMerge && (target.State != "MERGING" || len(target.MergeState) == 0) {
 			return ErrInvalidArgument
 		}
-		unlock = m.lockBranchWrite(diskID.String(), params.BranchName)
+		unlock = m.locks.LockBranchWrite(diskID.String(), params.BranchName)
 		branch, err = m.pebble.OpenBranch(diskID.String(), params.BranchName)
 		if err != nil {
 			return err
@@ -308,12 +297,12 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 			if sourceBranch.State == "MERGING" {
 				return ErrBusy
 			}
-			unlockSource = m.lockBranchWrite(disk, parent)
+			unlockSource = m.locks.LockBranchWrite(disk, parent)
 			source, err = m.pebble.OpenBranch(disk, parent)
 			if err != nil {
 				return err
 			}
-			dirty, err := m.branchHasDirtyOrAtime(disk, parent, source.DB())
+			dirty, err := m.flushAndCheckBranchDirtyLocked(disk, parent, source.DB())
 			if err != nil {
 				return err
 			}

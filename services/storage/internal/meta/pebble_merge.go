@@ -92,8 +92,8 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if err != nil {
 			return err
 		}
-		unlockSource = m.lockBranchWrite(disk, params.SourceBranch)
-		unlockTarget = m.lockBranchWrite(disk, params.TargetBranch)
+		unlockSource = m.locks.LockBranchWrite(disk, params.SourceBranch)
+		unlockTarget = m.locks.LockBranchWrite(disk, params.TargetBranch)
 		source, err = m.pebble.OpenBranch(disk, params.SourceBranch)
 		if err != nil {
 			return err
@@ -103,7 +103,7 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			return err
 		}
 		pin := func(branch *pebblekv.Branch, stored *storedBranch) (bool, error) {
-			dirty, err := m.branchHasDirtyOrAtime(disk, stored.Name, branch.DB())
+			dirty, err := m.flushAndCheckBranchDirtyLocked(disk, stored.Name, branch.DB())
 			if err != nil {
 				return false, err
 			}

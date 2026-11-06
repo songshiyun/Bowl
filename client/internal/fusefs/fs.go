@@ -69,14 +69,11 @@ type RawFS struct {
 	dirtyInodes    map[uint64]struct{}
 	orphanSessions map[uint64]uint64
 	// inodeLocks 按 Inode 粒度串行化 O_APPEND 定序与 Unlink/Release 孤儿标记。
-	inodeLocks    inodeLocks
-	tmpMu         sync.RWMutex
-	tmpFiles      map[uint64]*tmpFile
-	serverToLocal map[uint64]uint64
-	nextTmp       atomic.Uint64
-	sessions      *session.Manager
-	cfg           Config
-	nextReqID     atomic.Uint64
+	inodeLocks inodeLocks
+	tmpMgr     *TmpFileManager
+	sessions   *session.Manager
+	cfg        Config
+	nextReqID  atomic.Uint64
 
 	releaseMu       sync.Mutex
 	releaseQueue    []reclaimRetryItem
@@ -86,8 +83,7 @@ type RawFS struct {
 	releaseStarted  bool
 	releaseClosed   bool
 
-	readAheadMu      sync.Mutex
-	readAheadHandles map[uint64]*handleReadAhead
+	readAhead *ReadAheadCoordinator
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
@@ -100,20 +96,19 @@ func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Ma
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
-		RawFileSystem:    fuse.NewDefaultRawFileSystem(),
-		client:           client,
-		locks:            NewLockTable(),
-		cache:            NewNamespaceCache(cfg.NamespaceCacheCapacity),
-		caps:             newCapabilityCache(),
-		dirtyInodes:      make(map[uint64]struct{}),
-		tmpFiles:         make(map[uint64]*tmpFile),
-		serverToLocal:    make(map[uint64]uint64),
-		orphanSessions:   make(map[uint64]uint64),
-		sessions:         sessions,
-		cfg:              cfg,
-		releaseCtx:       releaseCtx,
-		releaseCancel:    releaseCancel,
-		readAheadHandles: make(map[uint64]*handleReadAhead),
+		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
+		client:         client,
+		locks:          NewLockTable(),
+		cache:          NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		caps:           newCapabilityCache(),
+		dirtyInodes:    make(map[uint64]struct{}),
+		tmpMgr:         NewTmpFileManager(cfg.RootIno),
+		orphanSessions: make(map[uint64]uint64),
+		sessions:       sessions,
+		cfg:            cfg,
+		releaseCtx:     releaseCtx,
+		releaseCancel:  releaseCancel,
+		readAhead:      NewReadAheadCoordinator(),
 	}
 	fs.handles = NewHandleTable(fs.reclaimOrphan)
 	if sessions != nil {
@@ -130,21 +125,7 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 
 	fs.cache.clear()
 	fs.caps.reset()
-	fs.readAheadMu.Lock()
-	var targets []*handleReadAhead
-	for fh, hra := range fs.readAheadHandles {
-		if expiredSID == 0 || hra.sessionID == expiredSID {
-			targets = append(targets, hra)
-			delete(fs.readAheadHandles, fh)
-		}
-	}
-	fs.readAheadMu.Unlock()
-
-	for _, hra := range targets {
-		hra.mu.Lock()
-		hra.resetLocked()
-		hra.mu.Unlock()
-	}
+	fs.readAhead.InvalidateSession(expiredSID)
 
 	fs.releaseMu.Lock()
 	remaining := fs.releaseQueue[:0]
@@ -160,43 +141,13 @@ func (fs *RawFS) onSessionExpired(expiredSID uint64) {
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
 // 严防内核越过根映射以非 1 且等于 RootIno 的编号直接访问，返回 ENOENT。
 func (fs *RawFS) ToServerIno(kernelIno uint64) (uint64, fuse.Status) {
-	fs.tmpMu.RLock()
-	tmp := fs.tmpFiles[kernelIno]
-	fs.tmpMu.RUnlock()
-	if tmp != nil {
-		tmp.mu.Lock()
-		serverIno := tmp.serverIno
-		tmp.mu.Unlock()
-		if serverIno != 0 {
-			return serverIno, fuse.OK
-		}
-		return kernelIno, fuse.OK
-	}
-	if kernelIno&(uint64(1)<<63) != 0 {
-		return 0, fuse.ENOENT
-	}
-	if kernelIno == fuse.FUSE_ROOT_ID {
-		return fs.cfg.RootIno, fuse.OK
-	}
-	if fs.cfg.RootIno != fuse.FUSE_ROOT_ID && kernelIno == fs.cfg.RootIno {
-		return 0, fuse.ENOENT
-	}
-	return kernelIno, fuse.OK
+	return fs.tmpMgr.ToServerIno(kernelIno)
 }
 
 // ToKernelIno 将服务端持久化 Inode 映射为 Linux 内核可见的 Inode。
 // 当 serverIno 等于目标 Disk.RootIno 时，强制映射为 1 (fuse.FUSE_ROOT_ID)。
 func (fs *RawFS) ToKernelIno(serverIno uint64) uint64 {
-	fs.tmpMu.RLock()
-	localIno := fs.serverToLocal[serverIno]
-	fs.tmpMu.RUnlock()
-	if localIno != 0 {
-		return localIno
-	}
-	if serverIno == fs.cfg.RootIno {
-		return fuse.FUSE_ROOT_ID
-	}
-	return serverIno
+	return fs.tmpMgr.ToKernelIno(serverIno)
 }
 
 // CheckWritable 检查文件系统当前是否允许写操作。只读挂载时返回 EROFS。
@@ -332,15 +283,12 @@ func (fs *RawFS) OnUnmount() {
 	fs.handles.clear()
 	fs.cache.clear()
 	fs.caps.reset()
-	fs.tmpMu.Lock()
-	clear(fs.tmpFiles)
-	clear(fs.serverToLocal)
-	fs.tmpMu.Unlock()
+	fs.tmpMgr.Clear()
 	fs.stateMu.Lock()
 	clear(fs.orphanSessions)
 	fs.stateMu.Unlock()
 	fs.lifecycleMu.Unlock()
-	fs.clearAllReadAhead()
+	fs.readAhead.Clear()
 	fs.stopAndDrainReleaseQueue()
 	if fs.cfg.OnUnmount != nil {
 		fs.cfg.OnUnmount()

@@ -137,47 +137,12 @@ func (m *manager) pebbleCreateResult(ctx context.Context, sid *uint64, params Cr
 }
 
 // withWritablePebbleBranch 在分支锁内使用已验证的可写会话。
-func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) (err error) {
+func (m *manager) withWritablePebbleBranch(ctx context.Context, sid *uint64, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) error {
 	return m.withWritablePebbleBranchFor(ctx, sid, nil, fn)
 }
 
-func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, check func(pgtype.UUID, string) error, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) (err error) {
-	if sid == nil || *sid == 0 || *sid > math.MaxInt64 {
-		return ErrInvalidArgument
-	}
-	session, err := m.requirePebbleSession(ctx, sid)
-	if err != nil {
-		return err
-	}
-	if session.readOnly {
-		return ErrPerm
-	}
-	if check != nil {
-		if err := check(session.diskID, session.branch); err != nil {
-			return err
-		}
-	}
-	disk := session.diskID.String()
-	quota, err := m.sessionTreeQuota(ctx, session.diskID)
-	if err != nil {
-		return err
-	}
-	unlock := m.lockBranchRead(disk, session.branch)
-	defer unlock()
-	// 锁内复查会话缓存：CloseSession 等控制面入口驱逐后立即拒绝后续请求。
-	if current, ok := m.peekPebbleSession(session.id); !ok || !samePebbleSession(current, session) {
-		return ErrBadFileHandle
-	}
-	branch, err := m.pebble.OpenBranch(disk, session.branch)
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, branch.Close()) }()
-	if err := fn(disk, session.branch, quota, branch.DB(), branch.Blobs()); err != nil {
-		return err
-	}
-	m.pebble.MarkBranchDirty(disk, session.branch)
-	return nil
+func (m *manager) withWritablePebbleBranchFor(ctx context.Context, sid *uint64, check func(pgtype.UUID, string) error, fn func(string, string, *TreeQuota, *pebble.DB, *pebblekv.BlobStore) error) error {
+	return m.gate.withWritableBranchFor(ctx, sid, check, m.sessionTreeQuota, fn)
 }
 
 // sessionTreeQuota 优先复用内存配额协调器，未命中时才读取控制面。
@@ -296,7 +261,7 @@ func (m *manager) createdPebbleInode(inode pebblekv.Inode) *Inode {
 
 func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebbleNodeParams) (result *Inode, err error) {
 	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlockInode := m.lockInodeWrite(disk, branch, params.parent)
+		unlockInode := m.locks.LockInodeWrite(disk, branch, params.parent)
 		defer unlockInode()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
 			parent, err := readCreateParent(store, params.parent, params.name)
@@ -374,7 +339,7 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 
 func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkParams) (result *Inode, err error) {
 	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlockInodes := m.lockInodesWrite(disk, branch, params.NewParentIno, params.Ino)
+		unlockInodes := m.locks.LockInodesWrite(disk, branch, params.NewParentIno, params.Ino)
 		defer unlockInodes()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
 			parent, err := readCreateParent(store, params.NewParentIno, params.NewName)

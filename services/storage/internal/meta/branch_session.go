@@ -173,17 +173,15 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 
 // snapshotBranchSession 为新只读会话固定工作区，且不推进分支头。
 func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskID pgtype.UUID, target *storedBranch) (id pgtype.UUID, checkpointDir string, err error) {
-	unlock := m.lockBranchWrite(diskID.String(), target.Name)
+	disk := diskID.String()
+	unlock := m.locks.LockBranchWrite(disk, target.Name)
 	defer unlock()
-	branch, err := m.pebble.OpenBranch(diskID.String(), target.Name)
+	branch, err := m.pebble.OpenBranch(disk, target.Name)
 	if err != nil {
 		return id, "", err
 	}
 	defer func() { err = errors.Join(err, branch.Close()) }()
-	if err := m.flushPebbleAtimeEntriesLocked(diskID.String(), target.Name, branch.DB()); err != nil {
-		return id, "", err
-	}
-	dirty, err := branchHasDirty(branch.DB())
+	dirty, err := m.flushAndCheckBranchDirtyLocked(disk, target.Name, branch.DB())
 	if err != nil {
 		return id, "", err
 	}
@@ -202,14 +200,14 @@ func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskI
 		return id, "", err
 	}
 	id = pgtype.UUID{Bytes: newID, Valid: true}
-	path := filepath.Join(m.storageRoot, "disks", diskID.String(), "commits", newID.String())
+	path := filepath.Join(m.storageRoot, "disks", disk, "commits", newID.String())
 	if _, err := os.Stat(path); err == nil {
 		return id, "", ErrAlreadyExists
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return id, "", err
 	}
 	checkpointDir = path
-	if err := branch.Checkpoint(newID.String()); err != nil {
+	if err := m.checkpointBranchLocked(disk, target.Name, branch, newID.String()); err != nil {
 		return id, checkpointDir, err
 	}
 	_, err = q.CreateCommit(ctx, db.CreateCommitParams{

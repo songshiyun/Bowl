@@ -358,6 +358,8 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		return fmt.Errorf("清理磁盘存储目录: %w", err)
 	}
 	m.invalidatePebbleDiskSessions(diskID)
+	m.atimes.DiscardDisk(diskID)
+	m.locks.EvictDisk(diskID)
 	return nil
 }
 

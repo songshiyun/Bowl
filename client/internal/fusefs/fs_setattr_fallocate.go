@@ -25,7 +25,17 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	if status, local := fs.setTmpAttr(input, out); local {
+	if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
+		h, _, st := fs.checkedHandle(input.NodeId, fh, false)
+		if st != fuse.OK {
+			return st
+		}
+		if needWrite && !h.CanWrite() {
+			return fuse.EBADF
+		}
+		return fuse.OK
+	}, &out.Attr); local {
+		out.SetTimeout(0)
 		return status
 	}
 	ino, status := fs.ToServerIno(input.NodeId)
@@ -113,8 +123,8 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return st
 	}
 
-	fs.invalidateReadAheadByIno(ino)
-	defer fs.invalidateReadAheadByIno(ino)
+	fs.readAhead.InvalidateInode(ino)
+	defer fs.readAhead.InvalidateInode(ino)
 
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
@@ -162,14 +172,11 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return fuse.Status(syscall.EOPNOTSUPP)
 	}
 
-	if _, local := fs.localTmpInode(input.NodeId); local {
-		if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
-			return status
+	if local, status := fs.tmpMgr.Allocate(input.NodeId, input.Offset, input.Length, input.Mode); local {
+		if status == fuse.OK {
+			fs.caps.markAbsent(input.NodeId)
 		}
-		ino, status = fs.ToServerIno(input.NodeId)
-		if status != fuse.OK {
-			return status
-		}
+		return status
 	}
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
@@ -183,8 +190,8 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		SessionId: optionalSession(sid),
 	}
 
-	fs.invalidateReadAheadByIno(ino)
-	defer fs.invalidateReadAheadByIno(ino)
+	fs.readAhead.InvalidateInode(ino)
+	defer fs.readAhead.InvalidateInode(ino)
 
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	fs.cache.invalidateInode(input.NodeId)

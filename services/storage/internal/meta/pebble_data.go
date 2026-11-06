@@ -175,7 +175,7 @@ func (m *manager) pebbleRead(ctx context.Context, session pebbleReadSession, req
 		if session.readOnly {
 			lockBranch = session.commitID.String()
 		}
-		unlock := m.lockInodeRead(session.diskID.String(), lockBranch, req.Ino)
+		unlock := m.locks.LockInodeRead(session.diskID.String(), lockBranch, req.Ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, req.Ino)
 		if err != nil {
@@ -384,7 +384,7 @@ type preparedFullBlock struct {
 // pebbleWriteFullBlocks 在 Inode 锁外完成整块 .blob 分配与磁盘写入，仅在提交元数据时持锁。
 // 返回 retry=true 表示旧块引用在准备期间被并发改写，需回退到持锁路径重做。
 func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore, req *WriteRequest) (result *WriteResponse, retry bool, err error) {
-	unlockRead := m.lockInodeRead(disk, branch, req.Ino)
+	unlockRead := m.locks.LockInodeRead(disk, branch, req.Ino)
 	inode, err := readPebbleInode(store, req.Ino)
 	if err != nil {
 		unlockRead()
@@ -421,7 +421,7 @@ func (m *manager) pebbleWriteFullBlocks(disk, branch string, quota *TreeQuota, s
 		newIDs = append(newIDs, id)
 	}
 
-	unlockWrite := m.lockInodeWrite(disk, branch, req.Ino)
+	unlockWrite := m.locks.LockInodeWrite(disk, branch, req.Ino)
 	defer unlockWrite()
 	current, err := readPebbleInode(store, req.Ino)
 	if err != nil {
@@ -481,7 +481,7 @@ func (m *manager) pebbleWrite(ctx context.Context, sid *uint64, req *WriteReques
 				return nil
 			}
 		}
-		unlock := m.lockInodeWrite(disk, branch, req.Ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, req.Ino)
 		defer unlock()
 		response, err := m.pebbleWriteLocked(disk, branch, quota, store, blobs, req)
 		result = response
@@ -593,7 +593,7 @@ func (m *manager) pebbleWriteLocked(disk, branch string, quota *TreeQuota, store
 
 func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, input SetAttrInput) (result *Inode, err error) {
 	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlock := m.lockInodeWrite(disk, branch, ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, ino)
 		if err != nil {
@@ -646,9 +646,11 @@ func (m *manager) pebbleSetAttr(ctx context.Context, sid *uint64, ino uint64, in
 		now := time.Now().UTC()
 		if input.AtimeNow {
 			inode.AtimeSec, inode.AtimeNsec = now.Unix(), uint32(now.Nanosecond())
+			m.atimes.DiscardInode(disk, branch, ino)
 		} else if input.Atime != nil {
 			atime := input.Atime.UTC()
 			inode.AtimeSec, inode.AtimeNsec = atime.Unix(), uint32(atime.Nanosecond())
+			m.atimes.DiscardInode(disk, branch, ino)
 		}
 		if input.MtimeNow || input.Size != nil && input.Mtime == nil {
 			inode.MtimeSec, inode.MtimeNsec = now.Unix(), uint32(now.Nanosecond())
@@ -802,7 +804,7 @@ func (m *manager) pebbleFallocate(ctx context.Context, sid *uint64, params Fallo
 		return ErrNotSupported
 	}
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlock := m.lockInodeWrite(disk, branch, params.Ino)
+		unlock := m.locks.LockInodeWrite(disk, branch, params.Ino)
 		defer unlock()
 		inode, err := readPebbleInode(store, params.Ino)
 		if err != nil {
@@ -855,7 +857,7 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 	return m.withPebbleWriteSession(ctx, session, func(store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		disk, branch := session.diskID.String(), session.branch
 		if !session.readOnly {
-			unlock := m.lockInodeWrite(disk, branch, ino)
+			unlock := m.locks.LockInodeWrite(disk, branch, ino)
 			defer unlock()
 		}
 		inode, err := readPebbleInode(store, ino)
@@ -875,7 +877,7 @@ func (m *manager) pebbleSync(ctx context.Context, sid *uint64, ino uint64, dir b
 			return nil
 		}
 		// 显式持久化屏障顺带合并内存中的脏访问时间。
-		if err := m.flushPebbleAtimeInodeLocked(disk, branch, store, ino); err != nil {
+		if err := m.gate.FlushInodeAtimeLocked(disk, branch, store, ino); err != nil {
 			return err
 		}
 		// 先取脏标记：块同步期间的新写入会重新置脏，不能被本次屏障吞掉。

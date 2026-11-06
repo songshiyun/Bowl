@@ -67,38 +67,19 @@ type manager struct {
 	store                                      db.Store
 	storageRoot                                string
 	pebble                                     *pebblekv.Manager
+	locks                                      *BranchLockTable
 	entryTimeout, attrTimeout, dirEntryTimeout float64
 	openKeepCache                              bool
 	atimeMode                                  AtimeMode
 	sessionLeaseTTL                            time.Duration
-	branchLocks                                sync.Map
-	branchMetaLocks                            sync.Map
-	inodeLocksMu                               sync.Mutex
-	inodeLocks                                 map[inodeLockKey]*inodeLockEntry
 	writeQuotaMu                               sync.Mutex
 	treeQuotaMu                                sync.Mutex
 	treeQuotas                                 map[string]*TreeQuota
 	dirCursorMu                                sync.Mutex
 	pebbleDirCursors                           map[pebbleDirCursorKey][]byte
-	sessionCacheMu                             sync.Mutex
-	sessionCache                               map[uint64]pebbleSessionCacheEntry
-	sessionCacheTTL                            time.Duration
-	atimeMu                                    sync.Mutex
-	dirtyAtimes                                map[pebbleAtimeKey]time.Time
+	atimes                                     *PebbleAtimeTracker
+	gate                                       *BranchWorkspaceGate
 }
-
-// pebbleSessionCacheEntry 是会话内存写透缓存条目，fresh 之后重新读取控制面。
-type pebbleSessionCacheEntry struct {
-	session pebbleReadSession
-	fresh   time.Time
-}
-
-const (
-	// defaultSessionCacheTTL 是会话缓存软过期时间，决定控制面变更的最长可见延迟。
-	defaultSessionCacheTTL = time.Second
-	// maxCachedSessions 是缓存条目上限，超出时优先清理已过期条目。
-	maxCachedSessions = 4096
-)
 
 type poolProvider interface{ Pool() *pgxpool.Pool }
 
@@ -151,14 +132,30 @@ func WithPebbleManager(pool *pebblekv.Manager) Option {
 	}
 }
 
+// WithBranchLockTable 注入自定义分支与节点锁表。
+func WithBranchLockTable(locks *BranchLockTable) Option {
+	return func(m *manager) {
+		if locks != nil {
+			m.locks = locks
+		}
+	}
+}
+
+// WithBranchWorkspaceGate 注入自定义分支工作区会话与访问时间网关。
+func WithBranchWorkspaceGate(gate *BranchWorkspaceGate) Option {
+	return func(m *manager) {
+		if gate != nil {
+			m.gate = gate
+		}
+	}
+}
+
 // New 创建存储管理器。
 func New(store db.Store, opts ...Option) Manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
-		sessionCache: make(map[uint64]pebbleSessionCacheEntry), sessionCacheTTL: defaultSessionCacheTTL,
-		inodeLocks:  make(map[inodeLockKey]*inodeLockEntry),
-		dirtyAtimes: make(map[pebbleAtimeKey]time.Time)}
+		locks: NewBranchLockTable()}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(m)
@@ -166,6 +163,12 @@ func New(store db.Store, opts ...Option) Manager {
 	}
 	if m.pebble == nil {
 		m.pebble = pebblekv.NewManager(m.storageRoot)
+	}
+	m.atimes = NewPebbleAtimeTracker(m.atimeMode, m.pebble, m.locks, m.storageRoot)
+	if m.gate == nil {
+		m.gate = NewBranchWorkspaceGate(m.store, m.pebble, m.locks, m.atimes, defaultSessionCacheTTL)
+	} else {
+		m.gate.bindDependencies(m.store, m.pebble, m.locks, m.atimes)
 	}
 	return m
 }
@@ -196,16 +199,6 @@ func validateOptionalSessionID(id *uint64) error {
 		return ErrInvalidArgument
 	}
 	return nil
-}
-func (m *manager) shouldTouchAtime(atime, mtime, ctime, now time.Time) bool {
-	switch m.atimeMode {
-	case AtimeModeStrictAtime:
-		return now.Sub(atime) >= time.Second
-	case AtimeModeRelAtime:
-		return atime.Before(mtime) || atime.Before(ctime) || now.Sub(atime) >= 24*time.Hour
-	default:
-		return false
-	}
 }
 func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(db.Querier) error) error {
 	return tx.Retry(ctx, func(ctx context.Context) error { return m.store.ExecTx(ctx, fn) }, tx.WithDefaultRetry())
@@ -289,7 +282,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 								slog.Error("清理过期分支会话失败", "error", err)
 							}
 						case <-atimeTicker.C:
-							if err := m.flushAllPebbleAtimes(ctx); err != nil && ctx.Err() == nil {
+							if err := m.atimes.FlushAll(ctx); err != nil && ctx.Err() == nil {
 								slog.Error("合并访问时间失败", "error", err)
 							}
 						}
@@ -309,7 +302,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 					}
 				}
 				// 停机前把内存中尚未合并的访问时间刷入 Pebble。
-				if err := m.flushAllPebbleAtimes(context.WithoutCancel(ctx)); err != nil {
+				if err := m.atimes.FlushAll(context.WithoutCancel(ctx)); err != nil {
 					return err
 				}
 				return m.pebble.Close()

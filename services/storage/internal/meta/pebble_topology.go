@@ -97,7 +97,7 @@ func (m *manager) lockEntryInodes(disk, branch string, parentIno uint64, name []
 		if err != nil {
 			return nil, err
 		}
-		unlock := m.lockInodesWrite(disk, branch, parentIno, child.Ino)
+		unlock := m.locks.LockInodesWrite(disk, branch, parentIno, child.Ino)
 		current, err := readTopologyTarget(store, parentIno, name)
 		if err != nil {
 			unlock()
@@ -128,7 +128,7 @@ func (m *manager) lockRenameInodes(disk, branch string, params RenameParams, sto
 		} else if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
-		unlock := m.lockInodesWrite(disk, branch, params.OldParentIno, params.NewParentIno, oldInode.Ino, newIno)
+		unlock := m.locks.LockInodesWrite(disk, branch, params.OldParentIno, params.NewParentIno, oldInode.Ino, newIno)
 		current, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
 		if err != nil {
 			unlock()
@@ -579,7 +579,7 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 		}
 		return nil
 	}, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
-		unlockInode := m.lockInodeWrite(disk, branch, params.Ino)
+		unlockInode := m.locks.LockInodeWrite(disk, branch, params.Ino)
 		defer unlockInode()
 		return m.withBranchReclaimTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
 			inode, err := readPebbleInode(store, params.Ino)
