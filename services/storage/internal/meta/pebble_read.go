@@ -319,7 +319,16 @@ func (m *manager) newPebbleInodeWithTimeout(target pebblekv.Inode, entryTimeout,
 	}
 }
 
-func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint64, name []byte) (*Inode, error) {
+func (m *manager) Lookup(ctx context.Context, sid *uint64, parentIno uint64, name []byte) (*Inode, error) {
+	if parentIno == 0 || parentIno > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
+	if len(name) > MaxFileNameBytes {
+		return nil, ErrNameTooLong
+	}
+	if bytes.IndexByte(name, '/') >= 0 || bytes.IndexByte(name, 0) >= 0 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -388,7 +397,10 @@ func (m *manager) pebbleLookup(ctx context.Context, sid *uint64, parentIno uint6
 	return result, err
 }
 
-func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*Inode, error) {
+func (m *manager) GetAttr(ctx context.Context, sid *uint64, ino uint64) (*Inode, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -409,7 +421,10 @@ func (m *manager) pebbleGetAttr(ctx context.Context, sid *uint64, ino uint64) (*
 	return result, err
 }
 
-func (m *manager) pebbleReadlink(ctx context.Context, sid *uint64, ino uint64) ([]byte, error) {
+func (m *manager) Readlink(ctx context.Context, sid *uint64, ino uint64) ([]byte, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, ErrInvalidArgument
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -563,7 +578,10 @@ func (m *manager) readPebbleDir(ctx context.Context, session pebbleReadSession, 
 	return entries, nil
 }
 
-func (m *manager) pebbleStatFS(ctx context.Context, sid *uint64, ino uint64) (*StatFSResult, error) {
+func (m *manager) StatFS(ctx context.Context, sid *uint64, ino uint64) (*StatFSResult, error) {
+	if ino == 0 || ino > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: ino must be between 1 and %d, got %d", ErrInvalidArgument, int64(math.MaxInt64), ino)
+	}
 	session, err := m.requirePebbleSession(ctx, sid)
 	if err != nil {
 		return nil, err

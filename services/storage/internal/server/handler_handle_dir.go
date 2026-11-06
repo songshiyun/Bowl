@@ -12,9 +12,6 @@ import (
 // Create 在指定父目录下原子创建常规文件并分配初始文件句柄 (FileHandle)。
 func (s *Server) Create(ctx context.Context, req *connect.Request[storagev1.CreateRequest]) (*connect.Response[storagev1.CreateResponse], error) {
 	msg := req.Msg
-	if msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, msg.SessionId)
-	}
 	params := meta.CreateParams{
 		ParentIno: msg.ParentIno,
 		Name:      msg.Name,
@@ -72,9 +69,6 @@ func (s *Server) FsyncDir(ctx context.Context, req *connect.Request[storagev1.Fs
 
 // ReadDir 读取指定目录的子项流（基本条目）。
 func (s *Server) ReadDir(ctx context.Context, req *connect.Request[storagev1.ReadDirRequest]) (*connect.Response[storagev1.ReadDirResponse], error) {
-	if req.Msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
-	}
 	msg := req.Msg
 	res, err := s.metaManager.ReadDir(ctx, meta.ReadDirParams{
 		Ino:       msg.Ino,
@@ -99,9 +93,6 @@ func (s *Server) ReadDir(ctx context.Context, req *connect.Request[storagev1.Rea
 
 // ReadDirPlus 读取指定目录的子项流并附带完整 Inode 属性与缓存时效（扩展条目）。
 func (s *Server) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1.ReadDirPlusRequest]) (*connect.Response[storagev1.ReadDirPlusResponse], error) {
-	if req.Msg.SessionId != nil {
-		ctx = meta.WithSessionID(ctx, req.Msg.SessionId)
-	}
 	msg := req.Msg
 	res, err := s.metaManager.ReadDirPlus(ctx, meta.ReadDirPlusParams{
 		Ino:       msg.Ino,
