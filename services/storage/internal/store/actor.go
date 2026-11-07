@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -436,6 +437,9 @@ func (s *StoreActor) TickCount() uint64 { return s.tickCount.Load() }
 
 // BatchReallocCount 返回 IndexedBatch 触发防膨胀重建的次数（用于测试观测）。
 func (s *StoreActor) BatchReallocCount() uint64 { return s.batchResetCnt.Load() }
+
+// WALDirty 报告是否存在尚未通过 pebble.Sync 刷盘的 NoSync WAL 写入（用于测试观测）。
+func (s *StoreActor) WALDirty() bool { return s.walDirty.Load() }
 
 // StatFS 直接从内存原子镜像读取逻辑已用字节数与节点数（0 锁、0 I/O，ADR-0030 §2.4）。
 func (s *StoreActor) StatFS() (StatFSResult, error) {
@@ -891,7 +895,7 @@ func (s *StoreActor) processTick() {
 		}
 		if cmd.syncBarrier || cmd.op == opFsync || cmd.op == opFsyncDir {
 			hasSyncBarrier = true
-			if cmd.syncIno != 0 {
+			if cmd.syncIno != 0 && !slices.Contains(fsyncFileInodes, cmd.syncIno) {
 				fsyncFileInodes = append(fsyncFileInodes, cmd.syncIno)
 			}
 		}
@@ -904,12 +908,15 @@ func (s *StoreActor) processTick() {
 	}
 
 	if commitErr == nil {
-		if mutated || s.batch.Count() > 0 {
+		if mutated || s.batch.Count() > 0 || hasSyncBarrier {
 			// 顺带将内存 dirtyAtime 合入当前批次
 			s.flushDirtyAtimeToBatch(s.batch)
+		}
+		if mutated {
 			// 批次末尾仅写 1 次 "sys:stat"
 			batchSetStatDeferred(s.batch, s.stat)
-
+		}
+		if s.batch.Count() > 0 {
 			if hasSyncBarrier {
 				commitErr = s.commitWithSyncBarrier(fsyncFileInodes)
 			} else {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"io"
 	"math"
 	"os"
 	"sync/atomic"
@@ -532,10 +533,13 @@ func (s *StoreActor) readBlockSliceWithRetry(ino, blockIdx uint64, initialRef Bl
 		if err == nil {
 			return nil
 		}
-		if !errors.Is(err, os.ErrNotExist) || attempt == maxRetries {
+		if (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, io.ErrUnexpectedEOF)) || attempt == maxRetries {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil
+			}
 			return err
 		}
-		// 捕获并发覆写删块导致的 ENOENT：重读最新 DataKey(ino, blockIdx)
+		// 捕获并发覆写删块 (ENOENT) 或窗口内块原地截断 (ErrUnexpectedEOF)：重读最新 DataKey(ino, blockIdx)
 		latestRef, ok, getErr := s.readDataBlobRef(s.db, ino, blockIdx)
 		if getErr != nil {
 			return getErr

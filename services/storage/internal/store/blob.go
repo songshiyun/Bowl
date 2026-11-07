@@ -64,6 +64,9 @@ type BlobStore struct {
 	inoBlobs  map[uint64]map[uint64]struct{} // ino -> dirty blobID 集合
 	dirtyNew  map[uint64]struct{}            // 本窗口内新创建的 blobID（需在 Sync 时连带 fsync 父分片目录）
 	dirtyDir  map[string]struct{}            // 删除过已持久化旧块的分片目录（需在 Sync 时 fsync 目录）
+
+	syncFileCount atomic.Uint64
+	syncDirCount  atomic.Uint64
 }
 
 func init() {
@@ -447,6 +450,12 @@ func (s *BlobStore) HasDirty() bool {
 	return len(s.dirtyFile) > 0 || len(s.dirtyDir) > 0
 }
 
+// SyncFileCount 返回已成功执行 fdatasync 的脏块文件累计次数（用于测试观测）。
+func (s *BlobStore) SyncFileCount() uint64 { return s.syncFileCount.Load() }
+
+// SyncDirCount 返回已成功执行 fsync 的分片目录累计次数（用于测试观测）。
+func (s *BlobStore) SyncDirCount() uint64 { return s.syncDirCount.Load() }
+
 // DetachMeta 在 Actor Step 4 内执行纯内存状态摘除（0 磁盘 I/O）：
 // 从 hotShard、dirtyFile、dirtyNew、inoBlobs 中剔除指定块；
 // 若被删除块不是本窗口内新建块（即不在 dirtyNew 中），则将其父分片目录登记进 dirtyDir。
@@ -753,6 +762,7 @@ func (s *BlobStore) syncFile(id uint64) error {
 		s.markFile(id)
 		return err
 	}
+	s.syncFileCount.Add(1)
 	return nil
 }
 
@@ -769,6 +779,7 @@ func (s *BlobStore) syncDir(dir string) error {
 		s.markDir(dir)
 		return err
 	}
+	s.syncDirCount.Add(1)
 	return nil
 }
 
