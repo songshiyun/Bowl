@@ -527,37 +527,59 @@ func (s *BlobStore) ApplyPatches(patches []PatchLog) error {
 	if len(patches) == 0 {
 		return nil
 	}
-	for _, p := range patches {
-		if err := s.applySinglePatch(p); err != nil {
+	for i := 0; i < len(patches); {
+		blobID := patches[i].BlobID
+		if blobID == 0 {
+			return ErrInvalidValue
+		}
+		j := i + 1
+		for j < len(patches) && patches[j].BlobID == blobID {
+			j++
+		}
+		if err := s.applyBlobPatches(patches[i:j]); err != nil {
 			return err
 		}
+		i = j
 	}
 	return nil
 }
 
-func (s *BlobStore) applySinglePatch(p PatchLog) error {
-	if p.BlobID == 0 || p.NewLen == 0 || p.NewLen > BlobSize {
+func (s *BlobStore) applyBlobPatches(group []PatchLog) error {
+	last := group[len(group)-1]
+	if last.BlobID == 0 || last.NewLen == 0 || last.NewLen > BlobSize {
 		return ErrInvalidValue
 	}
-	file, err := os.OpenFile(s.Path(p.BlobID), os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(s.Path(last.BlobID), os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	var writeErr error
-	if len(p.Data) > 0 {
-		_, writeErr = file.WriteAt(p.Data, int64(p.Offset))
-	}
 	var truncErr error
-	if writeErr == nil {
-		truncErr = file.Truncate(int64(p.NewLen))
+	for _, p := range group {
+		if p.NewLen == 0 || p.NewLen > BlobSize {
+			writeErr = ErrInvalidValue
+			break
+		}
+		if len(p.Data) > 0 {
+			if _, wErr := file.WriteAt(p.Data, int64(p.Offset)); wErr != nil {
+				writeErr = wErr
+				break
+			}
+		}
+		if tErr := file.Truncate(int64(p.NewLen)); tErr != nil {
+			truncErr = tErr
+			break
+		}
 	}
 	closeErr := file.Close()
 	if err := errors.Join(writeErr, truncErr, closeErr); err != nil {
 		return err
 	}
 
-	s.markFileInode(p.BlobID, p.Ino)
-	s.patchHotShard(p)
+	s.markFileInode(last.BlobID, last.Ino)
+	for _, p := range group {
+		s.patchHotShard(p)
+	}
 	return nil
 }
 
