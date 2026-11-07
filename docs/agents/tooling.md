@@ -3,7 +3,8 @@
 ## 多模块与目录布局
 
 - **根模块（[`go.mod`](../../go.mod)）**：包含 `proto/storage/v1/`（Protobuf 源文件）、`gen/go/`（ConnectRPC 生成代码）、[`pkg/validator`](../../pkg/validator)（请求校验器）、[`tests/contract`](../../tests/contract)（跨模块契约测试）及 [`e2e`](../../e2e)（跨服务黑盒 E2E 测试）。
-- **Storage 子模块（[`services/storage/go.mod`](../../services/storage/go.mod)）**：代码位于 `services/storage/internal/{config,db,meta,server}` 与 `services/storage/db/{migrations,queries}`。
+- **Storage 子模块（[`services/storage/go.mod`](../../services/storage/go.mod)）**：代码位于 `services/storage/internal/{config,db,meta,server,store}` 与 `services/storage/db/{migrations,queries}`。
+  - `services/storage/internal/store/` 文件职责索引（ADR-0030 独立 Actor 存储引擎）：`actor.go`、`keys.go`、`values.go`、`errors.go` 实现 `StoreActor` 生命周期、7 类大端序键与 `Comparer.Split`、零拷贝 `SetDeferred`/`DeleteDeferred` 批次编解码与双缓冲 MPSC Group Commit 循环；`namespace.go`、`xattr_setattr.go`、`unlink_rename.go` 实现命名空间创建/查询、扩展属性/属性变更、解链/重命名与孤儿节点回收；`blob.go`、`data_rw.go`、`data_partial.go`、`fsync.go` 实现 `BlobStore` 分片热块缓存、4 阶段跨层写入流水线（满 `1 MiB` 锁外并行预写、`WindowLocal` 内存 `PatchLog` 阶段 3 批量合并、固化块 CoW）、无锁 `Read`（含 `ENOENT` 自动重试）及 `Fsync`/`FsyncDir` 双层并行落盘屏障。
   - `services/storage/internal/meta/` 文件职责索引：`entity.go` 与 `status.go` 定义领域实体和错误映射；`manager.go`、`manager_disk.go` 提供管理器和公开操作；`branch_control_store.go`、`workspace_swapper.go`、`branch_mutation_tx.go`、`branch_lock_table.go`（`BranchLockTable` 锁表）、`branch_workspace_gate.go`（`BranchWorkspaceGate` 会话锁内二次校验与开库控制流）、`pebble_atime.go`（`PebbleAtimeTracker` 延迟 atime 刷盘）、`pebble_*.go`、`disk_tree.go`、`tree_quota.go` 实现分支控制面存储、工作区目录切换、工作区变更事务、分支级锁、会话锁与开库门控、延迟 atime、分支数据/版本和配额；`branch_session.go` 管理分支会话。PostgreSQL 集成测试通过 `testdb_helper_test.go` 的辅助函数建立隔离数据库并调用 goose 执行迁移。
 
 - **Client 子模块（[`client/go.mod`](../../client/go.mod)）**：Linux FUSE 客户端 CLI，代码位于 `client/{cmd/bowl,internal,e2e}`；macOS 宿主机下须通过 `task test:client` 与 `task test:client:e2e` 在 Linux 容器内完成构建与挂载测试。
