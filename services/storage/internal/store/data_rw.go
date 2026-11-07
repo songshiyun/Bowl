@@ -10,8 +10,6 @@ import (
 )
 
 var (
-	securityCapabilityXattr = []byte("security.capability")
-
 	// partialWriteHook 供 STARSRC-622 挂载 < 1 MiB 或非对齐局部写流水线。
 	partialWriteHook func(s *StoreActor, ino, offset uint64, data []byte) (uint32, Attribute, error)
 
