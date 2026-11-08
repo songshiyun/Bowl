@@ -3,12 +3,9 @@ package config
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 const (
-	// DefaultSessionLeaseTTL 默认客户端会话租约时长（15秒）。
-	DefaultSessionLeaseTTL = 15 * time.Second
 	// DefaultAtimeMode 默认访问时间更新策略（noatime）。
 	DefaultAtimeMode = "noatime"
 	// DefaultEntryTimeoutSeconds 默认非目录条目内核缓存时长（1.0秒）。
@@ -23,27 +20,18 @@ const (
 	DefaultOpenDirCache = false
 	// DefaultDataDir 默认本地数据根目录。
 	DefaultDataDir = "/tmp/bowl-storage-data"
-	// DefaultSessionSweepInterval 默认过期会话清理间隔（1分钟）。
-	DefaultSessionSweepInterval = time.Minute
 )
 
 // MetaConfig 承载元数据与 FUSE 缓存相关配置。
 type MetaConfig struct {
-	SessionLeaseTTLVal        time.Duration `env:"STORAGE_SESSION_LEASE_TTL" envDefault:"15s"`
-	AtimeModeVal              string        `env:"STORAGE_ATIME_MODE" envDefault:"noatime"`
-	EntryTimeoutSecondsVal    float64       `env:"STORAGE_ENTRY_TIMEOUT_SECONDS" envDefault:"1.0"`
-	AttrTimeoutSecondsVal     float64       `env:"STORAGE_ATTR_TIMEOUT_SECONDS" envDefault:"1.0"`
-	DirEntryTimeoutSecondsVal float64       `env:"STORAGE_DIR_ENTRY_TIMEOUT_SECONDS" envDefault:"1.0"`
-	OpenKeepCacheVal          bool          `env:"STORAGE_OPEN_KEEP_CACHE" envDefault:"false"`
-	OpenDirCacheVal           bool          `env:"STORAGE_OPEN_DIR_CACHE" envDefault:"false"`
-	DataDirVal                string        `env:"DATA_DIR"`
-	StorageDataDirVal         string        `env:"STORAGE_DATA_DIR"`
-	SessionSweepIntervalVal   time.Duration `env:"STORAGE_SESSION_SWEEP_INTERVAL" envDefault:"1m"`
-}
-
-// SessionLeaseTTL 返回客户端会话租约时长。
-func (c *MetaConfig) SessionLeaseTTL() time.Duration {
-	return c.SessionLeaseTTLVal
+	AtimeModeVal              string  `env:"STORAGE_ATIME_MODE" envDefault:"noatime"`
+	EntryTimeoutSecondsVal    float64 `env:"STORAGE_ENTRY_TIMEOUT_SECONDS" envDefault:"1.0"`
+	AttrTimeoutSecondsVal     float64 `env:"STORAGE_ATTR_TIMEOUT_SECONDS" envDefault:"1.0"`
+	DirEntryTimeoutSecondsVal float64 `env:"STORAGE_DIR_ENTRY_TIMEOUT_SECONDS" envDefault:"1.0"`
+	OpenKeepCacheVal          bool    `env:"STORAGE_OPEN_KEEP_CACHE" envDefault:"false"`
+	OpenDirCacheVal           bool    `env:"STORAGE_OPEN_DIR_CACHE" envDefault:"false"`
+	DataDirVal                string  `env:"DATA_DIR"`
+	StorageDataDirVal         string  `env:"STORAGE_DATA_DIR"`
 }
 
 // AtimeMode 返回最后访问时间更新策略的小写标准化字符串（"noatime" / "relatime" / "strictatime"）。
@@ -96,22 +84,10 @@ func (c *MetaConfig) DataDir() string {
 	return DefaultDataDir
 }
 
-// SessionSweepInterval 返回过期会话清理间隔。若未设置或 <= 0 则采用 DefaultSessionSweepInterval。
-func (c *MetaConfig) SessionSweepInterval() time.Duration {
-	if c.SessionSweepIntervalVal <= 0 {
-		return DefaultSessionSweepInterval
-	}
-	return c.SessionSweepIntervalVal
-}
-
 // Validate 校验元数据配置合法性。
 func (c *MetaConfig) Validate() error {
 	if strings.TrimSpace(c.DataDir()) == "" {
 		return fmt.Errorf("invalid data dir %q: must not be empty", c.DataDir())
-	}
-
-	if c.SessionLeaseTTLVal <= 0 {
-		return fmt.Errorf("invalid session lease TTL %v: must be greater than 0", c.SessionLeaseTTLVal)
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(c.AtimeModeVal))
@@ -129,10 +105,6 @@ func (c *MetaConfig) Validate() error {
 	}
 	if c.DirEntryTimeoutSecondsVal < 0 {
 		return fmt.Errorf("invalid dir entry timeout %v: must be non-negative", c.DirEntryTimeoutSecondsVal)
-	}
-
-	if c.SessionSweepIntervalVal < 0 {
-		return fmt.Errorf("invalid session sweep interval %v: must be non-negative", c.SessionSweepIntervalVal)
 	}
 
 	return nil

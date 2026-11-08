@@ -14,8 +14,7 @@ import (
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"github.com/starsrc/bowl/pkg/validator"
 	"github.com/starsrc/bowl/services/storage/internal/config"
-	"github.com/starsrc/bowl/services/storage/internal/meta"
-	"github.com/starsrc/bowl/services/storage/internal/readbuf"
+	"github.com/starsrc/bowl/services/storage/internal/control"
 )
 
 var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
@@ -23,10 +22,10 @@ var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
 // Server 封装并管理底层 HTTP 服务与 ConnectRPC 路由处理器。
 type Server struct {
 	storagev1connect.UnimplementedStorageServiceHandler
-	metaManager meta.Manager
-	config      config.ServerConfig
-	logger      *slog.Logger
-	httpServer  *http.Server
+	control    control.Manager
+	config     config.ServerConfig
+	logger     *slog.Logger
+	httpServer *http.Server
 }
 
 // Handler 返回 HTTP 处理器实例，便于测试与中间件挂载。
@@ -37,9 +36,9 @@ func (s *Server) Handler() http.Handler {
 	return nil
 }
 
-// MetaManager 返回持有的元数据领域层管理器。
-func (s *Server) MetaManager() meta.Manager {
-	return s.metaManager
+// Control 返回持有的单盘控制面与 StoreActor 实例池管理器。
+func (s *Server) Control() control.Manager {
+	return s.control
 }
 
 // Addr 返回服务器监听的网络地址。
@@ -55,7 +54,7 @@ type Params struct {
 	fx.In
 
 	Config         config.ServerConfig
-	MetaManager    meta.Manager
+	Control        control.Manager
 	Observability  serverx.ObservabilityConfig  `optional:"true"`
 	Telemetry      telemetry.Config             `optional:"true"`
 	TelemetryReady telemetry.Ready              `optional:"true"`
@@ -100,9 +99,9 @@ func New(p Params) (*Server, error) {
 	}
 
 	srv := &Server{
-		metaManager: p.MetaManager,
-		config:      p.Config,
-		logger:      quietExpectedNotFound(p.Logger),
+		control: p.Control,
+		config:  p.Config,
+		logger:  quietExpectedNotFound(p.Logger),
 	}
 
 	mux := http.NewServeMux()
@@ -116,15 +115,7 @@ func New(p Params) (*Server, error) {
 		srv,
 		handlerOpts...,
 	)
-	readBuffers := readbuf.NewPool()
-	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == storagev1connect.StorageServiceReadProcedure {
-			ctx, release := readBuffers.WithScope(r.Context())
-			defer release()
-			r = r.WithContext(ctx)
-		}
-		handler.ServeHTTP(w, r)
-	}))
+	mux.Handle(path, handler)
 
 	httpServer := serverx.NewHTTPServer(p.Config.Addr(), mux, p.Config)
 	srv.httpServer = httpServer
