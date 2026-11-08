@@ -3,20 +3,7 @@ package store
 import (
 	"errors"
 	"math"
-
-	"github.com/cockroachdb/pebble/v2"
 )
-
-type writeBlockSpec struct {
-	blockIdx uint64
-	newRef   BlobRef
-	keep     bool
-	sameRef  bool
-
-	// Phase A 校验时从 s.batch 读取的实时旧块状态
-	oldRef BlobRef
-	oldOK  bool
-}
 
 type writeDataOp struct {
 	ino     uint64
@@ -105,15 +92,15 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 
 	numBlocks := len(data) / BlobSize
 	specs := make([]writeBlockSpec, 0, numBlocks)
-	var pinned []uint64
+	var staged []BlobRef
 
 	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 追加写入满块数据。
 	for i := range numBlocks {
 		blockIdx := (offset / BlobSize) + uint64(i)
 		chunk := data[i*BlobSize : (i+1)*BlobSize]
-		ref, writeErr := s.appendBlob(blobs, ino, chunk, &pinned)
+		ref, writeErr := s.stageAppend(blobs, ino, chunk, &staged)
 		if writeErr != nil {
-			s.unpinPacks(pinned)
+			s.unpinStagedBlobs(staged)
 			return 0, Attribute{}, writeErr
 		}
 		specs = append(specs, writeBlockSpec{
@@ -137,7 +124,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
 	cmd.req = op
-	cmd.pinnedPacks = pinned
+	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return 0, Attribute{}, err
 	}
@@ -162,7 +149,7 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 
 	var (
 		specs  []writeBlockSpec
-		pinned []uint64
+		staged []BlobRef
 	)
 
 	for pos, consumed := offset, 0; consumed < len(data); {
@@ -171,9 +158,9 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 		length := min(len(data)-consumed, BlobSize-inBlock)
 		chunk := data[consumed : consumed+length]
 
-		spec, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk, &pinned)
+		spec, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk, &staged)
 		if err != nil {
-			s.unpinPacks(pinned)
+			s.unpinStagedBlobs(staged)
 			return 0, Attribute{}, err
 		}
 		specs = append(specs, spec)
@@ -191,14 +178,14 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
 	cmd.req = op
-	cmd.pinnedPacks = pinned
+	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, pinned *[]uint64) (writeBlockSpec, error) {
+func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, staged *[]BlobRef) (writeBlockSpec, error) {
 	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
@@ -207,7 +194,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 				keep:     false,
 			}, nil
 		}
-		ref, err := s.appendBlob(blobs, ino, chunk, pinned)
+		ref, err := s.stageAppend(blobs, ino, chunk, staged)
 		if err != nil {
 			return writeBlockSpec{}, err
 		}
@@ -230,10 +217,9 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 
 	// 尝试活跃 .pack 尾部顺延扩展
 	if oldOK && inBlock >= int(oldRef.Length) {
-		if extRef, ok, extErr := blobs.ExtendTail(ino, oldRef, uint32(inBlock), chunk, uint32(newLen)); extErr != nil {
+		if extRef, ok, extErr := s.stageExtendTail(blobs, ino, oldRef, uint32(inBlock), chunk, uint32(newLen), staged); extErr != nil {
 			return writeBlockSpec{}, extErr
 		} else if ok {
-			s.pinPack(extRef.PackID, pinned)
 			return writeBlockSpec{
 				blockIdx: blockIdx,
 				newRef:   extRef,
@@ -265,7 +251,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		}, nil
 	}
 
-	ref, err := s.appendBlob(blobs, ino, merged, pinned)
+	ref, err := s.stageAppend(blobs, ino, merged, staged)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -274,23 +260,6 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		newRef:   ref,
 		keep:     true,
 	}, nil
-}
-
-func (s *StoreActor) readDataBlobRef(reader pebbleReader, ino, blockIdx uint64) (BlobRef, bool, error) {
-	var keyBuf [DataKeyLen]byte
-	putDataKey(keyBuf[:], ino, blockIdx)
-	val, closer, err := reader.Get(keyBuf[:])
-	if errors.Is(err, pebble.ErrNotFound) {
-		return BlobRef{}, false, nil
-	}
-	if err != nil {
-		return BlobRef{}, false, err
-	}
-	ref, decErr := DecodeBlobRef(val)
-	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
-		return BlobRef{}, false, errors.Join(decErr, closeErr)
-	}
-	return ref, true, nil
 }
 
 func (s *StoreActor) validateWritableFileInode(reader pebbleReader, ino, offset uint64, dataLen uint32) (Inode, error) {
@@ -348,13 +317,8 @@ func (s *StoreActor) validateWriteCmd(cmd *writeCmd) error {
 		}
 	}
 
-	for i := range op.blocks {
-		oldRef, oldOK, err := s.readDataBlobRef(s.batch, op.ino, op.blocks[i].blockIdx)
-		if err != nil {
-			return err
-		}
-		op.blocks[i].oldRef = oldRef
-		op.blocks[i].oldOK = oldOK
+	if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.blocks); err != nil {
+		return err
 	}
 
 	op.target = inode
@@ -389,21 +353,7 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 	BatchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
 	BatchSetDirtyDeferred(s.batch, op.ino)
 
-	for i := range op.blocks {
-		b := &op.blocks[i]
-		if b.keep {
-			if !b.sameRef {
-				if b.oldOK {
-					s.removeBlobRef(b.oldRef)
-				}
-				s.addBlobRef(b.newRef)
-				BatchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
-			}
-		} else if b.oldOK {
-			s.removeBlobRef(b.oldRef)
-			BatchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
-		}
-	}
+	s.applyWriteBlockSpecs(op.ino, op.blocks)
 
 	s.overlayAtime(&inode)
 	op.attr = inode.ToAttribute()

@@ -782,7 +782,7 @@ func (e *formalEnv) stepFsyncDir() {
 }
 
 func (e *formalEnv) stepSealActivePack() {
-	require.NoError(e.t, e.actor.Blobs().SealActivePack())
+	require.NoError(e.t, e.actor.SealActivePack())
 	require.Equal(e.t, uint64(0), e.actor.Blobs().ActivePackID())
 	e.sealPackCount++
 }
@@ -1421,7 +1421,7 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 					}
 				}
 				if workerID == 0 && step%6 == 3 {
-					err = actor.Blobs().SealActivePack()
+					err = actor.SealActivePack()
 					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d SealActivePack: %w", workerID, err)
 						return

@@ -104,35 +104,6 @@ func (s *StoreActor) collectXattrKeys(reader pebbleReader, ino uint64) (keys [][
 	return keys, nil
 }
 
-// collectDataKeys 通过 reader.NewIter(nil) + iter.SeekPrefixGE(DataPrefix(ino)) 激活 14B Prefix Bloom Filter，
-// 收集指定节点的全部 DataKey 及对应 BlobRef。
-func (s *StoreActor) collectDataKeys(reader pebbleReader, ino uint64) (entries []dataKeyEntry, err error) {
-	iter, err := reader.NewIter(nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, iter.Close()) }()
-
-	prefix := DataPrefix(ino)
-	for valid := iter.SeekPrefixGE(prefix); valid; valid = iter.Next() {
-		if _, _, decErr := DecodeDataKey(iter.Key()); decErr != nil {
-			return nil, decErr
-		}
-		ref, decErr := DecodeBlobRef(iter.Value())
-		if decErr != nil {
-			return nil, decErr
-		}
-		entries = append(entries, dataKeyEntry{
-			key: append([]byte(nil), iter.Key()...),
-			ref: ref,
-		})
-	}
-	if iterErr := iter.Error(); iterErr != nil {
-		return nil, iterErr
-	}
-	return entries, nil
-}
-
 type inodeReclaimPlan struct {
 	ino          uint64
 	inode        Inode
@@ -194,10 +165,7 @@ func (s *StoreActor) applyInodeReclaimPlan(plan *inodeReclaimPlan) {
 	for _, k := range plan.xattrKeys {
 		BatchDeleteDeferred(s.batch, k)
 	}
-	for _, entry := range plan.dataKeys {
-		s.removeBlobRef(entry.ref)
-		BatchDeleteDeferred(s.batch, entry.key)
-	}
+	s.deleteDataKeyEntries(plan.dataKeys)
 	BatchSetDirtyDeferred(s.batch, plan.ino)
 	s.discardDirtyAtime(plan.ino)
 	if plan.hasInode {

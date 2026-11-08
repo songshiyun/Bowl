@@ -1,51 +1,8 @@
 package store
 
 import (
-	"errors"
 	"math"
 )
-
-type dataKeyEntry struct {
-	key []byte
-	ref BlobRef
-}
-
-// collectDataKeysFrom 扫描指定节点从 startBlockIdx 起（闭区间 [startBlockIdx, +∞)）的所有 DataKey 及对应 BlobRef。
-func (s *StoreActor) collectDataKeysFrom(reader pebbleReader, ino, startBlockIdx uint64) (entries []dataKeyEntry, err error) {
-	iter, err := reader.NewIter(nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, iter.Close()) }()
-
-	var startKey [DataKeyLen]byte
-	putDataKey(startKey[:], ino, startBlockIdx)
-
-	for valid := iter.SeekPrefixGE(startKey[:]); valid; valid = iter.Next() {
-		keyIno, blockIdx, decErr := DecodeDataKey(iter.Key())
-		if decErr != nil {
-			return nil, decErr
-		}
-		if keyIno != ino {
-			break
-		}
-		if blockIdx < startBlockIdx {
-			continue
-		}
-		ref, decErr := DecodeBlobRef(iter.Value())
-		if decErr != nil {
-			return nil, decErr
-		}
-		entries = append(entries, dataKeyEntry{
-			key: append([]byte(nil), iter.Key()...),
-			ref: ref,
-		})
-	}
-	if iterErr := iter.Error(); iterErr != nil {
-		return nil, iterErr
-	}
-	return entries, nil
-}
 
 // setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线（ADR-0031 §3.2）：
 //   - 完全落入截断区间的整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
@@ -68,9 +25,8 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 
 	newSize := *req.Size
 	var (
-		hasTailSpec bool
-		tailSpec    writeBlockSpec
-		pinned      []uint64
+		tailSpecs []writeBlockSpec
+		staged    []BlobRef
 	)
 
 	// 若截断后尾部落在某个 256 KiB 块内部（0 < tailLen < BlobSize），读取有效前缀并追加至活跃 .pack（或全零时标记删除）。
@@ -83,34 +39,32 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 				return Attribute{}, err
 			}
 			if oldOK && oldRef.Length > tailLen {
-				spec, err := s.prepareTruncateTailBlock(blobs, ino, tailBlock, oldRef, tailLen, &pinned)
+				spec, err := s.prepareTruncateTailBlock(blobs, ino, tailBlock, oldRef, tailLen, &staged)
 				if err != nil {
-					s.unpinPacks(pinned)
+					s.unpinStagedBlobs(staged)
 					return Attribute{}, err
 				}
-				hasTailSpec = true
-				tailSpec = spec
+				tailSpecs = []writeBlockSpec{spec}
 			}
 		}
 	}
 
 	op := &setAttrOp{
-		ino:         ino,
-		req:         req,
-		hasTailSpec: hasTailSpec,
-		tailSpec:    tailSpec,
+		ino:       ino,
+		req:       req,
+		tailSpecs: tailSpecs,
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opSetAttr
 	cmd.req = op
-	cmd.pinnedPacks = pinned
+	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return Attribute{}, err
 	}
 	return op.attr, nil
 }
 
-func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, pinned *[]uint64) (writeBlockSpec, error) {
+func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
 	data := make([]byte, tailLen)
 	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
 		return writeBlockSpec{}, err
@@ -121,7 +75,7 @@ func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx ui
 			keep:     false,
 		}, nil
 	}
-	ref, err := s.appendBlob(blobs, ino, data, pinned)
+	ref, err := s.stageAppend(blobs, ino, data, staged)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -188,7 +142,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	zeroRange := mode&FallocPunchHole != 0 || mode&FallocZeroRange != 0
 	var (
 		partialSpecs []writeBlockSpec
-		pinned       []uint64
+		staged       []BlobRef
 	)
 
 	if zeroRange {
@@ -213,9 +167,9 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 				// 完整 256 KiB 块交由阶段 2 范围扫描删除
 				continue
 			}
-			spec, hasSpec, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen, &pinned)
+			spec, hasSpec, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen, &staged)
 			if err != nil {
-				s.unpinPacks(pinned)
+				s.unpinStagedBlobs(staged)
 				return err
 			}
 			if hasSpec {
@@ -235,11 +189,11 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	cmd := s.acquireCmd()
 	cmd.op = opFallocate
 	cmd.req = op
-	cmd.pinnedPacks = pinned
+	cmd.stagedBlobs = staged
 	return s.enqueueAndWait(cmd)
 }
 
-func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, pinned *[]uint64) (writeBlockSpec, bool, error) {
+func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, staged *[]BlobRef) (writeBlockSpec, bool, error) {
 	oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
 	if err != nil || !oldOK {
 		return writeBlockSpec{}, false, err
@@ -266,7 +220,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 		}, true, nil
 	}
 
-	ref, err := s.appendBlob(blobs, ino, data, pinned)
+	ref, err := s.stageAppend(blobs, ino, data, staged)
 	if err != nil {
 		return writeBlockSpec{}, false, err
 	}
@@ -275,46 +229,6 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 		newRef:   ref,
 		keep:     true,
 	}, true, nil
-}
-
-// collectDataKeysInRange 扫描指定节点在闭区间 [startBlockIdx, endBlockIdx] 内的全部 DataKey 及对应 BlobRef。
-func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlockIdx, endBlockIdx uint64) (entries []dataKeyEntry, err error) {
-	if startBlockIdx > endBlockIdx {
-		return nil, nil
-	}
-	iter, err := reader.NewIter(nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, iter.Close()) }()
-
-	var startKey [DataKeyLen]byte
-	putDataKey(startKey[:], ino, startBlockIdx)
-
-	for valid := iter.SeekPrefixGE(startKey[:]); valid; valid = iter.Next() {
-		keyIno, blockIdx, decErr := DecodeDataKey(iter.Key())
-		if decErr != nil {
-			return nil, decErr
-		}
-		if keyIno != ino || blockIdx > endBlockIdx {
-			break
-		}
-		if blockIdx < startBlockIdx {
-			continue
-		}
-		ref, decErr := DecodeBlobRef(iter.Value())
-		if decErr != nil {
-			return nil, decErr
-		}
-		entries = append(entries, dataKeyEntry{
-			key: append([]byte(nil), iter.Key()...),
-			ref: ref,
-		})
-	}
-	if iterErr := iter.Error(); iterErr != nil {
-		return nil, iterErr
-	}
-	return entries, nil
 }
 
 func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
@@ -377,13 +291,8 @@ func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
 			op.fullDeleteKeys = keys
 		}
 
-		for i := range op.partialSpecs {
-			oldRef, oldOK, err := s.readDataBlobRef(s.batch, op.ino, op.partialSpecs[i].blockIdx)
-			if err != nil {
-				return err
-			}
-			op.partialSpecs[i].oldRef = oldRef
-			op.partialSpecs[i].oldOK = oldOK
+		if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.partialSpecs); err != nil {
+			return err
 		}
 	}
 
@@ -418,24 +327,6 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 	BatchSetDirtyDeferred(s.batch, op.ino)
 
 	if op.zeroRange {
-		for _, entry := range op.fullDeleteKeys {
-			s.removeBlobRef(entry.ref)
-			BatchDeleteDeferred(s.batch, entry.key)
-		}
-		for i := range op.partialSpecs {
-			b := &op.partialSpecs[i]
-			if b.keep {
-				if !b.sameRef {
-					if b.oldOK {
-						s.removeBlobRef(b.oldRef)
-					}
-					s.addBlobRef(b.newRef)
-					BatchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
-				}
-			} else if b.oldOK {
-				s.removeBlobRef(b.oldRef)
-				BatchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
-			}
-		}
+		s.applyBlockMutations(op.ino, op.partialSpecs, op.fullDeleteKeys)
 	}
 }

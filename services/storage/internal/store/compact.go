@@ -62,22 +62,22 @@ func (s *StoreActor) CompactPacks() error {
 	}
 
 	if len(liveBlocks) > 0 {
-		// 先钉住所有源候选包与即将写入的目标活跃包，使 Actor Step 3 不会在目标新包完成 fdatasync 前提前触发 RemovePack
-		var pinned []uint64
-		for _, srcID := range candidates {
-			s.pinPack(srcID, &pinned)
-		}
+		// 先钉住所有源候选包，使 Actor Step 3 不会在目标新包完成 fdatasync 前提前触发 RemovePack。
+		s.pinPackIDs(candidates)
 
+		var staged []BlobRef
 		specs := make([]relocateBlockSpec, 0, len(liveBlocks))
 		for _, blk := range liveBlocks {
 			data, readErr := blobs.Read(blk.oldRef)
 			if readErr != nil {
-				s.unpinPacks(pinned)
+				s.unpinStagedBlobs(staged)
+				s.unpinPackIDs(candidates)
 				return readErr
 			}
-			newRef, writeErr := s.appendBlob(blobs, blk.ino, data, &pinned)
+			newRef, writeErr := s.stageAppend(blobs, blk.ino, data, &staged)
 			if writeErr != nil {
-				s.unpinPacks(pinned)
+				s.unpinStagedBlobs(staged)
+				s.unpinPackIDs(candidates)
 				return writeErr
 			}
 			specs = append(specs, relocateBlockSpec{
@@ -96,24 +96,18 @@ func (s *StoreActor) CompactPacks() error {
 		cmd := s.acquireCmd()
 		cmd.op = opCompactRelocate
 		cmd.req = op
-		// 注意：保留源候选包在 inFlightPacks 中的钉住计数直至完成 blobs.Sync()，
-		// 仅将新分配包交由 cmd.pinnedPacks 在 Phase B 释放。
-		s.unpinPacks(candidates)
-		for _, srcID := range candidates {
-			s.pinPack(srcID, nil)
-		}
-		cmd.pinnedPacks = filterNonCandidatePins(pinned, candSet)
+		cmd.stagedBlobs = staged
 
 		relocErr := s.enqueueAndWait(cmd)
 		if relocErr != nil {
-			s.unpinPacks(candidates)
+			s.unpinPackIDs(candidates)
 			return relocErr
 		}
 
 		// 4. Soft Updates 双重持久化屏障：
 		// 先将目标新 .pack 持久化落盘（fdatasync），再释放源包钉住并在 Actor 内归零回收，最后同步 Pebble WAL 并调用 RemovePack。
 		syncErr := blobs.Sync()
-		s.unpinPacks(candidates)
+		s.unpinPackIDs(candidates)
 		if syncErr != nil {
 			return syncErr
 		}
@@ -124,16 +118,6 @@ func (s *StoreActor) CompactPacks() error {
 		return err
 	}
 	return s.FlushWAL()
-}
-
-func filterNonCandidatePins(pinned []uint64, candSet map[uint64]struct{}) []uint64 {
-	out := make([]uint64, 0, len(pinned))
-	for _, id := range pinned {
-		if _, isCand := candSet[id]; !isCand {
-			out = append(out, id)
-		}
-	}
-	return out
 }
 
 func (s *StoreActor) selectLowWatermarkPacks() ([]uint64, error) {
@@ -253,19 +237,6 @@ func (s *StoreActor) mutateCompactRelocateCmd(cmd *writeCmd) {
 	}
 }
 
-func (s *StoreActor) recordDeadBlobWrite(ref BlobRef) {
-	if ref.PackID == 0 || ref.Length == 0 {
-		return
-	}
-	meta := s.packStats[ref.PackID]
-	endOffset := uint64(ref.Offset) + uint64(ref.Length)
-	if endOffset > meta.TotalBytes {
-		meta.TotalBytes = endOffset
-	}
-	s.packStats[ref.PackID] = meta
-	s.dirtyPackStats[ref.PackID] = struct{}{}
-}
-
 func (s *StoreActor) reapZeroLiveCandidatePacks(candidates []uint64) error {
 	if len(candidates) == 0 {
 		return nil
@@ -278,9 +249,17 @@ func (s *StoreActor) reapZeroLiveCandidatePacks(candidates []uint64) error {
 
 func (s *StoreActor) mutateCompactReapCmd(cmd *writeCmd) {
 	ids, _ := cmd.req.([]uint64)
+	activeID := s.activePackID()
 	for _, id := range ids {
-		if meta, ok := s.packStats[id]; ok && meta.LiveBytes == 0 {
-			s.dirtyPackStats[id] = struct{}{}
+		if id == 0 {
+			continue
+		}
+		if meta, ok := s.packStats[id]; ok {
+			if meta.LiveBytes == 0 {
+				s.dirtyPackStats[id] = struct{}{}
+			}
+		} else if id != activeID && !s.isPackPinned(id) {
+			s.addPendingDeadPacks([]uint64{id})
 		}
 	}
 }

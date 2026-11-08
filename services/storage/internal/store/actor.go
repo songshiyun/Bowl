@@ -70,7 +70,7 @@ type writeCmd struct {
 
 	syncBarrier bool
 	syncIno     uint64
-	pinnedPacks []uint64
+	stagedBlobs []BlobRef
 }
 
 // InodeReserveFunc 向盘级分配器持久化预留一段连续 Inode 编号，返回闭区间 [first, last]。
@@ -342,85 +342,6 @@ func (s *StoreActor) initOrLoadState() error {
 	return s.loadPackStats()
 }
 
-func (s *StoreActor) loadPackStats() error {
-	iter, err := s.db.NewIter(nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = iter.Close() }()
-
-	prefix := PackStatPrefix()
-	for valid := iter.SeekGE(prefix); valid && bytes.HasPrefix(iter.Key(), prefix); valid = iter.Next() {
-		packID, decErr := DecodePackStatKey(iter.Key())
-		if decErr != nil {
-			return decErr
-		}
-		meta, decErr := DecodePackMeta(iter.Value())
-		if decErr != nil {
-			return decErr
-		}
-		s.packStats[packID] = meta
-	}
-	return iter.Error()
-}
-
-func (s *StoreActor) syncPackStatsWithBlobs() error {
-	bs := s.blobs
-	if bs == nil {
-		return nil
-	}
-	var maxPackID uint64
-	var zeroLiveMetaPacks []uint64
-	for packID, meta := range s.packStats {
-		if packID > maxPackID {
-			maxPackID = packID
-		}
-		if meta.LiveBytes == 0 {
-			zeroLiveMetaPacks = append(zeroLiveMetaPacks, packID)
-		}
-	}
-
-	var deadDiskPacks []uint64
-	for _, packID := range bs.existingPackIDs() {
-		if packID > maxPackID {
-			maxPackID = packID
-		}
-		if meta, ok := s.packStats[packID]; !ok || meta.LiveBytes == 0 {
-			deadDiskPacks = append(deadDiskPacks, packID)
-		}
-	}
-
-	if maxPackID > 0 {
-		bs.AdvanceMinPackID(maxPackID)
-	}
-	if s.readOnly {
-		return nil
-	}
-
-	if len(zeroLiveMetaPacks) > 0 {
-		cleanBatch := s.db.NewBatch()
-		defer func() { _ = cleanBatch.Close() }()
-		for _, packID := range zeroLiveMetaPacks {
-			delete(s.packStats, packID)
-			BatchDeletePackMetaDeferred(cleanBatch, packID)
-			if !slices.Contains(deadDiskPacks, packID) {
-				deadDiskPacks = append(deadDiskPacks, packID)
-			}
-		}
-		if err := s.db.Apply(cleanBatch, pebble.Sync); err != nil {
-			return err
-		}
-	} else if len(deadDiskPacks) > 0 {
-		if err := s.db.LogData(nil, pebble.Sync); err != nil {
-			return err
-		}
-	}
-	for _, packID := range deadDiskPacks {
-		_ = bs.RemovePack(packID)
-	}
-	return nil
-}
-
 func (s *StoreActor) scanMaxInode() (uint64, error) {
 	iter, err := s.db.NewIter(nil)
 	if err != nil {
@@ -654,18 +575,7 @@ func (s *StoreActor) FlushWAL() error {
 	}
 	defer unlock()
 
-	toReclaim := s.takePendingDeadPacks()
-	wasDirty := s.walDirty.Swap(false)
-	if !wasDirty && len(toReclaim) == 0 {
-		return nil
-	}
-	if err := s.db.LogData(nil, pebble.Sync); err != nil {
-		s.restorePendingDeadPacks(toReclaim)
-		s.walDirty.Store(true)
-		return err
-	}
-	s.removePacks(toReclaim)
-	return nil
+	return s.syncWALAndReclaimDeadPacks()
 }
 
 func (s *StoreActor) acquireCmd() *writeCmd {
@@ -679,19 +589,19 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.err = nil
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
-	cmd.pinnedPacks = cmd.pinnedPacks[:0]
+	cmd.stagedBlobs = cmd.stagedBlobs[:0]
 	s.cmdPool.Put(cmd)
 }
 
 func (s *StoreActor) submit(cmd *writeCmd) error {
 	if s.readOnly {
-		s.unpinPacks(cmd.pinnedPacks)
+		s.unpinStagedBlobs(cmd.stagedBlobs)
 		s.releaseCmd(cmd)
 		return ErrReadOnly
 	}
 	unlock, err := s.enter()
 	if err != nil {
-		s.unpinPacks(cmd.pinnedPacks)
+		s.unpinStagedBlobs(cmd.stagedBlobs)
 		s.releaseCmd(cmd)
 		return err
 	}
@@ -703,7 +613,7 @@ func (s *StoreActor) enqueueAndWait(cmd *writeCmd) error {
 	s.mb.mu.Lock()
 	if s.mb.closed {
 		s.mb.mu.Unlock()
-		s.unpinPacks(cmd.pinnedPacks)
+		s.unpinStagedBlobs(cmd.stagedBlobs)
 		s.releaseCmd(cmd)
 		return ErrClosed
 	}
@@ -814,18 +724,11 @@ func (s *StoreActor) processTick() {
 	for _, cmd := range cmds {
 		// Phase A — 纯内存只读预校验（绝不触碰 s.batch 写接口）
 		if err := s.validateCmd(cmd); err != nil {
-			for _, id := range cmd.pinnedPacks {
-				if id != 0 {
-					if meta, ok := s.packStats[id]; !ok {
-						s.packStats[id] = PackMeta{}
-						s.dirtyPackStats[id] = struct{}{}
-					} else if meta.LiveBytes == 0 {
-						s.dirtyPackStats[id] = struct{}{}
-					}
-				}
+			for _, ref := range cmd.stagedBlobs {
+				s.recordDeadBlobWrite(ref)
 			}
-			s.unpinPacks(cmd.pinnedPacks)
-			cmd.pinnedPacks = cmd.pinnedPacks[:0]
+			s.unpinStagedBlobs(cmd.stagedBlobs)
+			cmd.stagedBlobs = cmd.stagedBlobs[:0]
 			cmd.err = err
 			continue
 		}
@@ -834,13 +737,13 @@ func (s *StoreActor) processTick() {
 		prevCount := s.batch.Count()
 		prevStat := s.stat
 		s.mutateCmd(cmd)
-		for _, id := range cmd.pinnedPacks {
-			if meta, ok := s.packStats[id]; ok && meta.LiveBytes == 0 {
-				s.dirtyPackStats[id] = struct{}{}
+		for _, ref := range cmd.stagedBlobs {
+			if meta, ok := s.packStats[ref.PackID]; ok && meta.LiveBytes == 0 {
+				s.dirtyPackStats[ref.PackID] = struct{}{}
 			}
 		}
-		s.unpinPacks(cmd.pinnedPacks)
-		cmd.pinnedPacks = cmd.pinnedPacks[:0]
+		s.unpinStagedBlobs(cmd.stagedBlobs)
+		cmd.stagedBlobs = cmd.stagedBlobs[:0]
 		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.dirtyPackStats) > 0 {
 			mutated = true
 		}
@@ -990,12 +893,7 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 		return err
 	}
 	toReclaim = append(toReclaim, deadPacks...)
-	var dataErr error
-	if s.blobs != nil {
-		for _, ino := range fsyncFileInodes {
-			dataErr = errors.Join(dataErr, s.blobs.SyncInode(ino))
-		}
-	}
+	dataErr := s.syncFileInodes(fsyncFileInodes)
 	walErr := s.batch.SyncWait()
 	if walErr != nil {
 		s.restorePendingDeadPacks(toReclaim)
@@ -1010,174 +908,9 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 }
 
 func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) error {
-	var dataErr error
-	if s.blobs != nil {
-		for _, ino := range fsyncFileInodes {
-			dataErr = errors.Join(dataErr, s.blobs.SyncInode(ino))
-		}
-	}
-	toReclaim := s.takePendingDeadPacks()
-	var walErr error
-	if s.walDirty.Swap(false) || len(toReclaim) > 0 {
-		walErr = s.db.LogData(nil, pebble.Sync)
-		if walErr != nil {
-			s.restorePendingDeadPacks(toReclaim)
-			s.walDirty.Store(true)
-		} else {
-			s.removePacks(toReclaim)
-		}
-	}
+	dataErr := s.syncFileInodes(fsyncFileInodes)
+	walErr := s.syncWALAndReclaimDeadPacks()
 	return errors.Join(dataErr, walErr)
-}
-
-func (s *StoreActor) addBlobRef(ref BlobRef) {
-	if ref.PackID == 0 || ref.Length == 0 {
-		return
-	}
-	meta := s.packStats[ref.PackID]
-	meta.LiveBytes += uint64(ref.Length)
-	endOffset := uint64(ref.Offset) + uint64(ref.Length)
-	if endOffset > meta.TotalBytes {
-		meta.TotalBytes = endOffset
-	}
-	if meta.LiveBytes > meta.TotalBytes {
-		meta.TotalBytes = meta.LiveBytes
-	}
-	s.packStats[ref.PackID] = meta
-	s.dirtyPackStats[ref.PackID] = struct{}{}
-}
-
-func (s *StoreActor) removeBlobRef(ref BlobRef) {
-	if ref.PackID == 0 || ref.Length == 0 {
-		return
-	}
-	meta, ok := s.packStats[ref.PackID]
-	if !ok {
-		return
-	}
-	dec := uint64(ref.Length)
-	if dec >= meta.LiveBytes {
-		meta.LiveBytes = 0
-	} else {
-		meta.LiveBytes -= dec
-	}
-	s.packStats[ref.PackID] = meta
-	s.dirtyPackStats[ref.PackID] = struct{}{}
-}
-
-func (s *StoreActor) activePackID() uint64 {
-	if s.blobs != nil {
-		return s.blobs.ActivePackID()
-	}
-	return 0
-}
-
-func (s *StoreActor) appendBlob(blobs *BlobStore, ino uint64, data []byte, pinned *[]uint64) (BlobRef, error) {
-	ref, err := blobs.Append(ino, data)
-	if err != nil {
-		return BlobRef{}, err
-	}
-	s.pinPack(ref.PackID, pinned)
-	return ref, nil
-}
-
-func (s *StoreActor) pinPack(packID uint64, pinned *[]uint64) {
-	if packID == 0 {
-		return
-	}
-	s.inFlightMu.Lock()
-	s.inFlightPacks[packID]++
-	s.inFlightMu.Unlock()
-	if pinned != nil {
-		*pinned = append(*pinned, packID)
-	}
-}
-
-func (s *StoreActor) unpinPacks(packIDs []uint64) {
-	if len(packIDs) == 0 {
-		return
-	}
-	s.inFlightMu.Lock()
-	for _, id := range packIDs {
-		if c := s.inFlightPacks[id]; c <= 1 {
-			delete(s.inFlightPacks, id)
-		} else {
-			s.inFlightPacks[id] = c - 1
-		}
-	}
-	s.inFlightMu.Unlock()
-}
-
-func (s *StoreActor) isPackPinned(packID uint64) bool {
-	s.inFlightMu.Lock()
-	pinned := s.inFlightPacks[packID] > 0
-	s.inFlightMu.Unlock()
-	return pinned
-}
-
-func (s *StoreActor) flushDirtyPackStatsToBatch(batch *pebble.Batch) (deadPacks []uint64, wrote bool) {
-	activeID := s.activePackID()
-	if s.lastActivePackID != 0 && s.lastActivePackID != activeID {
-		if meta, ok := s.packStats[s.lastActivePackID]; ok && meta.LiveBytes == 0 {
-			s.dirtyPackStats[s.lastActivePackID] = struct{}{}
-		}
-	}
-	s.lastActivePackID = activeID
-
-	for packID := range s.dirtyPackStats {
-		meta, ok := s.packStats[packID]
-		if !ok {
-			continue
-		}
-		if meta.LiveBytes == 0 && packID != activeID && !s.isPackPinned(packID) {
-			delete(s.packStats, packID)
-			BatchDeletePackMetaDeferred(batch, packID)
-			deadPacks = append(deadPacks, packID)
-			wrote = true
-			continue
-		}
-		BatchSetPackMetaDeferred(batch, packID, meta)
-		wrote = true
-	}
-	clear(s.dirtyPackStats)
-	return deadPacks, wrote
-}
-
-func (s *StoreActor) addPendingDeadPacks(packIDs []uint64) {
-	if len(packIDs) == 0 {
-		return
-	}
-	s.deadPacksMu.Lock()
-	for _, id := range packIDs {
-		if id != 0 && !slices.Contains(s.pendingDeadPacks, id) {
-			s.pendingDeadPacks = append(s.pendingDeadPacks, id)
-		}
-	}
-	s.deadPacksMu.Unlock()
-}
-
-func (s *StoreActor) takePendingDeadPacks() []uint64 {
-	s.deadPacksMu.Lock()
-	defer s.deadPacksMu.Unlock()
-	if len(s.pendingDeadPacks) == 0 {
-		return nil
-	}
-	out := s.pendingDeadPacks
-	s.pendingDeadPacks = nil
-	return out
-}
-
-func (s *StoreActor) restorePendingDeadPacks(packIDs []uint64) {
-	s.addPendingDeadPacks(packIDs)
-}
-
-func (s *StoreActor) removePacks(packIDs []uint64) {
-	if len(packIDs) == 0 || s.blobs == nil {
-		return
-	}
-	for _, packID := range packIDs {
-		_ = s.blobs.RemovePack(packID)
-	}
 }
 
 func (s *StoreActor) takeDirtyAtime() map[uint64]int64 {
@@ -1227,15 +960,10 @@ func (s *StoreActor) flushOnClose() error {
 			s.walDirty.Store(true)
 		}
 	}
-	toReclaim := s.takePendingDeadPacks()
-	var syncErr error
-	if s.walDirty.Swap(false) || len(toReclaim) > 0 {
-		syncErr = s.db.LogData(nil, pebble.Sync)
+	if applyErr != nil {
+		return applyErr
 	}
-	if applyErr == nil && syncErr == nil {
-		s.removePacks(toReclaim)
-	}
-	return errors.Join(applyErr, syncErr)
+	return s.syncWALAndReclaimDeadPacks()
 }
 
 // Close 执行三步无死锁优雅关闭：

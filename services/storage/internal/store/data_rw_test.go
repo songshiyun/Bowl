@@ -650,11 +650,17 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	require.NoError(t, actor.FlushWAL())
 	require.False(t, actor.Blobs().Exists(1), "FlushWAL 落盘确认后，全死封口包 000001.pack 必须被物理删除")
 
-	// 3. 快照硬链接隔离（LinkAllTo）：将当前存活的 Pack 2 硬链接至快照目录，随后写入 f2 触发滚动至 Pack 3，并 Unlink(f1) 使 Pack 2 全死
-	snapBlobs := store.NewBlobStore(t.TempDir())
-	defer func() { require.NoError(t, snapBlobs.Close()) }()
-	require.NoError(t, actor.Blobs().LinkAllTo(snapBlobs))
-	require.True(t, snapBlobs.Exists(2))
+	// 3. 快照硬链接隔离（LinkAllPacksTo）：将当前存活的 Pack 2 硬链接至快照分支实例，随后写入 f2 触发滚动至 Pack 3，并 Unlink(f1) 使 Pack 2 全死
+	snapActor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-pack-reclaim",
+		BranchID: "snap",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, snapActor.Close()) }()
+	require.NoError(t, actor.LinkAllPacksTo(snapActor))
+	require.True(t, snapActor.Blobs().Exists(2))
 
 	block3Data := bytes.Repeat([]byte{0xC3}, store.BlobSize)
 	_, _, err = actor.Write(f2.Ino, 0, block3Data)
@@ -671,9 +677,9 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	require.False(t, actor.Blobs().Exists(2), "FsyncDir 屏障落盘后，全死封口包 000002.pack 必须被物理删除")
 
 	// 验证快照目录中硬链接的 000002.pack 完好无损且可读出完整历史数据
-	require.True(t, snapBlobs.Exists(2))
+	require.True(t, snapActor.Blobs().Exists(2))
 	snapBuf := make([]byte, store.BlobSize)
-	require.NoError(t, snapBlobs.ReadAt(store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, 0, snapBuf))
+	require.NoError(t, snapActor.Blobs().ReadAt(store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, 0, snapBuf))
 	require.Equal(t, block2Data, snapBuf)
 
 	// 4. Fallocate 打洞触发封口包回收 + CloseDiscard 模拟崩溃后重启清理残留死包

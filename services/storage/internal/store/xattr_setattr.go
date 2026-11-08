@@ -47,10 +47,9 @@ type removeXattrOp struct {
 }
 
 type setAttrOp struct {
-	ino         uint64
-	req         SetAttrReq
-	hasTailSpec bool
-	tailSpec    writeBlockSpec
+	ino       uint64
+	req       SetAttrReq
+	tailSpecs []writeBlockSpec
 
 	// Phase A 校验缓存至 Phase B
 	inode      Inode
@@ -510,16 +509,11 @@ func (s *StoreActor) validateSetAttrCmd(cmd *writeCmd) error {
 			}
 			op.deleteKeys = keys
 
-			if op.hasTailSpec {
-				oldRef, oldOK, err := s.readDataBlobRef(s.batch, op.ino, op.tailSpec.blockIdx)
-				if err != nil {
-					return err
-				}
-				op.tailSpec.oldRef = oldRef
-				op.tailSpec.oldOK = oldOK
+			if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.tailSpecs); err != nil {
+				return err
 			}
 		} else {
-			op.hasTailSpec = false
+			op.tailSpecs = nil
 		}
 	}
 	op.inode = inode
@@ -536,24 +530,7 @@ func (s *StoreActor) mutateSetAttrCmd(cmd *writeCmd) {
 	s.applySetAttrFields(&op.inode, op.req, nowNano, seq)
 
 	if op.req.Size != nil && *op.req.Size < oldSize {
-		for _, entry := range op.deleteKeys {
-			s.removeBlobRef(entry.ref)
-			BatchDeleteDeferred(s.batch, entry.key)
-		}
-		if op.hasTailSpec {
-			if op.tailSpec.keep {
-				if !op.tailSpec.sameRef {
-					if op.tailSpec.oldOK {
-						s.removeBlobRef(op.tailSpec.oldRef)
-					}
-					s.addBlobRef(op.tailSpec.newRef)
-					BatchSetDataDeferred(s.batch, op.ino, op.tailSpec.blockIdx, op.tailSpec.newRef)
-				}
-			} else if op.tailSpec.oldOK {
-				s.removeBlobRef(op.tailSpec.oldRef)
-				BatchDeleteDataDeferred(s.batch, op.ino, op.tailSpec.blockIdx)
-			}
-		}
+		s.applyBlockMutations(op.ino, op.tailSpecs, op.deleteKeys)
 	}
 
 	_ = BatchSetInodeDeferred(s.batch, op.inode)
