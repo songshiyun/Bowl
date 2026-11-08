@@ -60,26 +60,26 @@ func pebbleXattrNames(ctx context.Context, store pebbleReader, ino uint64) (name
 	defer func() { err = errors.Join(err, iter.Close()) }()
 	names = [][]byte{}
 	for iter.First(); iter.Valid(); iter.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
-		_, name, err := pebblekv.DecodeXattrKey(iter.Key())
-		if err != nil {
-			return nil, err
+		_, name, decodeErr := pebblekv.DecodeXattrKey(iter.Key())
+		if decodeErr != nil {
+			return nil, decodeErr
 		}
 		names = append(names, name)
 	}
 	return names, iter.Error()
 }
 
-func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode pebblekv.Inode, name, value []byte, remove bool) error {
+func (m *manager) writePebbleXattr(disk, branch string, store *pebble.DB, inode *pebblekv.Inode, name, value []byte, remove bool) error {
 	return m.withBranchMutationTx(disk, branch, store, nil, nil, func(tx *BranchMutationTx) error {
 		now := tx.Now()
 		inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
 		if err := tx.PutXattr(inode.Ino, name, value, remove); err != nil {
 			return err
 		}
-		if err := tx.PutInode(&inode); err != nil {
+		if err := tx.PutInode(inode); err != nil {
 			return err
 		}
 		return tx.CommitWithoutQuota()
@@ -106,8 +106,8 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
-			return err
+		if liveErr := checkPebbleInodeLive(store, &inode); liveErr != nil {
+			return liveErr
 		}
 		if bytes.HasPrefix(params.Name, []byte("user.")) && !isAllowedUserXattrFileType(inode.Mode) {
 			return ErrPerm
@@ -124,9 +124,9 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 			if params.Flags&XattrReplace != 0 {
 				return ErrNoData
 			}
-			names, err := pebbleXattrNames(ctx, store, params.Ino)
-			if err != nil {
-				return err
+			names, namesErr := pebbleXattrNames(ctx, store, params.Ino)
+			if namesErr != nil {
+				return namesErr
 			}
 			total := len(params.Name) + 1
 			for _, name := range names {
@@ -136,7 +136,7 @@ func (m *manager) SetXattr(ctx context.Context, params SetXattrParams) error {
 				return ErrNoSpace
 			}
 		}
-		return m.writePebbleXattr(disk, branch, store, inode, params.Name, params.Value, false)
+		return m.writePebbleXattr(disk, branch, store, &inode, params.Name, params.Value, false)
 	})
 }
 
@@ -152,23 +152,23 @@ func (m *manager) GetXattr(ctx context.Context, sid *uint64, ino uint64, name []
 		return nil, err
 	}
 	var result []byte
-	err = m.withPebblePointReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
-		inode, err := readPebbleInode(store, ino)
-		if err != nil {
-			return err
+	err = m.withPebblePointReadSession(ctx, &session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+		inode, readErr := readPebbleInode(store, ino)
+		if readErr != nil {
+			return readErr
 		}
-		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
-			return err
+		if liveErr := checkPebbleSessionInodeLive(&session, store, &inode); liveErr != nil {
+			return liveErr
 		}
 		if bytes.HasPrefix(name, []byte("user.")) && !isAllowedUserXattrFileType(inode.Mode) {
 			return ErrNoData
 		}
-		value, closer, err := store.Get(pebblekv.XattrKey(ino, name))
-		if errors.Is(err, pebble.ErrNotFound) {
+		value, closer, getErr := store.Get(pebblekv.XattrKey(ino, name))
+		if errors.Is(getErr, pebble.ErrNotFound) {
 			return ErrNoData
 		}
-		if err != nil {
-			return err
+		if getErr != nil {
+			return getErr
 		}
 		result = append([]byte{}, value...)
 		return closer.Close()
@@ -185,16 +185,17 @@ func (m *manager) ListXattr(ctx context.Context, sid *uint64, ino uint64) ([][]b
 		return nil, err
 	}
 	var names [][]byte
-	err = m.withPebbleReadSession(ctx, session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
-		inode, err := readPebbleInode(store, ino)
-		if err != nil {
-			return err
+	err = m.withPebbleReadSession(ctx, &session, func(store pebbleReader, _ *pebblekv.BlobStore) error {
+		inode, readErr := readPebbleInode(store, ino)
+		if readErr != nil {
+			return readErr
 		}
-		if err := checkPebbleSessionInodeLive(session, store, inode); err != nil {
-			return err
+		if liveErr := checkPebbleSessionInodeLive(&session, store, &inode); liveErr != nil {
+			return liveErr
 		}
-		names, err = pebbleXattrNames(ctx, store, ino)
-		return err
+		var namesErr error
+		names, namesErr = pebbleXattrNames(ctx, store, ino)
+		return namesErr
 	})
 	return names, err
 }
@@ -213,8 +214,8 @@ func (m *manager) RemoveXattr(ctx context.Context, sid *uint64, ino uint64, name
 		if err != nil {
 			return err
 		}
-		if err := checkPebbleInodeLive(store, inode); err != nil {
-			return err
+		if liveErr := checkPebbleInodeLive(store, &inode); liveErr != nil {
+			return liveErr
 		}
 		if bytes.HasPrefix(name, []byte("user.")) && !isAllowedUserXattrFileType(inode.Mode) {
 			return ErrPerm
@@ -226,6 +227,6 @@ func (m *manager) RemoveXattr(ctx context.Context, sid *uint64, ino uint64, name
 		if !exists {
 			return ErrNoData
 		}
-		return m.writePebbleXattr(disk, branch, store, inode, name, nil, true)
+		return m.writePebbleXattr(disk, branch, store, &inode, name, nil, true)
 	})
 }

@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"maps"
 	"strings"
 	"sync"
 )
@@ -13,14 +14,13 @@ type TreeQuotaUsage struct {
 
 // TreeQuota 串行协调一块磁盘的各分支用量。
 type TreeQuota struct {
-	mu              sync.Mutex
-	maxBytes        uint64
-	branches        map[string]map[uint64]uint64
-	inodes          map[uint64]map[string]uint64
-	usage           TreeQuotaUsage
-	committed       TreeQuotaUsage
-	nextReservation uint64
-	closed          bool
+	mu        sync.Mutex
+	maxBytes  uint64
+	branches  map[string]map[uint64]uint64
+	inodes    map[uint64]map[string]uint64
+	usage     TreeQuotaUsage
+	committed TreeQuotaUsage
+	closed    bool
 }
 
 // NewTreeQuota 创建指定容量的配额协调器。
@@ -176,6 +176,7 @@ func (q *TreeQuota) applyLocked(branch string, ino, size uint64, live bool, pers
 	return nil
 }
 
+// ReplaceBranch 用新的块大小映射原子替换指定分支的配额占用。
 func (q *TreeQuota) ReplaceBranch(branch string, sizes map[uint64]uint64) error {
 	return q.replaceBranch(branch, sizes, true)
 }
@@ -210,9 +211,7 @@ func (q *TreeQuota) StageBranchPatch(branch string, dirty map[uint64]bool, chang
 			sizes[ino] = size
 		}
 	}
-	for ino, size := range changed {
-		sizes[ino] = size
-	}
+	maps.Copy(sizes, changed)
 	if err := q.replaceBranchLocked(branch, sizes, enforce); err != nil {
 		q.mu.Unlock()
 		return nil, err

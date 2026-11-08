@@ -10,10 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -25,11 +26,6 @@ import (
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
-
-type overwrite struct {
-	offset int64
-	data   []byte
-}
 
 func overwriteAt(t *testing.T, f *os.File, model []byte, offset int64, data []byte) {
 	t.Helper()
@@ -57,18 +53,18 @@ func TestE2E_ReadWrite(t *testing.T) {
 		filePath := filepath.Join(mountpoint, "large-66m.bin")
 		const totalSize = 66 * 1024 * 1024
 		fullBuf := make([]byte, totalSize)
-		prng := rand.New(rand.NewSource(123456789))
+		prng := rand.NewChaCha8([32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9})
 		_, err := prng.Read(fullBuf)
 		require.NoError(t, err)
 
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		require.NoError(t, err)
 		written, err := f.Write(fullBuf)
 		require.NoError(t, err)
 		require.Equal(t, totalSize, written)
 		require.NoError(t, f.Close())
 
-		f, err = os.OpenFile(filePath, os.O_WRONLY, 0644)
+		f, err = os.OpenFile(filePath, os.O_WRONLY, 0o644)
 		require.NoError(t, err)
 		overwriteAt(t, f, fullBuf, 2*1024*1024, []byte("OVERWRITE_AT_2MIB_BLOCK"))
 		overwriteAt(t, f, fullBuf, 4*1024*1024-10, []byte("STRADDLE_FIRST_4MIB_CHUNK_BOUNDARY_123456"))
@@ -101,20 +97,20 @@ func TestE2E_ReadWrite(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "append-test.log")
-		initF, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0644)
+		initF, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		require.NoError(t, err)
 		require.NoError(t, initF.Close())
 
 		// 2 个并发 O_APPEND 写入者各写一条定长记录：每条记录必须出现且仅出现一次。
 		const firstLine = "W00-S0000-0000000000000000000000000000000000000000"
 		const secondLine = "W01-S0001-0000000000000000000000000000000000000000"
-		first, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0644)
+		first, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0o644)
 		require.NoError(t, err)
-		second, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0644)
+		second, err := os.OpenFile(filePath, os.O_WRONLY|os.O_APPEND, 0o644)
 		require.NoError(t, err)
 		errs := make(chan error, 2)
-		go func() { _, writeErr := first.Write([]byte(firstLine + "\n")); errs <- writeErr }()
-		go func() { _, writeErr := second.Write([]byte(secondLine + "\n")); errs <- writeErr }()
+		go func() { _, writeErr := first.WriteString(firstLine + "\n"); errs <- writeErr }()
+		go func() { _, writeErr := second.WriteString(secondLine + "\n"); errs <- writeErr }()
 		require.NoError(t, errors.Join(<-errs, <-errs))
 		require.NoError(t, first.Close())
 		require.NoError(t, second.Close())
@@ -152,7 +148,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "quota-file.bin")
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0o644)
 		require.NoError(t, err)
 		defer f.Close()
 
@@ -163,7 +159,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 
 		_, writeErr := f.Write(make([]byte, 1024*1024))
 		require.Error(t, writeErr, "超出配额写入必须报错")
-		require.True(t, errors.Is(writeErr, syscall.ENOSPC), "错误必须为 syscall.ENOSPC，实际: %v", writeErr)
+		require.ErrorIs(t, writeErr, syscall.ENOSPC, "错误必须为 syscall.ENOSPC，实际: %v", writeErr)
 		quotaWrite = errors.Unwrap(writeErr).Error()
 	})
 
@@ -177,14 +173,14 @@ func TestE2E_ReadWrite(t *testing.T) {
 
 		filePath := filepath.Join(mountpoint, "mmap-test.bin")
 		const mmapSize = 8192
-		require.NoError(t, os.WriteFile(filePath, bytes.Repeat([]byte{'A'}, mmapSize), 0644))
+		require.NoError(t, os.WriteFile(filePath, bytes.Repeat([]byte{'A'}, mmapSize), 0o644))
 
-		f, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 		require.NoError(t, err)
 		mmapData, err := unix.Mmap(int(f.Fd()), 0, mmapSize, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 		require.NoError(t, err)
-		copy(mmapData[100:111], []byte("MMAP_MUTATE"))
-		copy(mmapData[5000:5011], []byte("MMAP_PAGE2_"))
+		copy(mmapData[100:111], "MMAP_MUTATE")
+		copy(mmapData[5000:5011], "MMAP_PAGE2_")
 		require.NoError(t, unix.Msync(mmapData, unix.MS_SYNC))
 		require.NoError(t, unix.Munmap(mmapData))
 		require.NoError(t, f.Close())
@@ -210,7 +206,7 @@ func TestE2E_ReadWrite(t *testing.T) {
 		require.NoError(t, err, "读取 host bowl 二进制失败")
 
 		execPath := filepath.Join(mountpoint, "bowl-exec")
-		require.NoError(t, os.WriteFile(execPath, binData, 0755), "写入挂载点可执行文件失败")
+		require.NoError(t, os.WriteFile(execPath, binData, 0o755), "写入挂载点可执行文件失败")
 		out, err := exec.Command(execPath, "version").CombinedOutput()
 		require.NoError(t, err, "在挂载点执行二进制失败: %s", string(out))
 		require.Contains(t, string(out), "bowl version", "输出必须包含 bowl version")
@@ -218,9 +214,9 @@ func TestE2E_ReadWrite(t *testing.T) {
 	})
 
 	recordArtifact(t, map[string]string{
-		"large_file_size":   fmt.Sprintf("%d", largeFileSize),
+		"large_file_size":   strconv.FormatInt(largeFileSize, 10),
 		"large_file_sha256": largeFileDigest,
-		"append_records":    fmt.Sprintf("%d", appendRecords),
+		"append_records":    strconv.Itoa(appendRecords),
 		"quota_write":       quotaWrite,
 		"mmap_sync":         mmapSync,
 		"elf_exec":          elfExec,

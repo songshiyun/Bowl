@@ -37,8 +37,8 @@ func readTopologyTarget(store *pebble.DB, parent uint64, name []byte) (pebblekv.
 		return pebblekv.Inode{}, err
 	}
 	entry, decodeErr := pebblekv.DecodeEntry(value)
-	if err := errors.Join(decodeErr, closer.Close()); err != nil {
-		return pebblekv.Inode{}, err
+	if closeErr := errors.Join(decodeErr, closer.Close()); closeErr != nil {
+		return pebblekv.Inode{}, closeErr
 	}
 	inode, err := readPebbleInode(store, entry.Ino)
 	if err != nil {
@@ -115,7 +115,7 @@ func (m *manager) lockEntryInodes(disk, branch string, parentIno uint64, name []
 }
 
 // lockRenameInodes 按 ino 升序锁定源/目标父目录与节点，避免并发目录操作死锁。
-func (m *manager) lockRenameInodes(disk, branch string, params RenameParams, store *pebble.DB) (func(), error) {
+func (m *manager) lockRenameInodes(disk, branch string, params *RenameParams, store *pebble.DB) (func(), error) {
 	for {
 		oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
 		if err != nil {
@@ -142,13 +142,13 @@ func (m *manager) lockRenameInodes(disk, branch string, params RenameParams, sto
 			continue
 		}
 		if newIno != 0 {
-			currentNew, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
-			if err != nil {
+			currentNew, newErr := readTopologyTarget(store, params.NewParentIno, params.NewName)
+			if newErr != nil {
 				unlock()
-				if errors.Is(err, ErrNotFound) {
+				if errors.Is(newErr, ErrNotFound) {
 					continue
 				}
-				return nil, err
+				return nil, newErr
 			}
 			if currentNew.Ino != newIno {
 				unlock()
@@ -181,15 +181,15 @@ func deletePebbleRangePointwise(store *pebble.DB, batch *pebble.Batch, lower, up
 		// batch 会持有该键，必须拷贝迭代器复用的字节切片。
 		keys = append(keys, append([]byte(nil), iter.Key()...))
 	}
-	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
-		return err
+	if joinErr := errors.Join(iter.Error(), iter.Close()); joinErr != nil {
+		return joinErr
 	}
 	if overflow {
 		return batch.DeleteRange(lower, upper, nil)
 	}
 	for _, key := range keys {
-		if err := batch.Delete(key, nil); err != nil {
-			return err
+		if delErr := batch.Delete(key, nil); delErr != nil {
+			return delErr
 		}
 	}
 	return nil
@@ -217,15 +217,15 @@ func deletePebbleDataKeys(store *pebble.DB, batch *pebble.Batch, ino uint64, rem
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
 	}
-	if err := errors.Join(iter.Error(), iter.Close()); err != nil {
-		return err
+	if joinErr := errors.Join(iter.Error(), iter.Close()); joinErr != nil {
+		return joinErr
 	}
 	if overflow {
 		return batch.DeleteRange(lower, upper, nil)
 	}
 	for _, key := range keys {
-		if err := batch.Delete(key, nil); err != nil {
-			return err
+		if delErr := batch.Delete(key, nil); delErr != nil {
+			return delErr
 		}
 	}
 	return nil
@@ -251,6 +251,7 @@ func (m *manager) Rmdir(ctx context.Context, sid *uint64, parentIno uint64, name
 	return m.rmdirPebbleNode(ctx, sid, parentIno, name)
 }
 
+//nolint:gocritic // hugeParam: Manager 接口公开契约由 internal/server 按值调用。
 func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	if params.OldParentIno == 0 || params.OldParentIno > math.MaxInt64 {
 		return ErrInvalidArgument
@@ -273,7 +274,7 @@ func (m *manager) Rename(ctx context.Context, params RenameParams) error {
 	if err := validateEntryName(params.NewName); err != nil {
 		return err
 	}
-	return m.renamePebbleNode(ctx, params.SessionID, params)
+	return m.renamePebbleNode(ctx, params.SessionID, &params)
 }
 
 func (m *manager) unlinkPebbleNode(ctx context.Context, sid *uint64, parentIno uint64, name []byte, openInClient bool) error {
@@ -287,8 +288,8 @@ func (m *manager) rmdirPebbleNode(ctx context.Context, sid *uint64, parentIno ui
 func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno uint64, name []byte, directory, openInClient bool) error {
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		// 先校验父节点类型，保持与 POSIX 一致：非目录优先于名称错误返回。
-		if _, err := readTopologyParent(store, parentIno); err != nil {
-			return err
+		if _, parentErr := readTopologyParent(store, parentIno); parentErr != nil {
+			return parentErr
 		}
 		if len(name) == 0 {
 			return ErrNotFound
@@ -305,13 +306,13 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 		}
 		defer unlockInodes()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
-			parent, err := readTopologyParent(store, parentIno)
-			if err != nil {
-				return err
+			parent, parentErr := readTopologyParent(store, parentIno)
+			if parentErr != nil {
+				return parentErr
 			}
-			child, err := readTopologyTarget(store, parentIno, name)
-			if err != nil {
-				return err
+			child, childErr := readTopologyTarget(store, parentIno, name)
+			if childErr != nil {
+				return childErr
 			}
 			if child.Flags&FlagImmutable != 0 {
 				return ErrPerm
@@ -320,9 +321,9 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 				if child.Mode&S_IFMT != S_IFDIR {
 					return ErrNotDir
 				}
-				empty, err := pebbleDirEmpty(store, child.Ino)
-				if err != nil {
-					return err
+				empty, emptyErr := pebbleDirEmpty(store, child.Ino)
+				if emptyErr != nil {
+					return emptyErr
 				}
 				if !empty {
 					return ErrNotEmpty
@@ -341,15 +342,15 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 			}
 			touchTopologyInode(&child, now, seq)
 			touchCreateParent(&parent, now, seq)
-			if err := tx.DeleteEntry(parentIno, name); err != nil {
-				return err
+			if delErr := tx.DeleteEntry(parentIno, name); delErr != nil {
+				return delErr
 			}
-			if err := tx.PutInode(&parent); err != nil {
-				return err
+			if putErr := tx.PutInode(&parent); putErr != nil {
+				return putErr
 			}
-			removed, err := tx.SetOrphanedOrReclaim(&child, openInClient)
-			if err != nil {
-				return err
+			removed, reclaimErr := tx.SetOrphanedOrReclaim(&child, openInClient)
+			if reclaimErr != nil {
+				return reclaimErr
 			}
 			if removed {
 				return tx.CommitReclaim(child.Ino)
@@ -359,15 +360,15 @@ func (m *manager) removePebbleEntry(ctx context.Context, sid *uint64, parentIno 
 	})
 }
 
-func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params RenameParams) error {
+func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params *RenameParams) error {
 	return m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		// 先校验两个父节点类型，保持与 POSIX 一致：非目录优先于名称错误返回。
-		if _, err := readTopologyParent(store, params.OldParentIno); err != nil {
-			return err
+		if _, parentErr := readTopologyParent(store, params.OldParentIno); parentErr != nil {
+			return parentErr
 		}
 		if params.OldParentIno != params.NewParentIno {
-			if _, err := readTopologyParent(store, params.NewParentIno); err != nil {
-				return err
+			if _, parentErr := readTopologyParent(store, params.NewParentIno); parentErr != nil {
+				return parentErr
 			}
 		}
 		if len(params.OldName) == 0 {
@@ -382,21 +383,21 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 		}
 		defer unlockInodes()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
-			oldParent, err := readTopologyParent(store, params.OldParentIno)
-			if err != nil {
-				return err
+			oldParent, oldParentErr := readTopologyParent(store, params.OldParentIno)
+			if oldParentErr != nil {
+				return oldParentErr
 			}
 			newParent := &oldParent
 			if params.OldParentIno != params.NewParentIno {
-				parent, err := readTopologyParent(store, params.NewParentIno)
-				if err != nil {
-					return err
+				parent, newParentErr := readTopologyParent(store, params.NewParentIno)
+				if newParentErr != nil {
+					return newParentErr
 				}
 				newParent = &parent
 			}
-			oldInode, err := readTopologyTarget(store, params.OldParentIno, params.OldName)
-			if err != nil {
-				return err
+			oldInode, oldInodeErr := readTopologyTarget(store, params.OldParentIno, params.OldName)
+			if oldInodeErr != nil {
+				return oldInodeErr
 			}
 			if params.OldParentIno == params.NewParentIno && bytes.Equal(params.OldName, params.NewName) {
 				if params.Flags == RenameNoReplace {
@@ -407,10 +408,10 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 			if oldInode.Flags&FlagImmutable != 0 {
 				return ErrPerm
 			}
-			newInode, err := readTopologyTarget(store, params.NewParentIno, params.NewName)
-			hasNew := err == nil
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return err
+			newInode, newInodeErr := readTopologyTarget(store, params.NewParentIno, params.NewName)
+			hasNew := newInodeErr == nil
+			if newInodeErr != nil && !errors.Is(newInodeErr, ErrNotFound) {
+				return newInodeErr
 			}
 			if hasNew && newInode.Flags&FlagImmutable != 0 {
 				return ErrPerm
@@ -428,18 +429,18 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 			newIsDir := hasNew && newInode.Mode&S_IFMT == S_IFDIR
 			crossParent := params.OldParentIno != params.NewParentIno
 			if oldIsDir && crossParent {
-				isSub, err := isPebbleSubdirectory(store, params.NewParentIno, oldInode.Ino)
-				if err != nil {
-					return err
+				isSub, subErr := isPebbleSubdirectory(store, params.NewParentIno, oldInode.Ino)
+				if subErr != nil {
+					return subErr
 				}
 				if isSub {
 					return ErrInvalidArgument
 				}
 			}
 			if params.Flags == RenameExchange && newIsDir && crossParent {
-				isSub, err := isPebbleSubdirectory(store, params.OldParentIno, newInode.Ino)
-				if err != nil {
-					return err
+				isSub, subErr := isPebbleSubdirectory(store, params.OldParentIno, newInode.Ino)
+				if subErr != nil {
+					return subErr
 				}
 				if isSub {
 					return ErrInvalidArgument
@@ -459,9 +460,9 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 						return ErrIsDir
 					}
 					if newIsDir {
-						empty, err := pebbleDirEmpty(store, newInode.Ino)
-						if err != nil {
-							return err
+						empty, emptyErr := pebbleDirEmpty(store, newInode.Ino)
+						if emptyErr != nil {
+							return emptyErr
 						}
 						if !empty {
 							return ErrNotEmpty
@@ -474,21 +475,21 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 			}
 			now, seq := tx.Now(), tx.WriteSeq()
 			if params.Flags == RenameExchange {
-				if err := tx.PutEntry(params.OldParentIno, params.OldName, newInode.Ino, newInode.Mode); err != nil {
-					return err
+				if putErr := tx.PutEntry(params.OldParentIno, params.OldName, newInode.Ino, newInode.Mode); putErr != nil {
+					return putErr
 				}
-			} else if err := tx.DeleteEntry(params.OldParentIno, params.OldName); err != nil {
-				return err
+			} else if delErr := tx.DeleteEntry(params.OldParentIno, params.OldName); delErr != nil {
+				return delErr
 			}
-			if err := tx.PutEntry(params.NewParentIno, params.NewName, oldInode.Ino, oldInode.Mode); err != nil {
-				return err
+			if putErr := tx.PutEntry(params.NewParentIno, params.NewName, oldInode.Ino, oldInode.Mode); putErr != nil {
+				return putErr
 			}
 			if oldIsDir && crossParent {
 				oldInode.ParentIno = params.NewParentIno
 			}
 			touchTopologyInode(&oldInode, now, seq)
-			if err := tx.PutInode(&oldInode); err != nil {
-				return err
+			if putErr := tx.PutInode(&oldInode); putErr != nil {
+				return putErr
 			}
 			var removedIno uint64
 			if params.Flags == RenameExchange {
@@ -496,8 +497,8 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 					newInode.ParentIno = params.OldParentIno
 				}
 				touchTopologyInode(&newInode, now, seq)
-				if err := tx.PutInode(&newInode); err != nil {
-					return err
+				if putErr := tx.PutInode(&newInode); putErr != nil {
+					return putErr
 				}
 				if crossParent && oldIsDir != newIsDir {
 					if oldIsDir {
@@ -526,9 +527,9 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 						newInode.Nlink--
 					}
 					touchTopologyInode(&newInode, now, seq)
-					removed, err := tx.SetOrphanedOrReclaim(&newInode, params.TargetOpenInClient)
-					if err != nil {
-						return err
+					removed, reclaimErr := tx.SetOrphanedOrReclaim(&newInode, params.TargetOpenInClient)
+					if reclaimErr != nil {
+						return reclaimErr
 					}
 					if removed {
 						removedIno = newInode.Ino
@@ -536,13 +537,13 @@ func (m *manager) renamePebbleNode(ctx context.Context, sid *uint64, params Rena
 				}
 			}
 			touchCreateParent(&oldParent, now, seq)
-			if err := tx.PutInode(&oldParent); err != nil {
-				return err
+			if putErr := tx.PutInode(&oldParent); putErr != nil {
+				return putErr
 			}
 			if crossParent {
 				touchCreateParent(newParent, now, seq)
-				if err := tx.PutInode(newParent); err != nil {
-					return err
+				if putErr := tx.PutInode(newParent); putErr != nil {
+					return putErr
 				}
 			}
 			if removedIno != 0 {
@@ -582,15 +583,15 @@ func (m *manager) ReclaimOrphan(ctx context.Context, params ReclaimOrphanParams)
 		unlockInode := m.locks.LockInodeWrite(disk, branch, params.Ino)
 		defer unlockInode()
 		return m.withBranchReclaimTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
-			inode, err := readPebbleInode(store, params.Ino)
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return err
+			inode, readErr := readPebbleInode(store, params.Ino)
+			if readErr != nil && !errors.Is(readErr, ErrNotFound) {
+				return readErr
 			}
-			if err == nil && inode.Nlink > 0 {
+			if readErr == nil && inode.Nlink > 0 {
 				return ErrInvalidArgument
 			}
-			if err := tx.ReclaimOrphanInode(params.Ino); err != nil {
-				return err
+			if reclaimErr := tx.ReclaimOrphanInode(params.Ino); reclaimErr != nil {
+				return reclaimErr
 			}
 			return tx.CommitReclaim(params.Ino)
 		})

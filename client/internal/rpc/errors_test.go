@@ -132,7 +132,7 @@ func TestContextWithCancelChan_NormalCancel(t *testing.T) {
 	cancelFn()
 	<-ctx.Done()
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	require.False(t, errors.Is(context.Cause(ctx), ErrKernelInterrupted))
+	require.NotErrorIs(t, context.Cause(ctx), ErrKernelInterrupted)
 }
 
 func TestContextWithCancelChan_NilChan(t *testing.T) {

@@ -115,7 +115,7 @@ func (g *BranchWorkspaceGate) ReloadSession(ctx context.Context, id uint64) erro
 	if err != nil {
 		return err
 	}
-	g.cacheSession(session)
+	g.cacheSession(&session)
 	return nil
 }
 
@@ -142,7 +142,7 @@ func (g *BranchWorkspaceGate) loadSession(ctx context.Context, sid *uint64) (peb
 	if err != nil {
 		return pebbleReadSession{}, err
 	}
-	g.cacheSession(session)
+	g.cacheSession(&session)
 	return session, nil
 }
 
@@ -157,8 +157,8 @@ func (g *BranchWorkspaceGate) peekSession(id uint64) (pebbleReadSession, bool) {
 	return entry.session, ok
 }
 
-func (g *BranchWorkspaceGate) cacheSession(session pebbleReadSession) {
-	if g == nil {
+func (g *BranchWorkspaceGate) cacheSession(session *pebbleReadSession) {
+	if g == nil || session == nil {
 		return
 	}
 	g.mu.Lock()
@@ -178,7 +178,7 @@ func (g *BranchWorkspaceGate) cacheSession(session pebbleReadSession) {
 	if ttl <= 0 {
 		ttl = defaultSessionCacheTTL
 	}
-	g.sessionCache[session.id] = pebbleSessionCacheEntry{session: session, fresh: now.Add(ttl)}
+	g.sessionCache[session.id] = pebbleSessionCacheEntry{session: *session, fresh: now.Add(ttl)}
 }
 
 // InvalidateSession 驱逐单个会话的内存缓存条目。
@@ -219,7 +219,7 @@ func (g *BranchWorkspaceGate) InvalidateDiskSessions(disk string) {
 	}
 }
 
-func samePebbleSession(a, b pebbleReadSession) bool {
+func samePebbleSession(a, b *pebbleReadSession) bool {
 	return a.id == b.id && a.diskID == b.diskID && a.branch == b.branch && a.readOnly == b.readOnly &&
 		a.commitID == b.commitID && a.createdAt.Equal(b.createdAt)
 }
@@ -239,10 +239,11 @@ func (g *BranchWorkspaceGate) requireSession(ctx context.Context, sid *uint64) (
 //  1. 只读会话直接打开不可变 Commit 句柄并自动关闭；
 //  2. 可写会话获取目标分支共享读锁，在锁内二次校验 samePebbleSession 防止等待锁期间会话失效或缓存漂移，
 //     随后打开常驻 Branch 句柄并在回调结束后自动关闭。
-func (g *BranchWorkspaceGate) withOpenSession(session pebbleReadSession, fn func(disk string, store *pebble.DB, blobs *pebblekv.BlobStore) error) (err error) {
+func (g *BranchWorkspaceGate) withOpenSession(session *pebbleReadSession, fn func(disk string, store *pebble.DB, blobs *pebblekv.BlobStore) error) (err error) {
 	disk := session.diskID.String()
 	if session.readOnly {
-		commit, err := g.pebble.OpenCommit(disk, session.commitID.String())
+		var commit *pebblekv.Commit
+		commit, err = g.pebble.OpenCommit(disk, session.commitID.String())
 		if err != nil {
 			return err
 		}
@@ -253,7 +254,7 @@ func (g *BranchWorkspaceGate) withOpenSession(session pebbleReadSession, fn func
 	unlock := g.locks.LockBranchRead(disk, session.branch)
 	defer unlock()
 	// 锁内复查会话缓存：CloseSession、过期清扫或会话重建替换后立即拒绝请求。
-	if current, ok := g.peekSession(session.id); !ok || !samePebbleSession(current, session) {
+	if current, ok := g.peekSession(session.id); !ok || !samePebbleSession(&current, session) {
 		return ErrBadFileHandle
 	}
 	branch, err := g.pebble.OpenBranch(disk, session.branch)
@@ -265,7 +266,7 @@ func (g *BranchWorkspaceGate) withOpenSession(session pebbleReadSession, fn func
 }
 
 // withSnapshotReadSession 在分支读锁内用短命快照执行多键读取，保证 Inode 与 Blob 视图一致。
-func (g *BranchWorkspaceGate) withSnapshotReadSession(_ context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
+func (g *BranchWorkspaceGate) withSnapshotReadSession(_ context.Context, session *pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
 	return g.withOpenSession(session, func(_ string, store *pebble.DB, blobs *pebblekv.BlobStore) (err error) {
 		if session.readOnly {
 			return fn(store, blobs)
@@ -277,14 +278,14 @@ func (g *BranchWorkspaceGate) withSnapshotReadSession(_ context.Context, session
 }
 
 // withPointReadSession 直接读取分支实例，单键点查不创建 Pebble Snapshot。
-func (g *BranchWorkspaceGate) withPointReadSession(_ context.Context, session pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
+func (g *BranchWorkspaceGate) withPointReadSession(_ context.Context, session *pebbleReadSession, fn func(pebbleReader, *pebblekv.BlobStore) error) error {
 	return g.withOpenSession(session, func(_ string, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		return fn(store, blobs)
 	})
 }
 
 // withWriteSession 在分支共享读锁内执行显式持久化屏障（如 Fsync / FsyncDir）。
-func (g *BranchWorkspaceGate) withWriteSession(_ context.Context, session pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) error {
+func (g *BranchWorkspaceGate) withWriteSession(_ context.Context, session *pebbleReadSession, fn func(*pebble.DB, *pebblekv.BlobStore) error) error {
 	return g.withOpenSession(session, func(_ string, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		return fn(store, blobs)
 	})
@@ -309,7 +310,8 @@ func (g *BranchWorkspaceGate) withWritableBranchFor(
 		return ErrPerm
 	}
 	if check != nil {
-		if err := check(session.diskID, session.branch); err != nil {
+		err = check(session.diskID, session.branch)
+		if err != nil {
 			return err
 		}
 	}
@@ -320,7 +322,7 @@ func (g *BranchWorkspaceGate) withWritableBranchFor(
 			return err
 		}
 	}
-	return g.withOpenSession(session, func(disk string, store *pebble.DB, blobs *pebblekv.BlobStore) error {
+	return g.withOpenSession(&session, func(disk string, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		if err := fn(disk, session.branch, quota, store, blobs); err != nil {
 			return err
 		}
@@ -330,16 +332,16 @@ func (g *BranchWorkspaceGate) withWritableBranchFor(
 }
 
 // RecordAtime 在可写会话读热路径登记内存脏访问时间。
-func (g *BranchWorkspaceGate) RecordAtime(session pebbleReadSession, inode pebblekv.Inode, now time.Time) {
-	if g == nil || session.readOnly || g.atimes == nil {
+func (g *BranchWorkspaceGate) RecordAtime(session *pebbleReadSession, inode *pebblekv.Inode, now time.Time) {
+	if g == nil || session == nil || session.readOnly || g.atimes == nil {
 		return
 	}
 	g.atimes.MarkDirty(session.diskID.String(), session.branch, inode, now)
 }
 
 // OverlayAtime 将内存脏访问时间叠加到可写会话读取的节点属性上。
-func (g *BranchWorkspaceGate) OverlayAtime(session pebbleReadSession, inode *pebblekv.Inode) {
-	if g == nil || session.readOnly || g.atimes == nil {
+func (g *BranchWorkspaceGate) OverlayAtime(session *pebbleReadSession, inode *pebblekv.Inode) {
+	if g == nil || session == nil || session.readOnly || g.atimes == nil {
 		return
 	}
 	g.atimes.Overlay(session.diskID.String(), session.branch, inode)

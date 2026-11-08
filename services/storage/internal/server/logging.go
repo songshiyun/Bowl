@@ -27,9 +27,10 @@ func quietExpectedNotFound(logger *slog.Logger) *slog.Logger {
 	return slog.New(expectedNotFoundHandler{Handler: logger.Handler()})
 }
 
+//nolint:gocritic // hugeParam: 标准库 slog.Handler 接口契约要求按值接收 slog.Record。
 func (h expectedNotFoundHandler) Handle(ctx context.Context, record slog.Record) error {
-	if record.Level >= slog.LevelWarn && recordCode(record) == connect.CodeNotFound.String() {
-		if !h.Handler.Enabled(ctx, slog.LevelDebug) {
+	if record.Level >= slog.LevelWarn && recordCode(&record) == connect.CodeNotFound.String() {
+		if !h.Enabled(ctx, slog.LevelDebug) {
 			return nil
 		}
 		record.Level = slog.LevelDebug
@@ -46,7 +47,7 @@ func (h expectedNotFoundHandler) WithGroup(name string) slog.Handler {
 }
 
 // recordCode 提取访问日志中的 Connect 状态码属性。
-func recordCode(record slog.Record) string {
+func recordCode(record *slog.Record) string {
 	code := ""
 	record.Attrs(func(attr slog.Attr) bool {
 		if attr.Key == slogx.DefaultCodeKey {

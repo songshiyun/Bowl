@@ -1,3 +1,4 @@
+// Package main 启动 Bowl Storage 服务进程。
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 
 	"github.com/starsrc/Aether/pkg/observability/slogx"
 	"github.com/starsrc/Aether/pkg/observability/telemetry"
+
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/meta"
@@ -20,12 +22,13 @@ import (
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	if err := run(ctx); err != nil {
+		stop()
 		slog.Error("service terminated with error", "error", err)
 		os.Exit(1)
 	}
+	stop()
 }
 
 func run(ctx context.Context, opts ...fx.Option) error {

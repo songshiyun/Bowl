@@ -61,7 +61,7 @@ func casRaceHasSingleWinner(first, second error) bool {
 	return firstWon || secondWon
 }
 
-func renewSessionsConcurrently(t *testing.T, q *db.Queries, ctx context.Context, diskID pgtype.UUID) (error, error) {
+func renewSessionsConcurrently(t *testing.T, q *db.Queries, ctx context.Context, diskID pgtype.UUID) (firstErr, secondErr error) {
 	t.Helper()
 	start := make(chan struct{})
 	errs := make(chan error, 2)

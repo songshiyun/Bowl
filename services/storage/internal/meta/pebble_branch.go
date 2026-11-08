@@ -18,22 +18,22 @@ import (
 func (m *manager) sweepBranchOrphans(ctx context.Context, q db.Querier, diskID pgtype.UUID, branchName string) (err error) {
 	disk := diskID.String()
 	path := filepath.Join(m.storageRoot, "disks", disk, "branches", branchName)
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
 		return nil
-	} else if err != nil {
-		return err
+	} else if statErr != nil {
+		return statErr
 	}
 	quota, ok := m.lookupTreeQuota(disk)
 	if !ok {
-		row, err := q.GetDisk(ctx, diskID)
-		if err != nil {
-			return err
+		row, getErr := q.GetDisk(ctx, diskID)
+		if getErr != nil {
+			return getErr
 		}
-		control, err := q.GetDiskControlPlane(ctx, diskID)
-		if err != nil {
-			return err
+		control, ctrlErr := q.GetDiskControlPlane(ctx, diskID)
+		if ctrlErr != nil {
+			return ctrlErr
 		}
-		if quota, err = m.loadTreeQuota(ctx, row, control); err != nil {
+		if quota, err = m.loadTreeQuota(ctx, &row, control); err != nil {
 			return err
 		}
 	}

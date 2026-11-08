@@ -31,7 +31,7 @@ func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 
 	// 2. 创建一级子目录 dir1 并验证父目录 nlink + 1
 	dir1 := filepath.Join(mountpoint, "dir1")
-	err = os.Mkdir(dir1, 0755)
+	err = os.Mkdir(dir1, 0o755)
 	require.NoError(t, err, "创建一级子目录必须成功")
 
 	var rootStatAfter unix.Stat_t
@@ -40,14 +40,14 @@ func TestE2E_Topology_MkdirRmdir(t *testing.T) {
 	require.Equal(t, initNlink+1, rootStatAfter.Nlink, "根目录 nlink 应因创建子目录而递增 1")
 
 	// 3. 验证创建重复目录返回 EEXIST
-	err = os.Mkdir(dir1, 0755)
+	err = os.Mkdir(dir1, 0o755)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EEXIST, "创建已存在目录必须返回 EEXIST")
 
 	// 4. 多层嵌套目录创建 dir1/dir2/dir3
 	dir2 := filepath.Join(dir1, "dir2")
 	dir3 := filepath.Join(dir2, "dir3")
-	err = os.MkdirAll(dir3, 0755)
+	err = os.MkdirAll(dir3, 0o755)
 	require.NoError(t, err, "os.MkdirAll 多层嵌套创建必须成功")
 
 	// 5. 移除非空目录 dir1 必须返回 ENOTEMPTY
@@ -108,7 +108,7 @@ func TestE2E_Topology_SgidInheritance(t *testing.T) {
 
 	// 2. 通过 FUSE 挂载点在父目录下创建子目录 child
 	childDir := filepath.Join(parentDir, "child")
-	err = os.Mkdir(childDir, 0755)
+	err = os.Mkdir(childDir, 0o755)
 	require.NoError(t, err, "在 SGID 父目录下创建子目录必须成功")
 
 	// 3. 校验子目录自动继承父目录 GID 与 S_ISGID
@@ -141,7 +141,7 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 	fifoPath := filepath.Join(mountpoint, "test_fifo")
 
 	// 1. 创建命名管道 FIFO
-	err := unix.Mkfifo(fifoPath, 0640)
+	err := unix.Mkfifo(fifoPath, 0o640)
 	require.NoError(t, err, "创建 FIFO 命名管道必须成功")
 
 	// 2. stat 校验节点类型为 FIFO
@@ -149,10 +149,10 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 	err = unix.Stat(fifoPath, &stat)
 	require.NoError(t, err)
 	require.Equal(t, uint32(syscall.S_IFIFO), stat.Mode&syscall.S_IFMT, "节点类型必须为 S_IFIFO")
-	require.Equal(t, uint32(0640), stat.Mode&0777, "权限位必须匹配 0640")
+	require.Equal(t, uint32(0o640), stat.Mode&0o777, "权限位必须匹配 0640")
 
 	// 3. 重复创建相同 FIFO 返回 EEXIST
-	err = unix.Mkfifo(fifoPath, 0640)
+	err = unix.Mkfifo(fifoPath, 0o640)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EEXIST, "重复创建 FIFO 必须返回 EEXIST")
 
@@ -163,7 +163,7 @@ func TestE2E_Topology_MknodUnlink(t *testing.T) {
 
 	// 5. 对目录调用 Unlink 返回 EISDIR
 	subDir := filepath.Join(mountpoint, "test_dir")
-	require.NoError(t, os.Mkdir(subDir, 0755))
+	require.NoError(t, os.Mkdir(subDir, 0o755))
 	err = syscall.Unlink(subDir)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EISDIR, "对目录执行 Unlink 必须返回 EISDIR")
@@ -202,10 +202,10 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	waitForMount(t, initMountpoint, "RW挂载失败: stdout=%s stderr=%s", stdoutRW.String(), stderrRW.String())
 
 	existDir := filepath.Join(initMountpoint, "exist_dir")
-	require.NoError(t, os.Mkdir(existDir, 0755))
+	require.NoError(t, os.Mkdir(existDir, 0o755))
 
 	existFifo := filepath.Join(initMountpoint, "exist_fifo")
-	require.NoError(t, unix.Mkfifo(existFifo, 0644))
+	require.NoError(t, unix.Mkfifo(existFifo, 0o644))
 
 	commitMain(t, client, disk.GetDiskId())
 	stopBowlMountGracefully(t, cmdRW, initMountpoint)
@@ -217,12 +217,12 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	defer stopBowlMountGracefully(t, cmdRO, roMountpoint)
 
 	// 3. 验证 Mkdir 返回 EROFS
-	err := os.Mkdir(filepath.Join(roMountpoint, "new_dir"), 0755)
+	err := os.Mkdir(filepath.Join(roMountpoint, "new_dir"), 0o755)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EROFS, "只读挂载下 Mkdir 必须返回 EROFS")
 
 	// 4. 验证 Mknod (Mkfifo) 返回 EROFS
-	err = unix.Mkfifo(filepath.Join(roMountpoint, "new_fifo"), 0644)
+	err = unix.Mkfifo(filepath.Join(roMountpoint, "new_fifo"), 0o644)
 	require.Error(t, err)
 	require.ErrorIs(t, err, syscall.EROFS, "只读挂载下 Mknod 必须返回 EROFS")
 

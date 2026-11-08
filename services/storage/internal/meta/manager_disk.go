@@ -32,7 +32,7 @@ func validateDiskName(name string) error {
 }
 
 // toDomainDisk 将数据库持久层 db.GetDiskRow 行模型转换为领域层 Disk 实体。
-func toDomainDisk(row db.GetDiskRow) *Disk {
+func toDomainDisk(row *db.GetDiskRow) *Disk {
 	var diskID string
 	if row.DiskID.Valid {
 		diskID = row.DiskID.String()
@@ -74,19 +74,22 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	var created db.GetDiskRow
 	var branches []byte
 	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		row, err := q.CreateDisk(ctx, db.CreateDiskParams{DiskID: pgID, Name: params.Name, MaxBytes: int64(params.MaxBytes)})
-		if err != nil {
-			return fmt.Errorf("创建磁盘: %w", err)
+		row, createErr := q.CreateDisk(ctx, db.CreateDiskParams{DiskID: pgID, Name: params.Name, MaxBytes: int64(params.MaxBytes)})
+		if createErr != nil {
+			return fmt.Errorf("创建磁盘: %w", createErr)
 		}
 		created = db.GetDiskRow(row)
-		branches, err = m.registerDiskStorage(ctx, q, created, commitID)
-		return err
+		var regErr error
+		branches, regErr = m.registerDiskStorage(ctx, q, &created, commitID)
+		return regErr
 	})
-	if err = swap.Finalize(err); err != nil {
+	err = swap.Finalize(err)
+	if err != nil {
 		return nil, err
 	}
-	disk := toDomainDisk(created)
-	if err := setDiskBranches(disk, branches); err != nil {
+	disk := toDomainDisk(&created)
+	err = setDiskBranches(disk, branches)
+	if err != nil {
 		return nil, err
 	}
 	disk.UsedInodes = 1
@@ -94,7 +97,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	control := db.GetDiskControlPlaneRow{
 		DiskID: created.DiskID, StorageDir: filepath.Join(m.storageRoot, "disks", id.String()), Branches: branches,
 	}
-	if _, err := m.loadTreeQuota(ctx, created, control); err != nil {
+	if _, err = m.loadTreeQuota(ctx, &created, control); err != nil {
 		return nil, err
 	}
 	return disk, nil
@@ -126,7 +129,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 		}
 		return nil, err
 	}
-	return m.diskWithBranches(ctx, row)
+	return m.diskWithBranches(ctx, &row)
 }
 
 // diskPageCursor 定义 ListDisks 游标令牌的序列化载荷。
@@ -156,7 +159,7 @@ func decodeDiskPageCursor(token string) (pgtype.Timestamptz, pgtype.UUID, error)
 	var cursor diskPageCursor
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cursor); err != nil || dec.More() || cursor.CreatedAtMicro == nil || cursor.DiskID == "" {
+	if err = dec.Decode(&cursor); err != nil || dec.More() || cursor.CreatedAtMicro == nil || cursor.DiskID == "" {
 		return pgtype.Timestamptz{}, pgtype.UUID{}, fmt.Errorf("%w: malformed page_token payload", ErrInvalidArgument)
 	}
 	pgID, err := parseDiskID(cursor.DiskID)
@@ -218,9 +221,9 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	disks := make([]*Disk, 0, len(rows))
 	for i := range rows {
 		r := db.GetDiskRow(rows[i])
-		disk, err := m.diskWithBranches(ctx, r)
-		if err != nil {
-			return nil, err
+		disk, branchErr := m.diskWithBranches(ctx, &r)
+		if branchErr != nil {
+			return nil, branchErr
 		}
 		disks = append(disks, disk)
 	}
@@ -242,7 +245,8 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil, ErrInvalidArgument
 	}
 	if params.Name != nil {
-		if err := validateDiskName(*params.Name); err != nil {
+		err = validateDiskName(*params.Name)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -257,13 +261,13 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	}
 	var updated db.GetDiskRow
 	err = tree.WithShrinkCheck(func() (uint64, error) {
-		err := m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-			current, err := q.GetDiskForUpdate(ctx, id)
-			if errors.Is(err, pgx.ErrNoRows) {
+		txErr := m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+			current, getErr := q.GetDiskForUpdate(ctx, id)
+			if errors.Is(getErr, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
-			if err != nil {
-				return err
+			if getErr != nil {
+				return getErr
 			}
 			name, limit := current.Name, uint64(current.MaxBytes)
 			if params.Name != nil {
@@ -272,25 +276,25 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 			if params.MaxBytes != nil {
 				limit = *params.MaxBytes
 			}
-			if err := tree.CheckLimit(limit); err != nil {
-				return err
+			if limitErr := tree.CheckLimit(limit); limitErr != nil {
+				return limitErr
 			}
-			row, err := q.UpdateDisk(ctx, db.UpdateDiskParams{DiskID: id, Name: name, MaxBytes: int64(limit)})
-			if err != nil {
-				return err
+			row, updateErr := q.UpdateDisk(ctx, db.UpdateDiskParams{DiskID: id, Name: name, MaxBytes: int64(limit)})
+			if updateErr != nil {
+				return updateErr
 			}
 			updated = db.GetDiskRow(row)
 			return nil
 		})
-		if err != nil {
-			return 0, err
+		if txErr != nil {
+			return 0, txErr
 		}
 		return uint64(updated.MaxBytes), nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return m.diskWithBranches(ctx, updated)
+	return m.diskWithBranches(ctx, &updated)
 }
 
 // DeleteDisk 在没有活跃会话时删除控制面记录和磁盘存储。
@@ -319,23 +323,23 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	}
 	m.treeQuotaMu.Unlock()
 	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		_, err := q.GetDiskForUpdate(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
+		_, getErr := q.GetDiskForUpdate(ctx, id)
+		if errors.Is(getErr, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		if err != nil {
-			return err
+		if getErr != nil {
+			return getErr
 		}
-		sessions, err := q.ListActiveSessionIDsByDisk(ctx, id)
-		if err != nil {
-			return err
+		sessions, listErr := q.ListActiveSessionIDsByDisk(ctx, id)
+		if listErr != nil {
+			return listErr
 		}
 		if len(sessions) > 0 {
 			return ErrBusy
 		}
-		count, err := q.DeleteDisk(ctx, id)
-		if err != nil {
-			return err
+		count, delErr := q.DeleteDisk(ctx, id)
+		if delErr != nil {
+			return delErr
 		}
 		if count == 0 {
 			return ErrNotFound

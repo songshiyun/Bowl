@@ -19,30 +19,30 @@ func copyMergeSidecarRange(batch *pebble.Batch, source *pebble.DB, lower, upper,
 	defer func() { err = errors.Join(err, iter.Close()) }()
 	for iter.First(); iter.Valid(); iter.Next() {
 		key := append(append([]byte(nil), targetPrefix...), iter.Key()[len(lower):]...)
-		if err := batch.Set(key, iter.Value(), nil); err != nil {
-			return err
+		if setErr := batch.Set(key, iter.Value(), nil); setErr != nil {
+			return setErr
 		}
 	}
 	return iter.Error()
 }
 
-func mergeSidecarParent(store *pebble.DB, path string) (uint64, string, error) {
+func mergeSidecarParent(store *pebble.DB, path string) (parent uint64, name string, err error) {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(parts) == 0 || parts[len(parts)-1] == "" {
 		return 0, "", ErrInvalidArgument
 	}
-	parent := uint64(RootIno)
+	parent = RootIno
 	for _, part := range parts[:len(parts)-1] {
-		value, closer, err := store.Get(pebblekv.EntryKey(parent, []byte(part)))
-		if errors.Is(err, pebble.ErrNotFound) {
+		value, closer, getErr := store.Get(pebblekv.EntryKey(parent, []byte(part)))
+		if errors.Is(getErr, pebble.ErrNotFound) {
 			return 0, "", ErrNotFound
 		}
-		if err != nil {
-			return 0, "", err
+		if getErr != nil {
+			return 0, "", getErr
 		}
 		entry, decodeErr := pebblekv.DecodeEntry(value)
-		if err := errors.Join(decodeErr, closer.Close()); err != nil {
-			return 0, "", err
+		if closeErr := errors.Join(decodeErr, closer.Close()); closeErr != nil {
+			return 0, "", closeErr
 		}
 		if entry.Mode&S_IFMT != S_IFDIR {
 			return 0, "", ErrNotDir
@@ -120,9 +120,9 @@ func (m *manager) materializeMergeConflicts(disk string, stage *pebble.DB, store
 			if version.attr == nil {
 				continue
 			}
-			node, err := getMergeInode(stores[version.side], version.attr.Ino)
-			if err != nil {
-				return nil, nil, err
+			node, getErr := getMergeInode(stores[version.side], version.attr.Ino)
+			if getErr != nil {
+				return nil, nil, getErr
 			}
 			if !node.exists || node.value.Mode&S_IFMT != S_IFREG && node.value.Mode&S_IFMT != S_IFLNK {
 				continue
@@ -134,49 +134,49 @@ func (m *manager) materializeMergeConflicts(disk string, stage *pebble.DB, store
 				}
 				conflict.Path = path
 			}
-			parent, name, err := mergeSidecarParent(stage, path)
-			if err != nil {
-				return nil, nil, err
+			parent, name, parentErr := mergeSidecarParent(stage, path)
+			if parentErr != nil {
+				return nil, nil, parentErr
 			}
 			name += version.suffix
-			if err := validateEntryName([]byte(name)); err != nil {
-				return nil, nil, err
+			if valErr := validateEntryName([]byte(name)); valErr != nil {
+				return nil, nil, valErr
 			}
 			sidecarPath := path + version.suffix
 			if created[sidecarPath] {
 				continue
 			}
-			if err := checkCreateEntry(stage, parent, []byte(name)); err != nil {
-				return nil, nil, err
+			if entryErr := checkCreateEntry(stage, parent, []byte(name)); entryErr != nil {
+				return nil, nil, entryErr
 			}
 			if stat.Inodes == math.MaxUint64 || node.value.Size > math.MaxUint64-stat.LogicalBytes {
 				return nil, nil, ErrNoSpace
 			}
-			ino, err := m.pebble.AllocateInode(disk)
-			if err != nil {
-				return nil, nil, err
+			ino, allocErr := m.pebble.AllocateInode(disk)
+			if allocErr != nil {
+				return nil, nil, allocErr
 			}
 			original := node.value.Ino
 			node.value.Ino, node.value.ParentIno, node.value.Nlink, node.value.Generation, node.value.WriteSeq = ino, parent, 1, 1, sequence
-			if err := setCreateInode(batch, node.value); err != nil {
-				return nil, nil, err
+			if setErr := setCreateInode(batch, &node.value); setErr != nil {
+				return nil, nil, setErr
 			}
 			lower, upper := pebblekv.XattrRange(original)
 			target, _ := pebblekv.XattrRange(ino)
-			if err := copyMergeSidecarRange(batch, stores[version.side], lower, upper, target); err != nil {
-				return nil, nil, err
+			if copyErr := copyMergeSidecarRange(batch, stores[version.side], lower, upper, target); copyErr != nil {
+				return nil, nil, copyErr
 			}
 			lower, upper = pebblekv.DataRange(original, 0)
 			target, _ = pebblekv.DataRange(ino, 0)
 			lower, target = lower[:len(lower)-8], target[:len(target)-8]
-			if err := copyMergeSidecarRange(batch, stores[version.side], lower, upper, target); err != nil {
-				return nil, nil, err
+			if copyErr := copyMergeSidecarRange(batch, stores[version.side], lower, upper, target); copyErr != nil {
+				return nil, nil, copyErr
 			}
-			if err := batch.Set(pebblekv.EntryKey(parent, []byte(name)), pebblekv.EncodeEntry(pebblekv.Entry{Ino: ino, Mode: node.value.Mode}), nil); err != nil {
-				return nil, nil, err
+			if setErr := batch.Set(pebblekv.EntryKey(parent, []byte(name)), pebblekv.EncodeEntry(pebblekv.Entry{Ino: ino, Mode: node.value.Mode}), nil); setErr != nil {
+				return nil, nil, setErr
 			}
-			if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
-				return nil, nil, err
+			if setErr := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); setErr != nil {
+				return nil, nil, setErr
 			}
 			stat.Inodes++
 			stat.LogicalBytes += node.value.Size
@@ -185,23 +185,23 @@ func (m *manager) materializeMergeConflicts(disk string, stage *pebble.DB, store
 		}
 	}
 	for ino := range parents {
-		parent, err := readCreateInode(stage, ino)
-		if err != nil {
-			return nil, nil, err
+		parent, readErr := readCreateInode(stage, ino)
+		if readErr != nil {
+			return nil, nil, readErr
 		}
 		parent.WriteSeq = sequence
-		if err := setCreateInode(batch, parent); err != nil {
-			return nil, nil, err
+		if setErr := setCreateInode(batch, &parent); setErr != nil {
+			return nil, nil, setErr
 		}
-		if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
-			return nil, nil, err
+		if setErr := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); setErr != nil {
+			return nil, nil, setErr
 		}
 	}
-	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-		return nil, nil, err
+	if setErr := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); setErr != nil {
+		return nil, nil, setErr
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return nil, nil, err
+	if commitErr := batch.Commit(pebble.Sync); commitErr != nil {
+		return nil, nil, commitErr
 	}
 	return paths, inodes, nil
 }

@@ -51,7 +51,7 @@ func prepareFlagFile(t *testing.T, client storagev1connect.StorageServiceClient,
 	require.NoError(t, err)
 }
 
-func requireIoctlFlagCase(t *testing.T, client storagev1connect.StorageServiceClient, endpoint, name string, proto uint32, vfs int, afterOpen func(*testing.T, string)) {
+func requireIoctlFlagCase(t *testing.T, client storagev1connect.StorageServiceClient, endpoint, _ string, proto uint32, vfs int, afterOpen func(*testing.T, string)) {
 	t.Helper()
 	disk := createTestDisk(t, client)
 	prepareFlagFile(t, client, disk.GetDiskId(), "target.txt", proto)

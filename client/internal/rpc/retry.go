@@ -4,15 +4,16 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const (
@@ -96,8 +97,7 @@ func IsIdempotentProcedure(procedure string) bool {
 // hasErrorInfo 检查错误是否解包出非空业务 ErrorInfo。
 // 任何携带业务 ErrorInfo 的错误表明服务端已明确处理并拒绝，必须绝不重试。
 func hasErrorInfo(err error) bool {
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 		for _, detail := range connectErr.Details() {
 			msg, detailErr := detail.Value()
 			if detailErr != nil {
@@ -140,15 +140,13 @@ func isDialError(err error) bool {
 		return true
 	}
 
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok {
 		if opErr.Op == "dial" {
 			return true
 		}
 	}
 
-	var sysErr *os.SyscallError
-	if errors.As(err, &sysErr) {
+	if sysErr, ok := errors.AsType[*os.SyscallError](err); ok {
 		if sysErr.Syscall == "connect" {
 			return true
 		}
@@ -171,11 +169,7 @@ func isTransportError(err error) bool {
 	}
 
 	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &opErr)
 }
 
 // shouldRetry 根据 procedure 与捕获的错误决定是否允许重试。
@@ -323,10 +317,7 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 				}
 
 				// 指数退避增长并钳位在 MaxInterval
-				interval = time.Duration(float64(interval) * config.Multiplier)
-				if interval > config.MaxInterval {
-					interval = config.MaxInterval
-				}
+				interval = min(time.Duration(float64(interval)*config.Multiplier), config.MaxInterval)
 			}
 		}
 	}

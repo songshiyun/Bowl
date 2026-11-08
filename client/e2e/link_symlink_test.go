@@ -27,7 +27,7 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 
 	// 1. 创建常规目标文件用于链接验证
 	regPath := filepath.Join(mountpoint, "real_file.txt")
-	err := unix.Mknod(regPath, syscall.S_IFREG|0644, 0)
+	err := unix.Mknod(regPath, syscall.S_IFREG|0o644, 0)
 	require.NoError(t, err, "mknod 普通文件失败")
 
 	var regStat unix.Stat_t
@@ -44,7 +44,7 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 	err = unix.Lstat(symRel, &relLstat)
 	require.NoError(t, err)
 	require.Equal(t, uint32(syscall.S_IFLNK), relLstat.Mode&syscall.S_IFMT, "文件类型必须为 S_IFLNK")
-	require.Equal(t, uint32(0777), relLstat.Mode&0777, "符号链接权限位必须为 0777")
+	require.Equal(t, uint32(0o777), relLstat.Mode&0o777, "符号链接权限位必须为 0777")
 
 	// Readlink 验证相对路径目标
 	targetRel, err := os.Readlink(symRel)
@@ -85,7 +85,7 @@ func TestE2E_Symlink_Readlink(t *testing.T) {
 	targetLong, err := os.Readlink(symLong)
 	require.NoError(t, err)
 	require.Equal(t, longTarget, targetLong, "4095 字节长路径符号链接内容必须无损返回")
-	require.Equal(t, 4095, len(targetLong))
+	require.Len(t, targetLong, 4095)
 
 	// 5. 验证包含非 UTF-8 任意非空字节的目标路径（无损传输）
 	rawBytes := []byte{'r', 'a', 'w', '_', 0xff, 0xfe, 0x80, '_', 'p', 'a', 't', 'h'}
@@ -130,7 +130,7 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 
 	// 1. 创建源常规文件
 	origPath := filepath.Join(mountpoint, "orig_file.txt")
-	err := unix.Mknod(origPath, syscall.S_IFREG|0644, 0)
+	err := unix.Mknod(origPath, syscall.S_IFREG|0o644, 0)
 	require.NoError(t, err, "创建初始源文件失败")
 
 	var origStat unix.Stat_t
@@ -157,7 +157,7 @@ func TestE2E_Link_Hardlink(t *testing.T) {
 
 	// 3. 在非根子目录下创建第 2 个硬链接，验证跨目录同盘硬链接创建与 nlink 递增为 3
 	subDir := filepath.Join(mountpoint, "subdir")
-	err = os.Mkdir(subDir, 0755)
+	err = os.Mkdir(subDir, 0o755)
 	require.NoError(t, err)
 
 	link2 := filepath.Join(subDir, "link2.txt")

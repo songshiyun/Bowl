@@ -24,17 +24,17 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 	if err != nil {
 		return nil, err
 	}
-	if err := validateBranchName(params.SourceBranch); err != nil {
-		return nil, err
+	if valErr := validateBranchName(params.SourceBranch); valErr != nil {
+		return nil, valErr
 	}
-	if err := validateBranchName(params.TargetBranch); err != nil {
-		return nil, err
+	if valErr := validateBranchName(params.TargetBranch); valErr != nil {
+		return nil, valErr
 	}
 	if params.SourceBranch == params.TargetBranch || params.Strategy < ConflictStrategyUnspecified || params.Strategy > ConflictStrategyMaterialize {
 		return nil, ErrInvalidArgument
 	}
-	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
-		return nil, err
+	if sweepErr := m.sweepExpiredBranchSessions(ctx); sweepErr != nil {
+		return nil, sweepErr
 	}
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
@@ -63,9 +63,9 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		}
 	}()
 	err = m.store.ExecTx(ctx, func(q db.Querier) (txErr error) {
-		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		control, branches, lockErr := controlStore.LockedBranches(ctx, q, diskID)
+		if lockErr != nil {
+			return lockErr
 		}
 		sourceBranch, _ := controlStore.FindBranch(branches, params.SourceBranch)
 		targetBranch, _ := controlStore.FindBranch(branches, params.TargetBranch)
@@ -75,84 +75,86 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		if sourceBranch.State == "MERGING" || targetBranch.State == "MERGING" {
 			return ErrBusy
 		}
-		if err := controlStore.LockBranchWriter(ctx, q, diskID, params.TargetBranch); err != nil {
-			return err
+		if lockWriterErr := controlStore.LockBranchWriter(ctx, q, diskID, params.TargetBranch); lockWriterErr != nil {
+			return lockWriterErr
 		}
-		hasTargetWriter, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.TargetBranch)
-		if err != nil {
-			return err
+		hasTargetWriter, writerErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.TargetBranch)
+		if writerErr != nil {
+			return writerErr
 		}
 		if hasTargetWriter {
 			return ErrBusy
 		}
-		if _, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.SourceBranch); err != nil {
-			return err
+		if _, srcWriterErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.SourceBranch); srcWriterErr != nil {
+			return srcWriterErr
 		}
-		quota, err := m.versionQuota(ctx, q, diskID, control)
-		if err != nil {
-			return err
+		quota, quotaErr := m.versionQuota(ctx, q, diskID, control)
+		if quotaErr != nil {
+			return quotaErr
 		}
 		unlockSource = m.locks.LockBranchWrite(disk, params.SourceBranch)
 		unlockTarget = m.locks.LockBranchWrite(disk, params.TargetBranch)
-		source, err = m.pebble.OpenBranch(disk, params.SourceBranch)
-		if err != nil {
-			return err
+		var openErr error
+		source, openErr = m.pebble.OpenBranch(disk, params.SourceBranch)
+		if openErr != nil {
+			return openErr
 		}
-		target, err = m.pebble.OpenBranch(disk, params.TargetBranch)
-		if err != nil {
-			return err
+		target, openErr = m.pebble.OpenBranch(disk, params.TargetBranch)
+		if openErr != nil {
+			return openErr
 		}
 		pin := func(branch *pebblekv.Branch, stored *storedBranch) (bool, error) {
-			dirty, err := m.flushAndCheckBranchDirtyLocked(disk, stored.Name, branch.DB())
-			if err != nil {
-				return false, err
+			dirty, dirtyErr := m.flushAndCheckBranchDirtyLocked(disk, stored.Name, branch.DB())
+			if dirtyErr != nil {
+				return false, dirtyErr
 			}
 			if !dirty && stored.HeadCommitID != nil {
 				return false, nil
 			}
 			id := uuid.Must(uuid.NewV7())
 			created = append(created, id.String())
-			_, err = m.createVersion(ctx, q, diskID, stored, branch, id, "")
-			return err == nil, err
+			_, createErr := m.createVersion(ctx, q, diskID, stored, branch, id, "")
+			return createErr == nil, createErr
 		}
-		sourcePinned, err = pin(source, sourceBranch)
-		if err != nil {
-			return err
+		sourcePinned, openErr = pin(source, sourceBranch)
+		if openErr != nil {
+			return openErr
 		}
-		targetPinned, err = pin(target, targetBranch)
-		if err != nil {
-			return err
+		targetPinned, openErr = pin(target, targetBranch)
+		if openErr != nil {
+			return openErr
 		}
-		sourceID, err := parseDiskID(*sourceBranch.HeadCommitID)
-		if err != nil {
-			return err
+		sourceID, parseErr := parseDiskID(*sourceBranch.HeadCommitID)
+		if parseErr != nil {
+			return parseErr
 		}
-		targetID, err := parseDiskID(*targetBranch.HeadCommitID)
-		if err != nil {
-			return err
+		targetID, parseErr := parseDiskID(*targetBranch.HeadCommitID)
+		if parseErr != nil {
+			return parseErr
 		}
-		graph, sourceAncestors, targetAncestors, err := loadMergeGraph(ctx, q, diskID, sourceID, targetID)
-		if err != nil {
-			return err
+		graph, sourceAncestors, targetAncestors, graphErr := loadMergeGraph(ctx, q, diskID, sourceID, targetID)
+		if graphErr != nil {
+			return graphErr
 		}
 		if targetAncestors[sourceID] {
 			id := targetID.String()
 			result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
 			return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
 		}
-		baseID, err := graph.lowestMergeBase(sourceID, targetID)
-		if err != nil {
-			return err
+		baseID, baseErr := graph.lowestMergeBase(sourceID, targetID)
+		if baseErr != nil {
+			return baseErr
 		}
-		dirty, err := m.mergeDirtyInodes(ctx, disk, graph, baseID, sourceAncestors, targetAncestors)
-		if err != nil {
-			return err
+		dirty, dirtyErr := m.mergeDirtyInodes(ctx, disk, graph, baseID, sourceAncestors, targetAncestors)
+		if dirtyErr != nil {
+			return dirtyErr
 		}
 		var workspace *pebblekv.Branch
-		swap, workspace, err = swapper.PrepareStaging(disk, params.TargetBranch, targetID.String(), ".merge-", unlockTarget)
+		var stageErr error
+		swap, workspace, stageErr = swapper.PrepareStaging(disk, params.TargetBranch, targetID.String(), ".merge-", unlockTarget)
 		unlockTarget = nil
-		if err != nil {
-			return err
+		if stageErr != nil {
+			return stageErr
 		}
 		defer func() {
 			workspaceCloseErr = workspace.Close()
@@ -162,12 +164,13 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		}()
 		var snapshots [3]*pebblekv.Commit
 		for i, id := range []pgtype.UUID{baseID, targetID, sourceID} {
-			snapshots[i], err = m.pebble.OpenCommit(disk, id.String())
-			if err != nil {
-				for j := 0; j < i; j++ {
-					err = errors.Join(err, snapshots[j].Close())
+			var snapErr error
+			snapshots[i], snapErr = m.pebble.OpenCommit(disk, id.String())
+			if snapErr != nil {
+				for j := range i {
+					snapErr = errors.Join(snapErr, snapshots[j].Close())
 				}
-				return err
+				return snapErr
 			}
 		}
 		// 合并结果会直接复制源侧 DataKey；先把基准与源快照的块硬链接进暂存目录。
@@ -175,11 +178,11 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			if i == 1 {
 				continue
 			}
-			if err := snapshot.Blobs().LinkAllTo(workspace.Blobs()); err != nil {
+			if linkErr := snapshot.Blobs().LinkAllTo(workspace.Blobs()); linkErr != nil {
 				for _, opened := range snapshots {
-					err = errors.Join(err, opened.Close())
+					linkErr = errors.Join(linkErr, opened.Close())
 				}
-				return err
+				return linkErr
 			}
 		}
 		stores := [3]*pebble.DB{snapshots[0].DB(), snapshots[1].DB(), snapshots[2].DB()}
@@ -203,28 +206,29 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 		materialized := len(conflicts) != 0 && params.Strategy == ConflictStrategyMaterialize
 		if materialized {
 			state := storedMergeState{BaseCommitID: baseID.String(), SourceBranch: params.SourceBranch, SourceCommitID: sourceID.String(), TargetCommitID: targetID.String(), SidecarPaths: sidecarPaths, SidecarInodes: sidecarInodes, Conflicts: conflicts}
-			targetBranch.MergeState, err = json.Marshal(state)
-			if err != nil {
-				return err
+			var marshalErr error
+			targetBranch.MergeState, marshalErr = json.Marshal(state)
+			if marshalErr != nil {
+				return marshalErr
 			}
 			targetBranch.State = "MERGING"
 			result = &MergeResult{Result: MergeResultMaterialized, Conflicts: conflicts}
 		} else {
 			mergeID := uuid.Must(uuid.NewV7())
 			created = append(created, mergeID.String())
-			if err := workspace.Checkpoint(mergeID.String()); err != nil {
-				return err
+			if ckptErr := workspace.Checkpoint(mergeID.String()); ckptErr != nil {
+				return ckptErr
 			}
-			_, err = q.CreateCommit(ctx, db.CreateCommitParams{
+			_, createCommitErr := q.CreateCommit(ctx, db.CreateCommitParams{
 				CommitID: pgtype.UUID{Bytes: mergeID, Valid: true}, DiskID: diskID, BranchName: params.TargetBranch,
 				ParentCommitID: targetID, MergeParentCommitID: sourceID,
 				CheckpointDir: filepath.Join(m.storageRoot, "disks", disk, "commits", mergeID.String()),
 			})
-			if err != nil {
-				return err
+			if createCommitErr != nil {
+				return createCommitErr
 			}
-			if err := clearBranchDirty(workspace.DB()); err != nil {
-				return err
+			if clearErr := clearBranchDirty(workspace.DB()); clearErr != nil {
+				return clearErr
 			}
 			id := mergeID.String()
 			targetBranch.HeadCommitID = &id
@@ -232,24 +236,24 @@ func (m *manager) Merge(ctx context.Context, params MergeParams) (result *MergeR
 			result = &MergeResult{Result: MergeResultMerged, MergeCommitID: &id}
 		}
 		for _, ino := range sidecarInodes {
-			node, err := readCreateInode(workspace.DB(), ino)
-			if err != nil {
-				return err
+			node, readErr := readCreateInode(workspace.DB(), ino)
+			if readErr != nil {
+				return readErr
 			}
 			changedSizes[ino] = node.Size
 		}
-		if err := workspace.Close(); err != nil {
-			return err
+		if closeErr := workspace.Close(); closeErr != nil {
+			return closeErr
 		}
-		if err := target.Close(); err != nil {
-			return err
+		if closeErr := target.Close(); closeErr != nil {
+			return closeErr
 		}
 		target = nil
-		if err := swap.InstallStaged(); err != nil {
-			return err
+		if installErr := swap.InstallStaged(); installErr != nil {
+			return installErr
 		}
-		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
-			return err
+		if saveErr := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); saveErr != nil {
+			return saveErr
 		}
 		return swap.StagePatch(quota, dirty, changedSizes, materialized)
 	})

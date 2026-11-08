@@ -84,6 +84,8 @@ type inodeFields struct {
 }
 
 // EncodeInode 编码节点属性和符号链接目标。
+//
+//nolint:gocritic // hugeParam: 保持与 internal/meta 调用方按值传参契约兼容。
 func EncodeInode(i Inode) ([]byte, error) {
 	if uint64(len(i.SymlinkTarget)) > math.MaxUint32 {
 		return nil, ErrInvalidValue

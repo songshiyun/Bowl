@@ -68,8 +68,8 @@ func TestErrInvalidShrink_HierarchyAndStatus(t *testing.T) {
 	err := meta.ErrInvalidShrink
 
 	// 1. 同时满足对 ErrInvalidShrink 与 ErrInvalidArgument 的匹配
-	assert.True(t, errors.Is(err, meta.ErrInvalidShrink), "必须满足 errors.Is(err, ErrInvalidShrink)")
-	assert.True(t, errors.Is(err, meta.ErrInvalidArgument), "必须满足 errors.Is(err, ErrInvalidArgument)")
+	require.ErrorIs(t, err, meta.ErrInvalidShrink, "必须满足 errors.Is(err, ErrInvalidShrink)")
+	require.ErrorIs(t, err, meta.ErrInvalidArgument, "必须满足 errors.Is(err, ErrInvalidArgument)")
 
 	// 2. ToStatus 优先匹配 ErrInvalidShrink，映射为 FailedPrecondition 与 EINVAL
 	st := meta.ToStatus(err)

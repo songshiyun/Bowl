@@ -19,7 +19,7 @@ import (
 )
 
 func validateBranchName(name string) error {
-	if len(name) == 0 || len(name) > 255 || name == "." || name == ".." {
+	if name == "" || len(name) > 255 || name == "." || name == ".." {
 		return ErrInvalidArgument
 	}
 	for i := range len(name) {
@@ -34,8 +34,8 @@ func clearBranchDirty(store *pebble.DB) (err error) {
 	batch := store.NewBatch()
 	defer func() { err = errors.Join(err, batch.Close()) }()
 	lower, upper := pebblekv.DirtyRange()
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
-		return err
+	if delErr := batch.DeleteRange(lower, upper, nil); delErr != nil {
+		return delErr
 	}
 	return batch.Commit(pebble.Sync)
 }
@@ -61,16 +61,16 @@ func prepareBranch(store *pebble.DB, blobs *pebblekv.BlobStore, name string) (er
 	defer func() { err = errors.Join(err, iter.Close()) }()
 	quota := NewTreeQuota(math.MaxUint64)
 	for iter.First(); iter.Valid(); iter.Next() {
-		ino, err := pebblekv.DecodeOrphanKey(iter.Key())
-		if err != nil {
-			return err
+		ino, decodeErr := pebblekv.DecodeOrphanKey(iter.Key())
+		if decodeErr != nil {
+			return decodeErr
 		}
-		if err := reclaimBranchOrphan(store, blobs, quota, name, ino); err != nil {
-			return err
+		if reclaimErr := reclaimBranchOrphan(store, blobs, quota, name, ino); reclaimErr != nil {
+			return reclaimErr
 		}
 	}
-	if err := iter.Error(); err != nil {
-		return err
+	if iterErr := iter.Error(); iterErr != nil {
+		return iterErr
 	}
 	return clearBranchDirty(store)
 }
@@ -80,7 +80,7 @@ func (m *manager) versionQuota(ctx context.Context, q db.Querier, diskID pgtype.
 	if err != nil {
 		return nil, err
 	}
-	return m.loadTreeQuota(ctx, row, db.GetDiskControlPlaneRow{DiskID: control.DiskID, StorageDir: control.StorageDir, Branches: control.Branches})
+	return m.loadTreeQuota(ctx, &row, db.GetDiskControlPlaneRow(control))
 }
 
 // createVersion 要求调用方持有分支锁，并在数据库提交后清理变更标记。
@@ -155,7 +155,7 @@ func (m *manager) Commit(ctx context.Context, params CommitParams) (info *Commit
 
 // ResolveMerge 完成已物化且旁路副本已清理的合并。
 func (m *manager) ResolveMerge(ctx context.Context, params ResolveMergeParams) (*CommitInfo, error) {
-	return m.commit(ctx, CommitParams{DiskID: params.DiskID, BranchName: params.BranchName, Message: params.Message}, true)
+	return m.commit(ctx, CommitParams(params), true)
 }
 
 func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge bool) (info *CommitInfo, err error) {
@@ -163,8 +163,8 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateBranchName(params.BranchName); err != nil {
-		return nil, err
+	if valErr := validateBranchName(params.BranchName); valErr != nil {
+		return nil, valErr
 	}
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
@@ -182,9 +182,9 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 	}()
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
-		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		control, branches, lockErr := controlStore.LockedBranches(ctx, q, diskID)
+		if lockErr != nil {
+			return lockErr
 		}
 		target, _ := controlStore.FindBranch(branches, params.BranchName)
 		if target == nil {
@@ -194,14 +194,15 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 			return ErrInvalidArgument
 		}
 		unlock = m.locks.LockBranchWrite(diskID.String(), params.BranchName)
-		branch, err = m.pebble.OpenBranch(diskID.String(), params.BranchName)
-		if err != nil {
-			return err
+		var openErr error
+		branch, openErr = m.pebble.OpenBranch(diskID.String(), params.BranchName)
+		if openErr != nil {
+			return openErr
 		}
 		created = true
-		info, err = m.createVersion(ctx, q, diskID, target, branch, id, params.Message)
-		if err != nil {
-			return err
+		info, openErr = m.createVersion(ctx, q, diskID, target, branch, id, params.Message)
+		if openErr != nil {
+			return openErr
 		}
 		return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
 	})
@@ -211,7 +212,8 @@ func (m *manager) commit(ctx context.Context, params CommitParams, requireMerge 
 		}
 		return nil, err
 	}
-	if err = clearBranchDirty(branch.DB()); err != nil {
+	err = clearBranchDirty(branch.DB())
+	if err != nil {
 		return nil, err
 	}
 	return info, nil
@@ -223,12 +225,12 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 	if err != nil {
 		return nil, err
 	}
-	if err := validateBranchName(params.Name); err != nil {
-		return nil, err
+	if valErr := validateBranchName(params.Name); valErr != nil {
+		return nil, valErr
 	}
 	if params.SourceBranch != nil {
-		if err := validateBranchName(*params.SourceBranch); err != nil {
-			return nil, err
+		if valErr := validateBranchName(*params.SourceBranch); valErr != nil {
+			return nil, valErr
 		}
 	}
 	var sourceID pgtype.UUID
@@ -258,25 +260,25 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 	}()
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
-		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		control, branches, lockErr := controlStore.LockedBranches(ctx, q, diskID)
+		if lockErr != nil {
+			return lockErr
 		}
 		if _, i := controlStore.FindBranch(branches, params.Name); i >= 0 {
 			return ErrAlreadyExists
 		}
-		quota, err := m.versionQuota(ctx, q, diskID, control)
-		if err != nil {
-			return err
+		quota, quotaErr := m.versionQuota(ctx, q, diskID, control)
+		if quotaErr != nil {
+			return quotaErr
 		}
 		var parent, fork string
 		if params.SourceCommitID != nil {
-			row, err := q.GetCommit(ctx, sourceID)
-			if errors.Is(err, pgx.ErrNoRows) || err == nil && row.DiskID != diskID {
+			row, getErr := q.GetCommit(ctx, sourceID)
+			if errors.Is(getErr, pgx.ErrNoRows) || getErr == nil && row.DiskID != diskID {
 				return ErrNotFound
 			}
-			if err != nil {
-				return err
+			if getErr != nil {
+				return getErr
 			}
 			parent, fork = row.BranchName, sourceID.String()
 			if params.SourceBranch != nil {
@@ -298,36 +300,38 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 				return ErrBusy
 			}
 			unlockSource = m.locks.LockBranchWrite(disk, parent)
-			source, err = m.pebble.OpenBranch(disk, parent)
-			if err != nil {
-				return err
+			var openErr error
+			source, openErr = m.pebble.OpenBranch(disk, parent)
+			if openErr != nil {
+				return openErr
 			}
-			dirty, err := m.flushAndCheckBranchDirtyLocked(disk, parent, source.DB())
-			if err != nil {
-				return err
+			dirty, dirtyErr := m.flushAndCheckBranchDirtyLocked(disk, parent, source.DB())
+			if dirtyErr != nil {
+				return dirtyErr
 			}
 			if dirty || sourceBranch.HeadCommitID == nil {
 				id := uuid.Must(uuid.NewV7())
 				checkpointID, checkpointCreated = id.String(), true
-				if _, err := m.createVersion(ctx, q, diskID, sourceBranch, source, id, ""); err != nil {
-					return err
+				if _, createErr := m.createVersion(ctx, q, diskID, sourceBranch, source, id, ""); createErr != nil {
+					return createErr
 				}
 			}
 			fork = *sourceBranch.HeadCommitID
 		}
 		var sizes map[uint64]uint64
-		swap, sizes, err = swapper.StageFork(disk, fork, params.Name)
-		if err != nil {
-			return err
+		var stageErr error
+		swap, sizes, stageErr = swapper.StageFork(disk, fork, params.Name)
+		if stageErr != nil {
+			return stageErr
 		}
-		if err := swap.StageReplace(quota, sizes, true); err != nil {
-			return err
+		if replaceErr := swap.StageReplace(quota, sizes, true); replaceErr != nil {
+			return replaceErr
 		}
 		now := time.Now().UTC()
 		id := uuid.Must(uuid.NewV7()).String()
 		branches = append(branches, storedBranch{BranchID: id, Name: params.Name, ParentBranch: &parent, ForkCommitID: &fork, HeadCommitID: &fork, State: "NORMAL", CreatedAt: &now})
-		if err := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); err != nil {
-			return err
+		if saveErr := controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches); saveErr != nil {
+			return saveErr
 		}
 		result = &Branch{BranchID: id, DiskID: disk, Name: params.Name, ParentBranch: &parent, ForkCommitID: &fork, HeadCommitID: &fork, State: "NORMAL", CreatedAt: now}
 		return nil
@@ -340,7 +344,8 @@ func (m *manager) CreateBranch(ctx context.Context, params CreateBranchParams) (
 		return nil, err
 	}
 	if checkpointCreated {
-		if err = clearBranchDirty(source.DB()); err != nil {
+		err = clearBranchDirty(source.DB())
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -362,14 +367,14 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 	if err != nil {
 		return err
 	}
-	if err := validateBranchName(params.Name); err != nil {
-		return err
+	if valErr := validateBranchName(params.Name); valErr != nil {
+		return valErr
 	}
 	if params.Name == "main" {
 		return ErrInvalidArgument
 	}
-	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
-		return err
+	if sweepErr := m.sweepExpiredBranchSessions(ctx); sweepErr != nil {
+		return sweepErr
 	}
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
@@ -378,34 +383,35 @@ func (m *manager) DeleteBranch(ctx context.Context, params DeleteBranchParams) (
 	var swap *WorkspaceSwap
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
-		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		control, branches, lockErr := controlStore.LockedBranches(ctx, q, diskID)
+		if lockErr != nil {
+			return lockErr
 		}
-		if err := controlStore.LockBranchWriter(ctx, q, diskID, params.Name); err != nil {
-			return err
+		if writerLockErr := controlStore.LockBranchWriter(ctx, q, diskID, params.Name); writerLockErr != nil {
+			return writerLockErr
 		}
 		_, i := controlStore.FindBranch(branches, params.Name)
 		if i < 0 {
 			return ErrNotFound
 		}
-		active, err := controlStore.HasActiveBranchSessions(ctx, q, diskID, params.Name)
-		if err != nil {
-			return err
+		active, activeErr := controlStore.HasActiveBranchSessions(ctx, q, diskID, params.Name)
+		if activeErr != nil {
+			return activeErr
 		}
 		if active {
 			return ErrBusy
 		}
-		quota, err := m.versionQuota(ctx, q, diskID, control)
-		if err != nil {
-			return err
+		quota, quotaErr := m.versionQuota(ctx, q, diskID, control)
+		if quotaErr != nil {
+			return quotaErr
 		}
-		swap, err = swapper.StageDelete(disk, params.Name)
-		if err != nil {
-			return err
+		var stageErr error
+		swap, stageErr = swapper.StageDelete(disk, params.Name)
+		if stageErr != nil {
+			return stageErr
 		}
-		if err := swap.StageReplace(quota, nil, false); err != nil {
-			return err
+		if replaceErr := swap.StageReplace(quota, nil, false); replaceErr != nil {
+			return replaceErr
 		}
 		branches = append(branches[:i], branches[i+1:]...)
 		return controlStore.SaveBranches(ctx, q, diskID, control.Branches, branches)
@@ -428,8 +434,8 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 	if err != nil {
 		return err
 	}
-	if err := validateBranchName(params.BranchName); err != nil {
-		return err
+	if valErr := validateBranchName(params.BranchName); valErr != nil {
+		return valErr
 	}
 	var commitID pgtype.UUID
 	if !abort {
@@ -438,8 +444,8 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 			return err
 		}
 	}
-	if err := m.sweepExpiredBranchSessions(ctx); err != nil {
-		return err
+	if sweepErr := m.sweepExpiredBranchSessions(ctx); sweepErr != nil {
+		return sweepErr
 	}
 	m.writeQuotaMu.Lock()
 	defer m.writeQuotaMu.Unlock()
@@ -448,20 +454,20 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 	var swap *WorkspaceSwap
 	controlStore := newBranchControlStore(m.store)
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
-		control, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		control, branches, lockErr := controlStore.LockedBranches(ctx, q, diskID)
+		if lockErr != nil {
+			return lockErr
 		}
-		if err := controlStore.LockBranchWriter(ctx, q, diskID, params.BranchName); err != nil {
-			return err
+		if writerLockErr := controlStore.LockBranchWriter(ctx, q, diskID, params.BranchName); writerLockErr != nil {
+			return writerLockErr
 		}
 		target, _ := controlStore.FindBranch(branches, params.BranchName)
 		if target == nil {
 			return ErrNotFound
 		}
-		hasWriter, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.BranchName)
-		if err != nil {
-			return err
+		hasWriter, writerErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, params.BranchName)
+		if writerErr != nil {
+			return writerErr
 		}
 		if hasWriter {
 			return ErrBusy
@@ -471,32 +477,34 @@ func (m *manager) rollback(ctx context.Context, params RollbackParams, abort boo
 				return ErrInvalidArgument
 			}
 			var state storedMergeState
-			if err := json.Unmarshal(target.MergeState, &state); err != nil || state.TargetCommitID != *target.HeadCommitID {
+			if unmarshalErr := json.Unmarshal(target.MergeState, &state); unmarshalErr != nil || state.TargetCommitID != *target.HeadCommitID {
 				return ErrInvalidArgument
 			}
-			commitID, err = parseDiskID(state.TargetCommitID)
-			if err != nil {
-				return err
+			var parseErr error
+			commitID, parseErr = parseDiskID(state.TargetCommitID)
+			if parseErr != nil {
+				return parseErr
 			}
 		}
-		row, err := q.GetCommit(ctx, commitID)
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && row.DiskID != diskID {
+		row, getErr := q.GetCommit(ctx, commitID)
+		if errors.Is(getErr, pgx.ErrNoRows) || getErr == nil && row.DiskID != diskID {
 			return ErrNotFound
 		}
-		if err != nil {
-			return err
+		if getErr != nil {
+			return getErr
 		}
-		quota, err := m.versionQuota(ctx, q, diskID, control)
-		if err != nil {
-			return err
+		quota, quotaErr := m.versionQuota(ctx, q, diskID, control)
+		if quotaErr != nil {
+			return quotaErr
 		}
 		var sizes map[uint64]uint64
-		swap, sizes, err = swapper.StageRestore(disk, params.BranchName, commitID.String())
-		if err != nil {
-			return err
+		var stageErr error
+		swap, sizes, stageErr = swapper.StageRestore(disk, params.BranchName, commitID.String())
+		if stageErr != nil {
+			return stageErr
 		}
-		if err := swap.StageReplace(quota, sizes, false); err != nil {
-			return err
+		if replaceErr := swap.StageReplace(quota, sizes, false); replaceErr != nil {
+			return replaceErr
 		}
 		id := commitID.String()
 		target.HeadCommitID = &id

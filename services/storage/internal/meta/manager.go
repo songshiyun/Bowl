@@ -12,6 +12,7 @@ import (
 	"go.uber.org/fx"
 
 	"github.com/starsrc/Aether/pkg/tx"
+
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
@@ -83,15 +84,13 @@ type manager struct {
 
 type poolProvider interface{ Pool() *pgxpool.Pool }
 
-func (m *manager) hasPool() bool {
-	p, ok := m.store.(poolProvider)
-	return ok && p != nil && p.Pool() != nil
-}
-
 // Option 配置存储管理器。
 type Option func(*manager)
 
+// WithStorageRoot 配置磁盘与分支数据根目录。
 func WithStorageRoot(root string) Option { return func(m *manager) { m.storageRoot = root } }
+
+// WithSessionLeaseTTL 配置客户端会话租约有效时长。
 func WithSessionLeaseTTL(ttl time.Duration) Option {
 	return func(m *manager) {
 		if ttl > 0 {
@@ -99,6 +98,8 @@ func WithSessionLeaseTTL(ttl time.Duration) Option {
 		}
 	}
 }
+
+// WithEntryTimeout 配置目录项缓存时效（秒）。
 func WithEntryTimeout(d float64) Option {
 	return func(m *manager) {
 		if d >= 0 {
@@ -106,6 +107,8 @@ func WithEntryTimeout(d float64) Option {
 		}
 	}
 }
+
+// WithAttrTimeout 配置节点属性缓存时效（秒）。
 func WithAttrTimeout(d float64) Option {
 	return func(m *manager) {
 		if d >= 0 {
@@ -113,6 +116,8 @@ func WithAttrTimeout(d float64) Option {
 		}
 	}
 }
+
+// WithDirEntryTimeout 配置目录自身缓存时效（秒）。
 func WithDirEntryTimeout(d float64) Option {
 	return func(m *manager) {
 		if d >= 0 {
@@ -120,8 +125,12 @@ func WithDirEntryTimeout(d float64) Option {
 		}
 	}
 }
+
+// WithOpenKeepCache 配置打开文件时是否下发 FOPEN_KEEP_CACHE。
 func WithOpenKeepCache(enable bool) Option { return func(m *manager) { m.openKeepCache = enable } }
-func WithAtimeMode(mode AtimeMode) Option  { return func(m *manager) { m.atimeMode = mode } }
+
+// WithAtimeMode 配置访问时间（atime）更新策略。
+func WithAtimeMode(mode AtimeMode) Option { return func(m *manager) { m.atimeMode = mode } }
 
 // WithPebbleManager 复用外部创建的 Pebble 句柄池；同一存储根目录必须共用一个句柄池。
 func WithPebbleManager(pool *pebblekv.Manager) Option {
@@ -152,6 +161,10 @@ func WithBranchWorkspaceGate(gate *BranchWorkspaceGate) Option {
 
 // New 创建存储管理器。
 func New(store db.Store, opts ...Option) Manager {
+	return newManager(store, opts...)
+}
+
+func newManager(store db.Store, opts ...Option) *manager {
 	m := &manager{store: store, storageRoot: config.DefaultDataDir,
 		entryTimeout: DefaultEntryTimeoutSeconds, attrTimeout: DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultEntryTimeoutSeconds, sessionLeaseTTL: DefaultSessionLeaseTTL,
@@ -229,6 +242,7 @@ func (m *manager) clearSessionCursors(sessionID uint64) {
 	}
 }
 
+// ManagerParams 定义存储管理器的 Fx 依赖注入参数。
 type ManagerParams struct {
 	fx.In
 	Lifecycle fx.Lifecycle `optional:"true"`
@@ -237,6 +251,7 @@ type ManagerParams struct {
 	MetaVal   config.MetaConfig  `optional:"true"`
 }
 
+//nolint:gocritic // hugeParam: fx.In 依赖注入参数结构体必须按值传递。
 func newManagerFromParams(params ManagerParams) Manager {
 	cfg := params.MetaCfg
 	if cfg == nil && params.MetaVal != (config.MetaConfig{}) {
@@ -257,7 +272,7 @@ func newManagerFromParams(params ManagerParams) Manager {
 			WithDirEntryTimeout(cfg.DirEntryTimeoutSeconds()), WithOpenKeepCache(cfg.OpenKeepCache()))
 		interval = cfg.SessionSweepInterval()
 	}
-	m := New(params.Store, opts...).(*manager)
+	m := newManager(params.Store, opts...)
 	if params.Lifecycle != nil {
 		var cancel context.CancelFunc
 		var done chan struct{}

@@ -39,7 +39,7 @@ func validateDiskName(name string) error {
 		return fmt.Errorf("磁盘名称不能超过 %d 字节 (当前 %d 字节)", MaxDiskNameBytes, len(name))
 	}
 	if strings.Contains(name, "\x00") {
-		return fmt.Errorf("磁盘名称不能包含空字节 (NUL)")
+		return errors.New("磁盘名称不能包含空字节 (NUL)")
 	}
 	return nil
 }
@@ -77,46 +77,50 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 			case "json":
 				jsonOut = true
 			case "size":
-				if hasVal {
+				switch {
+				case hasVal:
 					v := val
 					sizeRaw = &v
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					v := args[i]
 					sizeRaw = &v
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --size 需要指定参数值")
 					return 2
 				}
 			case "name":
-				if hasVal {
+				switch {
+				case hasVal:
 					v := val
 					namePtr = &v
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					v := args[i]
 					namePtr = &v
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --name 需要指定参数值")
 					return 2
 				}
 			case "endpoint":
-				if hasVal {
+				switch {
+				case hasVal:
 					endpoint = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					endpoint = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
 					return 2
 				}
 			case "token":
-				if hasVal {
+				switch {
+				case hasVal:
 					token = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					token = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
 					return 2
 				}
@@ -148,7 +152,8 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 
 	var sizePtr *uint64
 	if sizeRaw != nil {
-		maxBytes, err := ParseSize(*sizeRaw)
+		var maxBytes uint64
+		maxBytes, err = ParseSize(*sizeRaw)
 		if err != nil {
 			fmt.Fprintf(stderr, "错误: 无效的 --size 参数: %v\n", err)
 			return 2
@@ -157,7 +162,7 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if namePtr != nil {
-		if err := validateDiskName(*namePtr); err != nil {
+		if err = validateDiskName(*namePtr); err != nil {
 			fmt.Fprintf(stderr, "错误: %v\n", err)
 			return 2
 		}
@@ -180,7 +185,8 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 	// 第一层：当指定 --size 时，执行客户端 GetDisk 缩容水位线前置预检
 	if sizePtr != nil {
 		newMaxBytes := *sizePtr
-		getResp, err := client.GetDisk(rpcCtx, connect.NewRequest(&storagev1.GetDiskRequest{
+		var getResp *connect.Response[storagev1.GetDiskResponse]
+		getResp, err = client.GetDisk(rpcCtx, connect.NewRequest(&storagev1.GetDiskRequest{
 			DiskId: diskIDStr,
 		}))
 		if err != nil {
@@ -217,8 +223,7 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 		MaxBytes: sizePtr,
 	}))
 	if err != nil {
-		var connectErr *connect.Error
-		if errors.As(err, &connectErr) {
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			switch connectErr.Code() {
 			case connect.CodeNotFound:
 				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)

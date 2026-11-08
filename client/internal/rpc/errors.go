@@ -83,8 +83,7 @@ func MapError(err error) syscall.Errno {
 		return syscall.EINTR
 	}
 
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 		for _, detail := range connectErr.Details() {
 			msg, detailErr := detail.Value()
 			if detailErr != nil {

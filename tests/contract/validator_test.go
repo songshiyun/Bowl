@@ -37,7 +37,7 @@ func assertValidationReason(t *testing.T, err error, wantReason string) {
 	require.Error(t, err)
 
 	var pvErr *protovalidate.ValidationError
-	require.True(t, errors.As(err, &pvErr), "应支持 errors.As 提取底层 protovalidate.ValidationError")
+	require.ErrorAs(t, err, &pvErr, "应支持 errors.As 提取底层 protovalidate.ValidationError")
 
 	reason, ok := validator.ErrnoReason(err)
 	require.True(t, ok)
@@ -161,9 +161,6 @@ func TestStorageValidatorErrnoReasonRejectsNonValidationErrors(t *testing.T) {
 	require.NoError(t, validator.ToGRPCError(nil))
 }
 
-func stringPtr(value string) *string { return &value }
-func uint64Ptr(value uint64) *uint64 { return &value }
-
 const (
 	validDiskID   = "11111111-1111-7111-8111-111111111111"
 	validCommitID = "22222222-2222-7222-8222-222222222222"
@@ -180,7 +177,7 @@ func TestStorageValidatorAcceptsValidVersionAndDiskRequests(t *testing.T) {
 	maxBytes := uint64(1 << 30)
 
 	require.NoError(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch}))
-	require.NoError(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceBranch: &mainBranch, SourceCommitId: stringPtr(validCommitID)}))
+	require.NoError(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceBranch: &mainBranch, SourceCommitId: new(validCommitID)}))
 	require.NoError(t, v.Validate(&storagev1.ListBranchesRequest{DiskId: validDiskID}))
 	require.NoError(t, v.Validate(&storagev1.DeleteBranchRequest{DiskId: validDiskID, Name: featureBranch}))
 	require.NoError(t, v.Validate(&storagev1.CommitRequest{DiskId: validDiskID, BranchName: mainBranch, Message: "snapshot"}))
@@ -200,9 +197,9 @@ func TestStorageValidatorAcceptsValidVersionAndDiskRequests(t *testing.T) {
 	require.NoError(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: &maxBytes}))
 	require.NoError(t, v.Validate(&storagev1.DeleteDiskRequest{DiskId: validDiskID}))
 
-	require.NoError(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), BranchName: &mainBranch}))
+	require.NoError(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), BranchName: &mainBranch}))
 	require.NoError(t, v.Validate(&storagev1.RenewSessionRequest{
-		SessionId: 1, DiskId: stringPtr(validDiskID), BranchName: &mainBranch, ReadOnly: true, CommitId: stringPtr(validCommitID),
+		SessionId: 1, DiskId: new(validDiskID), BranchName: &mainBranch, ReadOnly: true, CommitId: new(validCommitID),
 	}))
 	require.NoError(t, v.Validate(&storagev1.CloseSessionRequest{SessionId: 1}))
 	require.NoError(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: &mainBranch, Ino: 1}))
@@ -224,9 +221,9 @@ func TestStorageValidatorMapsVersionAndDiskReasons(t *testing.T) {
 	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: "a\x00b"}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: ".."}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: longName}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceBranch: stringPtr("a/b")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceCommitId: stringPtr("bad")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceCommitId: stringPtr(nilUUID)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceBranch: new("a/b")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceCommitId: new("bad")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.CreateBranchRequest{DiskId: validDiskID, Name: featureBranch, SourceCommitId: new(nilUUID)}), validator.ReasonInvalidArgument)
 
 	assertValidationReason(t, v.Validate(&storagev1.ListBranchesRequest{DiskId: nilUUID}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.DeleteBranchRequest{DiskId: nilUUID, Name: featureBranch}), validator.ReasonInvalidArgument)
@@ -266,23 +263,23 @@ func TestStorageValidatorMapsVersionAndDiskReasons(t *testing.T) {
 	assertValidationReason(t, v.Validate(&storagev1.GetDiskRequest{DiskId: nilUUID}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.ListDisksRequest{PageSize: 1001}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: "bad", Name: stringPtr("renamed")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, Name: stringPtr(longName)}), validator.ReasonNameTooLong)
-	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, Name: stringPtr("a\x00b")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: uint64Ptr(0)}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: uint64Ptr(overMax)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: "bad", Name: new("renamed")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, Name: new(longName)}), validator.ReasonNameTooLong)
+	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, Name: new("a\x00b")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: new(uint64(0))}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: new(overMax)}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.DeleteDiskRequest{DiskId: nilUUID}), validator.ReasonInvalidArgument)
 
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 0, DiskId: stringPtr(validDiskID)}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: overMax, DiskId: stringPtr(validDiskID)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 0, DiskId: new(validDiskID)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: overMax, DiskId: new(validDiskID)}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr("bad")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(nilUUID)}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), BranchName: stringPtr("")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), BranchName: stringPtr("a/b")}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), CommitId: stringPtr("bad"), ReadOnly: true}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), CommitId: stringPtr(nilUUID), ReadOnly: true}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: stringPtr(validDiskID), CommitId: stringPtr(validCommitID)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new("bad")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(nilUUID)}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), BranchName: new("")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), BranchName: new("a/b")}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), CommitId: new("bad"), ReadOnly: true}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), CommitId: new(nilUUID), ReadOnly: true}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.RenewSessionRequest{SessionId: 1, DiskId: new(validDiskID), CommitId: new(validCommitID)}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.CloseSessionRequest{SessionId: 0}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.CloseSessionRequest{SessionId: overMax}), validator.ReasonInvalidArgument)
 
@@ -290,9 +287,9 @@ func TestStorageValidatorMapsVersionAndDiskReasons(t *testing.T) {
 	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: overMax, DiskId: validDiskID, Ino: 1}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: "bad", Ino: 1}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: nilUUID, Ino: 1}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: stringPtr(""), Ino: 1}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: stringPtr("a/b"), Ino: 1}), validator.ReasonInvalidArgument)
-	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: stringPtr(".."), Ino: 1}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: new(""), Ino: 1}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: new("a/b"), Ino: 1}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, BranchName: new(".."), Ino: 1}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, Ino: 0}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.ReclaimOrphanRequest{SessionId: 1, DiskId: validDiskID, Ino: overMax}), validator.ReasonInvalidArgument)
 }

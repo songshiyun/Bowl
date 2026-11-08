@@ -11,7 +11,7 @@ import (
 )
 
 // toProtoAttribute 将 meta.Attribute 领域实体转换为 Protobuf InodeAttribute。
-func toProtoAttribute(attr meta.Attribute) *storagev1.InodeAttribute {
+func toProtoAttribute(attr *meta.Attribute) *storagev1.InodeAttribute {
 	return &storagev1.InodeAttribute{
 		Mode:    attr.Mode,
 		Size:    attr.Size,
@@ -36,7 +36,7 @@ func toProtoInode(in *meta.Inode) *storagev1.Inode {
 	return &storagev1.Inode{
 		Ino:        in.Ino,
 		Generation: in.Generation,
-		Attr:       toProtoAttribute(in.Attr),
+		Attr:       toProtoAttribute(&in.Attr),
 	}
 }
 
@@ -58,8 +58,8 @@ func toProtoDisk(d *meta.Disk) *storagev1.Disk {
 	if d.DefaultBranch != "" {
 		result.DefaultBranch = &d.DefaultBranch
 	}
-	for _, branch := range d.Branches {
-		result.Branches = append(result.Branches, toProtoBranch(branch))
+	for i := range d.Branches {
+		result.Branches = append(result.Branches, toProtoBranch(&d.Branches[i]))
 	}
 	return result
 }

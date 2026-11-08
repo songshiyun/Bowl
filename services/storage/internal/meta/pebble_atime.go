@@ -60,8 +60,8 @@ func (t *PebbleAtimeTracker) shouldTouch(atime, mtime, ctime, now time.Time) boo
 }
 
 // MarkDirty 在读热路径（Read / Readlink）按配置的 AtimeMode 登记内存脏访问时间，避免同步提交 Pebble 批次。
-func (t *PebbleAtimeTracker) MarkDirty(disk, branch string, inode pebblekv.Inode, now time.Time) {
-	if t == nil || t.mode == AtimeModeNoAtime {
+func (t *PebbleAtimeTracker) MarkDirty(disk, branch string, inode *pebblekv.Inode, now time.Time) {
+	if t == nil || inode == nil || t.mode == AtimeModeNoAtime {
 		return
 	}
 	key := pebbleAtimeKey{disk: disk, branch: branch, ino: inode.Ino}
@@ -394,11 +394,11 @@ func (t *PebbleAtimeTracker) FlushAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (m *manager) markPebbleAtimeDirty(session pebbleReadSession, inode pebblekv.Inode, now time.Time) {
+func (m *manager) markPebbleAtimeDirty(session *pebbleReadSession, inode *pebblekv.Inode, now time.Time) {
 	m.gate.RecordAtime(session, inode, now)
 }
 
-func (m *manager) applyDirtyPebbleAtime(session pebbleReadSession, inode *pebblekv.Inode) {
+func (m *manager) applyDirtyPebbleAtime(session *pebbleReadSession, inode *pebblekv.Inode) {
 	m.gate.OverlayAtime(session, inode)
 }
 

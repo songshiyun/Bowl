@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"time"
 
@@ -161,7 +160,7 @@ func (m *manager) sessionTreeQuota(ctx context.Context, diskID pgtype.UUID) (*Tr
 	if err != nil {
 		return nil, err
 	}
-	return m.loadTreeQuota(ctx, row, control)
+	return m.loadTreeQuota(ctx, &row, control)
 }
 
 func readCreateInode(store *pebble.DB, ino uint64) (pebblekv.Inode, error) {
@@ -177,7 +176,7 @@ func readCreateInode(store *pebble.DB, ino uint64) (pebblekv.Inode, error) {
 		return pebblekv.Inode{}, err
 	}
 	if inode.Ino != ino {
-		return pebblekv.Inode{}, fmt.Errorf("节点编号与键不一致")
+		return pebblekv.Inode{}, errors.New("节点编号与键不一致")
 	}
 	return inode, nil
 }
@@ -222,8 +221,8 @@ func readCreateStat(store *pebble.DB) (pebblekv.BranchStat, error) {
 	return stat, errors.Join(decodeErr, closer.Close())
 }
 
-func setCreateInode(batch *pebble.Batch, inode pebblekv.Inode) error {
-	value, err := pebblekv.EncodeInode(inode)
+func setCreateInode(batch *pebble.Batch, inode *pebblekv.Inode) error {
+	value, err := pebblekv.EncodeInode(*inode)
 	if err != nil {
 		return err
 	}
@@ -236,7 +235,7 @@ func touchCreateParent(parent *pebblekv.Inode, now time.Time, seq uint64) {
 	parent.WriteSeq = seq
 }
 
-func (m *manager) createdPebbleInode(inode pebblekv.Inode) *Inode {
+func (m *manager) createdPebbleInode(inode *pebblekv.Inode) *Inode {
 	entryTimeout := m.entryTimeout
 	size := inode.Size
 	if inode.Mode&S_IFMT == S_IFDIR {
@@ -259,38 +258,39 @@ func (m *manager) createdPebbleInode(inode pebblekv.Inode) *Inode {
 	}
 }
 
-func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebbleNodeParams) (result *Inode, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
+func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebbleNodeParams) (*Inode, error) {
+	var result *Inode
+	err := m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		unlockInode := m.locks.LockInodeWrite(disk, branch, params.parent)
 		defer unlockInode()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
-			parent, err := readCreateParent(store, params.parent, params.name)
-			if err != nil {
-				return err
+			parent, readErr := readCreateParent(store, params.parent, params.name)
+			if readErr != nil {
+				return readErr
 			}
-			if err := checkCreateEntry(store, params.parent, params.name); err != nil {
-				return err
+			if checkErr := checkCreateEntry(store, params.parent, params.name); checkErr != nil {
+				return checkErr
 			}
 			isDir := params.mode&S_IFMT == S_IFDIR
 			if isDir && parent.Nlink >= MaxNlink {
 				return ErrTooManyLinks
 			}
 			size := uint64(len(params.target))
-			if err := tx.RequireNewInode(size); err != nil {
-				return err
+			if reqErr := tx.RequireNewInode(size); reqErr != nil {
+				return reqErr
 			}
 
 			// 号段分配在配额锁之外完成，避免持久化预留阻塞其他分支的写入。
-			ino, err := m.pebble.AllocateInode(disk)
-			if err != nil {
-				return err
+			ino, allocErr := m.pebble.AllocateInode(disk)
+			if allocErr != nil {
+				return allocErr
 			}
 			if ino > math.MaxInt64 {
 				return ErrNoSpace
 			}
 
 			var inode pebblekv.Inode
-			if err := tx.CommitCreate(ino, size, func() error {
+			if commitErr := tx.CommitCreate(ino, size, func() error {
 				gid, mode := params.gid, params.mode
 				if parent.Mode&S_ISGID != 0 {
 					gid = parent.GID
@@ -319,36 +319,37 @@ func (m *manager) createPebbleNode(ctx context.Context, sid *uint64, params pebb
 				touchCreateParent(&parent, now, tx.WriteSeq())
 				tx.AddInodes(1)
 				tx.AddLogicalBytes(size)
-				if err := tx.PutInode(&inode); err != nil {
-					return err
+				if putErr := tx.PutInode(&inode); putErr != nil {
+					return putErr
 				}
-				if err := tx.PutInode(&parent); err != nil {
-					return err
+				if putErr := tx.PutInode(&parent); putErr != nil {
+					return putErr
 				}
 				return tx.PutEntry(params.parent, params.name, ino, mode)
-			}); err != nil {
-				return err
+			}); commitErr != nil {
+				return commitErr
 			}
 
-			result = m.createdPebbleInode(inode)
+			result = m.createdPebbleInode(&inode)
 			return nil
 		})
 	})
 	return result, err
 }
 
-func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkParams) (result *Inode, err error) {
-	err = m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
+func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkParams) (*Inode, error) {
+	var result *Inode
+	err := m.withWritablePebbleBranch(ctx, sid, func(disk, branch string, quota *TreeQuota, store *pebble.DB, blobs *pebblekv.BlobStore) error {
 		unlockInodes := m.locks.LockInodesWrite(disk, branch, params.NewParentIno, params.Ino)
 		defer unlockInodes()
 		return m.withBranchMutationTx(disk, branch, store, blobs, quota, func(tx *BranchMutationTx) error {
-			parent, err := readCreateParent(store, params.NewParentIno, params.NewName)
-			if err != nil {
-				return err
+			parent, readErr := readCreateParent(store, params.NewParentIno, params.NewName)
+			if readErr != nil {
+				return readErr
 			}
-			inode, err := readCreateInode(store, params.Ino)
-			if err != nil {
-				return err
+			inode, readErr := readCreateInode(store, params.Ino)
+			if readErr != nil {
+				return readErr
 			}
 			if inode.Mode&S_IFMT == S_IFDIR {
 				return ErrPerm
@@ -359,27 +360,27 @@ func (m *manager) linkPebbleNode(ctx context.Context, sid *uint64, params LinkPa
 			if inode.Nlink == 0 {
 				return ErrNotFound
 			}
-			if err := checkCreateEntry(store, params.NewParentIno, params.NewName); err != nil {
-				return err
+			if checkErr := checkCreateEntry(store, params.NewParentIno, params.NewName); checkErr != nil {
+				return checkErr
 			}
 			now := tx.Now()
 			inode.Nlink++
 			inode.CtimeSec, inode.CtimeNsec = now.Unix(), uint32(now.Nanosecond())
 			touchCreateParent(&parent, now, tx.WriteSeq())
-			if err := tx.PutInode(&inode); err != nil {
-				return err
+			if putErr := tx.PutInode(&inode); putErr != nil {
+				return putErr
 			}
-			if err := tx.PutInode(&parent); err != nil {
-				return err
+			if putErr := tx.PutInode(&parent); putErr != nil {
+				return putErr
 			}
-			if err := tx.PutEntry(params.NewParentIno, params.NewName, inode.Ino, inode.Mode); err != nil {
-				return err
+			if putErr := tx.PutEntry(params.NewParentIno, params.NewName, inode.Ino, inode.Mode); putErr != nil {
+				return putErr
 			}
-			if err := tx.CommitWithQuota(true); err != nil {
-				return err
+			if commitErr := tx.CommitWithQuota(true); commitErr != nil {
+				return commitErr
 			}
 
-			result = m.createdPebbleInode(inode)
+			result = m.createdPebbleInode(&inode)
 			return nil
 		})
 	})

@@ -31,8 +31,7 @@ func isPermissionError(err error) bool {
 	if os.IsPermission(err) {
 		return true
 	}
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
+	if errno, ok := errors.AsType[syscall.Errno](err); ok {
 		switch errno {
 		case syscall.EACCES, syscall.EPERM, syscall.EROFS:
 			return true
@@ -74,7 +73,8 @@ func ResolveLogFile(explicitPath, diskID string) (*os.File, string, error) {
 	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" {
 		stateDir = xdg
 	} else {
-		home, err := os.UserHomeDir()
+		var home string
+		home, err = os.UserHomeDir()
 		if err != nil {
 			return nil, "", fmt.Errorf("获取用户家目录失败: %w", err)
 		}
@@ -82,7 +82,7 @@ func ResolveLogFile(explicitPath, diskID string) (*os.File, string, error) {
 	}
 
 	fallbackDir := filepath.Join(stateDir, "bowl", "logs")
-	if err := os.MkdirAll(fallbackDir, 0o755); err != nil {
+	if err = os.MkdirAll(fallbackDir, 0o755); err != nil {
 		return nil, "", fmt.Errorf("创建回退日志目录 \"%s\" 失败: %w", fallbackDir, err)
 	}
 

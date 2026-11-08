@@ -85,7 +85,8 @@ func printDiskDetail(w io.Writer, d *storagev1.Disk) {
 	if dj.DefaultBranch != "" || len(dj.Branches) > 0 {
 		fmt.Fprintf(w, "Default Branch: %s\n", dj.DefaultBranch)
 		var summaries []string
-		for _, branch := range dj.Branches {
+		for i := range dj.Branches {
+			branch := &dj.Branches[i]
 			summary := fmt.Sprintf("%s@%s[%s]", branch.Name, branch.HeadCommitID, branch.State)
 			if branch.ParentBranch != "" {
 				summary += " <- " + branch.ParentBranch

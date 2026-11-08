@@ -85,12 +85,13 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()
-	if fs.cfg.DirectIO {
+	switch {
+	case fs.cfg.DirectIO:
 		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
 		out.OpenFlags |= fuse.FOPEN_DIRECT_IO
-	} else if input.Flags&uint32(syscall.O_TRUNC) != 0 {
+	case input.Flags&uint32(syscall.O_TRUNC) != 0:
 		out.OpenFlags &^= fuse.FOPEN_KEEP_CACHE
-	} else {
+	default:
 		// 非截断且非 DirectIO 时保留内核 Page Cache，避免每次 open 全量清空。
 		out.OpenFlags |= fuse.FOPEN_KEEP_CACHE
 	}
@@ -126,9 +127,9 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 		set := &fuse.SetAttrIn{}
 		set.NodeId = input.NodeId
 		set.Valid = fuse.FATTR_SIZE
-		if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, set, nil, &fuse.Attr{}); local {
-			if status != fuse.OK {
-				return status
+		if _, local, truncStatus := fs.tmpMgr.SetAttr(input.NodeId, set, nil, &fuse.Attr{}); local {
+			if truncStatus != fuse.OK {
+				return truncStatus
 			}
 		} else {
 			ino, st := fs.ToServerIno(input.NodeId)
@@ -189,7 +190,7 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	if status != fuse.OK {
 		return status
 	}
-	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+	if status = fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
 		return status
 	}
 	ino, status := fs.ToServerIno(input.NodeId)

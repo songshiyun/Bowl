@@ -1,3 +1,4 @@
+// Package validator 提供 Storage RPC 请求参数的业务校验器。
 package validator
 
 import (
@@ -170,8 +171,7 @@ func (v *storageValidator) Validate(msg proto.Message, options ...protovalidate.
 	if err == nil {
 		return nil
 	}
-	var valErr *protovalidate.ValidationError
-	if errors.As(err, &valErr) {
+	if valErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		reason, domain := translateValidation(valErr, ErrorDomain)
 		return &ValidationError{
 			err:    valErr,
@@ -199,12 +199,10 @@ func ErrnoReason(err error) (string, bool) {
 	if err == nil {
 		return "", false
 	}
-	var storageValErr *ValidationError
-	if errors.As(err, &storageValErr) {
+	if storageValErr, ok := errors.AsType[*ValidationError](err); ok {
 		return storageValErr.Reason(), true
 	}
-	var protoValErr *protovalidate.ValidationError
-	if errors.As(err, &protoValErr) {
+	if protoValErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		return translateValidationReason(protoValErr), true
 	}
 	return "", false
@@ -220,12 +218,10 @@ func ToStatus(err error) *status.Status {
 	if s, ok := status.FromError(err); ok {
 		return s
 	}
-	var storageValErr *ValidationError
-	if errors.As(err, &storageValErr) {
+	if storageValErr, ok := errors.AsType[*ValidationError](err); ok {
 		return buildInvalidArgumentStatus(err.Error(), storageValErr.Reason(), storageValErr.Domain())
 	}
-	var protoValErr *protovalidate.ValidationError
-	if errors.As(err, &protoValErr) {
+	if protoValErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		reason, domain := translateValidation(protoValErr, ErrorDomain)
 		return buildInvalidArgumentStatus(err.Error(), reason, domain)
 	}
@@ -262,7 +258,7 @@ func translateValidationReason(valErr *protovalidate.ValidationError) string {
 	return reason
 }
 
-func translateValidation(valErr *protovalidate.ValidationError, defaultDomain string) (string, string) {
+func translateValidation(valErr *protovalidate.ValidationError, defaultDomain string) (reason, domain string) {
 	bestPriority := 100
 	bestReason := ReasonInvalidArgument
 	bestDomain := defaultDomain
@@ -271,12 +267,12 @@ func translateValidation(valErr *protovalidate.ValidationError, defaultDomain st
 	}
 
 	for _, v := range valErr.Violations {
-		priority, reason, domain := classifyViolation(v)
+		priority, vReason, vDomain := classifyViolation(v)
 		if priority < bestPriority {
 			bestPriority = priority
-			bestReason = reason
-			if domain != "" {
-				bestDomain = domain
+			bestReason = vReason
+			if vDomain != "" {
+				bestDomain = vDomain
 			}
 		}
 	}
@@ -284,14 +280,14 @@ func translateValidation(valErr *protovalidate.ValidationError, defaultDomain st
 	return bestReason, bestDomain
 }
 
-func classifyViolation(v *protovalidate.Violation) (int, string, string) {
-	priority, reason := classifyViolationInternal(v)
+func classifyViolation(v *protovalidate.Violation) (priority int, reason, domain string) {
+	priority, reason = classifyViolationInternal(v)
 	fullName := ""
 	if v != nil && v.FieldDescriptor != nil {
 		fullName = string(v.FieldDescriptor.FullName())
 	}
 
-	domain := ""
+	domain = ""
 	if strings.HasPrefix(fullName, "storage.v1.") {
 		domain = ErrorDomain
 	} else if fullName == "" {
@@ -301,7 +297,7 @@ func classifyViolation(v *protovalidate.Violation) (int, string, string) {
 	return priority, reason, domain
 }
 
-func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
+func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason string) {
 	if v == nil || v.Proto == nil {
 		return 60, ReasonInvalidArgument
 	}

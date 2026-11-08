@@ -194,7 +194,7 @@ func TestPebbleAtimeTrackerPreservesEntriesOnFlushFailure(t *testing.T) {
 	require.NoError(t, branch.DB().Set(pebblekv.InodeKey(10), encoded, pebble.Sync))
 
 	now := time.Unix(500, 123000000).UTC()
-	tracker.MarkDirty("disk-1", "main", inode, now)
+	tracker.MarkDirty("disk-1", "main", &inode, now)
 	require.True(t, tracker.HasPending("disk-1", "main"))
 
 	// 叠加校验：刷盘前 Overlay 立即反映最新内存脏 atime。
@@ -233,9 +233,9 @@ func TestPebbleAtimeTrackerPreservesEntriesOnFlushFailure(t *testing.T) {
 
 	// 4. 删除清理：DiscardInode / DiscardBranch / DiscardDisk 精准移除内存脏项。
 	tLater := time.Unix(900, 0).UTC()
-	tracker.MarkDirty("disk-1", "main", flushed, tLater)
-	tracker.MarkDirty("disk-1", "feature", flushed, tLater)
-	tracker.MarkDirty("disk-2", "main", flushed, tLater)
+	tracker.MarkDirty("disk-1", "main", &flushed, tLater)
+	tracker.MarkDirty("disk-1", "feature", &flushed, tLater)
+	tracker.MarkDirty("disk-2", "main", &flushed, tLater)
 	require.True(t, tracker.HasPending("disk-1", "main"))
 	require.True(t, tracker.HasPending("disk-1", "feature"))
 	require.True(t, tracker.HasPending("disk-2", "main"))

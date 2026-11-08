@@ -110,7 +110,7 @@ tasks:
       - go -C client mod tidy {{.CLI_ARGS}}
 
   test:client:
-    desc: "Run client static checks, build, and unit tests inside Linux Docker container"
+    desc: "Build client and run unit tests inside Linux Docker container"
     deps: [build:client:test]
     cmds:
       - docker run --rm
@@ -120,7 +120,7 @@ tasks:
         -w /workspace/client
         -e GOWORK=off
         {{.CLIENT_TEST_IMAGE}}:{{.TAG}}
-        sh -c 'test -z "$(gofmt -s -l .)" && go vet ./... && CGO_ENABLED=0 GOOS=linux go build -o /tmp/bowl ./cmd/bowl && /tmp/bowl version && go test -v -count=1 ./... {{.CLI_ARGS}}'
+        sh -c 'CGO_ENABLED=0 GOOS=linux go build -o /tmp/bowl ./cmd/bowl && /tmp/bowl version && go test -v -count=1 ./... {{.CLI_ARGS}}'
 
   test:client:e2e:
     desc: "Run Linux FUSE client black-box E2E tests inside privileged test container"
@@ -155,30 +155,12 @@ tasks:
       - go test -tags=e2e -v -count=1 ./e2e/... {{.CLI_ARGS}}
 
   lint:
-    desc: "Run buf lint, gofmt check, and go vet across all modules"
+    desc: "Run buf lint and golangci-lint across all modules"
     cmds:
       - buf lint
-      - test -z "$(gofmt -s -l . | grep -Ev '^(\.worktrees/|(.*/)?vendor/)')"
-      - >-
-        sh -c '
-        for f in services/storage/internal/meta/*_test.go; do
-          base=$(basename "$f");
-          if [ "$base" != "testdb_helper_test.go" ] && [ "$base" != "disk_test.go" ]; then
-            if grep -Eq "STORAGE_DB_DSN|STORAGE_TEST_DSN|TEST_DB_DSN|BOWL_TEST_POSTGRES_DSN|:(5432|9432)/bowl" "$f"; then
-              echo "lint error: $f 私自解析或硬编码数据库 DSN，请统一调用 setupMetaTestDB(t)" >&2;
-              exit 1;
-            fi;
-            if grep -Eq "pgxpool\.New(WithConfig)?\(" "$f" && ! grep -Eq "resolveAndConnectTestDB|getStorageTestDSN" "$f"; then
-              echo "lint error: $f 绕过统一辅助函数直接调用 pgxpool.New，请统一调用 setupMetaTestDB(t)" >&2;
-              exit 1;
-            fi;
-          fi;
-        done'
-      - go vet ./...
-      - go -C services/storage vet ./...
-      - GOOS=linux CGO_ENABLED=0 go -C client vet ./...
-      - GOOS=linux CGO_ENABLED=0 go -C client vet -tags=e2e ./e2e/...
-      - go vet -tags=e2e ./e2e/...
+      - golangci-lint run ./...
+      - cd services/storage && golangci-lint run --config ../../.golangci.yml ./...
+      - cd client && GOOS=linux CGO_ENABLED=0 golangci-lint run --config ../.golangci.yml ./...
 
   goose:storage:up:
     desc: "执行 storage 服务的 goose 向上迁移 (Up)"

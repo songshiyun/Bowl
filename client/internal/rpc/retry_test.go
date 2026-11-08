@@ -22,7 +22,7 @@ func TestRetryConfigWithDefaults(t *testing.T) {
 	got := RetryConfig{}.withDefaults()
 	require.Equal(t, DefaultMaxElapsedTime, got.MaxElapsedTime)
 	require.Equal(t, DefaultInitialInterval, got.InitialInterval)
-	require.Equal(t, DefaultMultiplier, got.Multiplier)
+	require.InDelta(t, DefaultMultiplier, got.Multiplier, 1e-9)
 	require.Equal(t, DefaultMaxInterval, got.MaxInterval)
 	require.False(t, got.Disable)
 	require.Nil(t, got.RandFloat64)
@@ -49,7 +49,7 @@ func TestRetryConfigWithDefaultsReplacesNonPositiveValues(t *testing.T) {
 	got := cfg.withDefaults()
 	require.Equal(t, DefaultMaxElapsedTime, got.MaxElapsedTime)
 	require.Equal(t, DefaultInitialInterval, got.InitialInterval)
-	require.Equal(t, DefaultMultiplier, got.Multiplier)
+	require.InDelta(t, DefaultMultiplier, got.Multiplier, 1e-9)
 	require.Equal(t, DefaultMaxInterval, got.MaxInterval)
 }
 

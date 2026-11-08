@@ -173,10 +173,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			}
 		}
 
-		chunkSize := uint32(dataLen) - totalWritten
-		if chunkSize > MaxRPCChunkSize {
-			chunkSize = MaxRPCChunkSize
-		}
+		chunkSize := min(uint32(dataLen)-totalWritten, MaxRPCChunkSize)
 		chunk := data[totalWritten : totalWritten+chunkSize]
 		curOffset := input.Offset + uint64(totalWritten)
 

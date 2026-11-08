@@ -9,6 +9,7 @@ import (
 	"github.com/starsrc/Aether/pkg/observability/slogx"
 	"github.com/starsrc/Aether/pkg/observability/telemetry"
 	"github.com/starsrc/Aether/pkg/serverx"
+
 	"github.com/starsrc/bowl/pkg/validator"
 )
 
@@ -64,12 +65,4 @@ func BuildInterceptors(
 		valInterceptor,
 		extra...,
 	)
-}
-
-func buildInterceptors(
-	telemetryCfg telemetry.Config,
-	logInterceptor connect.UnaryInterceptorFunc,
-	logger *slog.Logger,
-) ([]connect.Interceptor, error) {
-	return BuildInterceptors(telemetryCfg, logInterceptor, logger)
 }

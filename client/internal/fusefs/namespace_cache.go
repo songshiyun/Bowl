@@ -4,8 +4,9 @@ import (
 	"container/list"
 	"sync"
 
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // DefaultNamespaceCacheCapacity 限制缓存的节点、目录项和目录流所占条目数。
@@ -27,8 +28,15 @@ type cachedInode struct {
 
 type cacheItem struct {
 	key    cacheKey
-	value  any
+	inode  cachedInode
+	entry  uint64
+	dir    []*storagev1.DirEntryPlus
 	weight int
+}
+
+func itemOf(el *list.Element) *cacheItem {
+	item, _ := el.Value.(*cacheItem)
+	return item
 }
 
 // NamespaceCache 按最近使用顺序淘汰属性、目录项和完整目录流。
@@ -74,7 +82,7 @@ func (c *NamespaceCache) remove(el *list.Element) {
 	if el == nil {
 		return
 	}
-	item := el.Value.(*cacheItem)
+	item := itemOf(el)
 	delete(c.items, item.key)
 	c.used -= item.weight
 	c.lru.Remove(el)
@@ -100,7 +108,7 @@ func (c *NamespaceCache) index(item *cacheItem) {
 	case 'd':
 		dir := item.key.ino
 		children := make(map[uint64]struct{})
-		for _, entry := range item.value.([]*storagev1.DirEntryPlus) {
+		for _, entry := range item.dir {
 			child := entry.GetIno()
 			if child == 0 {
 				continue
@@ -148,7 +156,9 @@ func (c *NamespaceCache) unindex(item *cacheItem) {
 	}
 }
 
-func (c *NamespaceCache) put(key cacheKey, value any, weight int) {
+func (c *NamespaceCache) putItem(item *cacheItem) {
+	key := item.key
+	weight := item.weight
 	if old := c.items[key]; old != nil {
 		c.remove(old)
 	}
@@ -165,24 +175,23 @@ func (c *NamespaceCache) put(key cacheKey, value any, weight int) {
 			break
 		}
 		// 目录项被容量淘汰后，该父目录的完整内容不再可信；属性与目录流的淘汰不影响完整标记。
-		if item := back.Value.(*cacheItem); item.key.kind == 'e' {
-			delete(c.completeDirs, item.key.ino)
+		if evicted := itemOf(back); evicted.key.kind == 'e' {
+			delete(c.completeDirs, evicted.key.ino)
 		}
 		c.remove(back)
 	}
-	item := &cacheItem{key: key, value: value, weight: weight}
 	c.items[key] = c.lru.PushFront(item)
 	c.used += weight
 	c.index(item)
 }
 
-func (c *NamespaceCache) get(key cacheKey) (any, bool) {
+func (c *NamespaceCache) get(key cacheKey) (*cacheItem, bool) {
 	el := c.items[key]
 	if el == nil {
 		return nil, false
 	}
 	c.lru.MoveToFront(el)
-	return el.Value.(*cacheItem).value, true
+	return itemOf(el), true
 }
 
 func cloneTimestamp(ts *timestamppb.Timestamp) *timestamppb.Timestamp {
@@ -246,8 +255,8 @@ func cloneDir(entries []*storagev1.DirEntryPlus) []*storagev1.DirEntryPlus {
 func (c *NamespaceCache) inode(ino uint64) (cachedInode, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if value, ok := c.get(cacheKey{kind: 'i', ino: ino}); ok {
-		v := value.(cachedInode)
+	if item, ok := c.get(cacheKey{kind: 'i', ino: ino}); ok {
+		v := item.inode
 		v.inode = cloneInode(v.inode)
 		return v, true
 	}
@@ -257,7 +266,7 @@ func (c *NamespaceCache) inode(ino uint64) (cachedInode, bool) {
 		if el == nil {
 			continue
 		}
-		for _, entry := range el.Value.(*cacheItem).value.([]*storagev1.DirEntryPlus) {
+		for _, entry := range itemOf(el).dir {
 			if entry.GetIno() == ino && entry.GetInode() != nil && entry.GetInode().GetAttr() != nil {
 				c.lru.MoveToFront(el)
 				return cachedInode{cloneInode(entry.GetInode()), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}, true
@@ -302,7 +311,7 @@ func (c *NamespaceCache) putInodeLocked(ino uint64, inode *storagev1.Inode, entr
 		if el == nil {
 			continue
 		}
-		entries := el.Value.(*cacheItem).value.([]*storagev1.DirEntryPlus)
+		entries := itemOf(el).dir
 		for i, entry := range entries {
 			if entry.GetIno() == ino {
 				// 替换而非原地改写：目录流一旦发布就不再被修改，
@@ -314,7 +323,11 @@ func (c *NamespaceCache) putInodeLocked(ino uint64, inode *storagev1.Inode, entr
 			}
 		}
 	}
-	c.put(cacheKey{kind: 'i', ino: ino}, cachedInode{cloneInode(inode), entryTimeout, attrTimeout}, 1)
+	c.putItem(&cacheItem{
+		key:    cacheKey{kind: 'i', ino: ino},
+		inode:  cachedInode{cloneInode(inode), entryTimeout, attrTimeout},
+		weight: 1,
+	})
 }
 
 // refreshInodeAt 用写操作返回的最新属性刷新缓存项，但保留既有目录项有效期。
@@ -360,14 +373,14 @@ func (c *NamespaceCache) refreshInodeLocked(ino uint64, inode *storagev1.Inode, 
 // 保证 STORAGE_ENTRY_TIMEOUT_SECONDS=0 的 pjdfstest 场景不会产生非预期的非零 EntryValid。
 func (c *NamespaceCache) entryTimeoutLocked(ino uint64, fallback float64) float64 {
 	if el := c.items[cacheKey{kind: 'i', ino: ino}]; el != nil {
-		return el.Value.(*cacheItem).value.(cachedInode).entryTimeout
+		return itemOf(el).inode.entryTimeout
 	}
 	for dir := range c.dirsByChild[ino] {
 		el := c.items[cacheKey{kind: 'd', ino: dir}]
 		if el == nil {
 			continue
 		}
-		for _, entry := range el.Value.(*cacheItem).value.([]*storagev1.DirEntryPlus) {
+		for _, entry := range itemOf(el).dir {
 			if entry.GetIno() == ino {
 				return entry.GetEntryTimeoutSeconds()
 			}
@@ -390,11 +403,11 @@ func (c *NamespaceCache) invalidateInode(ino uint64) {
 func (c *NamespaceCache) entry(parent uint64, name string) (uint64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if value, ok := c.get(cacheKey{kind: 'e', ino: parent, name: name}); ok {
-		return value.(uint64), true
+	if item, ok := c.get(cacheKey{kind: 'e', ino: parent, name: name}); ok {
+		return item.entry, true
 	}
-	if value, ok := c.get(cacheKey{kind: 'd', ino: parent}); ok {
-		for _, entry := range value.([]*storagev1.DirEntryPlus) {
+	if item, ok := c.get(cacheKey{kind: 'd', ino: parent}); ok {
+		for _, entry := range item.dir {
 			if string(entry.GetName()) == name {
 				return entry.GetIno(), true
 			}
@@ -437,7 +450,11 @@ func (c *NamespaceCache) putEntryLocked(parent uint64, name string, ino uint64) 
 	// 独立目录项与旧目录流冲突：先把目录流按条目降级，保留未变动兄弟项的权威命中，
 	// 再写入本次变更的目录项。
 	c.demoteDirStreamToEntriesLocked(parent)
-	c.put(cacheKey{kind: 'e', ino: parent, name: name}, ino, 1)
+	c.putItem(&cacheItem{
+		key:    cacheKey{kind: 'e', ino: parent, name: name},
+		entry:  ino,
+		weight: 1,
+	})
 }
 
 func (c *NamespaceCache) invalidateDir(parent uint64) {
@@ -482,7 +499,7 @@ func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
 	if el == nil {
 		return
 	}
-	entries := el.Value.(*cacheItem).value.([]*storagev1.DirEntryPlus)
+	entries := itemOf(el).dir
 	c.remove(el)
 	if len(entries) > c.capacity/4 {
 		return
@@ -497,12 +514,12 @@ func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
 		// put 每个目录项最多触发一次容量淘汰，预先判断被淘汰项是否属于同一父目录。
 		if c.items[key] == nil && c.used+1 > c.capacity {
 			if back := c.lru.Back(); back != nil {
-				if item := back.Value.(*cacheItem); item.key.kind == 'e' && item.key.ino == parent {
+				if item := itemOf(back); item.key.kind == 'e' && item.key.ino == parent {
 					evictedSameParent = true
 				}
 			}
 		}
-		c.put(key, entry.GetIno(), 1)
+		c.putItem(&cacheItem{key: key, entry: entry.GetIno(), weight: 1})
 	}
 	if !evictedSameParent {
 		c.completeDirs[parent] = struct{}{}
@@ -533,7 +550,7 @@ func (c *NamespaceCache) invalidateDirListingTouchParentAt(epoch, parent uint64,
 	var parentEntry cachedInode
 	var hadParent bool
 	if el := c.items[cacheKey{kind: 'i', ino: parent}]; el != nil {
-		parentEntry = el.Value.(*cacheItem).value.(cachedInode)
+		parentEntry = itemOf(el).inode
 		hadParent = true
 	}
 	c.demoteDirStreamToEntriesLocked(parent)
@@ -581,7 +598,7 @@ func (c *NamespaceCache) invalidateDirListingTouchParentNowAt(epoch, parent uint
 	var parentEntry cachedInode
 	var hadParent bool
 	if el := c.items[cacheKey{kind: 'i', ino: parent}]; el != nil {
-		parentEntry = el.Value.(*cacheItem).value.(cachedInode)
+		parentEntry = itemOf(el).inode
 		hadParent = true
 	}
 	c.demoteDirStreamToEntriesLocked(parent)
@@ -619,13 +636,13 @@ func (c *NamespaceCache) removeEntry(parent uint64, name string) {
 func (c *NamespaceCache) dir(ino uint64) ([]*storagev1.DirEntryPlus, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	value, ok := c.get(cacheKey{kind: 'd', ino: ino})
+	item, ok := c.get(cacheKey{kind: 'd', ino: ino})
 	if !ok {
 		return nil, false
 	}
 	// 只做指针快照：缓存项一经发布就不再原地修改（putInodeLocked 以替换元素的方式更新），
 	// 因此调用方可以安全并发读取。500 项目录从 2,001 次分配 / 65~97µs 降到 1 次分配 / ~0.3µs。
-	return append([]*storagev1.DirEntryPlus(nil), value.([]*storagev1.DirEntryPlus)...), true
+	return append([]*storagev1.DirEntryPlus(nil), item.dir...), true
 }
 
 func (c *NamespaceCache) putDir(ino uint64, entries []*storagev1.DirEntryPlus) {
@@ -657,7 +674,11 @@ func (c *NamespaceCache) putDirLocked(ino uint64, entries []*storagev1.DirEntryP
 	for _, name := range copyNames(c.byParent[ino]) {
 		c.removeKey(cacheKey{kind: 'e', ino: ino, name: name})
 	}
-	c.put(cacheKey{kind: 'd', ino: ino}, cloneDir(entries), len(entries)+1)
+	c.putItem(&cacheItem{
+		key:    cacheKey{kind: 'd', ino: ino},
+		dir:    cloneDir(entries),
+		weight: len(entries) + 1,
+	})
 	// 目录流已完整加载：未命中的名字可权威判定为 ENOENT。
 	if len(entries)+1 <= c.capacity {
 		c.completeDirs[ino] = struct{}{}

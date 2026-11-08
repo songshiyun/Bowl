@@ -15,6 +15,7 @@ const (
 // Pool 最多保留八个不大于 4 MiB 的闲置缓冲；不限制或合并正在执行的读取。
 type Pool struct{ idle chan []byte }
 
+// NewPool 创建读取缓冲池。
 func NewPool() *Pool { return &Pool{idle: make(chan []byte, idleLimit)} }
 
 type scopeKey struct{}
@@ -28,7 +29,7 @@ type scope struct {
 
 // WithScope 绑定 HTTP 请求的缓冲所有权。调用方必须在处理器完成序列化和写入后释放，
 // 不能在领域 Read 返回时释放。结束后的上下文再次申请缓冲会退回普通分配。
-func (p *Pool) WithScope(ctx context.Context) (context.Context, func()) {
+func (p *Pool) WithScope(ctx context.Context) (scopedCtx context.Context, release func()) {
 	s := &scope{pool: p}
 	return context.WithValue(ctx, scopeKey{}, s), s.close
 }

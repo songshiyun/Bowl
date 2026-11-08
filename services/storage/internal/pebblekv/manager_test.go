@@ -8,8 +8,9 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
 func TestBranchCheckpointForkAndSharedCommit(t *testing.T) {

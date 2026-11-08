@@ -67,42 +67,46 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 				jsonOut = true
 			case "limit":
 				limitSet = true
-				if hasVal {
+				switch {
+				case hasVal:
 					limitRaw = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					limitRaw = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --limit 需要指定参数值")
 					return 2
 				}
 			case "page-token":
-				if hasVal {
+				switch {
+				case hasVal:
 					pageToken = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					pageToken = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --page-token 需要指定参数值")
 					return 2
 				}
 			case "endpoint":
-				if hasVal {
+				switch {
+				case hasVal:
 					endpoint = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					endpoint = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
 					return 2
 				}
 			case "token":
-				if hasVal {
+				switch {
+				case hasVal:
 					token = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					token = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
 					return 2
 				}
@@ -182,7 +186,7 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 		if dj.MaxBytes > 0 {
 			usagePct = float64(dj.UsedBytes) * 100.0 / float64(dj.MaxBytes)
 		}
-		branches := fmt.Sprintf("%d", len(dj.Branches))
+		branches := strconv.Itoa(len(dj.Branches))
 		if dj.DefaultBranch != "" {
 			branches = fmt.Sprintf("%s (%d)", dj.DefaultBranch, len(dj.Branches))
 		}

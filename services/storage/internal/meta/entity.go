@@ -8,6 +8,8 @@ import (
 )
 
 // POSIX 文件类型掩码与模式常量。
+//
+//revive:disable:var-naming
 const (
 	S_IFMT                uint32 = 0o170000
 	S_IFIFO               uint32 = 0o010000
@@ -24,6 +26,8 @@ const (
 	MaxFileNameBytes             = 255
 	MaxSymlinkTargetBytes        = 4095
 )
+
+//revive:enable:var-naming
 
 // 根节点编号。
 const (
@@ -42,7 +46,7 @@ const (
 	DefaultDirSize   uint64 = 4096
 )
 
-// 单次数据请求的最大长度。
+// BlockSize 定义单次数据请求的最大长度。
 const BlockSize = 1 << 22
 
 // 磁盘与 StatFS 常量。
@@ -64,6 +68,8 @@ const (
 )
 
 // Linux FUSE / POSIX 打开标志位常量（平台无关固定值，严禁依赖宿主机 syscall.O_*）。
+//
+//revive:disable:var-naming
 const (
 	O_ACCMODE = 0o3
 	O_RDONLY  = 0o0
@@ -84,6 +90,8 @@ const (
 	FOPEN_CACHE_DIR   uint32 = 1 << 3
 )
 
+//revive:enable:var-naming
+
 // Linux FUSE / POSIX fallocate 模式标志位常量（平台无关固定值）。
 const (
 	FallocFlKeepSize      uint32 = 0x01
@@ -103,6 +111,7 @@ const (
 // AtimeMode 定义最后访问时间更新策略枚举。
 type AtimeMode int
 
+// 访问时间（atime）更新策略枚举值。
 const (
 	AtimeModeNoAtime     AtimeMode = 0 // 默认：不更新 atime
 	AtimeModeRelAtime    AtimeMode = 1 // relatime：仅当 atime <= mtime 或 atime 超过 24h 时更新
@@ -119,7 +128,7 @@ const (
 	XattrReplace uint32 = 0x2
 )
 
-// 默认客户端会话租约时长。
+// DefaultSessionLeaseTTL 定义默认客户端会话租约时长。
 const DefaultSessionLeaseTTL = 15 * time.Second
 
 // SetAttrInput 定义修改 Inode 属性的输入参数。
@@ -238,7 +247,7 @@ type FsyncDirParams struct {
 	SessionID *uint64
 }
 
-// 目录遍历最大单次条目配额限制。
+// MaxReadDirLimit 定义目录遍历最大单次条目配额限制。
 const MaxReadDirLimit uint32 = 4096
 
 // 默认内核条目与属性缓存时效（秒）。
@@ -453,6 +462,7 @@ type RollbackParams struct {
 // ConflictStrategy 指定合并冲突的处理方式。
 type ConflictStrategy int32
 
+// 合并冲突处理策略枚举值。
 const (
 	ConflictStrategyUnspecified ConflictStrategy = iota
 	ConflictStrategyAbortOnConflict
@@ -464,6 +474,7 @@ const (
 // MergeResultType 表示合并结果。
 type MergeResultType int32
 
+// 合并结果类型枚举值。
 const (
 	MergeResultUnspecified MergeResultType = iota
 	MergeResultMerged
@@ -511,6 +522,7 @@ type MergeResult struct {
 // DiffChangeType 表示路径的变更类型。
 type DiffChangeType int32
 
+// 路径变更类型枚举值。
 const (
 	DiffChangeTypeUnspecified DiffChangeType = 0
 	DiffChangeTypeAdded       DiffChangeType = 1

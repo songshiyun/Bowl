@@ -1,18 +1,18 @@
+// Package rpc 封装 StorageService ConnectRPC 客户端、重试拦截器与错误映射。
 package rpc
 
 import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
 	"connectrpc.com/connect"
+
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
-	"golang.org/x/net/http2"
 )
 
 const (
@@ -101,13 +101,13 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 		if strings.EqualFold(u.Scheme, "http") {
 			// 明文 HTTP/2 (h2c) 并发多路复用传输
-			h2cTransport := &http2.Transport{
-				AllowHTTP: true,
+			var protocols http.Protocols
+			protocols.SetUnencryptedHTTP2(true)
+			h2cTransport := &http.Transport{
+				Protocols: &protocols,
 				// 协商 256 KiB 接收帧，降低大响应的帧处理开销。
-				MaxReadFrameSize: 256 * 1024,
-				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, network, addr)
+				HTTP2: &http.HTTP2Config{
+					MaxReadFrameSize: 256 * 1024,
 				},
 			}
 			httpClient = &http.Client{

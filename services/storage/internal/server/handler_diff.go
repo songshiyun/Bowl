@@ -19,10 +19,10 @@ func (s *Server) Diff(ctx context.Context, req *connect.Request[storagev1.DiffRe
 	for _, entry := range entries {
 		out := &storagev1.DiffEntry{ChangeType: storagev1.DiffChangeType(entry.ChangeType), Path: entry.Path, OldPath: entry.OldPath, ModifiedBlockIndices: entry.ModifiedBlockIndices}
 		if entry.OldAttr != nil {
-			out.OldAttr = toProtoAttribute(entry.OldAttr.Attr)
+			out.OldAttr = toProtoAttribute(&entry.OldAttr.Attr)
 		}
 		if entry.NewAttr != nil {
-			out.NewAttr = toProtoAttribute(entry.NewAttr.Attr)
+			out.NewAttr = toProtoAttribute(&entry.NewAttr.Attr)
 		}
 		result = append(result, out)
 	}

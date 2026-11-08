@@ -33,7 +33,7 @@ const (
 )
 
 func validDiffRef(ref string) bool {
-	if len(ref) == 0 || len(ref) > 255 || ref == "." || ref == ".." {
+	if ref == "" || len(ref) > 255 || ref == "." || ref == ".." {
 		return false
 	}
 	for i := range len(ref) {
@@ -195,7 +195,7 @@ var errDiffSnapshotMismatch = errors.New("只读快照与分支工作区不一�
 func (r *diffRenderer) lookup(ctx context.Context, mgr *session.Manager, path string, expected *storagev1.InodeAttribute) (uint64, error) {
 	ino := uint64(1)
 	var inode *storagev1.Inode
-	for _, name := range strings.Split(path, "/") {
+	for name := range strings.SplitSeq(path, "/") {
 		sid, err := mgr.AcquireSessionID(ctx)
 		if err != nil {
 			return 0, err
@@ -264,7 +264,7 @@ func (r *diffRenderer) readUntil(ctx context.Context, content *diffContent, size
 	return nil
 }
 
-func diffName(entry *storagev1.DiffEntry) (string, string) {
+func diffName(entry *storagev1.DiffEntry) (oldPath, newPath string) {
 	old := entry.Path
 	if entry.OldPath != "" {
 		old = entry.OldPath

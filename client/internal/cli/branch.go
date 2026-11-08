@@ -1,3 +1,4 @@
+// Package cli 实现 bowl 客户端命令行参数解析与子命令分发。
 package cli
 
 import (
@@ -162,7 +163,8 @@ func executeBranch(args []string, stdout, stderr io.Writer) int {
 		}
 		tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "NAME\tPARENT\tHEAD COMMIT\tSTATE\tCREATED AT")
-		for _, branch := range branches {
+		for i := range branches {
+			branch := &branches[i]
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", branch.Name, branch.ParentBranch, branch.HeadCommitID, branch.State, branch.CreatedAt)
 		}
 		_ = tw.Flush()

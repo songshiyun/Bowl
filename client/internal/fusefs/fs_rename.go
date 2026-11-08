@@ -19,7 +19,7 @@ const (
 )
 
 // Rename 实现目录项重命名、跨目录移动与双向原子交换操作（支持 Linux FUSE_RENAME2 协议标志位）。
-func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName string, newName string) fuse.Status {
+func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, newName string) fuse.Status {
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}

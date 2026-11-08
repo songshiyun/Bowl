@@ -11,7 +11,6 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/starsrc/bowl/e2e/testutil"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -107,7 +106,7 @@ func TestBranchStorageLifecycle(t *testing.T) {
 	testutil.RequireConnectError(t, err, connect.CodeFailedPrecondition, "EBUSY")
 	rollbackWhileOpenReason := testutil.ExtractErrorInfo(err).GetReason()
 
-	_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("shared"), SessionId: &mainID, OpenInClient: proto.Bool(true)}))
+	_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{ParentIno: 1, Name: []byte("shared"), SessionId: &mainID, OpenInClient: new(true)}))
 	require.NoError(t, err)
 	read, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{Ino: ino, Size: 5, SessionId: &mainID}))
 	require.NoError(t, err)

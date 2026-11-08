@@ -89,7 +89,7 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	if status == fuse.OK {
 		fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
 		out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
-		out.Attr.Ino = out.NodeId
+		out.Ino = out.NodeId
 	}
 	return status
 }

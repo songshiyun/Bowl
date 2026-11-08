@@ -27,8 +27,8 @@ func readDaemonHandshake(r io.Reader, stderr io.Writer) int {
 		if line == "OK" {
 			return 0
 		}
-		if strings.HasPrefix(line, "ERR:") {
-			errMsg := strings.TrimPrefix(line, "ERR:")
+		if after, ok := strings.CutPrefix(line, "ERR:"); ok {
+			errMsg := after
 			fmt.Fprintf(stderr, "错误: 后台守护进程初始化失败: %s\n", errMsg)
 			return 1
 		}

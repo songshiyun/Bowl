@@ -11,6 +11,8 @@ import (
 )
 
 // Linux ioctl 文件系统标志位命令号（兼容 64 位与 32 位 ABI，以及 VFS fileattr 扩展属性桥接）。
+//
+//revive:disable:var-naming
 const (
 	FS_IOC_GETFLAGS   uint32 = 0x80086601
 	FS_IOC32_GETFLAGS uint32 = 0x80046601
@@ -31,6 +33,8 @@ const (
 	FS_XFLAG_IMMUTABLE uint32 = 0x00000008
 	FS_XFLAG_APPEND    uint32 = 0x00000010
 )
+
+//revive:enable:var-naming
 
 // 服务端协议标志位常量（对应 storage.proto / meta.Flag*）。
 const (

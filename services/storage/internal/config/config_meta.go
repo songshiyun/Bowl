@@ -42,12 +42,12 @@ type MetaConfig struct {
 }
 
 // SessionLeaseTTL 返回客户端会话租约时长。
-func (c MetaConfig) SessionLeaseTTL() time.Duration {
+func (c *MetaConfig) SessionLeaseTTL() time.Duration {
 	return c.SessionLeaseTTLVal
 }
 
 // AtimeMode 返回最后访问时间更新策略的小写标准化字符串（"noatime" / "relatime" / "strictatime"）。
-func (c MetaConfig) AtimeMode() string {
+func (c *MetaConfig) AtimeMode() string {
 	if c.AtimeModeVal == "" {
 		return DefaultAtimeMode
 	}
@@ -55,32 +55,32 @@ func (c MetaConfig) AtimeMode() string {
 }
 
 // EntryTimeoutSeconds 返回非目录节点内核条目缓存时长（秒）。
-func (c MetaConfig) EntryTimeoutSeconds() float64 {
+func (c *MetaConfig) EntryTimeoutSeconds() float64 {
 	return c.EntryTimeoutSecondsVal
 }
 
 // AttrTimeoutSeconds 返回节点内核属性缓存时长（秒）。
-func (c MetaConfig) AttrTimeoutSeconds() float64 {
+func (c *MetaConfig) AttrTimeoutSeconds() float64 {
 	return c.AttrTimeoutSecondsVal
 }
 
 // DirEntryTimeoutSeconds 返回目录节点内核条目缓存时长（秒）。
-func (c MetaConfig) DirEntryTimeoutSeconds() float64 {
+func (c *MetaConfig) DirEntryTimeoutSeconds() float64 {
 	return c.DirEntryTimeoutSecondsVal
 }
 
 // OpenKeepCache 返回打开文件时是否保留内核页缓存。
-func (c MetaConfig) OpenKeepCache() bool {
+func (c *MetaConfig) OpenKeepCache() bool {
 	return c.OpenKeepCacheVal
 }
 
 // OpenDirCache 返回打开目录时是否保留内核目录缓存。
-func (c MetaConfig) OpenDirCache() bool {
+func (c *MetaConfig) OpenDirCache() bool {
 	return c.OpenDirCacheVal
 }
 
 // DataDir 返回本地数据根目录路径（优先读取 DATA_DIR，其次 STORAGE_DATA_DIR，默认 DefaultDataDir）。
-func (c MetaConfig) DataDir() string {
+func (c *MetaConfig) DataDir() string {
 	if strings.TrimSpace(c.DataDirVal) != "" {
 		return c.DataDirVal
 	}
@@ -97,7 +97,7 @@ func (c MetaConfig) DataDir() string {
 }
 
 // SessionSweepInterval 返回过期会话清理间隔。若未设置或 <= 0 则采用 DefaultSessionSweepInterval。
-func (c MetaConfig) SessionSweepInterval() time.Duration {
+func (c *MetaConfig) SessionSweepInterval() time.Duration {
 	if c.SessionSweepIntervalVal <= 0 {
 		return DefaultSessionSweepInterval
 	}
@@ -105,7 +105,7 @@ func (c MetaConfig) SessionSweepInterval() time.Duration {
 }
 
 // Validate 校验元数据配置合法性。
-func (c MetaConfig) Validate() error {
+func (c *MetaConfig) Validate() error {
 	if strings.TrimSpace(c.DataDir()) == "" {
 		return fmt.Errorf("invalid data dir %q: must not be empty", c.DataDir())
 	}

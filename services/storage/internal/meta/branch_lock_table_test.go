@@ -53,10 +53,10 @@ func TestBranchLockTableConcurrentInodeLockRefCountConservation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		go func(workerID int) {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for i := range iterations {
 				a := inos[(workerID+i)%len(inos)]
 				b := inos[(workerID*3+i*5+1)%len(inos)]
 				c := inos[(workerID*7+i*2+3)%len(inos)]

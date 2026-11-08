@@ -3,8 +3,9 @@ package pebblekv_test
 import (
 	"testing"
 
-	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
 func TestMetadataValuesRoundTrip(t *testing.T) {

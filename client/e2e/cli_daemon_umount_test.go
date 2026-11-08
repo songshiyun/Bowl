@@ -48,7 +48,7 @@ func TestE2E_CLI_DaemonMount_ZeroDelayAndDuplicateRejection(t *testing.T) {
 
 	// 4. 定位后台守护进程 PID 并确保其正常活跃
 	daemonPID := findBowlDaemonPID(t, mountpoint)
-	require.Greater(t, daemonPID, 0)
+	require.Positive(t, daemonPID)
 	t.Logf("已检测到活跃守护进程 PID: %d", daemonPID)
 
 	// 5. 执行 bowl umount <mountpoint> 卸载
@@ -91,7 +91,7 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 
 		fi, err := os.Stat(customLog)
 		require.NoError(t, err, "自定义日志文件必须存在")
-		require.Greater(t, fi.Size(), int64(0), "自定义日志文件必须包含实际写入内容")
+		require.Positive(t, fi.Size(), "自定义日志文件必须包含实际写入内容")
 	})
 
 	t.Run("default system log /var/log/bowl/mount-<disk-id>.log is written", func(t *testing.T) {
@@ -110,10 +110,10 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 		require.NoError(t, umountCmd.Run())
 		waitForProcessExit(t, daemonPID)
 
-		expectedLog := filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
+		expectedLog := fmt.Sprintf("/var/log/bowl/mount-%s.log", disk.GetDiskId())
 		fi, err := os.Stat(expectedLog)
 		require.NoError(t, err, "默认系统日志文件必须存在: %s", expectedLog)
-		require.Greater(t, fi.Size(), int64(0), "默认系统日志文件必须包含实际写入内容")
+		require.Positive(t, fi.Size(), "默认系统日志文件必须包含实际写入内容")
 	})
 
 	t.Run("falls back to XDG_STATE_HOME when /var/log/bowl is not writable", func(t *testing.T) {
@@ -142,9 +142,9 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 		fallbackLog := filepath.Join(xdgState, "bowl", "logs", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
 		fi, err := os.Stat(fallbackLog)
 		require.NoError(t, err, "系统日志目录不可写时必须回退到 XDG_STATE_HOME: %s", fallbackLog)
-		require.Greater(t, fi.Size(), int64(0), "回退日志文件必须包含实际写入内容")
+		require.Positive(t, fi.Size(), "回退日志文件必须包含实际写入内容")
 
-		_, err = os.Stat(filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId())))
+		_, err = os.Stat(fmt.Sprintf("/var/log/bowl/mount-%s.log", disk.GetDiskId()))
 		require.ErrorIs(t, err, os.ErrNotExist, "回退后不得在 /var/log/bowl 留下日志")
 
 		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)
@@ -179,9 +179,9 @@ func TestE2E_CLI_LogFiles(t *testing.T) {
 		fallbackLog := filepath.Join(home, ".local", "state", "bowl", "logs", fmt.Sprintf("mount-%s.log", disk.GetDiskId()))
 		fi, err := os.Stat(fallbackLog)
 		require.NoError(t, err, "XDG_STATE_HOME 为空时必须回退到 HOME/.local/state: %s", fallbackLog)
-		require.Greater(t, fi.Size(), int64(0), "回退日志文件必须包含实际写入内容")
+		require.Positive(t, fi.Size(), "回退日志文件必须包含实际写入内容")
 
-		_, err = os.Stat(filepath.Join("/var/log/bowl", fmt.Sprintf("mount-%s.log", disk.GetDiskId())))
+		_, err = os.Stat(fmt.Sprintf("/var/log/bowl/mount-%s.log", disk.GetDiskId()))
 		require.ErrorIs(t, err, os.ErrNotExist, "回退后不得在 /var/log/bowl 留下日志")
 
 		umountCmd := exec.Command(getBowlBin(), "umount", mountpoint)

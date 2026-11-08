@@ -70,7 +70,8 @@ func executeMerge(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	if continuing {
-		resp, err := client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: diskID, BranchName: into, Message: opts.values["message"]}))
+		var resp *connect.Response[storagev1.ResolveMergeResponse]
+		resp, err = client.ResolveMerge(ctx, connect.NewRequest(&storagev1.ResolveMergeRequest{DiskId: diskID, BranchName: into, Message: opts.values["message"]}))
 		if err != nil {
 			fmt.Fprintf(stderr, "错误: 完成合并失败: %v\n", err)
 			return 1
@@ -87,7 +88,7 @@ func executeMerge(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if aborting {
-		_, err := client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: diskID, BranchName: into}))
+		_, err = client.AbortMerge(ctx, connect.NewRequest(&storagev1.AbortMergeRequest{DiskId: diskID, BranchName: into}))
 		if err != nil {
 			fmt.Fprintf(stderr, "错误: 中止合并失败: %v\n", err)
 			return 1

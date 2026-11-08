@@ -49,13 +49,13 @@ func mountSessionConfig(cfg fusefs.Config) session.Config {
 }
 
 // runForegroundMount 是默认的前台挂载执行器。
-func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, stdout, stderr io.Writer) error {
+func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, _, _ io.Writer) error {
 	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
 	if err != nil {
 		return fmt.Errorf("初始化客户端会话失败: %w", err)
 	}
 	defer sessionMgr.Close()
-	if err := sessionMgr.Start(ctx); err != nil {
+	if err = sessionMgr.Start(ctx); err != nil {
 		return fmt.Errorf("启动客户端会话保活失败: %w", err)
 	}
 
@@ -159,32 +159,35 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 					commitID = val
 				}
 			case "endpoint":
-				if hasVal {
+				switch {
+				case hasVal:
 					endpoint = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					endpoint = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
 					return 2
 				}
 			case "token":
-				if hasVal {
+				switch {
+				case hasVal:
 					token = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					token = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
 					return 2
 				}
 			case "log-file":
-				if hasVal {
+				switch {
+				case hasVal:
 					logFile = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					logFile = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --log-file 需要指定参数值")
 					return 2
 				}
@@ -225,7 +228,8 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "错误: --commit requires --ro (read-only snapshot mount)")
 			return 2
 		}
-		parsedCommit, err := uuid.Parse(commitID)
+		var parsedCommit uuid.UUID
+		parsedCommit, err = uuid.Parse(commitID)
 		if err != nil || parsedCommit == uuid.Nil {
 			fmt.Fprintln(stderr, "错误: --commit 必须为有效的非 Nil UUID")
 			return 2

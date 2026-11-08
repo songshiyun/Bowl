@@ -20,7 +20,7 @@ import (
 	"github.com/starsrc/bowl/client/internal/cli"
 )
 
-func evolutionCLI(args ...string) (int, string, string) {
+func evolutionCLI(args ...string) (exitCode int, stdoutStr, stderrStr string) {
 	args = append(args, "--endpoint", getStorageEndpoint())
 	var stdout, stderr bytes.Buffer
 	code := cli.Execute(args, &stdout, &stderr)
@@ -34,12 +34,12 @@ func evolutionSuccess(t *testing.T, args ...string) string {
 	return out
 }
 
-func evolutionMount(t *testing.T, diskID, branch string) (string, func()) {
+func evolutionMount(t *testing.T, diskID, branch string) (mountpoint string, stop func()) {
 	t.Helper()
 	path := t.TempDir()
 	cmd, _, stderr := startBowlMount(t, getStorageEndpoint(), diskID, path, "--branch", branch)
 	var once sync.Once
-	stop := func() { once.Do(func() { stopBowlMountGracefully(t, cmd, path) }) }
+	stop = func() { once.Do(func() { stopBowlMountGracefully(t, cmd, path) }) }
 	t.Cleanup(stop)
 	waitForMount(t, path, "挂载分支 %s 失败: %s", branch, stderr.String())
 	return path, stop

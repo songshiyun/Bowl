@@ -220,6 +220,7 @@ func TestTmpFileManager_SetAttrAndAllocate(t *testing.T) {
 	require.Equal(t, fuse.OK, st)
 	handled, st = mgr.GetAttr(ino, &attr)
 	require.True(t, handled)
+	require.Equal(t, fuse.OK, st)
 	require.Equal(t, uint64(24576), attr.Size, "KEEP_SIZE 预分配不得改变文件逻辑大小")
 
 	// 5. Allocate 打洞清零（FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE）
@@ -242,6 +243,7 @@ func TestTmpFileManager_SetAttrAndAllocate(t *testing.T) {
 
 	handled, st = mgr.GetAttr(ino, &attr)
 	require.True(t, handled)
+	require.Equal(t, fuse.OK, st)
 	require.Equal(t, uint64(2*(4096/512)), attr.Blocks, "整页 1 被打洞后应从稀疏页表中释放")
 }
 
@@ -263,14 +265,14 @@ type fakeMaterializer struct {
 	linkedNames   []string
 }
 
-func (f *fakeMaterializer) CreateTmpInode(_ context.Context, parentIno uint64, name string, mode, uid, gid uint32) (*storagev1.Inode, float64, float64, fuse.Status) {
+func (f *fakeMaterializer) CreateTmpInode(_ context.Context, parentIno uint64, name string, mode, uid, gid uint32) (inode *storagev1.Inode, entryTimeout, attrTimeout float64, status fuse.Status) {
 	if f.createStatus != fuse.OK {
 		return nil, 0, 0, f.createStatus
 	}
 	f.nextServerIno++
 	f.createdParent = parentIno
 	f.createdName = name
-	inode := &storagev1.Inode{
+	inode = &storagev1.Inode{
 		Ino:        f.nextServerIno,
 		Generation: 0,
 		Attr: &storagev1.InodeAttribute{
@@ -324,7 +326,7 @@ func (f *fakeMaterializer) UnlinkOpenTmpInode(_ context.Context, _ uint64, name 
 	return fuse.OK
 }
 
-func (f *fakeMaterializer) LinkInode(_ context.Context, serverIno, _ uint64, name string) (*storagev1.Inode, float64, float64, fuse.Status) {
+func (f *fakeMaterializer) LinkInode(_ context.Context, serverIno, _ uint64, name string) (inode *storagev1.Inode, entryTimeout, attrTimeout float64, status fuse.Status) {
 	if f.linkStatus != fuse.OK {
 		return nil, 0, 0, f.linkStatus
 	}
@@ -360,7 +362,7 @@ func TestTmpFileManager_LinkAndSync1MiBChunkingAliasAndRollback(t *testing.T) {
 		writeStatus:     fuse.Status(syscall.ENOSPC),
 	}
 	var entryOut fuse.EntryOut
-	_, _, _, _, _, handled, st := mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "named.bin", true, failMat, &entryOut)
+	_, handled, st := mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "named.bin", true, failMat, &entryOut)
 	require.True(t, handled)
 	require.Equal(t, fuse.Status(syscall.ENOSPC), st)
 	require.Equal(t, []string{"named.bin"}, failMat.rollbacks, "写入失败必须回滚撤销服务端创建的临时目录项")
@@ -378,19 +380,19 @@ func TestTmpFileManager_LinkAndSync1MiBChunkingAliasAndRollback(t *testing.T) {
 
 	// 2. 正常 Link 具名化：验证按 1 MiB 聚合分片上云（1.5 MiB 拆为 1 MiB + 512 KiB，3 MiB 处独立 8 KiB 分片，共 3 次 WriteChunk）
 	okMat := &fakeMaterializer{nextServerIno: 600}
-	gotSrvIno, firstUpload, gotInode, _, _, handled, st := mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "named.bin", true, okMat, &entryOut)
+	linkRes, handled, st := mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "named.bin", true, okMat, &entryOut)
 	require.True(t, handled)
 	require.Equal(t, fuse.OK, st)
-	require.True(t, firstUpload)
-	require.Equal(t, uint64(601), gotSrvIno)
-	require.NotNil(t, gotInode)
+	require.True(t, linkRes.FirstUpload)
+	require.Equal(t, uint64(601), linkRes.ServerIno)
+	require.NotNil(t, linkRes.Inode)
 	require.Equal(t, rootIno, okMat.createdParent)
 	require.Len(t, okMat.writes, 3, "连续 4 KiB 页必须按 1 MiB 聚合分片，跨空洞断开")
 	require.Equal(t, uint64(0), okMat.writes[0].Offset)
-	require.Equal(t, 1024*1024, len(okMat.writes[0].Data))
+	require.Len(t, okMat.writes[0].Data, 1024*1024)
 	require.Equal(t, part1[:1024*1024], okMat.writes[0].Data)
 	require.Equal(t, uint64(1024*1024), okMat.writes[1].Offset)
-	require.Equal(t, 512*1024, len(okMat.writes[1].Data))
+	require.Len(t, okMat.writes[1].Data, 512*1024)
 	require.Equal(t, part1[1024*1024:], okMat.writes[1].Data)
 	require.Equal(t, uint64(3*1024*1024), okMat.writes[2].Offset)
 	require.Equal(t, part2, okMat.writes[2].Data)
@@ -411,7 +413,7 @@ func TestTmpFileManager_LinkAndSync1MiBChunkingAliasAndRollback(t *testing.T) {
 	require.False(t, handled)
 
 	// 已具名化的匿名文件不可再次通过匿名路径 Link
-	_, _, _, _, _, handled, st = mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "again.bin", true, okMat, &entryOut)
+	_, handled, st = mgr.Link(context.Background(), localIno, fuse.FUSE_ROOT_ID, "again.bin", true, okMat, &entryOut)
 	require.True(t, handled)
 	require.Equal(t, fuse.ENOENT, st)
 
@@ -435,11 +437,11 @@ func TestTmpFileManager_LinkAndSync1MiBChunkingAliasAndRollback(t *testing.T) {
 	require.False(t, uploadedAgain)
 
 	// Sync 后执行 Link 走 LinkInode 分支
-	gotSrvIno2, firstUpload2, _, _, _, handled, st := mgr.Link(context.Background(), syncIno, fuse.FUSE_ROOT_ID, "from-synced.bin", true, syncMat, &entryOut)
+	linkRes2, handled, st := mgr.Link(context.Background(), syncIno, fuse.FUSE_ROOT_ID, "from-synced.bin", true, syncMat, &entryOut)
 	require.True(t, handled)
 	require.Equal(t, fuse.OK, st)
-	require.False(t, firstUpload2, "已通过 Sync 上云的节点在 Link 时应走服务端 LinkInode 而非首次上传")
-	require.Equal(t, uint64(701), gotSrvIno2)
+	require.False(t, linkRes2.FirstUpload, "已通过 Sync 上云的节点在 Link 时应走服务端 LinkInode 而非首次上传")
+	require.Equal(t, uint64(701), linkRes2.ServerIno)
 	require.Equal(t, []string{"from-synced.bin"}, syncMat.linkedNames)
 }
 
@@ -484,7 +486,8 @@ func TestTmpFileManager_DualZeroReclamationAndClear(t *testing.T) {
 	openHandles[namedIno] = 2
 	mat := &fakeMaterializer{nextServerIno: 800}
 	var entryOut fuse.EntryOut
-	srvIno, _, _, _, _, handled, st := mgr.Link(context.Background(), namedIno, 1, "linked.txt", true, mat, &entryOut)
+	namedLinkRes, handled, st := mgr.Link(context.Background(), namedIno, 1, "linked.txt", true, mat, &entryOut)
+	srvIno := namedLinkRes.ServerIno
 	require.True(t, handled)
 	require.Equal(t, fuse.OK, st)
 	require.Equal(t, uint64(801), srvIno)
@@ -582,11 +585,11 @@ func TestTmpFileManager_BoundaryAndErrorPaths(t *testing.T) {
 	// 7. O_EXCL 匿名文件或已关闭句柄（isOpen=false）拒绝 Link 返回 ENOENT
 	exclIno, _ := mgr.Create(1, 100, 200, 0o600, syscall.O_RDWR|syscall.O_EXCL)
 	mat := &fakeMaterializer{nextServerIno: 900}
-	_, _, _, _, _, handled, st = mgr.Link(context.Background(), exclIno, 1, "excl.bin", true, mat, &fuse.EntryOut{})
+	_, handled, st = mgr.Link(context.Background(), exclIno, 1, "excl.bin", true, mat, &fuse.EntryOut{})
 	require.True(t, handled)
 	require.Equal(t, fuse.ENOENT, st)
 
-	_, _, _, _, _, handled, st = mgr.Link(context.Background(), ino, 1, "closed.bin", false, mat, &fuse.EntryOut{})
+	_, handled, st = mgr.Link(context.Background(), ino, 1, "closed.bin", false, mat, &fuse.EntryOut{})
 	require.True(t, handled)
 	require.Equal(t, fuse.ENOENT, st)
 
@@ -595,7 +598,7 @@ func TestTmpFileManager_BoundaryAndErrorPaths(t *testing.T) {
 		nextServerIno: 910,
 		commitStatus:  fuse.EIO,
 	}
-	_, _, _, _, _, handled, st = mgr.Link(context.Background(), ino, 1, "commit-fail.bin", true, commitFailMat, &fuse.EntryOut{})
+	_, handled, st = mgr.Link(context.Background(), ino, 1, "commit-fail.bin", true, commitFailMat, &fuse.EntryOut{})
 	require.True(t, handled)
 	require.Equal(t, fuse.EIO, st)
 	require.Equal(t, []string{"commit-fail.bin"}, commitFailMat.rollbacks)
@@ -890,7 +893,7 @@ func (f *fakeStorageClientForTmpFS) CloseSession(_ context.Context, _ *connect.R
 
 func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
 	// 1. 结构体反射守卫：RawFS 根结构体不得再保留 tmpMu, tmpFiles, serverToLocal, nextTmp
-	rawFSType := reflect.TypeOf(fusefs.RawFS{})
+	rawFSType := reflect.TypeFor[fusefs.RawFS]()
 	for _, forbidden := range []string{"tmpMu", "tmpFiles", "serverToLocal", "nextTmp"} {
 		_, exists := rawFSType.FieldByName(forbidden)
 		require.False(t, exists, "RawFS 不得保留旧字段 %s", forbidden)
@@ -916,7 +919,7 @@ func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
 	localIno := createOut.NodeId
 	fh := createOut.Fh
 	require.NotZero(t, localIno&(uint64(1)<<63))
-	require.Equal(t, uint32(4096), createOut.Attr.Blksize, "Tmpfile 必须走 TmpFileManager 4 KiB 稀疏页")
+	require.Equal(t, uint32(4096), createOut.Blksize, "Tmpfile 必须走 TmpFileManager 4 KiB 稀疏页")
 
 	// 写入 1.25 MiB 连续数据，随后通过 Fallocate 打洞 [4096, 8192)，再通过 SetAttr 截断为 1.25 MiB
 	payload := bytes.Repeat([]byte("T"), 1280*1024)
@@ -945,7 +948,7 @@ func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
 	var attrOut fuse.AttrOut
 	st = fs.GetAttr(nil, &fuse.GetAttrIn{InHeader: fuse.InHeader{NodeId: localIno}}, &attrOut)
 	require.Equal(t, fuse.OK, st)
-	require.Equal(t, uint64(len(payload)), attrOut.Attr.Size)
+	require.Equal(t, uint64(len(payload)), attrOut.Size)
 
 	readBuf := make([]byte, 12288)
 	res, st := fs.Read(nil, &fuse.ReadIn{

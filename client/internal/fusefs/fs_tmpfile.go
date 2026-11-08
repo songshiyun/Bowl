@@ -25,7 +25,7 @@ func (fs *RawFS) newTmpMaterializer(cancel <-chan struct{}) *rawFSTmpMaterialize
 	}
 }
 
-func (m *rawFSTmpMaterializer) CreateTmpInode(ctx context.Context, parentIno uint64, name string, mode, uid, gid uint32) (*storagev1.Inode, float64, float64, fuse.Status) {
+func (m *rawFSTmpMaterializer) CreateTmpInode(ctx context.Context, parentIno uint64, name string, mode, uid, gid uint32) (inode *storagev1.Inode, entryTimeout, attrTimeout float64, status fuse.Status) {
 	resp, err := m.fs.client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
 		ParentIno: parentIno,
 		Name:      []byte(name),
@@ -96,7 +96,7 @@ func (m *rawFSTmpMaterializer) UnlinkOpenTmpInode(ctx context.Context, parentIno
 	return fuse.OK
 }
 
-func (m *rawFSTmpMaterializer) LinkInode(ctx context.Context, serverIno, newParentIno uint64, name string) (*storagev1.Inode, float64, float64, fuse.Status) {
+func (m *rawFSTmpMaterializer) LinkInode(ctx context.Context, serverIno, newParentIno uint64, name string) (inode *storagev1.Inode, entryTimeout, attrTimeout float64, status fuse.Status) {
 	resp, err := m.fs.client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{
 		Ino:          serverIno,
 		NewParentIno: newParentIno,
@@ -154,7 +154,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	defer done()
 	epoch := fs.cache.version()
 	mat := fs.newTmpMaterializer(cancel)
-	serverIno, firstUpload, inode, entryTimeout, attrTimeout, handled, status := fs.tmpMgr.Link(
+	res, handled, status := fs.tmpMgr.Link(
 		ctx, input.Oldnodeid, input.NodeId, filename, fs.handles.IsOpen(input.Oldnodeid), mat, out,
 	)
 	if !handled {
@@ -163,8 +163,8 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	if status != fuse.OK {
 		return status, true
 	}
-	if firstUpload {
-		fs.markDirty(serverIno)
+	if res.FirstUpload {
+		fs.markDirty(res.ServerIno)
 	} else {
 		fs.handles.ClearOrphan(input.Oldnodeid)
 		fs.stateMu.Lock()
@@ -173,7 +173,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	}
 	fs.cache.invalidateDirListing(input.NodeId)
 	fs.cache.putEntryAt(epoch, input.NodeId, filename, input.Oldnodeid)
-	fs.cache.putInodeAt(epoch, input.Oldnodeid, inode, entryTimeout, attrTimeout)
+	fs.cache.putInodeAt(epoch, input.Oldnodeid, res.Inode, res.EntryTimeout, res.AttrTimeout)
 	return fuse.OK, true
 }
 

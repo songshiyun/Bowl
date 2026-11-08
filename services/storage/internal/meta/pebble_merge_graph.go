@@ -15,16 +15,17 @@ import (
 
 type commitGraph map[pgtype.UUID]db.Commit
 
-func loadMergeGraph(ctx context.Context, q db.Querier, disk, source, target pgtype.UUID) (commitGraph, map[pgtype.UUID]bool, map[pgtype.UUID]bool, error) {
-	graph := make(commitGraph)
+func loadMergeGraph(ctx context.Context, q db.Querier, disk, source, target pgtype.UUID) (graph commitGraph, sourceSet, targetSet map[pgtype.UUID]bool, err error) {
+	graph = make(commitGraph)
 	sets := [2]map[pgtype.UUID]bool{make(map[pgtype.UUID]bool), make(map[pgtype.UUID]bool)}
 	for i, head := range []pgtype.UUID{source, target} {
 		rows, err := q.ListCommitAncestors(ctx, db.ListCommitAncestorsParams{DiskID: disk, CommitID: head})
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		for _, row := range rows {
-			graph[row.CommitID] = row
+		for j := range rows {
+			row := &rows[j]
+			graph[row.CommitID] = *row
 			sets[i][row.CommitID] = true
 		}
 		if !sets[i][head] {
@@ -83,9 +84,9 @@ func (g commitGraph) lowestMergeBase(source, target pgtype.UUID) (pgtype.UUID, e
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		a, b := candidates[i], candidates[j]
-		da, db := sourceDistance[a]+targetDistance[a], sourceDistance[b]+targetDistance[b]
-		if da != db {
-			return da < db
+		distA, distB := sourceDistance[a]+targetDistance[a], sourceDistance[b]+targetDistance[b]
+		if distA != distB {
+			return distA < distB
 		}
 		return a.String() < b.String()
 	})

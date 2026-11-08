@@ -71,7 +71,7 @@ func pebbleBlobEqual(a *pebblekv.BlobStore, aRef pebblekv.BlobRef, b *pebblekv.B
 		return false, err
 	}
 	size := max(len(aData), len(bData))
-	for i := 0; i < size; i++ {
+	for i := range size {
 		var av, bv byte
 		if i < len(aData) {
 			av = aData[i]

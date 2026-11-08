@@ -45,7 +45,7 @@ func ToHostLockType(protoType uint32) (uint32, fuse.Status) {
 }
 
 // NormalizeLockRange 校验 POSIX 区间，并将 flock 归一化为整个文件。
-func NormalizeLockRange(lkFlags uint32, start, end uint64) (uint64, uint64, fuse.Status) {
+func NormalizeLockRange(lkFlags uint32, start, end uint64) (normStart, normEnd uint64, status fuse.Status) {
 	if lkFlags&fuse.FUSE_LK_FLOCK != 0 {
 		return 0, ^uint64(0), fuse.OK
 	}

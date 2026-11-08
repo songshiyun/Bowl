@@ -3,10 +3,10 @@
 package e2e_test
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -94,8 +94,8 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	require.NoError(t, err, "unix.Statfs 必须成功")
 	require.Equal(t, int64(4096), stfs.Bsize, "块大小固定为 4096 字节")
 	expectedBlocks := disk.GetMaxBytes() / 4096
-	require.Equal(t, expectedBlocks, uint64(stfs.Blocks), "Blocks 必须匹配磁盘 max_bytes / 4096")
-	require.Greater(t, stfs.Bavail, uint64(0), "可用块数必须大于 0")
+	require.Equal(t, expectedBlocks, stfs.Blocks, "Blocks 必须匹配磁盘 max_bytes / 4096")
+	require.Positive(t, stfs.Bavail, "可用块数必须大于 0")
 	require.GreaterOrEqual(t, stfs.Files, uint64(1), "已用 Inode 数至少为 1 (根目录)")
 
 	// 6. 发送 SIGTERM 优雅卸载并断言退出码 0 且无残留
@@ -105,7 +105,7 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	recordArtifact(t, map[string]string{
 		"root_ino":         "1",
 		"block_size":       "4096",
-		"blocks":           fmt.Sprintf("%d", expectedBlocks),
+		"blocks":           strconv.FormatUint(expectedBlocks, 10),
 		"avail_positive":   "true",
 		"missing_path":     "ENOENT",
 		"graceful_unmount": "true",

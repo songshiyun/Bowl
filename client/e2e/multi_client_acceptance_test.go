@@ -125,16 +125,16 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 	t.Run("多用户权限", func(t *testing.T) {
 		// 准备 1: root 属主 0600 文件 secret.txt
 		secretPath := filepath.Join(mpA, "secret.txt")
-		require.NoError(t, os.WriteFile(secretPath, []byte("ROOT_TOP_SECRET_DATA"), 0600))
+		require.NoError(t, os.WriteFile(secretPath, []byte("ROOT_TOP_SECRET_DATA"), 0o600))
 
 		// 准备 2: root 属主 0755 目录 readonly-dir
 		roDirPath := filepath.Join(mpA, "readonly-dir")
-		require.NoError(t, os.Mkdir(roDirPath, 0755))
+		require.NoError(t, os.Mkdir(roDirPath, 0o755))
 
 		// 准备 3: 01777 带 Sticky Bit 的共享目录 shared-tmp
 		sharedTmpPath := filepath.Join(mpA, "shared-tmp")
-		require.NoError(t, os.Mkdir(sharedTmpPath, 0777|os.ModeSticky))
-		require.NoError(t, unix.Chmod(sharedTmpPath, 01777), "设置 Sticky Bit (01777) 失败")
+		require.NoError(t, os.Mkdir(sharedTmpPath, 0o777|os.ModeSticky))
+		require.NoError(t, unix.Chmod(sharedTmpPath, 0o1777), "设置 Sticky Bit (01777) 失败")
 
 		// 3.1 uid=1000 读取或写入 secret.txt (0600) 均被拒绝并返回 EACCES
 		codeRead, _, errRead := runAs(t, 1000, 1000, "cat", secretPath)
@@ -159,7 +159,8 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 		// 校验属主确为 uid=1000, gid=1000
 		st1000, err := os.Stat(u1000File)
 		require.NoError(t, err)
-		sysStat := st1000.Sys().(*syscall.Stat_t)
+		sysStat, ok := st1000.Sys().(*syscall.Stat_t)
+		require.True(t, ok)
 		require.Equal(t, uint32(1000), sysStat.Uid, "文件属主 UID 必须为 1000")
 		require.Equal(t, uint32(1000), sysStat.Gid, "文件属组 GID 必须为 1000")
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/starsrc/Aether/pkg/observability/telemetry"
 	"github.com/starsrc/Aether/pkg/serverx"
+
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"github.com/starsrc/bowl/pkg/validator"
 	"github.com/starsrc/bowl/services/storage/internal/config"
@@ -65,6 +66,8 @@ type Params struct {
 }
 
 // New 构造 Server 实例，组装洋葱拦截器链与 ConnectRPC 处理器，并按需在 Fx 生命周期中注册启停钩子。
+//
+//nolint:gocritic // hugeParam: Uber Fx fx.In 参数结构要求按值传入构造器。
 func New(p Params) (*Server, error) {
 	if p.Config.Port() < 0 || p.Config.Port() > 65535 {
 		return nil, fmt.Errorf("invalid server port %d: must be between 0 and 65535", p.Config.Port())

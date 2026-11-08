@@ -1,7 +1,7 @@
 package meta
 
 import (
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -35,7 +35,8 @@ func NewBranchLockTable() *BranchLockTable {
 
 func (t *BranchLockTable) branchLock(disk, branch string) *sync.RWMutex {
 	value, _ := t.branchLocks.LoadOrStore(branchLockKey{disk, branch}, &sync.RWMutex{})
-	return value.(*sync.RWMutex)
+	mu, _ := value.(*sync.RWMutex)
+	return mu
 }
 
 // LockBranchRead 取得分支共享读锁，允许同分支无限并发读取。
@@ -55,7 +56,7 @@ func (t *BranchLockTable) LockBranchWrite(disk, branch string) func() {
 // LockBranchMeta 串行化同分支的元数据批次，避免共享 BranchStat 丢失更新。
 func (t *BranchLockTable) LockBranchMeta(disk, branch string) func() {
 	value, _ := t.branchMetaLocks.LoadOrStore(branchLockKey{disk, branch}, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
+	mu, _ := value.(*sync.Mutex)
 	mu.Lock()
 	return mu.Unlock
 }
@@ -121,7 +122,7 @@ func (t *BranchLockTable) LockInodesWrite(disk, branch string, inos ...uint64) f
 		seen[ino] = struct{}{}
 		ordered = append(ordered, ino)
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	slices.Sort(ordered)
 	type heldLock struct {
 		key   inodeLockKey
 		entry *inodeLockEntry
@@ -133,9 +134,9 @@ func (t *BranchLockTable) LockInodesWrite(disk, branch string, inos ...uint64) f
 		locks = append(locks, heldLock{key: key, entry: entry})
 	}
 	return func() {
-		for i := len(locks) - 1; i >= 0; i-- {
-			locks[i].entry.mu.Unlock()
-			t.releaseInodeLock(locks[i].key, locks[i].entry)
+		for _, lock := range slices.Backward(locks) {
+			lock.entry.mu.Unlock()
+			t.releaseInodeLock(lock.key, lock.entry)
 		}
 	}
 }

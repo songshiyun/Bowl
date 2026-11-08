@@ -88,22 +88,24 @@ func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
 			case "json":
 				jsonOut = true
 			case "endpoint":
-				if hasVal {
+				switch {
+				case hasVal:
 					endpoint = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					endpoint = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
 					return 2
 				}
 			case "token":
-				if hasVal {
+				switch {
+				case hasVal:
 					token = val
-				} else if i+1 < len(args) {
+				case i+1 < len(args):
 					i++
 					token = args[i]
-				} else {
+				default:
 					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
 					return 2
 				}
@@ -173,8 +175,7 @@ func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
 		DiskId: diskIDStr,
 	}))
 	if err != nil {
-		var connectErr *connect.Error
-		if errors.As(err, &connectErr) {
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			switch connectErr.Code() {
 			case connect.CodeNotFound:
 				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)

@@ -2,7 +2,6 @@ package meta
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"time"
 
@@ -219,7 +218,7 @@ func (tx *BranchMutationTx) MarkDirty(inos ...uint64) {
 // PutInode 将节点的 WriteSeq 更新为当前事务序列号，编码写入批次并自动登记 DirtyKey。
 func (tx *BranchMutationTx) PutInode(inode *pebblekv.Inode) error {
 	inode.WriteSeq = tx.seq
-	if err := setCreateInode(tx.batch, *inode); err != nil {
+	if err := setCreateInode(tx.batch, inode); err != nil {
 		return err
 	}
 	tx.MarkDirty(inode.Ino)
@@ -268,7 +267,7 @@ func (tx *BranchMutationTx) TrackRemovedBlobs(ids ...uint64) {
 
 // ReclaimInode 在批次中移除指定节点的 InodeKey、OrphanKey、XattrRange 与 DataRange，
 // 收集需在提交后删除的数据块文件编号，并扣减 BranchStat 节点数与逻辑字节数。
-func (tx *BranchMutationTx) ReclaimInode(inode pebblekv.Inode) error {
+func (tx *BranchMutationTx) ReclaimInode(inode *pebblekv.Inode) error {
 	if err := tx.LoadStat(); err != nil {
 		return err
 	}
@@ -288,13 +287,13 @@ func (tx *BranchMutationTx) ReclaimOrphanInode(ino uint64) error {
 	if err == nil {
 		inode, decodeErr := pebblekv.DecodeInode(value)
 		closeErr := closer.Close()
-		if err := errors.Join(decodeErr, closeErr); err != nil {
-			return err
+		if joinErr := errors.Join(decodeErr, closeErr); joinErr != nil {
+			return joinErr
 		}
 		if inode.Ino != ino {
-			return fmt.Errorf("Inode 编号与键不一致")
+			return errors.New("Inode 编号与键不一致")
 		}
-		return tx.ReclaimInode(inode)
+		return tx.ReclaimInode(&inode)
 	}
 	if !errors.Is(err, pebble.ErrNotFound) {
 		return err
@@ -316,7 +315,7 @@ func (tx *BranchMutationTx) SetOrphanedOrReclaim(inode *pebblekv.Inode, openInCl
 	}
 	if !openInClient {
 		tx.MarkDirty(inode.Ino)
-		return true, tx.ReclaimInode(*inode)
+		return true, tx.ReclaimInode(inode)
 	}
 	if err := tx.PutInode(inode); err != nil {
 		return false, err
@@ -339,7 +338,7 @@ func deleteTopologyInodeKeys(store *pebble.DB, batch *pebble.Batch, ino uint64, 
 }
 
 // removeTopologyInode 在变更批次中删除节点及其关联数据，并登记需即时回收的块编号。
-func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode pebblekv.Inode, removed *[]uint64) error {
+func removeTopologyInode(store *pebble.DB, batch *pebble.Batch, stat *pebblekv.BranchStat, inode *pebblekv.Inode, removed *[]uint64) error {
 	if err := deleteTopologyInodeKeys(store, batch, inode.Ino, removed); err != nil {
 		return err
 	}

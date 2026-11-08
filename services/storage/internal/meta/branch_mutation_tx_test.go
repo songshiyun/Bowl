@@ -30,15 +30,15 @@ func TestBranchMutationTxDirectMechanics(t *testing.T) {
 	// 1. 新建节点事务：校验 WriteSeq 自动写入、DirtyKey 自动登记、Stat 递增与 MarkBranchDirty
 	var createdInode pebblekv.Inode
 	err = meta.RunBranchMutationTx(storage, "disk-tx", "main", branch.DB(), branch.Blobs(), quota, func(tx *meta.BranchMutationTx) error {
-		if err := tx.RequireNewInode(40); err != nil {
-			return err
+		if reqErr := tx.RequireNewInode(40); reqErr != nil {
+			return reqErr
 		}
 		createdInode = pebblekv.Inode{Ino: 2, Mode: meta.S_IFREG | 0o644, Nlink: 1, Size: 40}
-		if err := tx.PutInode(&createdInode); err != nil {
-			return err
+		if putErr := tx.PutInode(&createdInode); putErr != nil {
+			return putErr
 		}
-		if err := tx.PutEntry(1, []byte("hello"), 2, createdInode.Mode); err != nil {
-			return err
+		if entryErr := tx.PutEntry(1, []byte("hello"), 2, createdInode.Mode); entryErr != nil {
+			return entryErr
 		}
 		tx.AddInodes(1)
 		tx.AddLogicalBytes(40)
@@ -63,11 +63,11 @@ func TestBranchMutationTxDirectMechanics(t *testing.T) {
 		})
 		updated := createdInode
 		updated.Size = 200 // 超过配额上限 100
-		if err := tx.PutInode(&updated); err != nil {
-			return err
+		if putErr := tx.PutInode(&updated); putErr != nil {
+			return putErr
 		}
-		if err := tx.AdjustLogicalBytes(40, 200); err != nil {
-			return err
+		if adjErr := tx.AdjustLogicalBytes(40, 200); adjErr != nil {
+			return adjErr
 		}
 		return tx.CommitApplyChange(2, 200, true, true)
 	})
@@ -138,8 +138,8 @@ func TestBranchMutationTxWriteSeqDirtyKeyAndBlobCleanup(t *testing.T) {
 
 	var firstBlobID uint64
 	e.withBranch(t, "main", func(store *pebble.DB) {
-		ref, err := pebblekv.DecodeBlobRef(getPebbleValue(t, store, pebblekv.DataKey(ino, 0)))
-		require.NoError(t, err)
+		ref, decodeErr := pebblekv.DecodeBlobRef(getPebbleValue(t, store, pebblekv.DataKey(ino, 0)))
+		require.NoError(t, decodeErr)
 		firstBlobID = ref.ID
 	})
 
@@ -147,7 +147,7 @@ func TestBranchMutationTxWriteSeqDirtyKeyAndBlobCleanup(t *testing.T) {
 	// 若 beforeCommit 在配额检查前执行，块 0 的前 4 字节会被污染为 "BBBB"。
 	// 正确行为是：配额检查返回 ErrNoSpace，beforeCommit 不执行，新分配的跨块临时 Blob 被回滚清理，块 0 仍为全 'A'。
 	oversize := make([]byte, 2*pebblekv.BlobSize+4096)
-	copy(oversize, []byte("BBBB"))
+	copy(oversize, "BBBB")
 	_, err = e.mgr.Write(e.ctx, &meta.WriteRequest{
 		Ino: ino, Offset: 0, Data: oversize, SessionID: &e.sid,
 	})

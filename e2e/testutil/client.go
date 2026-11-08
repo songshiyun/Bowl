@@ -1,3 +1,4 @@
+// Package testutil 提供跨服务 E2E 测试的客户端构建与错误断言辅助函数。
 package testutil
 
 import (
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"github.com/starsrc/Aether/pkg/serverx"
+
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 

@@ -352,10 +352,12 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 		return nil, ErrClosed
 	}
 	if isStaging(branch) {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		err = os.MkdirAll(filepath.Dir(path), 0o755)
+		if err != nil {
 			return nil, err
 		}
-		db, err := pebble.Open(path, m.options(false))
+		var db *pebble.DB
+		db, err = pebble.Open(path, m.options(false))
 		if err != nil {
 			return nil, err
 		}
@@ -366,7 +368,8 @@ func (m *Manager) OpenBranch(disk, branch string) (*Branch, error) {
 		entry.lastUsed = m.tick()
 		return &Branch{manager: m, key: key, entry: entry, db: entry.db, blobs: entry.blobs}, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	err = os.MkdirAll(filepath.Dir(path), 0o755)
+	if err != nil {
 		return nil, err
 	}
 	db, err := pebble.Open(path, m.options(false))
@@ -568,7 +571,8 @@ func (m *Manager) Fork(disk, commit, branch string) (err error) {
 	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	err = os.MkdirAll(filepath.Dir(path), 0o755)
+	if err != nil {
 		return err
 	}
 	staging, err := os.MkdirTemp(filepath.Dir(path), ".fork-")
@@ -577,7 +581,8 @@ func (m *Manager) Fork(disk, commit, branch string) (err error) {
 	}
 	defer func() { err = errors.Join(err, os.RemoveAll(staging)) }()
 	source, _ := m.path(disk, "commits", commit)
-	if err := stageCheckpoint(source, staging); err != nil {
+	err = stageCheckpoint(source, staging)
+	if err != nil {
 		return err
 	}
 	opts := m.options(false)
@@ -617,7 +622,8 @@ func stageCheckpoint(source, destination string) error {
 		}
 		from, to := filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())
 		if strings.HasSuffix(entry.Name(), ".sst") {
-			if err := os.Link(from, to); err != nil {
+			err = os.Link(from, to)
+			if err != nil {
 				return err
 			}
 			continue
@@ -661,7 +667,7 @@ func (a *inodeAllocator) close() error {
 }
 
 // readLastLocked 返回已持久化的分配上界。
-func (a *inodeAllocator) readLastLocked() (uint64, bool, error) {
+func (a *inodeAllocator) readLastLocked() (last uint64, exists bool, err error) {
 	value, closer, err := a.db.Get([]byte(a.key))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return 0, false, nil
@@ -672,7 +678,7 @@ func (a *inodeAllocator) readLastLocked() (uint64, bool, error) {
 	if len(value) != 8 {
 		return 0, false, errors.Join(ErrInvalidValue, closer.Close())
 	}
-	last := binary.BigEndian.Uint64(value)
+	last = binary.BigEndian.Uint64(value)
 	return last, true, closer.Close()
 }
 
@@ -748,7 +754,8 @@ func (m *Manager) allocator(disk, kind string, initial uint64) (*inodeAllocator,
 	if allocator := m.allocators[allocatorID{disk, kind}]; allocator != nil {
 		return allocator, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	err = os.MkdirAll(filepath.Dir(path), 0o755)
+	if err != nil {
 		return nil, err
 	}
 	db, err := pebble.Open(path, &pebble.Options{Cache: m.cache, MemTableSize: allocatorMemTableSize, MaxOpenFiles: 16})

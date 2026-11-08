@@ -48,7 +48,9 @@ func freeTCPPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	port := listener.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	require.True(t, ok)
+	port := tcpAddr.Port
 	require.NoError(t, listener.Close())
 	return port
 }
@@ -67,7 +69,7 @@ func storageProcessEnv(publicPort, internalPort int, dataDir, dsn string) []stri
 }
 
 // runStorageProcessExpectFailure 启动 storage-service 并断言其在超时内以非零退出码失败。
-func runStorageProcessExpectFailure(t *testing.T, binary string, env []string) (int, string) {
+func runStorageProcessExpectFailure(t *testing.T, binary string, env []string) (exitCode int, out string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -108,7 +110,9 @@ func TestStorageProcessRejectsInvalidConfig(t *testing.T) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = listener.Close() })
-		port := listener.Addr().(*net.TCPAddr).Port
+		tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+		require.True(t, ok)
+		port := tcpAddr.Port
 		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(port, freeTCPPort(t), t.TempDir(), storageTestDSN()))
 		require.NotZero(t, exitCode, "端口冲突必须非零退出: %s", output)
 		require.Contains(t, output, "address already in use")

@@ -28,34 +28,34 @@ func TestE2E_SetAttr(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "priv-test.txt")
-		require.NoError(t, os.WriteFile(filePath, []byte("privileged content"), 0644))
+		require.NoError(t, os.WriteFile(filePath, []byte("privileged content"), 0o644))
 
 		// 1. 设置特权位 S_ISUID | S_ISGID (04755)
-		require.NoError(t, os.Chmod(filePath, 0755|os.ModeSetuid|os.ModeSetgid))
+		require.NoError(t, os.Chmod(filePath, 0o755|os.ModeSetuid|os.ModeSetgid))
 		info, err := os.Stat(filePath)
 		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0755), info.Mode().Perm())
-		require.True(t, (info.Mode()&os.ModeSetuid) != 0, "Setuid 特权位必须存在")
-		require.True(t, (info.Mode()&os.ModeSetgid) != 0, "Setgid 特权位必须存在")
+		require.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+		require.NotZero(t, info.Mode()&os.ModeSetuid, "Setuid 特权位必须存在")
+		require.NotZero(t, info.Mode()&os.ModeSetgid, "Setgid 特权位必须存在")
 
 		// 2. 执行 chown，验证服务端遵循 POSIX 规范自动剥离特权位
 		require.NoError(t, os.Chown(filePath, 1001, 1002))
 		infoAfterChown, err := os.Stat(filePath)
 		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0755), infoAfterChown.Mode().Perm())
+		require.Equal(t, os.FileMode(0o755), infoAfterChown.Mode().Perm())
 		require.Equal(t, os.FileMode(0), infoAfterChown.Mode()&(os.ModeSetuid|os.ModeSetgid), "chown 后 Setuid/Setgid 特权位必须被自动剥离")
 
 		var st syscall.Stat_t
 		require.NoError(t, syscall.Stat(filePath, &st))
 		require.Equal(t, uint32(1001), st.Uid)
 		require.Equal(t, uint32(1002), st.Gid)
-		require.Equal(t, uint32(0), uint32(st.Mode)&(syscall.S_ISUID|syscall.S_ISGID), "内核 stat 的 Mode 也必须剥离特权位")
+		require.Equal(t, uint32(0), st.Mode&(syscall.S_ISUID|syscall.S_ISGID), "内核 stat 的 Mode 也必须剥离特权位")
 
 		// 3. 再次显式 chmod 为普通权限
-		require.NoError(t, os.Chmod(filePath, 0600))
+		require.NoError(t, os.Chmod(filePath, 0o600))
 		infoFinal, err := os.Stat(filePath)
 		require.NoError(t, err)
-		require.Equal(t, os.FileMode(0600), infoFinal.Mode().Perm())
+		require.Equal(t, os.FileMode(0o600), infoFinal.Mode().Perm())
 	})
 
 	t.Run("utimensat_explicit_and_now", func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestE2E_SetAttr(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "time-test.txt")
-		require.NoError(t, os.WriteFile(filePath, []byte("time stamps"), 0644))
+		require.NoError(t, os.WriteFile(filePath, []byte("time stamps"), 0o644))
 
 		// 1. 显式设置纳秒时间戳（PostgreSQL TIMESTAMPTZ 为微秒精度，纳秒末三位微秒对齐）
 		expAtime := unix.Timespec{Sec: 1680000000, Nsec: 123456000}
@@ -76,10 +76,10 @@ func TestE2E_SetAttr(t *testing.T) {
 
 		var st syscall.Stat_t
 		require.NoError(t, syscall.Stat(filePath, &st))
-		require.Equal(t, expAtime.Sec, int64(st.Atim.Sec))
-		require.Equal(t, expAtime.Nsec, int64(st.Atim.Nsec))
-		require.Equal(t, expMtime.Sec, int64(st.Mtim.Sec))
-		require.Equal(t, expMtime.Nsec, int64(st.Mtim.Nsec))
+		require.Equal(t, expAtime.Sec, st.Atim.Sec)
+		require.Equal(t, expAtime.Nsec, st.Atim.Nsec)
+		require.Equal(t, expMtime.Sec, st.Mtim.Sec)
+		require.Equal(t, expMtime.Nsec, st.Mtim.Nsec)
 
 		// 2. 使用 UTIME_NOW 更新时间戳
 		nowBefore := time.Now().Unix()
@@ -91,8 +91,8 @@ func TestE2E_SetAttr(t *testing.T) {
 
 		var stNow syscall.Stat_t
 		require.NoError(t, syscall.Stat(filePath, &stNow))
-		require.GreaterOrEqual(t, int64(stNow.Atim.Sec), nowBefore-2)
-		require.GreaterOrEqual(t, int64(stNow.Mtim.Sec), nowBefore-2)
+		require.GreaterOrEqual(t, stNow.Atim.Sec, nowBefore-2)
+		require.GreaterOrEqual(t, stNow.Mtim.Sec, nowBefore-2)
 	})
 
 	t.Run("truncate_and_ftruncate_sparse_and_shrink", func(t *testing.T) {
@@ -107,7 +107,7 @@ func TestE2E_SetAttr(t *testing.T) {
 
 		// 初始写入 4096 字节非零数据
 		initialData := bytes.Repeat([]byte("A"), 4096)
-		require.NoError(t, os.WriteFile(filePath, initialData, 0644))
+		require.NoError(t, os.WriteFile(filePath, initialData, 0o644))
 
 		// 1. os.Truncate 扩容至 16384 字节（稀疏空洞填充零）
 		require.NoError(t, os.Truncate(filePath, 16384))
@@ -122,7 +122,7 @@ func TestE2E_SetAttr(t *testing.T) {
 		require.Equal(t, make([]byte, 16384-4096), readBack[4096:], "扩容区间必须全部为全零字节")
 
 		// 2. 打开句柄通过 f.Truncate 进行句柄绑定的缩容截断
-		f, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_RDWR, 0o644)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = f.Close() })
 
@@ -160,7 +160,7 @@ func TestE2E_SetAttr(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "falloc-test.bin")
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0o644)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = f.Close() })
 
@@ -236,14 +236,14 @@ func TestE2E_SetAttr(t *testing.T) {
 		filePath := filepath.Join(mountpoint, "ro-test.txt")
 
 		// 3. 只读挂载下 chmod 必须返回 EROFS
-		errChmod := os.Chmod(filePath, 0600)
+		errChmod := os.Chmod(filePath, 0o600)
 		require.Error(t, errChmod)
-		require.True(t, errors.Is(errChmod, syscall.EROFS), "只读模式下 chmod 必须返回 EROFS")
+		require.ErrorIs(t, errChmod, syscall.EROFS, "只读模式下 chmod 必须返回 EROFS")
 
 		// 4. 只读挂载下 truncate 必须返回 EROFS
 		errTrunc := os.Truncate(filePath, 1024)
 		require.Error(t, errTrunc)
-		require.True(t, errors.Is(errTrunc, syscall.EROFS), "只读模式下 truncate 必须返回 EROFS")
+		require.ErrorIs(t, errTrunc, syscall.EROFS, "只读模式下 truncate 必须返回 EROFS")
 
 		// 5. 只读挂载下以只读句柄尝试 fallocate，内核按非写句柄拒绝返回 EBADF
 		fRO, errOpenRO := os.Open(filePath)

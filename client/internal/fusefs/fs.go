@@ -1,3 +1,4 @@
+// Package fusefs 实现基于 go-fuse RawFileSystem 的 Bowl 用户态文件系统适配层。
 package fusefs
 
 import (
@@ -34,18 +35,14 @@ var _ fuse.RawFileSystem = (*RawFS)(nil)
 
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
-	DiskID                 string
-	RootIno                uint64
-	ReadOnly               bool
-	DirectIO               bool
-	AllowOther             bool
-	Debug                  bool
-	RPCTimeout             time.Duration
-	ReleaseRetryInterval   time.Duration
-	NamespaceCacheCapacity int
-	BranchName             string
-	CommitID               string
-	OnUnmount              func()
+	DiskID     string
+	RootIno    uint64
+	ReadOnly   bool
+	DirectIO   bool
+	AllowOther bool
+	Debug      bool
+	BranchName string
+	CommitID   string
 }
 
 type reclaimRetryItem struct {
@@ -88,18 +85,12 @@ type RawFS struct {
 
 // NewRawFS 创建并初始化 RawFS 实例。
 func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Manager, cfg Config) *RawFS {
-	if cfg.RPCTimeout <= 0 {
-		cfg.RPCTimeout = DefaultRPCTimeout
-	}
-	if cfg.ReleaseRetryInterval <= 0 {
-		cfg.ReleaseRetryInterval = DefaultReleaseRetryInterval
-	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
 		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
 		client:         client,
 		locks:          NewLockTable(),
-		cache:          NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		cache:          NewNamespaceCache(DefaultNamespaceCacheCapacity),
 		caps:           newCapabilityCache(),
 		dirtyInodes:    make(map[uint64]struct{}),
 		tmpMgr:         NewTmpFileManager(cfg.RootIno),
@@ -160,11 +151,7 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 
 // RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
-	timeout := fs.cfg.RPCTimeout
-	if timeout <= 0 {
-		timeout = DefaultRPCTimeout
-	}
-	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), timeout)
+	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), DefaultRPCTimeout)
 	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
 	return ctx, func() {
 		cancelChan()
@@ -247,7 +234,10 @@ func (fs *RawFS) currentSession() *uint64 {
 func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.Status) {
 	fh, err := fs.handles.Open(ino, flags, dir)
 	if err != nil {
-		return 0, fuse.Status(err.(syscall.Errno))
+		if errno, ok := errors.AsType[syscall.Errno](err); ok {
+			return 0, fuse.Status(errno)
+		}
+		return 0, fuse.EIO
 	}
 	fs.locks.RegisterHandle(fh, flags)
 	if fs.sessions != nil {
@@ -290,9 +280,6 @@ func (fs *RawFS) OnUnmount() {
 	fs.lifecycleMu.Unlock()
 	fs.readAhead.Clear()
 	fs.stopAndDrainReleaseQueue()
-	if fs.cfg.OnUnmount != nil {
-		fs.cfg.OnUnmount()
-	}
 }
 
 func shouldRetryReclaim(err error) bool {
@@ -377,7 +364,7 @@ func (fs *RawFS) reclaimOrphan(ino uint64) {
 
 // tryReclaim 返回 true 表示回收完成或错误不可重试。
 func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool {
-	ctx, cancel := context.WithTimeout(parent, fs.cfg.RPCTimeout)
+	ctx, cancel := context.WithTimeout(parent, DefaultRPCTimeout)
 	defer cancel()
 	req := &storagev1.ReclaimOrphanRequest{Ino: item.ino, SessionId: item.sessionID, DiskId: fs.cfg.DiskID}
 	if fs.cfg.BranchName != "" {
@@ -389,7 +376,7 @@ func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool 
 
 func (fs *RawFS) releaseRetryLoop() {
 	defer close(fs.releaseLoopDone)
-	ticker := time.NewTicker(fs.cfg.ReleaseRetryInterval)
+	ticker := time.NewTicker(DefaultReleaseRetryInterval)
 	defer ticker.Stop()
 	for {
 		select {

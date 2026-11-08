@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -22,7 +23,7 @@ const (
 func ParseSize(raw string) (uint64, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
-		return 0, fmt.Errorf("容量不能为空")
+		return 0, errors.New("容量不能为空")
 	}
 	if strings.HasPrefix(s, "-") {
 		return 0, fmt.Errorf("容量必须为正整数: %q", raw)

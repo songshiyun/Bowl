@@ -1,3 +1,4 @@
+// Package config 提供 Storage 服务的环境变量与配置加载。
 package config
 
 import (

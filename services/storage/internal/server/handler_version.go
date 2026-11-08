@@ -10,7 +10,7 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 
-func toProtoBranch(branch meta.Branch) *storagev1.Branch {
+func toProtoBranch(branch *meta.Branch) *storagev1.Branch {
 	state := storagev1.BranchState_BRANCH_STATE_NORMAL
 	if branch.State == "MERGING" {
 		state = storagev1.BranchState_BRANCH_STATE_MERGING
@@ -30,7 +30,7 @@ func (s *Server) CreateBranch(ctx context.Context, req *connect.Request[storagev
 	if err != nil {
 		return nil, toConnectError(err)
 	}
-	return connect.NewResponse(&storagev1.CreateBranchResponse{Branch: toProtoBranch(*branch)}), nil
+	return connect.NewResponse(&storagev1.CreateBranchResponse{Branch: toProtoBranch(branch)}), nil
 }
 
 // ListBranches 列出逻辑分支。
@@ -40,8 +40,8 @@ func (s *Server) ListBranches(ctx context.Context, req *connect.Request[storagev
 		return nil, toConnectError(err)
 	}
 	out := make([]*storagev1.Branch, 0, len(branches))
-	for _, branch := range branches {
-		out = append(out, toProtoBranch(branch))
+	for i := range branches {
+		out = append(out, toProtoBranch(&branches[i]))
 	}
 	return connect.NewResponse(&storagev1.ListBranchesResponse{Branches: out}), nil
 }
@@ -101,13 +101,13 @@ func (s *Server) Merge(ctx context.Context, req *connect.Request[storagev1.Merge
 	for _, conflict := range result.Conflicts {
 		item := &storagev1.MergeConflict{Path: conflict.Path, Reason: conflict.Reason}
 		if conflict.BaseAttr != nil {
-			item.BaseAttr = toProtoAttribute(conflict.BaseAttr.Attr)
+			item.BaseAttr = toProtoAttribute(&conflict.BaseAttr.Attr)
 		}
 		if conflict.OursAttr != nil {
-			item.OursAttr = toProtoAttribute(conflict.OursAttr.Attr)
+			item.OursAttr = toProtoAttribute(&conflict.OursAttr.Attr)
 		}
 		if conflict.TheirsAttr != nil {
-			item.TheirsAttr = toProtoAttribute(conflict.TheirsAttr.Attr)
+			item.TheirsAttr = toProtoAttribute(&conflict.TheirsAttr.Attr)
 		}
 		response.Conflicts = append(response.Conflicts, item)
 	}

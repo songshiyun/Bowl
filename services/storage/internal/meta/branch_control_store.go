@@ -1,3 +1,4 @@
+// Package meta 实现虚拟磁盘、分支控制面与文件系统元数据管理。
 package meta
 
 import (
@@ -30,7 +31,7 @@ func newBranchControlStore(store db.Store) BranchControlStore {
 func rawConn(q db.Querier) (db.DBTX, error) {
 	raw, ok := q.(rawDBTXProvider)
 	if !ok || raw.RawDBTX() == nil {
-		return nil, fmt.Errorf("会话事务无法访问数据库")
+		return nil, errors.New("会话事务无法访问数据库")
 	}
 	return raw.RawDBTX(), nil
 }
@@ -54,12 +55,16 @@ func (s BranchControlStore) LockBranchWriter(ctx context.Context, q db.Querier, 
 }
 
 // LockedBranches 锁定磁盘控制面行并解码分支拓扑。
+//
+//nolint:revive // unexported-return: 仅在 meta 包内部共享分支拓扑记录。
 func (s BranchControlStore) LockedBranches(ctx context.Context, q db.Querier, diskID pgtype.UUID) (db.GetDiskControlPlaneForUpdateRow, []storedBranch, error) {
 	return lockedBranches(ctx, q, diskID)
 }
 
 // FindBranch 在已解码的分支切片中按名称查找分支指针与下标。
-func (s BranchControlStore) FindBranch(branches []storedBranch, name string) (*storedBranch, int) {
+//
+//nolint:revive // unexported-return: 仅在 meta 包内部共享分支拓扑记录。
+func (s BranchControlStore) FindBranch(branches []storedBranch, name string) (branch *storedBranch, index int) {
 	i := branchIndex(branches, name)
 	if i < 0 {
 		return nil, -1
@@ -83,6 +88,8 @@ type controlPlaneSessionRecord struct {
 }
 
 // InspectSession 在事务内查询会话的当前绑定属性与存活状态。
+//
+//nolint:revive // unexported-return: 仅在 meta 包内部共享会话控制面记录。
 func (s BranchControlStore) InspectSession(ctx context.Context, q db.Querier, sessionID uint64) (controlPlaneSessionRecord, bool, error) {
 	conn, err := rawConn(q)
 	if err != nil {
@@ -104,7 +111,7 @@ func (s BranchControlStore) InspectSession(ctx context.Context, q db.Querier, se
 }
 
 // IsSessionExpired 检查指定会话记录是否已达过期时间。
-func (s BranchControlStore) IsSessionExpired(ctx context.Context, q db.Querier, sessionID uint64) (expired bool, exists bool, err error) {
+func (s BranchControlStore) IsSessionExpired(ctx context.Context, q db.Querier, sessionID uint64) (expired, exists bool, err error) {
 	conn, err := rawConn(q)
 	if err != nil {
 		return false, false, err
@@ -143,8 +150,8 @@ func (s BranchControlStore) HasActiveBranchWriter(ctx context.Context, q db.Quer
 }
 
 // RenewSession 调用控制面续期函数并将 PostgreSQL 约束错误映射为领域哨兵错误。
-func (s BranchControlStore) RenewSession(ctx context.Context, q db.Querier, params db.RenewControlPlaneSessionParams) (db.ClientSession, error) {
-	session, err := q.RenewControlPlaneSession(ctx, params)
+func (s BranchControlStore) RenewSession(ctx context.Context, q db.Querier, params *db.RenewControlPlaneSessionParams) (db.ClientSession, error) {
+	session, err := q.RenewControlPlaneSession(ctx, *params)
 	if err != nil {
 		return db.ClientSession{}, mapControlPlaneSessionError(err)
 	}
@@ -152,8 +159,7 @@ func (s BranchControlStore) RenewSession(ctx context.Context, q db.Querier, para
 }
 
 func mapControlPlaneSessionError(err error) error {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		switch pgErr.Code {
 		case "23505":
 			if pgErr.ConstraintName == "uq_client_sessions_managed_writer" {
@@ -169,12 +175,13 @@ func mapControlPlaneSessionError(err error) error {
 }
 
 // DeactivateOrDeleteManagedSession 注销受管会话：可写会话先在当前事务内强制过期以待孤儿清扫，只读会话直接删除。
-func (s BranchControlStore) DeactivateOrDeleteManagedSession(ctx context.Context, q db.Querier, sessionID uint64) (managed bool, needsSweep bool, err error) {
+func (s BranchControlStore) DeactivateOrDeleteManagedSession(ctx context.Context, q db.Querier, sessionID uint64) (managed, needsSweep bool, err error) {
 	conn, err := rawConn(q)
 	if err != nil {
 		return false, false, err
 	}
-	if err := lockSession(ctx, conn, sessionID); err != nil {
+	err = lockSession(ctx, conn, sessionID)
+	if err != nil {
 		return false, false, err
 	}
 	var diskID pgtype.UUID
@@ -188,11 +195,12 @@ func (s BranchControlStore) DeactivateOrDeleteManagedSession(ctx context.Context
 		return false, false, err
 	}
 	if !readOnly {
-		if err := lockBranchWriter(ctx, conn, diskID, branch); err != nil {
+		err = lockBranchWriter(ctx, conn, diskID, branch)
+		if err != nil {
 			return true, false, err
 		}
 		// 先持久化写端失效，再清扫 Pebble；后续事务失败时旧写端不会复活。
-		_, err := conn.Exec(ctx, `UPDATE client_sessions SET expires_at = LEAST(expires_at, clock_timestamp()) WHERE session_id = $1 AND lease_managed`, int64(sessionID))
+		_, err = conn.Exec(ctx, `UPDATE client_sessions SET expires_at = LEAST(expires_at, clock_timestamp()) WHERE session_id = $1 AND lease_managed`, int64(sessionID))
 		return true, err == nil, err
 	}
 	_, err = conn.Exec(ctx, `DELETE FROM client_sessions WHERE session_id = $1 AND lease_managed`, int64(sessionID))
@@ -213,9 +221,9 @@ func (s BranchControlStore) ListExpiredManagedSessionIDs(ctx context.Context) ([
 	var sessions []uint64
 	for rows.Next() {
 		var id int64
-		if err := rows.Scan(&id); err != nil {
+		if scanErr := rows.Scan(&id); scanErr != nil {
 			rows.Close()
-			return nil, err
+			return nil, scanErr
 		}
 		sessions = append(sessions, uint64(id))
 	}
@@ -235,12 +243,15 @@ type deletedExpiredSession struct {
 }
 
 // DeleteExpiredManagedSession 在持有咨询锁的事务内删除已过期的受管会话记录。
+//
+//nolint:revive // unexported-return: 仅在 meta 包内部共享过期会话删除结果。
 func (s BranchControlStore) DeleteExpiredManagedSession(ctx context.Context, q db.Querier, sessionID uint64) (deletedExpiredSession, error) {
 	conn, err := rawConn(q)
 	if err != nil {
 		return deletedExpiredSession{}, err
 	}
-	if err := lockSession(ctx, conn, sessionID); err != nil {
+	err = lockSession(ctx, conn, sessionID)
+	if err != nil {
 		return deletedExpiredSession{}, err
 	}
 	var out deletedExpiredSession
@@ -253,7 +264,8 @@ func (s BranchControlStore) DeleteExpiredManagedSession(ctx context.Context, q d
 		return deletedExpiredSession{}, err
 	}
 	if !out.readOnly {
-		if err := lockBranchWriter(ctx, conn, out.diskID, out.branch); err != nil {
+		err = lockBranchWriter(ctx, conn, out.diskID, out.branch)
+		if err != nil {
 			return deletedExpiredSession{}, err
 		}
 	}
@@ -267,6 +279,8 @@ func (s BranchControlStore) DeleteExpiredManagedSession(ctx context.Context, q d
 }
 
 // FindSession 从连接池读取会话权威状态（不开启事务）。
+//
+//nolint:revive // unexported-return: 仅在 meta 包内部共享只读会话快照。
 func (s BranchControlStore) FindSession(ctx context.Context, sessionID uint64) (pebbleReadSession, error) {
 	pp, ok := s.store.(poolProvider)
 	if !ok || pp == nil || pp.Pool() == nil {

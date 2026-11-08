@@ -5,9 +5,9 @@ package e2e_test
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -85,7 +85,7 @@ func requireXattrSemantics(t *testing.T, targetPath string) {
 
 	listSz, err := unix.Listxattr(targetPath, nil)
 	require.NoError(t, err, "nil 探测 Listxattr 必须成功")
-	require.True(t, listSz >= len(attrFoo)+1+len(attrBinary)+1, "Listxattr 探测长度应包含所有属性名")
+	require.Greater(t, listSz, len(attrFoo)+1+len(attrBinary), "Listxattr 探测长度应包含所有属性名")
 
 	_, err = unix.Listxattr(targetPath, make([]byte, listSz-1))
 	require.Error(t, err, "缓冲区过小 Listxattr 必须报错")
@@ -134,12 +134,12 @@ func TestE2E_Xattr(t *testing.T) {
 		defer stopBowlMountGracefully(t, cmd, mountpoint)
 
 		filePath := filepath.Join(mountpoint, "test-file.txt")
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 		require.NoError(t, err, "创建测试文件成功")
 		require.NoError(t, f.Close(), "关闭测试文件成功")
 
 		dirPath := filepath.Join(mountpoint, "test-dir")
-		require.NoError(t, os.Mkdir(dirPath, 0755), "创建测试目录成功")
+		require.NoError(t, os.Mkdir(dirPath, 0o755), "创建测试目录成功")
 
 		t.Run("regular_file", func(t *testing.T) { requireXattrSemantics(t, filePath) })
 		t.Run("directory", func(t *testing.T) { requireXattrSemantics(t, dirPath) })
@@ -185,7 +185,7 @@ func TestE2E_Xattr(t *testing.T) {
 		stopRemount()
 
 		recordArtifact(t, map[string]string{
-			"capability_bytes":         fmt.Sprint(len(capability)),
+			"capability_bytes":         strconv.Itoa(len(capability)),
 			"capability_initial":       "absent",
 			"capability_after_set":     "present",
 			"capability_after_write":   "absent",
@@ -202,7 +202,7 @@ func TestE2E_Xattr(t *testing.T) {
 		waitForMount(t, mountpointRW, "挂载读写就绪")
 
 		filePath := filepath.Join(mountpointRW, "ro-file.txt")
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 		require.NoError(t, err, "创建只读测试文件成功")
 		require.NoError(t, f.Close(), "关闭只读测试文件成功")
 		require.NoError(t, unix.Setxattr(filePath, "user.ro_key", []byte("ro_value"), 0))
@@ -222,7 +222,7 @@ func TestE2E_Xattr(t *testing.T) {
 
 		listSz, err := unix.Listxattr(roFilePath, nil)
 		require.NoError(t, err, "只读挂载点列出 xattr 必须成功")
-		require.True(t, listSz > 0)
+		require.Positive(t, listSz)
 
 		err = unix.Setxattr(roFilePath, "user.ro_new", []byte("val"), 0)
 		require.Error(t, err, "只读挂载点 Setxattr 必须报错")

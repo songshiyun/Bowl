@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 
@@ -77,13 +78,13 @@ func mergeEntries(store *pebble.DB, dir uint64) (entries map[string]pebblekv.Ent
 	defer func() { err = errors.Join(err, iter.Close()) }()
 	entries = make(map[string]pebblekv.Entry)
 	for iter.First(); iter.Valid(); iter.Next() {
-		_, name, err := pebblekv.DecodeEntryKey(iter.Key())
-		if err != nil {
-			return nil, err
+		_, name, decodeKeyErr := pebblekv.DecodeEntryKey(iter.Key())
+		if decodeKeyErr != nil {
+			return nil, decodeKeyErr
 		}
-		entry, err := pebblekv.DecodeEntry(iter.Value())
-		if err != nil {
-			return nil, err
+		entry, decodeValErr := pebblekv.DecodeEntry(iter.Value())
+		if decodeValErr != nil {
+			return nil, decodeValErr
 		}
 		entries[string(name)] = entry
 	}
@@ -91,15 +92,16 @@ func mergeEntries(store *pebble.DB, dir uint64) (entries map[string]pebblekv.Ent
 }
 
 // 比较实际文件内容，忽略由目录操作产生的链接数、时间和写序列差异。
-func mergeComparableInode(inode pebblekv.Inode) pebblekv.Inode {
-	inode.Ino, inode.ParentIno, inode.Generation, inode.WriteSeq = 0, 0, 0, 0
-	inode.Nlink = 0
-	inode.AtimeSec, inode.MtimeSec, inode.CtimeSec = 0, 0, 0
-	inode.AtimeNsec, inode.MtimeNsec, inode.CtimeNsec = 0, 0, 0
-	return inode
+func mergeComparableInode(inode *pebblekv.Inode) pebblekv.Inode {
+	copied := *inode
+	copied.Ino, copied.ParentIno, copied.Generation, copied.WriteSeq = 0, 0, 0, 0
+	copied.Nlink = 0
+	copied.AtimeSec, copied.MtimeSec, copied.CtimeSec = 0, 0, 0
+	copied.AtimeNsec, copied.MtimeNsec, copied.CtimeNsec = 0, 0, 0
+	return copied
 }
 
-func mergeTimesEqual(a, b pebblekv.Inode) bool {
+func mergeTimesEqual(a, b *pebblekv.Inode) bool {
 	return a.AtimeSec == b.AtimeSec && a.AtimeNsec == b.AtimeNsec &&
 		a.MtimeSec == b.MtimeSec && a.MtimeNsec == b.MtimeNsec
 }
@@ -123,18 +125,18 @@ func mergeRangeEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, aLower, aUpper []
 		left, right := ai.Value(), bi.Value()
 		if data {
 			// 块编号全局唯一且内容不可变，12B BlobRef 相等即可 O(1) 短路。
-			aRef, err := pebblekv.DecodeBlobRef(left)
-			if err != nil {
-				return false, err
+			aRef, aDecodeErr := pebblekv.DecodeBlobRef(left)
+			if aDecodeErr != nil {
+				return false, aDecodeErr
 			}
-			bRef, err := pebblekv.DecodeBlobRef(right)
-			if err != nil {
-				return false, err
+			bRef, bDecodeErr := pebblekv.DecodeBlobRef(right)
+			if bDecodeErr != nil {
+				return false, bDecodeErr
 			}
 			if aRef.ID != bRef.ID || aRef.Length != bRef.Length {
-				same, err := pebbleBlobEqual(aBlobs, aRef, bBlobs, bRef)
-				if err != nil || !same {
-					return same, err
+				same, eqErr := pebbleBlobEqual(aBlobs, aRef, bBlobs, bRef)
+				if eqErr != nil || !same {
+					return same, eqErr
 				}
 			}
 		} else if !bytes.Equal(left, right) {
@@ -145,11 +147,11 @@ func mergeRangeEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, aLower, aUpper []
 	return !av && !bv, errors.Join(ai.Error(), bi.Error())
 }
 
-func mergeInodesEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, ai mergeInode, b *pebble.DB, bBlobs *pebblekv.BlobStore, bi mergeInode) (bool, error) {
+func mergeInodesEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, ai *mergeInode, b *pebble.DB, bBlobs *pebblekv.BlobStore, bi *mergeInode) (bool, error) {
 	if !ai.exists || !bi.exists {
 		return ai.exists == bi.exists, nil
 	}
-	if !reflect.DeepEqual(mergeComparableInode(ai.value), mergeComparableInode(bi.value)) {
+	if !reflect.DeepEqual(mergeComparableInode(&ai.value), mergeComparableInode(&bi.value)) {
 		return false, nil
 	}
 	al, au := pebblekv.XattrRange(ai.value.Ino)
@@ -165,8 +167,8 @@ func mergeInodesEqual(a *pebble.DB, aBlobs *pebblekv.BlobStore, ai mergeInode, b
 }
 
 func copyMergeRange(batch *pebble.Batch, source *pebble.DB, lower, upper []byte) (err error) {
-	if err := batch.DeleteRange(lower, upper, nil); err != nil {
-		return err
+	if delErr := batch.DeleteRange(lower, upper, nil); delErr != nil {
+		return delErr
 	}
 	iter, err := source.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: upper})
 	if err != nil {
@@ -174,8 +176,8 @@ func copyMergeRange(batch *pebble.Batch, source *pebble.DB, lower, upper []byte)
 	}
 	defer func() { err = errors.Join(err, iter.Close()) }()
 	for iter.First(); iter.Valid(); iter.Next() {
-		if err := batch.Set(iter.Key(), iter.Value(), nil); err != nil {
-			return err
+		if setErr := batch.Set(iter.Key(), iter.Value(), nil); setErr != nil {
+			return setErr
 		}
 	}
 	return iter.Error()
@@ -219,11 +221,11 @@ func mergePath(store *pebble.DB, wanted uint64) (string, error) {
 }
 
 func mergePathInode(store *pebble.DB, path string) (mergeInode, error) {
-	ino := uint64(RootIno)
+	ino := RootIno
 	if path == "/" {
 		return getMergeInode(store, ino)
 	}
-	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
+	for part := range strings.SplitSeq(strings.TrimPrefix(path, "/"), "/") {
 		if part == "" {
 			return mergeInode{}, ErrInvalidArgument
 		}
@@ -235,8 +237,8 @@ func mergePathInode(store *pebble.DB, path string) (mergeInode, error) {
 			return mergeInode{}, err
 		}
 		entry, decodeErr := pebblekv.DecodeEntry(value)
-		if err := errors.Join(decodeErr, closer.Close()); err != nil {
-			return mergeInode{}, err
+		if closeErr := errors.Join(decodeErr, closer.Close()); closeErr != nil {
+			return mergeInode{}, closeErr
 		}
 		ino = entry.Ino
 	}
@@ -252,7 +254,7 @@ func (m *manager) mergeConflict(stores [3]*pebble.DB, ino uint64, path, reason s
 			return c, err
 		}
 		if inode.exists {
-			*attrs[i] = m.newPebbleInode(inode.value)
+			*attrs[i] = m.newPebbleInode(&inode.value)
 		}
 		if c.Path == "" {
 			c.Path, err = mergePath(store, ino)
@@ -274,7 +276,7 @@ func (m *manager) mergeConflict(stores [3]*pebble.DB, ino uint64, path, reason s
 			return c, err
 		}
 		if node.exists {
-			*attrs[i] = m.newPebbleInode(node.value)
+			*attrs[i] = m.newPebbleInode(&node.value)
 		}
 	}
 	return c, nil
@@ -289,9 +291,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 	abort := strategy == ConflictStrategyUnspecified || strategy == ConflictStrategyAbortOnConflict
 	conflictedInodes := make(map[uint64]bool)
 	for ino := range forcedInodes {
-		conflict, err := m.mergeConflict(stores, ino, "", "目录移动导致父目录循环或丢失")
-		if err != nil {
-			return nil, nil, err
+		conflict, conflictErr := m.mergeConflict(stores, ino, "", "目录移动导致父目录循环或丢失")
+		if conflictErr != nil {
+			return nil, nil, conflictErr
 		}
 		conflicts = append(conflicts, conflict)
 		conflictedInodes[ino] = true
@@ -303,9 +305,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		isDir := false
 		var present [3]bool
 		for side, store := range stores {
-			inode, err := getMergeInode(store, ino)
-			if err != nil {
-				return nil, nil, err
+			inode, getErr := getMergeInode(store, ino)
+			if getErr != nil {
+				return nil, nil, getErr
 			}
 			present[side] = inode.exists && inode.value.Mode&S_IFMT == S_IFDIR
 			isDir = isDir || present[side]
@@ -315,9 +317,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		}
 		directories[ino] = present
 		for side, store := range stores {
-			items, err := mergeEntries(store, ino)
-			if err != nil {
-				return nil, nil, err
+			items, itemsErr := mergeEntries(store, ino)
+			if itemsErr != nil {
+				return nil, nil, itemsErr
 			}
 			for name, entry := range items {
 				key := mergeEntry{ino, name}
@@ -352,9 +354,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 	}
 	for ino := range removedBoth {
 		if oursAdded[ino] && theirsAdded[ino] && !conflictedInodes[ino] {
-			conflict, err := m.mergeConflict(stores, ino, "", "节点被移动到不同位置")
-			if err != nil {
-				return nil, nil, err
+			conflict, conflictErr := m.mergeConflict(stores, ino, "", "节点被移动到不同位置")
+			if conflictErr != nil {
+				return nil, nil, conflictErr
 			}
 			conflicts = append(conflicts, conflict)
 			conflictedInodes[ino] = true
@@ -374,25 +376,25 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		if e[0] || !e[1] || !e[2] || v[1].Ino == v[2].Ino {
 			continue
 		}
-		o, err := getMergeInode(stores[1], v[1].Ino)
-		if err != nil {
-			return nil, nil, err
+		o, getErr := getMergeInode(stores[1], v[1].Ino)
+		if getErr != nil {
+			return nil, nil, getErr
 		}
-		t, err := getMergeInode(stores[2], v[2].Ino)
-		if err != nil {
-			return nil, nil, err
+		t, getErr := getMergeInode(stores[2], v[2].Ino)
+		if getErr != nil {
+			return nil, nil, getErr
 		}
-		baseO, err := getMergeInode(stores[0], v[1].Ino)
-		if err != nil {
-			return nil, nil, err
+		baseO, getErr := getMergeInode(stores[0], v[1].Ino)
+		if getErr != nil {
+			return nil, nil, getErr
 		}
-		baseT, err := getMergeInode(stores[0], v[2].Ino)
-		if err != nil {
-			return nil, nil, err
+		baseT, getErr := getMergeInode(stores[0], v[2].Ino)
+		if getErr != nil {
+			return nil, nil, getErr
 		}
-		equal, err := mergeInodesEqual(stores[1], blobs[1], o, stores[2], blobs[2], t)
-		if err != nil {
-			return nil, nil, err
+		equal, eqErr := mergeInodesEqual(stores[1], blobs[1], &o, stores[2], blobs[2], &t)
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
 		if equal && !baseO.exists && !baseT.exists && o.value.Mode&S_IFMT != S_IFDIR && o.value.Nlink == t.value.Nlink {
 			pair := inodePair{v[1].Ino, v[2].Ino}
@@ -415,7 +417,7 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 	for ino := range dirty {
 		ids = append(ids, ino)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	for _, ino := range ids {
 		var state [3]mergeInode
 		for side := range stores {
@@ -424,28 +426,28 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				return nil, nil, err
 			}
 		}
-		bo, err := mergeInodesEqual(stores[0], blobs[0], state[0], stores[1], blobs[1], state[1])
-		if err != nil {
-			return nil, nil, err
+		bo, eqErr := mergeInodesEqual(stores[0], blobs[0], &state[0], stores[1], blobs[1], &state[1])
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
-		bt, err := mergeInodesEqual(stores[0], blobs[0], state[0], stores[2], blobs[2], state[2])
-		if err != nil {
-			return nil, nil, err
+		bt, eqErr := mergeInodesEqual(stores[0], blobs[0], &state[0], stores[2], blobs[2], &state[2])
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
-		ot, err := mergeInodesEqual(stores[1], blobs[1], state[1], stores[2], blobs[2], state[2])
-		if err != nil {
-			return nil, nil, err
+		ot, eqErr := mergeInodesEqual(stores[1], blobs[1], &state[1], stores[2], blobs[2], &state[2])
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
 		timeConflict := false
 		if state[0].exists && state[1].exists && state[2].exists && state[0].value.Mode&S_IFMT != S_IFDIR {
-			timeConflict = (!bo && bt && !mergeTimesEqual(state[0].value, state[2].value)) ||
-				(bo && !bt && !mergeTimesEqual(state[0].value, state[1].value)) ||
-				(bo && bt && !mergeTimesEqual(state[0].value, state[1].value) && !mergeTimesEqual(state[0].value, state[2].value) && !mergeTimesEqual(state[1].value, state[2].value))
+			timeConflict = (!bo && bt && !mergeTimesEqual(&state[0].value, &state[2].value)) ||
+				(bo && !bt && !mergeTimesEqual(&state[0].value, &state[1].value)) ||
+				(bo && bt && !mergeTimesEqual(&state[0].value, &state[1].value) && !mergeTimesEqual(&state[0].value, &state[2].value) && !mergeTimesEqual(&state[1].value, &state[2].value))
 		}
 		if (!bo && !bt && !ot || timeConflict) && !conflictedInodes[ino] {
-			conflict, err := m.mergeConflict(stores, ino, "", "节点被双方修改")
-			if err != nil {
-				return nil, nil, err
+			conflict, conflictErr := m.mergeConflict(stores, ino, "", "节点被双方修改")
+			if conflictErr != nil {
+				return nil, nil, conflictErr
 			}
 			conflicts = append(conflicts, conflict)
 			conflictedInodes[ino] = true
@@ -459,9 +461,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		if dirs[0] && (!dirs[1] && (!same(0, 2) || e[2] && conflictedInodes[v[2].Ino]) ||
 			!dirs[2] && (!same(0, 1) || e[1] && conflictedInodes[v[1].Ino])) {
 			if !conflictedInodes[key.parent] {
-				conflict, err := m.mergeConflict(stores, key.parent, "", "目录被删除，同时包含另一侧的变更")
-				if err != nil {
-					return nil, nil, err
+				conflict, conflictErr := m.mergeConflict(stores, key.parent, "", "目录被删除，同时包含另一侧的变更")
+				if conflictErr != nil {
+					return nil, nil, conflictErr
 				}
 				conflicts = append(conflicts, conflict)
 			}
@@ -536,14 +538,14 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 			continue
 		}
 		if !forced && !same(0, 1) && !identical[key] {
-			path, err := mergePath(stores[1], key.parent)
-			if err != nil {
-				return nil, nil, err
+			path, pathErr := mergePath(stores[1], key.parent)
+			if pathErr != nil {
+				return nil, nil, pathErr
 			}
 			if path == "" {
-				path, err = mergePath(stores[2], key.parent)
-				if err != nil {
-					return nil, nil, err
+				path, pathErr = mergePath(stores[2], key.parent)
+				if pathErr != nil {
+					return nil, nil, pathErr
 				}
 			}
 			if path == "/" {
@@ -555,12 +557,12 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				if !e[side] {
 					continue
 				}
-				inode, err := getMergeInode(stores[side], v[side].Ino)
-				if err != nil {
-					return nil, nil, err
+				inode, getErr := getMergeInode(stores[side], v[side].Ino)
+				if getErr != nil {
+					return nil, nil, getErr
 				}
 				if inode.exists {
-					*attrs[side] = m.newPebbleInode(inode.value)
+					*attrs[side] = m.newPebbleInode(&inode.value)
 				}
 			}
 			conflicts = append(conflicts, conflict)
@@ -582,11 +584,11 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				dirDelta[key.parent]++
 				parent[v[2].Ino] = key.parent
 			}
-			if err := batch.Set(pebblekv.EntryKey(key.parent, []byte(key.name)), pebblekv.EncodeEntry(v[2]), nil); err != nil {
-				return nil, nil, err
+			if setErr := batch.Set(pebblekv.EntryKey(key.parent, []byte(key.name)), pebblekv.EncodeEntry(v[2]), nil); setErr != nil {
+				return nil, nil, setErr
 			}
-		} else if err := batch.Delete(pebblekv.EntryKey(key.parent, []byte(key.name)), nil); err != nil {
-			return nil, nil, err
+		} else if delErr := batch.Delete(pebblekv.EntryKey(key.parent, []byte(key.name)), nil); delErr != nil {
+			return nil, nil, delErr
 		}
 		changed[key.parent] = true
 	}
@@ -599,9 +601,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		return nil, nil, err
 	}
 	for _, store := range stores {
-		s, err := readCreateStat(store)
-		if err != nil {
-			return nil, nil, err
+		s, statErr := readCreateStat(store)
+		if statErr != nil {
+			return nil, nil, statErr
 		}
 		stat.NextWriteSeq = max(stat.NextWriteSeq, s.NextWriteSeq)
 	}
@@ -614,7 +616,7 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 	for ino := range dirty {
 		ids = append(ids, ino)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	sizes = make(map[uint64]uint64)
 	mergedDirs := make(map[uint64]mergedDirectory)
 	for _, ino := range ids {
@@ -625,13 +627,13 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				return nil, nil, err
 			}
 		}
-		bo, err := mergeInodesEqual(stores[0], blobs[0], state[0], stores[1], blobs[1], state[1])
-		if err != nil {
-			return nil, nil, err
+		bo, eqErr := mergeInodesEqual(stores[0], blobs[0], &state[0], stores[1], blobs[1], &state[1])
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
-		bt, err := mergeInodesEqual(stores[0], blobs[0], state[0], stores[2], blobs[2], state[2])
-		if err != nil {
-			return nil, nil, err
+		bt, eqErr := mergeInodesEqual(stores[0], blobs[0], &state[0], stores[2], blobs[2], &state[2])
+		if eqErr != nil {
+			return nil, nil, eqErr
 		}
 		chosen := state[1]
 		copySource := !bt && bo
@@ -642,7 +644,7 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 			}
 		}
 		if !conflictedInodes[ino] && bo && bt && state[0].exists && state[1].exists && state[2].exists &&
-			mergeTimesEqual(state[0].value, state[1].value) && !mergeTimesEqual(state[0].value, state[2].value) {
+			mergeTimesEqual(&state[0].value, &state[1].value) && !mergeTimesEqual(&state[0].value, &state[2].value) {
 			copySource = true
 		}
 		if copySource {
@@ -664,9 +666,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				refs = 1
 			}
 			if refs > 1 {
-				conflict, err := m.mergeConflict(stores, ino, "", "目录被移动到多个位置")
-				if err != nil {
-					return nil, nil, err
+				conflict, conflictErr := m.mergeConflict(stores, ino, "", "目录被移动到多个位置")
+				if conflictErr != nil {
+					return nil, nil, conflictErr
 				}
 				if abort {
 					return nil, append(conflicts, conflict), nil
@@ -709,8 +711,8 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		}
 		if !live {
 			if state[1].exists {
-				if err := removeTopologyInode(stage, batch, &pebblekv.BranchStat{}, state[1].value, &removedBlobs); err != nil {
-					return nil, nil, err
+				if rmErr := removeTopologyInode(stage, batch, &pebblekv.BranchStat{}, &state[1].value, &removedBlobs); rmErr != nil {
+					return nil, nil, rmErr
 				}
 				changed[ino] = true
 			}
@@ -725,18 +727,18 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		}
 		if copySource {
 			lower, upper := pebblekv.XattrRange(ino)
-			if err := copyMergeRange(batch, stores[2], lower, upper); err != nil {
-				return nil, nil, err
+			if copyErr := copyMergeRange(batch, stores[2], lower, upper); copyErr != nil {
+				return nil, nil, copyErr
 			}
 			lower, upper = pebblekv.DataRange(ino, 0)
-			if err := copyMergeRange(batch, stores[2], lower, upper); err != nil {
-				return nil, nil, err
+			if copyErr := copyMergeRange(batch, stores[2], lower, upper); copyErr != nil {
+				return nil, nil, copyErr
 			}
 		}
 		if copySource || linkDelta[ino] != 0 || dirDelta[ino] != 0 || changed[ino] {
 			chosen.value.WriteSeq = sequence
-			if err := setCreateInode(batch, chosen.value); err != nil {
-				return nil, nil, err
+			if setErr := setCreateInode(batch, &chosen.value); setErr != nil {
+				return nil, nil, setErr
 			}
 			changed[ino] = true
 		}
@@ -755,9 +757,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		return nil, nil, err
 	}
 	if invalidDir != 0 {
-		conflict, err := m.mergeConflict(stores, invalidDir, "", "目录移动导致父目录循环或丢失")
-		if err != nil {
-			return nil, nil, err
+		conflict, conflictErr := m.mergeConflict(stores, invalidDir, "", "目录移动导致父目录循环或丢失")
+		if conflictErr != nil {
+			return nil, nil, conflictErr
 		}
 		if abort {
 			return nil, append(conflicts, conflict), nil
@@ -774,9 +776,9 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 				ino = dir.parent
 				continue
 			}
-			node, err := getMergeInode(stores[1], ino)
-			if err != nil {
-				return nil, nil, err
+			node, getErr := getMergeInode(stores[1], ino)
+			if getErr != nil {
+				return nil, nil, getErr
 			}
 			if !node.exists {
 				break
@@ -789,18 +791,18 @@ func (m *manager) mergeWorkspaceWithForced(stage *pebble.DB, stageBlobs *pebblek
 		return m.mergeWorkspaceWithForced(stage, stageBlobs, stores, blobs, dirty, strategy, next)
 	}
 	for ino := range changed {
-		if err := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); err != nil {
-			return nil, nil, err
+		if setErr := batch.Set(pebblekv.DirtyKey(ino), []byte{1}, nil); setErr != nil {
+			return nil, nil, setErr
 		}
 	}
-	if err := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); err != nil {
-		return nil, nil, err
+	if setErr := batch.Set(pebblekv.StatKey(), pebblekv.EncodeBranchStat(stat), nil); setErr != nil {
+		return nil, nil, setErr
 	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return nil, nil, err
+	if commitErr := batch.Commit(pebble.Sync); commitErr != nil {
+		return nil, nil, commitErr
 	}
-	if err := pebbleRemoveBlobs(stageBlobs, removedBlobs); err != nil {
-		return nil, nil, err
+	if rmErr := pebbleRemoveBlobs(stageBlobs, removedBlobs); rmErr != nil {
+		return nil, nil, rmErr
 	}
 	sort.Slice(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
 	return sizes, conflicts, nil

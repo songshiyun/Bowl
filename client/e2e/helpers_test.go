@@ -141,13 +141,13 @@ func waitForProcessExit(t *testing.T, pid int) {
 }
 
 // runAs 以指定 uid/gid 运行可执行文件并返回退出码与输出。
-func runAs(t *testing.T, uid, gid uint32, name string, args ...string) (int, string, string) {
+func runAs(t *testing.T, uid, gid uint32, name string, args ...string) (exitCode int, stdoutStr, stderrStr string) {
 	t.Helper()
 	return runAsWithStdin(t, uid, gid, "", name, args...)
 }
 
 // runAsWithStdin 以指定 uid/gid 运行可执行文件并写入标准输入。
-func runAsWithStdin(t *testing.T, uid, gid uint32, stdin, name string, args ...string) (int, string, string) {
+func runAsWithStdin(t *testing.T, uid, gid uint32, stdin, name string, args ...string) (exitCode int, stdoutStr, stderrStr string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), helperProcessTimeout)
 	defer cancel()
@@ -164,30 +164,30 @@ func runAsWithStdin(t *testing.T, uid, gid uint32, stdin, name string, args ...s
 }
 
 // startBowlMount 启动 bowl mount -f 前台子进程。
-func startBowlMount(t *testing.T, endpoint, diskID, mountpoint string, extraFlags ...string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer) {
+func startBowlMount(t *testing.T, endpoint, diskID, mountpoint string, extraFlags ...string) (cmd *exec.Cmd, stdout, stderr *bytes.Buffer) {
 	args := []string{"mount", "-f", "--endpoint", endpoint, diskID, mountpoint}
 	args = append(args, extraFlags...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), mountProcessTimeout)
 	t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, getBowlBin(), args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	cmd = exec.CommandContext(ctx, getBowlBin(), args...)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
 
 	err := cmd.Start()
 	require.NoError(t, err, "启动 bowl mount 进程失败")
 
-	return cmd, &stdout, &stderr
+	return cmd, &outBuf, &errBuf
 }
 
 // mountWithCleanup 挂载磁盘并注册幂等的优雅卸载，返回挂载点与停止函数。
-func mountWithCleanup(t *testing.T, endpoint, diskID string, extraFlags ...string) (string, func()) {
+func mountWithCleanup(t *testing.T, endpoint, diskID string, extraFlags ...string) (mountpoint string, stop func()) {
 	t.Helper()
-	mountpoint := t.TempDir()
+	mountpoint = t.TempDir()
 	cmd, _, stderr := startBowlMount(t, endpoint, diskID, mountpoint, extraFlags...)
 	var once sync.Once
-	stop := func() { once.Do(func() { stopBowlMountGracefully(t, cmd, mountpoint) }) }
+	stop = func() { once.Do(func() { stopBowlMountGracefully(t, cmd, mountpoint) }) }
 	t.Cleanup(stop)
 	waitForMount(t, mountpoint, "挂载点就绪失败: %s", stderr.String())
 	return mountpoint, stop

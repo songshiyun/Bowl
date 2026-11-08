@@ -10,7 +10,7 @@ import (
 // Symlink 实现创建符号链接操作。
 // 校验只读挂载、重写父 Inode，透传调用进程 UID/GID、目标路径与链接名称。
 // 注意 go-fuse 参数顺序：pointedTo 为符号链接指向的目标路径，linkName 为待创建的目录项名称。
-func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo string, linkName string, out *fuse.EntryOut) fuse.Status {
+func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo, linkName string, out *fuse.EntryOut) fuse.Status {
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}

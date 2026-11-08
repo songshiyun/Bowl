@@ -6,6 +6,7 @@ import (
 	"errors"
 )
 
+// ErrInvalidKey 表示 Pebble 键格式或长度非法。
 var ErrInvalidKey = errors.New("pebblekv: 无效键")
 
 func numberedPrefix(prefix string, ino uint64) []byte {
@@ -36,7 +37,7 @@ func DataKey(ino, block uint64) []byte {
 }
 
 // DecodeDataKey 解码 Blob 键。
-func DecodeDataKey(key []byte) (uint64, uint64, error) {
+func DecodeDataKey(key []byte) (ino, block uint64, err error) {
 	if len(key) != len("data:")+8+1+8 || string(key[:5]) != "data:" || key[13] != ':' {
 		return 0, 0, ErrInvalidKey
 	}
@@ -67,7 +68,7 @@ func namedKey(prefix string, ino uint64, name []byte) []byte {
 	return append(numberedPrefix(prefix, ino), name...)
 }
 
-func decodeNamedKey(key []byte, prefix string) (uint64, []byte, error) {
+func decodeNamedKey(key []byte, prefix string) (ino uint64, name []byte, err error) {
 	n := len(prefix)
 	if len(key) < n+9 || string(key[:n]) != prefix || key[n+8] != ':' {
 		return 0, nil, ErrInvalidKey
@@ -82,16 +83,18 @@ func InodeKey(ino uint64) []byte { return numberKey("inode:", ino) }
 func DecodeInodeKey(key []byte) (uint64, error) { return decodeNumberKey(key, "inode:") }
 
 // InodeRange 返回所有 Inode 键的范围。
-func InodeRange() ([]byte, []byte) { return PrefixIterBounds([]byte("inode:")) }
+func InodeRange() (lower, upper []byte) { return PrefixIterBounds([]byte("inode:")) }
 
 // EntryKey 编码父 Inode 和原始名称。
 func EntryKey(parent uint64, name []byte) []byte { return namedKey("entry:", parent, name) }
 
 // DecodeEntryKey 解码目录项键。
-func DecodeEntryKey(key []byte) (uint64, []byte, error) { return decodeNamedKey(key, "entry:") }
+func DecodeEntryKey(key []byte) (parent uint64, name []byte, err error) {
+	return decodeNamedKey(key, "entry:")
+}
 
 // EntryRange 返回一个父 Inode 下的目录项范围。
-func EntryRange(parent uint64) ([]byte, []byte) {
+func EntryRange(parent uint64) (lower, upper []byte) {
 	return PrefixIterBounds(numberedPrefix("entry:", parent))
 }
 
@@ -99,10 +102,14 @@ func EntryRange(parent uint64) ([]byte, []byte) {
 func XattrKey(ino uint64, name []byte) []byte { return namedKey("xattr:", ino, name) }
 
 // DecodeXattrKey 解码扩展属性键。
-func DecodeXattrKey(key []byte) (uint64, []byte, error) { return decodeNamedKey(key, "xattr:") }
+func DecodeXattrKey(key []byte) (ino uint64, name []byte, err error) {
+	return decodeNamedKey(key, "xattr:")
+}
 
 // XattrRange 返回一个 Inode 的扩展属性范围。
-func XattrRange(ino uint64) ([]byte, []byte) { return PrefixIterBounds(numberedPrefix("xattr:", ino)) }
+func XattrRange(ino uint64) (lower, upper []byte) {
+	return PrefixIterBounds(numberedPrefix("xattr:", ino))
+}
 
 // DirtyKey 编码变更节点键。
 func DirtyKey(ino uint64) []byte { return numberKey("dirty:", ino) }
@@ -111,7 +118,7 @@ func DirtyKey(ino uint64) []byte { return numberKey("dirty:", ino) }
 func DecodeDirtyKey(key []byte) (uint64, error) { return decodeNumberKey(key, "dirty:") }
 
 // DirtyRange 返回变更节点键的范围。
-func DirtyRange() ([]byte, []byte) { return PrefixIterBounds([]byte("dirty:")) }
+func DirtyRange() (lower, upper []byte) { return PrefixIterBounds([]byte("dirty:")) }
 
 // OrphanKey 编码孤儿节点键。
 func OrphanKey(ino uint64) []byte { return numberKey("orphan:", ino) }
@@ -120,4 +127,4 @@ func OrphanKey(ino uint64) []byte { return numberKey("orphan:", ino) }
 func DecodeOrphanKey(key []byte) (uint64, error) { return decodeNumberKey(key, "orphan:") }
 
 // OrphanRange 返回孤儿节点键的范围。
-func OrphanRange() ([]byte, []byte) { return PrefixIterBounds([]byte("orphan:")) }
+func OrphanRange() (lower, upper []byte) { return PrefixIterBounds([]byte("orphan:")) }

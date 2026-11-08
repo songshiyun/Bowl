@@ -126,7 +126,7 @@ func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fu
 		} else {
 			fs.FillEntryOut(eo, entry.GetInode(), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds())
 			eo.NodeId = fs.tmpMgr.ObserveKernelLookup(entry.GetIno())
-			eo.Attr.Ino = eo.NodeId
+			eo.Ino = eo.NodeId
 		}
 	}
 	return fuse.OK

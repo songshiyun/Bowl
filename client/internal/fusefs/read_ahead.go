@@ -451,10 +451,7 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, sessionID, off
 
 	var totalRead int
 	for totalRead < want {
-		chunkReqSize := want - totalRead
-		if chunkReqSize > MaxRPCChunkSize {
-			chunkReqSize = MaxRPCChunkSize
-		}
+		chunkReqSize := min(want-totalRead, MaxRPCChunkSize)
 		curOffset := offset + uint64(totalRead)
 
 		chunkData, err := fetch(ctx, curOffset, uint32(chunkReqSize))

@@ -40,25 +40,25 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 	var cachedCommitID pgtype.UUID
 	var cachedCreatedAt time.Time
 	err = m.store.ExecTx(ctx, func(q db.Querier) error {
-		if err := controlStore.LockSession(ctx, q, params.SessionID); err != nil {
-			return err
+		if lockErr := controlStore.LockSession(ctx, q, params.SessionID); lockErr != nil {
+			return lockErr
 		}
-		_, branches, err := controlStore.LockedBranches(ctx, q, diskID)
-		if err != nil {
-			return err
+		_, branches, branchErr := controlStore.LockedBranches(ctx, q, diskID)
+		if branchErr != nil {
+			return branchErr
 		}
 		target, _ := controlStore.FindBranch(branches, branchName)
 		if target == nil {
 			return ErrNotFound
 		}
 		if !params.ReadOnly {
-			if err := controlStore.LockBranchWriter(ctx, q, diskID, branchName); err != nil {
-				return err
+			if lockErr := controlStore.LockBranchWriter(ctx, q, diskID, branchName); lockErr != nil {
+				return lockErr
 			}
 		}
-		previous, exists, err := controlStore.InspectSession(ctx, q, params.SessionID)
-		if err != nil {
-			return err
+		previous, exists, inspectErr := controlStore.InspectSession(ctx, q, params.SessionID)
+		if inspectErr != nil {
+			return inspectErr
 		}
 		if exists && (!previous.managed || previous.diskID != diskID || previous.branch != branchName || previous.readOnly != params.ReadOnly) {
 			return ErrInvalidArgument
@@ -71,9 +71,10 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 				commit = &id
 			} else if commit == nil {
 				var id pgtype.UUID
-				id, checkpointDir, err = m.snapshotBranchSession(ctx, q, diskID, target)
-				if err != nil {
-					return err
+				var snapErr error
+				id, checkpointDir, snapErr = m.snapshotBranchSession(ctx, q, diskID, target)
+				if snapErr != nil {
+					return snapErr
 				}
 				value := id.String()
 				commit = &value
@@ -81,16 +82,17 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 			if commit == nil {
 				return ErrNotFound
 			}
-			commitID, err = parseDiskID(*commit)
-			if err != nil {
-				return err
+			var parseErr error
+			commitID, parseErr = parseDiskID(*commit)
+			if parseErr != nil {
+				return parseErr
 			}
-			row, err := q.GetCommit(ctx, commitID)
-			if errors.Is(err, pgx.ErrNoRows) || err == nil && row.DiskID != diskID {
+			row, commitErr := q.GetCommit(ctx, commitID)
+			if errors.Is(commitErr, pgx.ErrNoRows) || commitErr == nil && row.DiskID != diskID {
 				return ErrNotFound
 			}
-			if err != nil {
-				return err
+			if commitErr != nil {
+				return commitErr
 			}
 		}
 		if exists && previous.commitID != commitID {
@@ -98,13 +100,13 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 		}
 		swept := false
 		if !params.ReadOnly && !previous.active {
-			hasWriter, err := controlStore.HasActiveBranchWriter(ctx, q, diskID, branchName)
-			if err != nil {
-				return err
+			hasWriter, writerErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, branchName)
+			if writerErr != nil {
+				return writerErr
 			}
 			if !hasWriter {
-				if err := m.sweepBranchOrphans(ctx, q, diskID, branchName); err != nil {
-					return err
+				if sweepErr := m.sweepBranchOrphans(ctx, q, diskID, branchName); sweepErr != nil {
+					return sweepErr
 				}
 				swept = true
 			}
@@ -117,8 +119,8 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 			SessionID: int64(params.SessionID), DiskID: diskID, BranchName: branchName,
 			ReadOnly: params.ReadOnly, CommitID: commitID, LeaseMicros: ttl.Microseconds(),
 		}
-		session, err := controlStore.RenewSession(ctx, q, renew)
-		if errors.Is(err, pgx.ErrNoRows) {
+		session, renewErr := controlStore.RenewSession(ctx, q, &renew)
+		if errors.Is(renewErr, pgx.ErrNoRows) {
 			expired, found, checkErr := controlStore.IsSessionExpired(ctx, q, params.SessionID)
 			if checkErr != nil {
 				return checkErr
@@ -127,31 +129,31 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 				return ErrInvalidArgument
 			}
 			if !params.ReadOnly && !swept {
-				hasWriter, checkErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, branchName)
-				if checkErr != nil {
-					return checkErr
+				hasWriter, writerErr := controlStore.HasActiveBranchWriter(ctx, q, diskID, branchName)
+				if writerErr != nil {
+					return writerErr
 				}
 				if hasWriter {
 					return ErrBusy
 				}
-				if checkErr = m.sweepBranchOrphans(ctx, q, diskID, branchName); checkErr != nil {
-					return checkErr
+				if sweepErr := m.sweepBranchOrphans(ctx, q, diskID, branchName); sweepErr != nil {
+					return sweepErr
 				}
 				swept = true
 			}
-			session, err = controlStore.RenewSession(ctx, q, renew)
-			if errors.Is(err, pgx.ErrNoRows) {
+			session, renewErr = controlStore.RenewSession(ctx, q, &renew)
+			if errors.Is(renewErr, pgx.ErrNoRows) {
 				return ErrInvalidArgument
 			}
 		}
-		if err != nil {
-			return err
+		if renewErr != nil {
+			return renewErr
 		}
 		recreated := !exists || !previous.createdAt.Equal(session.CreatedAt.Time)
 		if recreated && !params.ReadOnly && !swept {
 			// 新租约尚未提交，旧租约已过期，分支锁仍由本事务持有。
-			if err := m.sweepBranchOrphans(ctx, q, diskID, branchName); err != nil {
-				return err
+			if sweepErr := m.sweepBranchOrphans(ctx, q, diskID, branchName); sweepErr != nil {
+				return sweepErr
 			}
 		}
 		result = RenewSessionResult{ExpiresAt: session.ExpiresAt.Time, SessionRecreated: recreated}
@@ -164,7 +166,7 @@ func (m *manager) RenewBranchSession(ctx context.Context, params RenewBranchSess
 		}
 		return RenewSessionResult{}, err
 	}
-	m.cachePebbleSession(pebbleReadSession{
+	m.cachePebbleSession(&pebbleReadSession{
 		id: params.SessionID, diskID: diskID, branch: branchName, commitID: cachedCommitID,
 		readOnly: params.ReadOnly, managed: true, active: true, createdAt: cachedCreatedAt,
 	})
@@ -201,13 +203,14 @@ func (m *manager) snapshotBranchSession(ctx context.Context, q db.Querier, diskI
 	}
 	id = pgtype.UUID{Bytes: newID, Valid: true}
 	path := filepath.Join(m.storageRoot, "disks", disk, "commits", newID.String())
-	if _, err := os.Stat(path); err == nil {
+	if _, statErr := os.Stat(path); statErr == nil {
 		return id, "", ErrAlreadyExists
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return id, "", err
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return id, "", statErr
 	}
 	checkpointDir = path
-	if err := m.checkpointBranchLocked(disk, target.Name, branch, newID.String()); err != nil {
+	err = m.checkpointBranchLocked(disk, target.Name, branch, newID.String())
+	if err != nil {
 		return id, checkpointDir, err
 	}
 	_, err = q.CreateCommit(ctx, db.CreateCommitParams{

@@ -164,8 +164,8 @@ func TestBranchMutationTxReclaimsInodePhysicalState(t *testing.T) {
 	require.NoError(t, quota.ReplaceBranch("main", map[uint64]uint64{1: 0, 42: 6}))
 
 	err = meta.RunBranchReclaimTx(storage, "disk-reclaim", "main", branch.DB(), branch.Blobs(), quota, func(tx *meta.BranchMutationTx) error {
-		if err := tx.ReclaimInode(inode); err != nil {
-			return err
+		if reclaimErr := tx.ReclaimInode(&inode); reclaimErr != nil {
+			return reclaimErr
 		}
 		return tx.CommitReclaim(inode.Ino)
 	})

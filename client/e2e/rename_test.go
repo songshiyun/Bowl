@@ -15,7 +15,7 @@ import (
 // createRegularFile 辅助函数：通过 unix.Mknod 创建常规空文件。
 func createRegularFile(t *testing.T, path string) {
 	t.Helper()
-	err := unix.Mknod(path, syscall.S_IFREG|0644, 0)
+	err := unix.Mknod(path, syscall.S_IFREG|0o644, 0)
 	require.NoError(t, err, "创建常规文件失败: %s", path)
 }
 
@@ -45,7 +45,7 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 
 	// 2. 跨目录移动：将文件移入子目录
 	subDir1 := filepath.Join(mountpoint, "subdir1")
-	require.NoError(t, os.Mkdir(subDir1, 0755), "创建子目录1应成功")
+	require.NoError(t, os.Mkdir(subDir1, 0o755), "创建子目录1应成功")
 
 	fileInSub1 := filepath.Join(subDir1, "file_in_sub1.txt")
 	err = os.Rename(fileB, fileInSub1)
@@ -58,7 +58,7 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 
 	// 3. 跨不同子目录移动
 	subDir2 := filepath.Join(mountpoint, "subdir2")
-	require.NoError(t, os.Mkdir(subDir2, 0755), "创建子目录2应成功")
+	require.NoError(t, os.Mkdir(subDir2, 0o755), "创建子目录2应成功")
 
 	fileInSub2 := filepath.Join(subDir2, "file_in_sub2.txt")
 	err = os.Rename(fileInSub1, fileInSub2)
@@ -80,7 +80,7 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 
 	// 5. 试图用常规文件覆盖非空目录必须失败（Linux 返回 EEXIST）
 	nonEmptyDir := filepath.Join(mountpoint, "non_empty_dst")
-	require.NoError(t, os.Mkdir(nonEmptyDir, 0755))
+	require.NoError(t, os.Mkdir(nonEmptyDir, 0o755))
 	createRegularFile(t, filepath.Join(nonEmptyDir, "child.txt"))
 
 	createRegularFile(t, fileA)
@@ -89,7 +89,7 @@ func TestE2E_Rename_BasicAndCrossDir(t *testing.T) {
 
 	// 6. 试图用目录覆盖常规文件必须返回 ENOTDIR
 	srcDir := filepath.Join(mountpoint, "src_dir")
-	require.NoError(t, os.Mkdir(srcDir, 0755))
+	require.NoError(t, os.Mkdir(srcDir, 0o755))
 
 	err = os.Rename(srcDir, fileA)
 	require.ErrorIs(t, err, syscall.ENOTDIR, "用目录覆盖常规文件必须返回 ENOTDIR, 实际: %v", err)
@@ -169,7 +169,7 @@ func TestE2E_Rename_Exchange(t *testing.T) {
 
 	// 创建非空目录 dir_swap 并在其中放置子文件
 	dirPath := filepath.Join(mountpoint, "dir_swap")
-	require.NoError(t, os.Mkdir(dirPath, 0755))
+	require.NoError(t, os.Mkdir(dirPath, 0o755))
 	childPath := filepath.Join(dirPath, "child.txt")
 	createRegularFile(t, childPath)
 
@@ -245,9 +245,9 @@ func TestE2E_Rename_AncestorCycle(t *testing.T) {
 	child := filepath.Join(parent, "child")
 	grandchild := filepath.Join(child, "grandchild")
 
-	require.NoError(t, os.Mkdir(parent, 0755))
-	require.NoError(t, os.Mkdir(child, 0755))
-	require.NoError(t, os.Mkdir(grandchild, 0755))
+	require.NoError(t, os.Mkdir(parent, 0o755))
+	require.NoError(t, os.Mkdir(child, 0o755))
+	require.NoError(t, os.Mkdir(grandchild, 0o755))
 
 	// 试图将 parent 移入其子孙 grandchild 内部产生环
 	targetLoop := filepath.Join(grandchild, "parent_cycle")

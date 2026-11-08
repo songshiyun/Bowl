@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -30,12 +31,12 @@ func TestE2E_FileHandle(t *testing.T) {
 		filePath := filepath.Join(mountpoint, "file-test.txt")
 
 		// 1. O_CREAT 创建文件并成功打开
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 		require.NoError(t, err, "O_CREATE|O_EXCL 创建新文件必须成功")
 		t.Cleanup(func() { _ = f.Close() })
 
 		// 2. O_CREAT|O_EXCL 冲突断言 EEXIST
-		_, errConflict := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0644)
+		_, errConflict := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 		require.Error(t, errConflict, "排他创建已存在文件必须报错")
 		require.True(t, errors.Is(errConflict, os.ErrExist) || errors.Is(errConflict, syscall.EEXIST), "排他创建冲突必须返回 EEXIST")
 
@@ -49,7 +50,7 @@ func TestE2E_FileHandle(t *testing.T) {
 		// 5. 对目录调用非目录写打开错误边界 (EISDIR)
 		_, errDir := os.OpenFile(mountpoint, os.O_WRONLY, 0)
 		require.Error(t, errDir, "写模式打开目录必须报错")
-		require.True(t, errors.Is(errDir, syscall.EISDIR), "错误必须为 EISDIR")
+		require.ErrorIs(t, errDir, syscall.EISDIR, "错误必须为 EISDIR")
 	})
 
 	t.Run("readonly_mount_blocks_write_allows_read", func(t *testing.T) {
@@ -70,18 +71,18 @@ func TestE2E_FileHandle(t *testing.T) {
 		newFile := filepath.Join(mountpoint, "new-file.txt")
 
 		// 3. 禁止创建新文件 (EROFS)
-		_, errCreate := os.OpenFile(newFile, os.O_CREATE|os.O_WRONLY, 0644)
+		_, errCreate := os.OpenFile(newFile, os.O_CREATE|os.O_WRONLY, 0o644)
 		require.Error(t, errCreate, "只读挂载禁止创建新文件")
-		require.True(t, errors.Is(errCreate, syscall.EROFS), "错误必须为 EROFS")
+		require.ErrorIs(t, errCreate, syscall.EROFS, "错误必须为 EROFS")
 
 		// 4. 禁止写模式打开既有文件 (EROFS)
 		_, errWrite := os.OpenFile(existingFile, os.O_WRONLY, 0)
 		require.Error(t, errWrite, "只读挂载禁止 O_WRONLY 打开")
-		require.True(t, errors.Is(errWrite, syscall.EROFS), "错误必须为 EROFS")
+		require.ErrorIs(t, errWrite, syscall.EROFS, "错误必须为 EROFS")
 
 		_, errRW := os.OpenFile(existingFile, os.O_RDWR, 0)
 		require.Error(t, errRW, "只读挂载禁止 O_RDWR 打开")
-		require.True(t, errors.Is(errRW, syscall.EROFS), "错误必须为 EROFS")
+		require.ErrorIs(t, errRW, syscall.EROFS, "错误必须为 EROFS")
 
 		// 5. 允许只读模式打开既有文件
 		roF, errRO := os.OpenFile(existingFile, os.O_RDONLY, 0)
@@ -130,7 +131,7 @@ func TestE2E_FileHandle(t *testing.T) {
 		stopRemount()
 
 		recordArtifact(t, map[string]string{
-			"tmpfile_bytes":             fmt.Sprint(len(payload)),
+			"tmpfile_bytes":             strconv.Itoa(len(payload)),
 			"tmpfile_named_sha256":      namedDigest,
 			"tmpfile_persisted_sha256":  persistedDigest,
 			"tmpfile_remount_persisted": "true",
@@ -149,7 +150,7 @@ func TestE2E_FileHandle(t *testing.T) {
 		filePath := filepath.Join(mountpoint, targetName)
 
 		// 1. 通过挂载点打开并创建常规文件
-		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
+		f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0o644)
 		require.NoError(t, err, "挂载点打开创建常规文件必须成功")
 		t.Cleanup(func() { _ = f.Close() })
 

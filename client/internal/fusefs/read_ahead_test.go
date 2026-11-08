@@ -52,7 +52,7 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 	var prefetch2Done = make(chan struct{})
 	var callCount atomic.Int32
 
-	fetcher := func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+	fetcher := func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
 		idx := callCount.Add(1)
 		callsMu.Lock()
 		calls = append(calls, callRecord{offset: offset, length: length})
@@ -135,7 +135,7 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 	fileData := makeDeterministicFile(totalSize)
 	coord := fusefs.NewReadAheadCoordinator()
 
-	fetcher := func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+	fetcher := func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
 		if int(offset) >= len(fileData) {
 			return nil, nil
 		}
@@ -283,7 +283,7 @@ func TestReadAheadCoordinator并发读取同一窗口Singleflight单飞合并(t 
 
 	// 断言底层 4 MiB 对齐窗口 ChunkFetcher 仅被调用 1 次，且所有并发读均拿到各自的精确数据区间
 	require.Equal(t, int32(1), window0Fetches.Load(), "同一 4 MiB 对齐窗口的并发读必须通过 Singleflight 合并为 1 次拉取")
-	for i := 0; i < readers; i++ {
+	for i := range readers {
 		require.NoError(t, errs[i])
 		var expectedOff int
 		if i == 0 {
@@ -394,7 +394,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	}
 	var calls []callRecord
 
-	fetcher := func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+	fetcher := func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
 		calls = append(calls, callRecord{offset: offset, length: length})
 		if int(offset) >= len(fileData) {
 			return nil, nil
@@ -433,7 +433,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	sentinelErr := errors.New("simulated network failure on second chunk")
 	partialBuf := make([]byte, 2*chunkSize)
 	var chunkIdx int
-	n, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+	n, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
 		chunkIdx++
 		if chunkIdx == 2 {
 			return nil, sentinelErr
@@ -444,7 +444,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	require.Equal(t, chunkSize, n)
 	require.True(t, bytes.Equal(fileData[:chunkSize], partialBuf[:n]))
 
-	_, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+	_, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(_ context.Context, _ uint64, _ uint32) ([]byte, error) {
 		return nil, sentinelErr
 	})
 	require.ErrorIs(t, err, sentinelErr)
@@ -502,7 +502,7 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 		// 移除句柄后再次以同一 fh 读取，必须作为全新句柄首读直通（不命中旧窗口 0）
 		var gotLengths []uint32
 		buf := make([]byte, 32*1024)
-		n, err := coord.Read(context.Background(), 61, 601, 6, 128*1024, buf, func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+		n, err := coord.Read(context.Background(), 61, 601, 6, 128*1024, buf, func(_ context.Context, _ uint64, length uint32) ([]byte, error) {
 			gotLengths = append(gotLengths, length)
 			return bytes.Repeat([]byte{0x5A}, int(length)), nil
 		})
@@ -533,7 +533,7 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 		}
 		var sid20Fetched bool
 		buf := make([]byte, 64*1024)
-		n, err := coord.Read(context.Background(), 72, 702, 20, 128*1024, buf, func(ctx context.Context, offset uint64, length uint32) ([]byte, error) {
+		n, err := coord.Read(context.Background(), 72, 702, 20, 128*1024, buf, func(_ context.Context, _ uint64, _ uint32) ([]byte, error) {
 			sid20Fetched = true
 			return nil, nil
 		})
@@ -691,7 +691,7 @@ func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) 
 	)
 
 	// 结构体反射守卫：RawFS 不得再暴露旧版 readAheadMu 或 readAheadHandles 字段
-	rawFSType := reflect.TypeOf(fusefs.RawFS{})
+	rawFSType := reflect.TypeFor[fusefs.RawFS]()
 	_, hasOldMu := rawFSType.FieldByName("readAheadMu")
 	require.False(t, hasOldMu, "RawFS 不得保留旧字段 readAheadMu")
 	_, hasOldMap := rawFSType.FieldByName("readAheadHandles")
@@ -784,17 +784,17 @@ func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) 
 
 	readAtFh := func(targetFh, offset uint64, size uint32) ([]byte, fuse.Status) {
 		buf := make([]byte, size)
-		res, st := fs.Read(nil, &fuse.ReadIn{
+		res, readSt := fs.Read(nil, &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: nodeID},
 			Fh:       targetFh,
 			Offset:   offset,
 			Size:     size,
 		}, buf)
-		if st != fuse.OK {
-			return nil, st
+		if readSt != fuse.OK {
+			return nil, readSt
 		}
-		out, st := res.Bytes(buf)
-		return append([]byte(nil), out...), st
+		out, readSt := res.Bytes(buf)
+		return append([]byte(nil), out...), readSt
 	}
 
 	client.mu.Lock()

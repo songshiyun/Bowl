@@ -60,15 +60,15 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 		{
 			name: "SnapshotRead_Lookup",
 			run: func(ctx context.Context, sid *uint64) error {
-				_, err := mgr.Lookup(ctx, sid, 1, []byte("target.txt"))
-				return err
+				_, runErr := mgr.Lookup(ctx, sid, 1, []byte("target.txt"))
+				return runErr
 			},
 		},
 		{
 			name: "PointRead_GetAttr",
 			run: func(ctx context.Context, sid *uint64) error {
-				_, err := mgr.GetAttr(ctx, sid, ino)
-				return err
+				_, runErr := mgr.GetAttr(ctx, sid, ino)
+				return runErr
 			},
 		},
 		{
@@ -80,8 +80,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 		{
 			name: "WritableBranch_Write",
 			run: func(ctx context.Context, sid *uint64) error {
-				_, err := mgr.Write(ctx, &meta.WriteRequest{Ino: ino, Data: []byte("mutated"), SessionID: sid})
-				return err
+				_, runErr := mgr.Write(ctx, &meta.WriteRequest{Ino: ino, Data: []byte("mutated"), SessionID: sid})
+				return runErr
 			},
 		},
 	}
@@ -90,8 +90,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 	for i, tc := range ops {
 		t.Run("ClosedDuringLockWait/"+tc.name, func(t *testing.T) {
 			sid := uint64(910 + i)
-			_, err := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
-			require.NoError(t, err)
+			_, renewErr := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
+			require.NoError(t, renewErr)
 			require.True(t, gate.HasCachedSession(sid))
 
 			entered := make(chan struct{})
@@ -129,8 +129,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 	for i, tc := range ops {
 		t.Run("RecreatedDriftDuringLockWait/"+tc.name, func(t *testing.T) {
 			sid := uint64(930 + i)
-			_, err := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
-			require.NoError(t, err)
+			_, renewErr := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
+			require.NoError(t, renewErr)
 
 			entered := make(chan struct{})
 			gate.SetBeforeBranchLockHook(func(hookSID uint64) {
@@ -150,8 +150,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 			// 将会话在数据库中置为已过期，并并发发起过期会话清扫（通过 DeleteBranch/Merge 等入口触发 sweepExpiredBranchSessions），
 			// 或直接等待清扫/新写端接管在锁释放时完成。
 			// 此处测试在等待 Branch 锁期间同一 SessionID 过期并在控制面被重新创建（createdAt 发生缓存漂移）：
-			_, err = e.pool.Exec(e.ctx, `UPDATE client_sessions SET created_at = created_at + interval '5 seconds', expires_at = clock_timestamp() + interval '1 minute' WHERE session_id = $1`, int64(sid))
-			require.NoError(t, err)
+			_, execErr := e.pool.Exec(e.ctx, `UPDATE client_sessions SET created_at = created_at + interval '5 seconds', expires_at = clock_timestamp() + interval '1 minute' WHERE session_id = $1`, int64(sid))
+			require.NoError(t, execErr)
 			require.NoError(t, gate.ReloadSession(e.ctx, sid))
 			unlockBranch()
 
@@ -164,8 +164,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 	for i, tc := range ops {
 		t.Run("ExpiredSweptDuringLockWait/"+tc.name, func(t *testing.T) {
 			sid := uint64(940 + i)
-			_, err := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
-			require.NoError(t, err)
+			_, renewErr := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sid, DiskID: e.disk.DiskID})
+			require.NoError(t, renewErr)
 
 			entered := make(chan struct{})
 			gate.SetBeforeBranchLockHook(func(hookSID uint64) {
@@ -185,19 +185,19 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 			}()
 
 			<-entered
-			_, err = e.pool.Exec(e.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '2 seconds' WHERE session_id = $1`, int64(sid))
-			require.NoError(t, err)
-			sweepDone := make(chan struct{})
+			_, execErr := e.pool.Exec(e.ctx, `UPDATE client_sessions SET expires_at = clock_timestamp() - interval '2 seconds' WHERE session_id = $1`, int64(sid))
+			require.NoError(t, execErr)
+			sweepDone := make(chan error, 1)
 			go func() {
-				defer close(sweepDone)
-				triggerSessionSweep(t, e.ctx, mgr, e.disk.DiskID)
+				_, sweepErr := mgr.Merge(e.ctx, meta.MergeParams{DiskID: e.disk.DiskID, SourceBranch: "main", TargetBranch: "missing"})
+				sweepDone <- sweepErr
 			}()
 			// 等待过期清扫事务驱逐内存会话缓存（清扫协程在驱逐缓存后进入 sweepBranchOrphans 等待分支写锁）
 			require.Eventually(t, func() bool {
 				return !gate.HasCachedSession(sid)
 			}, 2*time.Second, 5*time.Millisecond)
 			unlockBranch()
-			<-sweepDone
+			require.ErrorIs(t, <-sweepDone, meta.ErrNotFound)
 
 			require.ErrorIs(t, <-errCh, meta.ErrBadFileHandle, "%s 在等待分支锁期间遭遇会话过期清扫必须被二次校验拦截", tc.name)
 		})
@@ -206,8 +206,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 	// 场景 3：等待 Branch 锁期间目标分支被回档/删除或整盘被清理（InvalidateBranchSessions / InvalidateDiskSessions）
 	t.Run("BranchAndDiskInvalidationEvictsCachedSessions", func(t *testing.T) {
 		sidBranch := uint64(950)
-		_, err := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sidBranch, DiskID: e.disk.DiskID})
-		require.NoError(t, err)
+		_, renewErr := mgr.RenewBranchSession(e.ctx, meta.RenewBranchSessionParams{SessionID: sidBranch, DiskID: e.disk.DiskID})
+		require.NoError(t, renewErr)
 		require.True(t, gate.HasCachedSession(sidBranch))
 		gate.InvalidateBranchSessions(e.disk.DiskID, "other-branch")
 		require.True(t, gate.HasCachedSession(sidBranch), "失效其他分支不得误伤当前分支会话缓存")
@@ -215,8 +215,8 @@ func TestBranchWorkspaceGateRejectsSessionDriftWhileWaitingForBranchLock(t *test
 		require.False(t, gate.HasCachedSession(sidBranch), "InvalidateBranchSessions 必须驱逐目标分支的会话缓存")
 
 		// 缓存驱逐后再次发起 GetAttr 会自动回源控制面重新加载并缓存
-		_, err = mgr.GetAttr(e.ctx, &sidBranch, ino)
-		require.NoError(t, err)
+		_, attrErr := mgr.GetAttr(e.ctx, &sidBranch, ino)
+		require.NoError(t, attrErr)
 		require.True(t, gate.HasCachedSession(sidBranch))
 
 		gate.InvalidateDiskSessions(e.disk.DiskID)

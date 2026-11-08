@@ -4,8 +4,9 @@ import (
 	"sync"
 	"syscall"
 
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // FileHandle 记录一个本地句柄的目标节点、打开标志和类型。

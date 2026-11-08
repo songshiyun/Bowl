@@ -75,7 +75,7 @@ func (m *manager) createDiskStorage(diskID, commitID string) (err error) {
 	return m.pebble.InitInodeAllocator(diskID)
 }
 
-func (m *manager) registerDiskStorage(ctx context.Context, q db.Querier, row db.GetDiskRow, commitID uuid.UUID) ([]byte, error) {
+func (m *manager) registerDiskStorage(ctx context.Context, q db.Querier, row *db.GetDiskRow, commitID uuid.UUID) ([]byte, error) {
 	diskID := row.DiskID.String()
 	storageDir := filepath.Join(m.storageRoot, "disks", diskID)
 	control, err := q.SetDiskStorageDir(ctx, db.SetDiskStorageDirParams{DiskID: row.DiskID, StorageDir: storageDir})
@@ -90,7 +90,7 @@ func (m *manager) registerDiskStorage(ctx context.Context, q db.Querier, row db.
 		return nil, fmt.Errorf("登记初始快照: %w", err)
 	}
 	var branches []storedBranch
-	if err := json.Unmarshal(control.Branches, &branches); err != nil {
+	if err = json.Unmarshal(control.Branches, &branches); err != nil {
 		return nil, fmt.Errorf("读取分支树: %w", err)
 	}
 	id := commitID.String()
@@ -104,7 +104,7 @@ func (m *manager) registerDiskStorage(ctx context.Context, q db.Querier, row db.
 		}
 	}
 	if !found {
-		return nil, fmt.Errorf("分支树缺少 main")
+		return nil, errors.New("分支树缺少 main")
 	}
 	raw, err := json.Marshal(branches)
 	if err != nil {
@@ -136,13 +136,14 @@ func setDiskBranches(disk *Disk, raw []byte) error {
 	return nil
 }
 
-func (m *manager) diskWithBranches(ctx context.Context, row db.GetDiskRow) (*Disk, error) {
+func (m *manager) diskWithBranches(ctx context.Context, row *db.GetDiskRow) (*Disk, error) {
 	disk := toDomainDisk(row)
 	control, err := m.store.GetDiskControlPlane(ctx, row.DiskID)
 	if err != nil {
 		return nil, fmt.Errorf("读取磁盘分支树: %w", err)
 	}
-	if err := setDiskBranches(disk, control.Branches); err != nil {
+	err = setDiskBranches(disk, control.Branches)
+	if err != nil {
 		return nil, err
 	}
 	quota, err := m.loadTreeQuota(ctx, row, control)
@@ -175,7 +176,7 @@ func (m *manager) TreeQuota(ctx context.Context, diskID string) (*TreeQuota, err
 	if err != nil {
 		return nil, err
 	}
-	return m.loadTreeQuota(ctx, row, control)
+	return m.loadTreeQuota(ctx, &row, control)
 }
 
 // lookupTreeQuota 只读取内存配额协调器，未命中时不触达控制面。
@@ -186,7 +187,7 @@ func (m *manager) lookupTreeQuota(diskID string) (*TreeQuota, bool) {
 	return quota, quota != nil
 }
 
-func (m *manager) loadTreeQuota(ctx context.Context, row db.GetDiskRow, control db.GetDiskControlPlaneRow) (*TreeQuota, error) {
+func (m *manager) loadTreeQuota(_ context.Context, row *db.GetDiskRow, control db.GetDiskControlPlaneRow) (*TreeQuota, error) {
 	m.treeQuotaMu.Lock()
 	defer m.treeQuotaMu.Unlock()
 	if m.treeQuotas == nil {
@@ -224,7 +225,7 @@ func (m *manager) readBranchSizes(diskID, branchName string) (sizes map[uint64]u
 	unlock := m.locks.LockBranchRead(diskID, branchName)
 	defer unlock()
 	path := filepath.Join(m.storageRoot, "disks", diskID, "branches", branchName)
-	if _, err := os.Stat(path); err != nil {
+	if _, err = os.Stat(path); err != nil {
 		return nil, err
 	}
 	branch, err := m.pebble.OpenBranch(diskID, branchName)
@@ -253,7 +254,7 @@ func readBranchSizesFromDB(store *pebble.DB) (sizes map[uint64]uint64, err error
 			return nil, err
 		}
 		if inode.Ino != ino {
-			return nil, fmt.Errorf("Inode 编号与键不一致")
+			return nil, errors.New("Inode 编号与键不一致")
 		}
 		if inode.Nlink == 0 {
 			_, closer, err := store.Get(pebblekv.OrphanKey(ino))

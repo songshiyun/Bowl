@@ -32,7 +32,7 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	)
 
 	var posArgs []string
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		arg := args[i]
 		if arg == "--" {
 			posArgs = append(posArgs, args[i+1:]...)

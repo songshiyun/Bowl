@@ -20,8 +20,8 @@ type versionArgs struct {
 	positional []string
 }
 
-func parseVersionArgs(args []string, extra map[string]bool, help string, stdout, stderr io.Writer) (versionArgs, int) {
-	opts := versionArgs{values: make(map[string]string), set: make(map[string]bool)}
+func parseVersionArgs(args []string, extra map[string]bool, help string, stdout, stderr io.Writer) (opts versionArgs, exitCode int) {
+	opts = versionArgs{values: make(map[string]string), set: make(map[string]bool)}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if arg == "--" {
@@ -45,9 +45,10 @@ func parseVersionArgs(args []string, extra map[string]bool, help string, stdout,
 			name = "message"
 		}
 		takesValue, known := extra[name]
-		if name == "endpoint" || name == "token" {
+		switch name {
+		case "endpoint", "token":
 			takesValue, known = true, true
-		} else if name == "json" {
+		case "json":
 			takesValue, known = false, true
 		}
 		if !known {

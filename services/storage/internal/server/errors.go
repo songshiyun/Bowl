@@ -1,3 +1,4 @@
+// Package server 实现 StorageService 的 ConnectRPC 处理器、拦截器与错误转换。
 package server
 
 import (
@@ -5,6 +6,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/starsrc/Aether/pkg/serverx"
+
 	"github.com/starsrc/bowl/services/storage/internal/meta"
 )
 

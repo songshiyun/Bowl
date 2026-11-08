@@ -4,12 +4,13 @@ import (
 	"syscall"
 	"testing"
 
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-func testInode(ino uint64, mode uint32, nlink uint32) *storagev1.Inode {
+func testInode(ino uint64, mode, nlink uint32) *storagev1.Inode {
 	return &storagev1.Inode{Ino: ino, Generation: 1, Attr: &storagev1.InodeAttribute{Mode: mode, Nlink: nlink}}
 }
 
@@ -321,15 +322,15 @@ func TestNamespaceCache刷新父目录属性(t *testing.T) {
 	require.Equal(t, int64(200), got.inode.Attr.Mtime.Seconds)
 	require.Equal(t, int32(7), got.inode.Attr.Mtime.Nanos)
 	require.Equal(t, int64(200), got.inode.Attr.Ctime.Seconds)
-	require.Equal(t, float64(3), got.attrTimeout)
-	require.Equal(t, float64(1), got.entryTimeout)
+	require.InDelta(t, float64(3), got.attrTimeout, 1e-9)
+	require.InDelta(t, float64(1), got.entryTimeout, 1e-9)
 
 	// nlink 递减不得下溢到 0 以下。
 	cache.invalidateDirListingTouchParentAt(epoch, 10, child, -1, 0)
 	got, ok = cache.inode(10)
 	require.True(t, ok)
 	require.Equal(t, uint32(2), got.inode.Attr.Nlink)
-	require.Equal(t, float64(3), got.attrTimeout, "attrTimeout<=0 时必须沿用父目录原有有效期")
+	require.InDelta(t, float64(3), got.attrTimeout, 1e-9, "attrTimeout<=0 时必须沿用父目录原有有效期")
 
 	// 子节点属性缺失时无法刷新父属性，只能保守失效。
 	cache.invalidateDirListingTouchParentAt(epoch, 10, &storagev1.Inode{Ino: 12}, 0, 0)
@@ -356,8 +357,8 @@ func TestNamespaceCacheTouchParentNowKeepsInode(t *testing.T) {
 	require.Equal(t, uint32(2), got.inode.Attr.Nlink)
 	require.Greater(t, got.inode.Attr.Mtime.Seconds, int64(100))
 	require.Greater(t, got.inode.Attr.Ctime.Seconds, int64(100))
-	require.Equal(t, float64(2), got.attrTimeout)
-	require.Equal(t, float64(1), got.entryTimeout)
+	require.InDelta(t, float64(2), got.attrTimeout, 1e-9)
+	require.InDelta(t, float64(1), got.entryTimeout, 1e-9)
 
 	// 目录流本身已被降级为独立目录项，不再命中完整目录流。
 	_, ok = cache.dir(10)

@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
-	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/services/storage/internal/pebblekv"
 )
 
 func TestDataKeysOrderAndRange(t *testing.T) {
@@ -18,10 +19,10 @@ func TestDataKeysOrderAndRange(t *testing.T) {
 	require.Equal(t, uint64(0x1122334455667788), block)
 
 	lower, upper := pebblekv.DataRange(42, 3)
-	require.True(t, bytes.Compare(pebblekv.DataKey(42, 2), lower) < 0)
-	require.True(t, bytes.Compare(pebblekv.DataKey(42, 3), lower) >= 0)
-	require.True(t, bytes.Compare(pebblekv.DataKey(42, ^uint64(0)), upper) < 0)
-	require.True(t, bytes.Compare(pebblekv.DataKey(43, 0), upper) >= 0)
+	require.Negative(t, bytes.Compare(pebblekv.DataKey(42, 2), lower))
+	require.GreaterOrEqual(t, bytes.Compare(pebblekv.DataKey(42, 3), lower), 0)
+	require.Negative(t, bytes.Compare(pebblekv.DataKey(42, ^uint64(0)), upper))
+	require.GreaterOrEqual(t, bytes.Compare(pebblekv.DataKey(43, 0), upper), 0)
 }
 
 func TestEntryRangeDeleteKeepsAdjacentKeys(t *testing.T) {
@@ -192,8 +193,8 @@ func requireNamedNamespace(
 	require.Equal(t, name, gotName)
 	lower, upper := bounds(42)
 	require.GreaterOrEqual(t, bytes.Compare(encoded, lower), 0)
-	require.Less(t, bytes.Compare(encoded, upper), 0)
-	require.Less(t, bytes.Compare(key(41, name), lower), 0)
+	require.Negative(t, bytes.Compare(encoded, upper))
+	require.Negative(t, bytes.Compare(key(41, name), lower))
 	require.GreaterOrEqual(t, bytes.Compare(key(43, name), upper), 0)
 }
 
@@ -209,5 +210,5 @@ func requireNumberNamespace(
 	require.Equal(t, uint64(255), ino)
 	lower, upper := bounds()
 	require.GreaterOrEqual(t, bytes.Compare(key(0), lower), 0)
-	require.Less(t, bytes.Compare(key(^uint64(0)), upper), 0)
+	require.Negative(t, bytes.Compare(key(^uint64(0)), upper))
 }
