@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const mountInfoPath = "/proc/self/mountinfo"
+var mountInfoPath = "/proc/self/mountinfo"
 
 type mountPoint struct {
 	path   string

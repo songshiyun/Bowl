@@ -34,13 +34,16 @@ var _ fuse.RawFileSystem = (*RawFS)(nil)
 
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
-	DiskID     string
-	Epoch      uint64
-	RootIno    uint64
-	ReadOnly   bool
-	DirectIO   bool
-	AllowOther bool
-	Debug      bool
+	DiskID              string
+	Epoch               uint64
+	RootIno             uint64
+	RootInode           *storagev1.Inode
+	EntryTimeoutSeconds float64
+	AttrTimeoutSeconds  float64
+	ReadOnly            bool
+	DirectIO            bool
+	AllowOther          bool
+	Debug               bool
 }
 
 type reclaimRetryItem struct {
@@ -81,6 +84,9 @@ type RawFS struct {
 
 // NewRawFS 创建并初始化 RawFS 实例。
 func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
+	if cfg.RootIno == 0 && cfg.RootInode != nil {
+		cfg.RootIno = cfg.RootInode.GetIno()
+	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
 		RawFileSystem: fuse.NewDefaultRawFileSystem(),
@@ -98,6 +104,11 @@ func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 	}
 	fs.handles = NewHandleTable(fs.reclaimOrphan)
 	return fs
+}
+
+// Config 返回当前 RawFS 绑定的静态与握手配置副本。
+func (fs *RawFS) Config() Config {
+	return fs.cfg
 }
 
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。

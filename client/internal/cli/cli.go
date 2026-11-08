@@ -1,3 +1,4 @@
+// Package cli 实现 bowl 客户端命令行参数解析、磁盘控制面操作与 FUSE 挂载命令路由。
 package cli
 
 import (
@@ -14,11 +15,6 @@ const usageHelp = `bowl - 分布式虚拟磁盘 Linux FUSE 客户端
 
 可用命令:
   disk        管理虚拟磁盘生命周期 (创建、列表、详情、更新/扩缩容、删除)
-  branch      管理虚拟磁盘逻辑分支 (create、ls、rm)
-  commit      定格分支版本快照
-  rollback    回档分支至历史快照
-  merge       合并分支或完成、终止冲突合并
-  diff        比较分支或版本快照
   mount       挂载远端虚拟磁盘至本地目录
   umount      卸载本地已挂载的虚拟磁盘 (别名: unmount)
   version     打印客户端版本信息
@@ -48,16 +44,6 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "disk":
 		return executeDisk(args[1:], stdout, stderr)
-	case "branch":
-		return executeBranch(args[1:], stdout, stderr)
-	case "commit":
-		return executeCommit(args[1:], stdout, stderr)
-	case "rollback":
-		return executeRollback(args[1:], stdout, stderr)
-	case "merge":
-		return executeMerge(args[1:], stdout, stderr)
-	case "diff":
-		return executeDiff(args[1:], stdout, stderr)
 	case "mount":
 		return executeMount(args[1:], stdout, stderr)
 	case "umount", "unmount":

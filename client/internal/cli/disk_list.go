@@ -179,18 +179,14 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 	}
 
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "DISK ID\tNAME\tUSED\tMAX\tUSAGE%\tINODES\tCREATED AT\tBRANCHES")
+	fmt.Fprintln(tw, "DISK ID\tNAME\tUSED\tMAX\tUSAGE%\tINODES\tCREATED AT")
 	for _, d := range disks {
 		dj := toDiskJSON(d)
 		var usagePct float64
 		if dj.MaxBytes > 0 {
 			usagePct = float64(dj.UsedBytes) * 100.0 / float64(dj.MaxBytes)
 		}
-		branches := strconv.Itoa(len(dj.Branches))
-		if dj.DefaultBranch != "" {
-			branches = fmt.Sprintf("%s (%d)", dj.DefaultBranch, len(dj.Branches))
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.2f%%\t%d\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.2f%%\t%d\t%s\n",
 			dj.DiskID,
 			dj.Name,
 			FormatSize(dj.UsedBytes),
@@ -198,7 +194,6 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 			usagePct,
 			dj.UsedInodes,
 			dj.CreatedAt,
-			branches,
 		)
 	}
 	_ = tw.Flush()

@@ -15,7 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
-	"github.com/starsrc/bowl/client/internal/session"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
@@ -76,8 +75,8 @@ func spawnDaemonProcess(args []string, stderr io.Writer) int {
 	return readDaemonHandshake(r, stderr)
 }
 
-// runDaemonWorker 是子进程内部的后台挂载与会话生命周期执行器。
-func runDaemonWorker(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint, explicitLogFile string) int {
+// runDaemonWorker 是子进程内部的后台挂载执行器（单次 MountDisk 握手，无后台心跳续期协程）。
+func runDaemonWorker(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg fusefs.Config, mountpoint, explicitLogFile string) int {
 	pipeWriter := os.NewFile(3, "readiness-pipe")
 	notifyErr := func(err error) {
 		if pipeWriter != nil {
@@ -95,7 +94,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	}
 
 	// 1. 准备日志文件并重定向标准输出/错误
-	logF, _, err := ResolveLogFile(explicitLogFile, cfg.DiskID)
+	logF, _, err := ResolveLogFile(explicitLogFile, baseCfg.DiskID)
 	if err != nil {
 		notifyErr(err)
 		return 1
@@ -106,16 +105,15 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	_ = unix.Dup2(logFd, int(os.Stdout.Fd()))
 	_ = unix.Dup2(logFd, int(os.Stderr.Fd()))
 
-	// 2. 初始化 ClientSession
-	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
+	// 2. 执行单次 MountDisk 握手
+	cfg, err := mountHandshake(ctx, client, baseCfg)
 	if err != nil {
-		notifyErr(fmt.Errorf("初始化客户端会话失败: %w", err))
+		notifyErr(err)
 		return 1
 	}
-	defer sessionMgr.Close()
 
 	// 3. 构建 FUSE 服务
-	rawFS := fusefs.NewRawFS(client, sessionMgr, cfg)
+	rawFS := fusefs.NewRawFS(client, cfg)
 	opts := fusefs.BuildMountOptions(cfg)
 
 	server, err := fuse.NewServer(rawFS, mountpoint, opts)
@@ -141,14 +139,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	// 5. 挂载已彻底就绪，通知父进程退出 0
 	notifyOK()
 
-	// 6. 启动会话保活心跳
-	if err := sessionMgr.Start(ctx); err != nil {
-		_ = server.Unmount()
-		<-serveDone
-		return 1
-	}
-
-	// 7. 优雅卸载信号与阻塞等待
+	// 6. 优雅卸载信号与阻塞等待
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)

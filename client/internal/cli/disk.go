@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
@@ -28,16 +27,14 @@ const diskUsageHelp = `用法:
 
 // diskJSON 定义磁盘实体在 --json 模式下的结构化输出格式。
 type diskJSON struct {
-	DiskID        string       `json:"disk_id"`
-	Name          string       `json:"name"`
-	RootIno       uint64       `json:"root_ino"`
-	MaxBytes      uint64       `json:"max_bytes"`
-	UsedBytes     uint64       `json:"used_bytes"`
-	UsedInodes    uint64       `json:"used_inodes"`
-	CreatedAt     string       `json:"created_at"`
-	UpdatedAt     string       `json:"updated_at"`
-	DefaultBranch string       `json:"default_branch,omitempty"`
-	Branches      []branchJSON `json:"branches,omitempty"`
+	DiskID     string `json:"disk_id"`
+	Name       string `json:"name"`
+	RootIno    uint64 `json:"root_ino"`
+	MaxBytes   uint64 `json:"max_bytes"`
+	UsedBytes  uint64 `json:"used_bytes"`
+	UsedInodes uint64 `json:"used_inodes"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 func toDiskJSON(d *storagev1.Disk) diskJSON {
@@ -48,21 +45,15 @@ func toDiskJSON(d *storagev1.Disk) diskJSON {
 	if d.GetUpdatedAt() != nil {
 		updatedAt = d.GetUpdatedAt().AsTime().UTC().Format(time.RFC3339)
 	}
-	var branches []branchJSON
-	for _, branch := range d.GetBranches() {
-		branches = append(branches, toBranchJSON(branch))
-	}
 	return diskJSON{
-		DiskID:        d.GetDiskId(),
-		Name:          d.GetName(),
-		RootIno:       d.GetRootIno(),
-		MaxBytes:      d.GetMaxBytes(),
-		UsedBytes:     d.GetUsedBytes(),
-		UsedInodes:    d.GetUsedInodes(),
-		CreatedAt:     createdAt,
-		UpdatedAt:     updatedAt,
-		DefaultBranch: d.GetDefaultBranch(),
-		Branches:      branches,
+		DiskID:     d.GetDiskId(),
+		Name:       d.GetName(),
+		RootIno:    d.GetRootIno(),
+		MaxBytes:   d.GetMaxBytes(),
+		UsedBytes:  d.GetUsedBytes(),
+		UsedInodes: d.GetUsedInodes(),
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
 	}
 }
 
@@ -82,19 +73,6 @@ func printDiskDetail(w io.Writer, d *storagev1.Disk) {
 	fmt.Fprintf(w, "Used Inodes:  %d\n", dj.UsedInodes)
 	fmt.Fprintf(w, "Created At:   %s\n", dj.CreatedAt)
 	fmt.Fprintf(w, "Updated At:   %s\n", dj.UpdatedAt)
-	if dj.DefaultBranch != "" || len(dj.Branches) > 0 {
-		fmt.Fprintf(w, "Default Branch: %s\n", dj.DefaultBranch)
-		var summaries []string
-		for i := range dj.Branches {
-			branch := &dj.Branches[i]
-			summary := fmt.Sprintf("%s@%s[%s]", branch.Name, branch.HeadCommitID, branch.State)
-			if branch.ParentBranch != "" {
-				summary += " <- " + branch.ParentBranch
-			}
-			summaries = append(summaries, summary)
-		}
-		fmt.Fprintf(w, "Branches:       %d (%s)\n", len(dj.Branches), strings.Join(summaries, ", "))
-	}
 }
 
 // newDiskStorageClient 解析 endpoint 与 token 并创建 StorageServiceClient。

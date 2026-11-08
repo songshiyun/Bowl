@@ -18,7 +18,6 @@ import (
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
 	"github.com/starsrc/bowl/client/internal/rpc"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -37,29 +36,49 @@ const mountUsageHelp = `用法:
   --log-file string    日志文件路径 (仅用于后台守护模式)
   --allow-other        允许本机其他非 root 用户访问挂载点
   --ro                 只读挂载
-  --branch string      挂载指定分支（分支磁盘默认 main）
-  --commit string      挂载不可变提交 UUID（需要 --ro）
   --direct-io          绕过内核页缓存直通数据
   --debug              开启调试日志
   -h, --help           查看帮助信息
 `
 
-func mountSessionConfig(cfg fusefs.Config) session.Config {
-	return session.Config{DiskID: cfg.DiskID, BranchName: cfg.BranchName, ReadOnly: cfg.ReadOnly, CommitID: cfg.CommitID}
+var serveFUSE = defaultServeFUSE
+
+// mountHandshake 向服务端发起单次 MountDisk 握手，返回注入了权威 Epoch、RootIno 与缓存超时配置的 fusefs.Config。
+func mountHandshake(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg fusefs.Config) (fusefs.Config, error) {
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer rpcCancel()
+
+	resp, err := client.MountDisk(rpcCtx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   baseCfg.DiskID,
+		ReadOnly: baseCfg.ReadOnly,
+	}))
+	if err != nil {
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok && connectErr.Code() == connect.CodeNotFound {
+			return fusefs.Config{}, fmt.Errorf("磁盘不存在: %s", baseCfg.DiskID)
+		}
+		return fusefs.Config{}, fmt.Errorf("挂载磁盘握手失败: %w", err)
+	}
+
+	rootInode := resp.Msg.GetRootInode()
+	if rootInode == nil || rootInode.GetIno() == 0 {
+		return fusefs.Config{}, errors.New("服务端返回无效的磁盘根目录元数据")
+	}
+
+	epoch := resp.Msg.GetEpoch()
+	if !baseCfg.ReadOnly && epoch == 0 {
+		return fusefs.Config{}, errors.New("服务端未返回有效的写挂载世代号")
+	}
+
+	cfg := baseCfg
+	cfg.Epoch = epoch
+	cfg.RootIno = rootInode.GetIno()
+	cfg.RootInode = rootInode
+	cfg.EntryTimeoutSeconds = resp.Msg.GetEntryTimeoutSeconds()
+	cfg.AttrTimeoutSeconds = resp.Msg.GetAttrTimeoutSeconds()
+	return cfg, nil
 }
 
-// runForegroundMount 是默认的前台挂载执行器。
-func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, _, _ io.Writer) error {
-	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
-	if err != nil {
-		return fmt.Errorf("初始化客户端会话失败: %w", err)
-	}
-	defer sessionMgr.Close()
-	if err = sessionMgr.Start(ctx); err != nil {
-		return fmt.Errorf("启动客户端会话保活失败: %w", err)
-	}
-
-	rawFS := fusefs.NewRawFS(client, sessionMgr, cfg)
+func defaultServeFUSE(ctx context.Context, rawFS *fusefs.RawFS, cfg fusefs.Config, mountpoint string) error {
 	opts := fusefs.BuildMountOptions(cfg)
 
 	server, err := fuse.NewServer(rawFS, mountpoint, opts)
@@ -99,6 +118,17 @@ func runForegroundMount(ctx context.Context, client storagev1connect.StorageServ
 	return nil
 }
 
+// runForegroundMount 执行单次 MountDisk 握手并启动前台 FUSE 挂载服务。
+func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg fusefs.Config, mountpoint string, _, _ io.Writer) error {
+	cfg, err := mountHandshake(ctx, client, baseCfg)
+	if err != nil {
+		return err
+	}
+
+	rawFS := fusefs.NewRawFS(client, cfg)
+	return serveFUSE(ctx, rawFS, cfg, mountpoint)
+}
+
 // executeMount 解析 mount 命令参数并启动挂载流程。
 func executeMount(args []string, stdout, stderr io.Writer) int {
 	var (
@@ -108,8 +138,6 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		logFile    string
 		allowOther bool
 		ro         bool
-		branchName string
-		commitID   string
 		directIO   bool
 		debug      bool
 		help       bool
@@ -144,20 +172,6 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 				directIO = true
 			case "debug":
 				debug = true
-			case "branch", "commit":
-				if !hasVal {
-					if i+1 >= len(args) {
-						fmt.Fprintf(stderr, "错误: --%s 需要指定参数值\n", name)
-						return 2
-					}
-					i++
-					val = args[i]
-				}
-				if name == "branch" {
-					branchName = val
-				} else {
-					commitID = val
-				}
 			case "endpoint":
 				switch {
 				case hasVal:
@@ -219,26 +233,6 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "错误: 无效的 disk-id \"%s\"，必须为合法的非 Nil UUID\n", diskIDStr)
 		return 2
 	}
-	if branchName != "" && commitID != "" {
-		fmt.Fprintln(stderr, "错误: --branch and --commit are mutually exclusive")
-		return 2
-	}
-	if commitID != "" {
-		if !ro {
-			fmt.Fprintln(stderr, "错误: --commit requires --ro (read-only snapshot mount)")
-			return 2
-		}
-		var parsedCommit uuid.UUID
-		parsedCommit, err = uuid.Parse(commitID)
-		if err != nil || parsedCommit == uuid.Nil {
-			fmt.Fprintln(stderr, "错误: --commit 必须为有效的非 Nil UUID")
-			return 2
-		}
-	}
-	if branchName != "" && !validBranchName(branchName) {
-		fmt.Fprintln(stderr, "错误: --branch 分支名称无效")
-		return 2
-	}
 
 	// 2. 静态前置校验: 挂载点必须为已存在的目录
 	absMountpoint, err := filepath.Abs(mountpoint)
@@ -277,7 +271,7 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	}
 	resolvedToken := rpc.ResolveToken(token)
 
-	// 4. 创建 StorageClient 并校验远端 Disk
+	// 4. 创建 StorageClient
 	client, err := rpc.NewClientFromConfig(rpc.ClientConfig{
 		Endpoint: resolvedEndpoint,
 		Token:    resolvedToken,
@@ -287,50 +281,17 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer rpcCancel()
-
-	diskResp, err := client.GetDisk(rpcCtx, connect.NewRequest(&storagev1.GetDiskRequest{
-		DiskId: diskIDStr,
-	}))
-	if err != nil {
-		var connectErr *connect.Error
-		if errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
-			fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)
-		} else {
-			fmt.Fprintf(stderr, "错误: 获取磁盘元数据失败: %v\n", err)
-		}
-		return 1
-	}
-
-	disk := diskResp.Msg.GetDisk()
-	if disk == nil || disk.GetRootIno() == 0 {
-		fmt.Fprintf(stderr, "错误: 服务端返回无效的磁盘元数据\n")
-		return 1
-	}
-
-	cfg := fusefs.Config{
+	baseCfg := fusefs.Config{
 		DiskID:     diskIDStr,
-		RootIno:    disk.GetRootIno(),
 		ReadOnly:   ro,
 		DirectIO:   directIO,
 		AllowOther: allowOther,
 		Debug:      debug,
 	}
-	if commitID != "" {
-		cfg.CommitID = commitID
-		cfg.RootIno = 1
-	} else if branchName != "" || len(disk.GetBranches()) != 0 {
-		if branchName == "" {
-			branchName = "main"
-		}
-		cfg.BranchName = branchName
-		cfg.RootIno = 1
-	}
 
 	// 5. 模式选择：检测是否为内部后台工作子进程
 	if os.Getenv("BOWL_DAEMON_WORKER") == "1" {
-		return runDaemonWorker(context.Background(), client, cfg, absMountpoint, logFile)
+		return runDaemonWorker(context.Background(), client, baseCfg, absMountpoint, logFile)
 	}
 
 	// 若未指定 -f / --foreground，执行默认后台守护派生与就绪握手
@@ -341,22 +302,10 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
 	defer runnerCancel()
 
-	if err := runForegroundMount(runnerCtx, client, cfg, absMountpoint, stdout, stderr); err != nil {
+	if err := runForegroundMount(runnerCtx, client, baseCfg, absMountpoint, stdout, stderr); err != nil {
 		fmt.Fprintf(stderr, "错误: 挂载执行失败: %v\n", err)
 		return 1
 	}
 
 	return 0
-}
-
-func validBranchName(name string) bool {
-	if len(name) > 255 || name == "." || name == ".." {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		if name[i] == '/' || name[i] < 0x20 || name[i] == 0x7f {
-			return false
-		}
-	}
-	return true
 }
