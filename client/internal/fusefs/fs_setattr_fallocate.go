@@ -26,7 +26,7 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
 	if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
-		h, _, st := fs.checkedHandle(input.NodeId, fh, false)
+		h, st := fs.checkedHandle(input.NodeId, fh, false)
 		if st != fuse.OK {
 			return st
 		}
@@ -44,7 +44,9 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	}
 
 	req := &storagev1.SetAttrRequest{
-		Ino: ino, SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}
 	hasUpdate := false
 	valid := input.Valid
@@ -102,14 +104,13 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 	// 当 FATTR_FH 置位时校验本地句柄；服务端请求不携带旧版句柄。
 	if (valid & fuse.FATTR_FH) != 0 {
-		h, sid, st := fs.checkedHandle(input.NodeId, input.Fh, false)
+		h, st := fs.checkedHandle(input.NodeId, input.Fh, false)
 		if st != fuse.OK {
 			return st
 		}
 		if valid&fuse.FATTR_SIZE != 0 && !h.CanWrite() {
 			return fuse.EBADF
 		}
-		req.SessionId = optionalSession(sid)
 	}
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
@@ -129,9 +130,6 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
 		fs.cache.invalidateInode(input.NodeId)
-		if req.SessionId != nil {
-			return fs.ToStatusWithSession(err, cancel)
-		}
 		return fs.ToStatus(err, cancel)
 	}
 
@@ -156,7 +154,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return status
 	}
 
-	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	handle, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return status
 	}
@@ -182,12 +180,13 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 	defer cancelFunc()
 
 	req := &storagev1.FallocateRequest{
-		Ino:       ino,
-		Fh:        0,
-		Offset:    input.Offset,
-		Length:    input.Length,
-		Mode:      input.Mode,
-		SessionId: optionalSession(sid),
+		Ino:    ino,
+		Fh:     0,
+		Offset: input.Offset,
+		Length: input.Length,
+		Mode:   input.Mode,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}
 
 	fs.readAhead.InvalidateInode(ino)
@@ -196,7 +195,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	fs.caps.markAbsent(input.NodeId)
 

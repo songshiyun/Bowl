@@ -62,7 +62,6 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		defer unlock()
 	}
 	targetOpen := target != 0 && fs.handles.IsOpen(target)
-	sid := fs.currentSession()
 
 	var protoFlags uint32
 	if (input.Flags & renameNoReplace) != 0 {
@@ -89,8 +88,9 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		NewParentIno:       newParentIno,
 		NewName:            []byte(newName),
 		Flags:              protoFlags,
-		SessionId:          sid,
 		TargetOpenInClient: &targetOpen,
+		DiskId:             fs.cfg.DiskID,
+		Epoch:              fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -151,7 +151,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		fs.cache.invalidateInode(target)
 	}
 	if targetOpen && target != source && input.Flags&renameExchange == 0 && targetAttr != nil && targetAttr.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(target, sid)
+		fs.markOrphan(target)
 	}
 	return fuse.OK
 }

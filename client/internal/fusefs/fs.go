@@ -15,7 +15,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -36,18 +35,16 @@ var _ fuse.RawFileSystem = (*RawFS)(nil)
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
 	DiskID     string
+	Epoch      uint64
 	RootIno    uint64
 	ReadOnly   bool
 	DirectIO   bool
 	AllowOther bool
 	Debug      bool
-	BranchName string
-	CommitID   string
 }
 
 type reclaimRetryItem struct {
-	ino       uint64
-	sessionID uint64
+	ino uint64
 }
 
 // RawFS 封装底层 FUSE 请求处理，桥接 Linux 内核 VFS 与 StorageService RPC。
@@ -62,13 +59,12 @@ type RawFS struct {
 	// lifecycleMu 保证 OnUnmount 等待所有在途 FUSE 请求排空；常规请求只持读锁。
 	lifecycleMu sync.RWMutex
 	// stateMu 仅保护本地内存态的微秒级读写，绝不包裹跨机 RPC。
-	stateMu        sync.Mutex
-	dirtyInodes    map[uint64]struct{}
-	orphanSessions map[uint64]uint64
+	stateMu      sync.Mutex
+	dirtyInodes  map[uint64]struct{}
+	orphanInodes map[uint64]struct{}
 	// inodeLocks 按 Inode 粒度串行化 O_APPEND 定序与 Unlink/Release 孤儿标记。
 	inodeLocks inodeLocks
 	tmpMgr     *TmpFileManager
-	sessions   *session.Manager
 	cfg        Config
 	nextReqID  atomic.Uint64
 
@@ -84,49 +80,24 @@ type RawFS struct {
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
-func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Manager, cfg Config) *RawFS {
+func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
-		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
-		client:         client,
-		locks:          NewLockTable(),
-		cache:          NewNamespaceCache(DefaultNamespaceCacheCapacity),
-		caps:           newCapabilityCache(),
-		dirtyInodes:    make(map[uint64]struct{}),
-		tmpMgr:         NewTmpFileManager(cfg.RootIno),
-		orphanSessions: make(map[uint64]uint64),
-		sessions:       sessions,
-		cfg:            cfg,
-		releaseCtx:     releaseCtx,
-		releaseCancel:  releaseCancel,
-		readAhead:      NewReadAheadCoordinator(),
+		RawFileSystem: fuse.NewDefaultRawFileSystem(),
+		client:        client,
+		locks:         NewLockTable(),
+		cache:         NewNamespaceCache(DefaultNamespaceCacheCapacity),
+		caps:          newCapabilityCache(),
+		dirtyInodes:   make(map[uint64]struct{}),
+		tmpMgr:        NewTmpFileManager(cfg.RootIno),
+		orphanInodes:  make(map[uint64]struct{}),
+		cfg:           cfg,
+		releaseCtx:    releaseCtx,
+		releaseCancel: releaseCancel,
+		readAhead:     NewReadAheadCoordinator(),
 	}
 	fs.handles = NewHandleTable(fs.reclaimOrphan)
-	if sessions != nil {
-		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
-	}
 	return fs
-}
-
-// onSessionExpired 清理旧会话的目录缓存、预读缓存与孤儿回收重试项。
-func (fs *RawFS) onSessionExpired(expiredSID uint64) {
-	if fs == nil {
-		return
-	}
-
-	fs.cache.clear()
-	fs.caps.reset()
-	fs.readAhead.InvalidateSession(expiredSID)
-
-	fs.releaseMu.Lock()
-	remaining := fs.releaseQueue[:0]
-	for _, item := range fs.releaseQueue {
-		if expiredSID != 0 && item.sessionID != expiredSID {
-			remaining = append(remaining, item)
-		}
-	}
-	fs.releaseQueue = remaining
-	fs.releaseMu.Unlock()
 }
 
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
@@ -168,67 +139,12 @@ func (fs *RawFS) ToStatus(err error, cancel <-chan struct{}) fuse.Status {
 	return fuse.Status(errno)
 }
 
-// isServerEBADF 判断服务端返回的错误是否表示句柄或会话已失效（EBADF / FailedPrecondition）。
-func isServerEBADF(err error) bool {
-	if err == nil {
-		return false
-	}
-	if rpc.MapError(err) == syscall.EBADF {
-		return true
-	}
-	var connectErr *connect.Error
-	return errors.As(err, &connectErr) && connectErr.Code() == connect.CodeFailedPrecondition
-}
-
-// ToStatusWithSession 将携带会话的 ConnectRPC 错误解码为 fuse.Status；
-// 若服务端返回 EBADF / FailedPrecondition，立即按需唤醒后台 renewLoop 发起续约/轮换探测。
-func (fs *RawFS) ToStatusWithSession(err error, cancel <-chan struct{}) fuse.Status {
-	if err == nil {
-		return fuse.OK
-	}
-	if isServerEBADF(err) && fs.sessions != nil {
-		fs.sessions.TriggerRenew()
-	}
-	errno := rpc.MapErrorWithCancel(err, cancel)
-	return fuse.Status(errno)
-}
-
-// ResolveHandle 校验本地句柄及其关联会话。
-func (fs *RawFS) ResolveHandle(fh uint64) (uint64, fuse.Status) {
-	if _, ok := fs.handles.Get(fh); !ok {
-		return 0, fuse.EBADF
-	}
-	if fs.sessions == nil {
-		return 0, fuse.OK
-	}
-	sid, err := fs.sessions.ResolveHandleSession(fh)
-	if err != nil {
-		return 0, fuse.EBADF
-	}
-	return sid, fuse.OK
-}
-
-func (fs *RawFS) checkedHandle(ino, fh uint64, dir bool) (FileHandle, uint64, fuse.Status) {
+func (fs *RawFS) checkedHandle(ino, fh uint64, dir bool) (FileHandle, fuse.Status) {
 	h, ok := fs.handles.Get(fh)
 	if !ok || h.Ino != ino || h.IsDir != dir {
-		return FileHandle{}, 0, fuse.EBADF
+		return FileHandle{}, fuse.EBADF
 	}
-	sid, status := fs.ResolveHandle(fh)
-	return h, sid, status
-}
-
-func optionalSession(sid uint64) *uint64 {
-	if sid == 0 {
-		return nil
-	}
-	return &sid
-}
-
-func (fs *RawFS) currentSession() *uint64 {
-	if fs.sessions == nil {
-		return nil
-	}
-	return optionalSession(fs.sessions.CurrentSessionID())
+	return h, fuse.OK
 }
 
 func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.Status) {
@@ -240,9 +156,6 @@ func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.St
 		return 0, fuse.EIO
 	}
 	fs.locks.RegisterHandle(fh, flags)
-	if fs.sessions != nil {
-		fs.sessions.BindHandle(fh, fs.sessions.CurrentSessionID())
-	}
 	return fh, fuse.OK
 }
 
@@ -264,7 +177,11 @@ func (fs *RawFS) OnUnmount() {
 	fs.lifecycleMu.Lock()
 	for _, ino := range fs.takeDirtyInodes() {
 		ctx, done := fs.RPCContext(nil)
-		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
+		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
+		}))
 		done()
 		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
 			slog.Warn("卸载时同步文件失败", "ino", ino, "error", err)
@@ -275,7 +192,7 @@ func (fs *RawFS) OnUnmount() {
 	fs.caps.reset()
 	fs.tmpMgr.Clear()
 	fs.stateMu.Lock()
-	clear(fs.orphanSessions)
+	clear(fs.orphanInodes)
 	fs.stateMu.Unlock()
 	fs.lifecycleMu.Unlock()
 	fs.readAhead.Clear()
@@ -320,31 +237,27 @@ func (fs *RawFS) takeDirtyInodes() []uint64 {
 	return inodes
 }
 
-// markOrphan 记录解链时使用的会话，避免轮换后误用新会话回收旧节点。
-func (fs *RawFS) markOrphan(ino uint64, sid *uint64) {
-	var sessionID uint64
-	if sid != nil {
-		sessionID = *sid
-	}
+// markOrphan 记录待延迟回收的孤儿节点。
+func (fs *RawFS) markOrphan(ino uint64) {
 	fs.stateMu.Lock()
-	fs.orphanSessions[ino] = sessionID
+	fs.orphanInodes[ino] = struct{}{}
 	fs.stateMu.Unlock()
 	fs.handles.MarkOrphan(ino)
 }
 
 func (fs *RawFS) reclaimOrphan(ino uint64) {
 	fs.stateMu.Lock()
-	sid := fs.orphanSessions[ino]
-	delete(fs.orphanSessions, ino)
+	_, exists := fs.orphanInodes[ino]
+	delete(fs.orphanInodes, ino)
 	fs.stateMu.Unlock()
-	if fs.sessions != nil && (sid == 0 || sid != fs.sessions.CurrentSessionID()) {
+	if !exists {
 		return
 	}
 	serverIno, status := fs.ToServerIno(ino)
 	if status != fuse.OK || fs.client == nil {
 		return
 	}
-	item := reclaimRetryItem{ino: serverIno, sessionID: sid}
+	item := reclaimRetryItem{ino: serverIno}
 	if fs.tryReclaim(context.Background(), item) {
 		return
 	}
@@ -366,9 +279,10 @@ func (fs *RawFS) reclaimOrphan(ino uint64) {
 func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool {
 	ctx, cancel := context.WithTimeout(parent, DefaultRPCTimeout)
 	defer cancel()
-	req := &storagev1.ReclaimOrphanRequest{Ino: item.ino, SessionId: item.sessionID, DiskId: fs.cfg.DiskID}
-	if fs.cfg.BranchName != "" {
-		req.BranchName = &fs.cfg.BranchName
+	req := &storagev1.ReclaimOrphanRequest{
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
+		Ino:    item.ino,
 	}
 	_, err := fs.client.ReclaimOrphan(ctx, connect.NewRequest(req))
 	return !shouldRetryReclaim(err)
@@ -398,9 +312,6 @@ func (fs *RawFS) drainReleaseQueueOnce(ctx context.Context) {
 			fs.releaseMu.Lock()
 			fs.releaseQueue = append(fs.releaseQueue, item)
 			fs.releaseMu.Unlock()
-			continue
-		}
-		if fs.sessions != nil && item.sessionID != fs.sessions.CurrentSessionID() {
 			continue
 		}
 		if !fs.tryReclaim(ctx, item) {

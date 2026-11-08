@@ -167,6 +167,8 @@ func TestShouldRetryRejectsNeverRetryCodes(t *testing.T) {
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, connect.NewError(connect.CodeInvalidArgument, nil)))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceCreateProcedure, connect.NewError(connect.CodeAlreadyExists, nil)))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceCreateProcedure, connect.NewError(connect.CodePermissionDenied, nil)))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceWriteProcedure, connect.NewError(connect.CodeFailedPrecondition, nil)))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceFsyncProcedure, connect.NewError(connect.CodeFailedPrecondition, nil)))
 }
 
 func TestShouldRetryRetriesDialErrorsForAllProcedures(t *testing.T) {

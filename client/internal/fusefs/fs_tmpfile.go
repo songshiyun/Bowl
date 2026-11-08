@@ -14,14 +14,12 @@ import (
 type rawFSTmpMaterializer struct {
 	fs     *RawFS
 	cancel <-chan struct{}
-	sid    *uint64
 }
 
 func (fs *RawFS) newTmpMaterializer(cancel <-chan struct{}) *rawFSTmpMaterializer {
 	return &rawFSTmpMaterializer{
 		fs:     fs,
 		cancel: cancel,
-		sid:    fs.currentSession(),
 	}
 }
 
@@ -32,7 +30,8 @@ func (m *rawFSTmpMaterializer) CreateTmpInode(ctx context.Context, parentIno uin
 		Mode:      mode,
 		Uid:       uid,
 		Gid:       gid,
-		SessionId: m.sid,
+		DiskId:    m.fs.cfg.DiskID,
+		Epoch:     m.fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return nil, 0, 0, m.fs.ToStatus(err, m.cancel)
@@ -42,13 +41,14 @@ func (m *rawFSTmpMaterializer) CreateTmpInode(ctx context.Context, parentIno uin
 
 func (m *rawFSTmpMaterializer) WriteChunk(ctx context.Context, serverIno, offset uint64, data []byte) fuse.Status {
 	written, err := m.fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-		Ino:       serverIno,
-		Offset:    offset,
-		Data:      data,
-		SessionId: m.sid,
+		Ino:    serverIno,
+		Offset: offset,
+		Data:   data,
+		DiskId: m.fs.cfg.DiskID,
+		Epoch:  m.fs.cfg.Epoch,
 	}))
 	if err != nil {
-		return m.fs.ToStatusWithSession(err, m.cancel)
+		return m.fs.ToStatus(err, m.cancel)
 	}
 	if written.Msg.GetSize() != uint32(len(data)) {
 		return fuse.EIO
@@ -58,11 +58,12 @@ func (m *rawFSTmpMaterializer) WriteChunk(ctx context.Context, serverIno, offset
 
 func (m *rawFSTmpMaterializer) CommitTmpAttr(ctx context.Context, serverIno, size uint64, atime, mtime *timestamppb.Timestamp) (*storagev1.Inode, fuse.Status) {
 	updated, err := m.fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-		Ino:       serverIno,
-		Size:      &size,
-		Atime:     atime,
-		Mtime:     mtime,
-		SessionId: m.sid,
+		Ino:    serverIno,
+		Size:   &size,
+		Atime:  atime,
+		Mtime:  mtime,
+		DiskId: m.fs.cfg.DiskID,
+		Epoch:  m.fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return nil, m.fs.ToStatus(err, m.cancel)
@@ -78,7 +79,8 @@ func (m *rawFSTmpMaterializer) RollbackTmpInode(_ context.Context, parentIno uin
 		ParentIno:    parentIno,
 		Name:         []byte(name),
 		OpenInClient: &open,
-		SessionId:    m.fs.currentSession(),
+		DiskId:       m.fs.cfg.DiskID,
+		Epoch:        m.fs.cfg.Epoch,
 	}))
 }
 
@@ -88,7 +90,8 @@ func (m *rawFSTmpMaterializer) UnlinkOpenTmpInode(ctx context.Context, parentIno
 		ParentIno:    parentIno,
 		Name:         []byte(name),
 		OpenInClient: &open,
-		SessionId:    m.sid,
+		DiskId:       m.fs.cfg.DiskID,
+		Epoch:        m.fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return m.fs.ToStatus(err, m.cancel)
@@ -101,7 +104,8 @@ func (m *rawFSTmpMaterializer) LinkInode(ctx context.Context, serverIno, newPare
 		Ino:          serverIno,
 		NewParentIno: newParentIno,
 		NewName:      []byte(name),
-		SessionId:    m.sid,
+		DiskId:       m.fs.cfg.DiskID,
+		Epoch:        m.fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return nil, 0, 0, m.fs.ToStatus(err, m.cancel)
@@ -168,7 +172,7 @@ func (fs *RawFS) linkTmp(cancel <-chan struct{}, input *fuse.LinkIn, filename st
 	} else {
 		fs.handles.ClearOrphan(input.Oldnodeid)
 		fs.stateMu.Lock()
-		delete(fs.orphanSessions, input.Oldnodeid)
+		delete(fs.orphanInodes, input.Oldnodeid)
 		fs.stateMu.Unlock()
 	}
 	fs.cache.invalidateDirListing(input.NodeId)
@@ -192,7 +196,7 @@ func (fs *RawFS) syncTmpFile(cancel <-chan struct{}, ino uint64) fuse.Status {
 	}
 	if uploaded {
 		fs.markDirty(serverIno)
-		fs.markOrphan(ino, mat.sid)
+		fs.markOrphan(ino)
 	}
 	return fuse.OK
 }

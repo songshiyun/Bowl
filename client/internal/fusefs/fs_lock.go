@@ -60,7 +60,7 @@ func (fs *RawFS) prepareLock(input *fuse.LkIn, get bool) (fuse.LkIn, fuse.Status
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return fuse.LkIn{}, status
 	}
-	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return fuse.LkIn{}, status
 	}
 	if _, status := ToProtoLockType(input.Lk.Typ); status != fuse.OK {

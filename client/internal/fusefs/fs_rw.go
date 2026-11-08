@@ -12,7 +12,7 @@ import (
 
 // Read 实现常规文件数据读取，对应 Linux FUSE FUSE_READ 协议。
 // 校验本地句柄与访问模式，并在服务端请求中省略旧版句柄：
-//  1. 映射内核 Inode 为服务端 Inode，并校验句柄所属活跃会话；
+//  1. 映射内核 Inode 为服务端 Inode，并校验本地文件句柄；
 //  2. 目标读取长度以 input.Size 与传入非空 buf 长度二者较小值为准；长度为 0 时立即返回空数据；
 //  3. 在同一文件句柄上维护顺序读检测与 4 MiB 对齐预读缓冲：顺序读与内核并发预读流量统一按 4 MiB 对齐窗口
 //     向服务端单飞拉取，并在窗口发布后异步预取下一窗口，使后续落入窗口内的读取直接命中客户端内存；
@@ -28,7 +28,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		return nil, status
 	}
 
-	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	handle, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return nil, status
 	}
@@ -58,24 +58,21 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
-	n, err := fs.readAhead.Read(ctx, input.Fh, ino, sid, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) ([]byte, error) {
+	n, err := fs.readAhead.Read(ctx, input.Fh, ino, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) ([]byte, error) {
 		resp, rpcErr := fs.client.Read(fetchCtx, connect.NewRequest(&storagev1.ReadRequest{
-			Ino:       ino,
-			Fh:        0,
-			Offset:    offset,
-			Size:      length,
-			SessionId: optionalSession(sid),
+			Ino:    ino,
+			Fh:     0,
+			Offset: offset,
+			Size:   length,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if rpcErr != nil {
-			if isServerEBADF(rpcErr) && fs.sessions != nil {
-				fs.sessions.TriggerRenew()
-			}
 			return nil, rpcErr
 		}
 		return resp.Msg.GetData(), nil
 	})
 	if err != nil {
-		return nil, fs.ToStatusWithSession(err, cancel)
+		return nil, fs.ToStatus(err, cancel)
 	}
 	return fuse.ReadResultData(dest[:n]), fuse.OK
 }
@@ -83,7 +80,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 // Write 实现常规文件数据写入，对应 Linux FUSE FUSE_WRITE 协议。
 // 常规文件写入直接提交服务端；匿名文件在具名化前保存在本地：
 // 1. --ro 只读挂载下直接拦截返回 EROFS；
-// 2. 映射 Inode 并校验句柄所属会话 session_id，立即同步失效目标 Inode 的预读缓冲；
+// 2. 映射 Inode 并校验本地文件句柄，立即同步失效目标 Inode 的预读缓冲；
 // 3. 当 len(data) <= MaxRPCChunkSize（包含 0 字节写入探针）时发起单次 Write RPC 直通落盘并校验模式；
 // 4. 当 len(data) > MaxRPCChunkSize 时按 4 MiB 顺序分片调用，并累加实际写入字节数；
 // 5. 遵循 POSIX 短写语义：若中途分片报错（如 ENOSPC）且已有数据写入成功，返回已写入字节数与 fuse.OK；首片即失败返回对应 errno。
@@ -100,7 +97,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		return 0, status
 	}
 
-	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	handle, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return 0, status
 	}
@@ -144,15 +141,16 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	dataLen := len(data)
 	if dataLen <= MaxRPCChunkSize {
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-			Ino:       ino,
-			Fh:        0,
-			Offset:    input.Offset,
-			Data:      data,
-			SessionId: optionalSession(sid),
+			Ino:    ino,
+			Fh:     0,
+			Offset: input.Offset,
+			Data:   data,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			fs.cache.invalidateInode(input.NodeId)
-			return 0, fs.ToStatusWithSession(err, nil)
+			return 0, fs.ToStatus(err, nil)
 		}
 		fs.markDirty(ino)
 		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)
@@ -178,21 +176,19 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		curOffset := input.Offset + uint64(totalWritten)
 
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-			Ino:       ino,
-			Fh:        0,
-			Offset:    curOffset,
-			Data:      chunk,
-			SessionId: optionalSession(sid),
+			Ino:    ino,
+			Fh:     0,
+			Offset: curOffset,
+			Data:   chunk,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			fs.cache.invalidateInode(input.NodeId)
-			if isServerEBADF(err) && fs.sessions != nil {
-				fs.sessions.TriggerRenew()
-			}
 			if totalWritten > 0 {
 				return totalWritten, fuse.OK
 			}
-			return 0, fs.ToStatusWithSession(err, nil)
+			return 0, fs.ToStatus(err, nil)
 		}
 
 		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)

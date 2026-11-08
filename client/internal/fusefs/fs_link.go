@@ -28,11 +28,12 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 
 	resp, err := fs.client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(linkName),
 		Target:    []byte(pointedTo),
 		Uid:       header.Uid,
 		Gid:       header.Gid,
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -63,7 +64,8 @@ func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte
 	defer cancelFunc()
 
 	resp, err := fs.client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{
-		Ino: ino, SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
 		return nil, fs.ToStatus(err, cancel)
@@ -102,7 +104,8 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 		Ino:          srcIno,
 		NewParentIno: newParentIno,
 		NewName:      []byte(filename),
-		SessionId:    fs.currentSession(),
+		DiskId:       fs.cfg.DiskID,
+		Epoch:        fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
