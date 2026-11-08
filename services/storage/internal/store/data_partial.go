@@ -10,8 +10,13 @@ func init() {
 	registerOp(opFallocate, (*StoreActor).validateFallocateCmd, (*StoreActor).mutateFallocateCmd)
 }
 
-// collectDataKeysFrom 扫描指定节点从 startBlockIdx 起（闭区间 [startBlockIdx, +∞)）的所有 DataKey。
-func (s *StoreActor) collectDataKeysFrom(reader pebbleReader, ino, startBlockIdx uint64) (keys [][]byte, err error) {
+type dataKeyEntry struct {
+	key []byte
+	ref BlobRef
+}
+
+// collectDataKeysFrom 扫描指定节点从 startBlockIdx 起（闭区间 [startBlockIdx, +∞)）的所有 DataKey 及对应 BlobRef。
+func (s *StoreActor) collectDataKeysFrom(reader pebbleReader, ino, startBlockIdx uint64) (entries []dataKeyEntry, err error) {
 	iter, err := reader.NewIter(nil)
 	if err != nil {
 		return nil, err
@@ -32,12 +37,19 @@ func (s *StoreActor) collectDataKeysFrom(reader pebbleReader, ino, startBlockIdx
 		if blockIdx < startBlockIdx {
 			continue
 		}
-		keys = append(keys, append([]byte(nil), iter.Key()...))
+		ref, decErr := DecodeBlobRef(iter.Value())
+		if decErr != nil {
+			return nil, decErr
+		}
+		entries = append(entries, dataKeyEntry{
+			key: append([]byte(nil), iter.Key()...),
+			ref: ref,
+		})
 	}
 	if iterErr := iter.Error(); iterErr != nil {
 		return nil, iterErr
 	}
-	return keys, nil
+	return entries, nil
 }
 
 // setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线（ADR-0031 §3.2）：
@@ -63,6 +75,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 	var (
 		hasTailSpec bool
 		tailSpec    writeBlockSpec
+		pinned      []uint64
 	)
 
 	// 若截断后尾部落在某个 256 KiB 块内部（0 < tailLen < BlobSize），读取有效前缀并追加至活跃 .pack（或全零时标记删除）。
@@ -75,8 +88,9 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 				return Attribute{}, err
 			}
 			if oldOK && oldRef.Length > tailLen {
-				spec, err := s.prepareTruncateTailBlock(blobs, ino, tailBlock, oldRef, tailLen)
+				spec, err := s.prepareTruncateTailBlock(blobs, ino, tailBlock, oldRef, tailLen, &pinned)
 				if err != nil {
+					s.unpinPacks(pinned)
 					return Attribute{}, err
 				}
 				hasTailSpec = true
@@ -87,12 +101,13 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 
 	var (
 		cachedInode Inode
-		deleteKeys  [][]byte
+		deleteKeys  []dataKeyEntry
 		outAttr     Attribute
 	)
 
 	cmd := s.acquireCmd()
 	cmd.op = opCustom
+	cmd.pinnedPacks = pinned
 	cmd.validate = func(actor *StoreActor, _ *writeCmd) error {
 		if actor.stat.NextWriteSeq == math.MaxUint64 {
 			return ErrNoSpace
@@ -145,15 +160,21 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 		actor.applySetAttrFields(&cachedInode, req, nowNano, seq)
 
 		if newSize < oldSize {
-			for _, k := range deleteKeys {
-				batchDeleteDeferred(actor.batch, k)
+			for _, entry := range deleteKeys {
+				actor.removeBlobRef(entry.ref)
+				batchDeleteDeferred(actor.batch, entry.key)
 			}
 			if hasTailSpec {
 				if tailSpec.keep {
 					if !tailSpec.sameRef {
+						if tailSpec.oldOK {
+							actor.removeBlobRef(tailSpec.oldRef)
+						}
+						actor.addBlobRef(tailSpec.newRef)
 						batchSetDataDeferred(actor.batch, ino, tailSpec.blockIdx, tailSpec.newRef)
 					}
 				} else if tailSpec.oldOK {
+					actor.removeBlobRef(tailSpec.oldRef)
 					batchDeleteDataDeferred(actor.batch, ino, tailSpec.blockIdx)
 				}
 			}
@@ -170,7 +191,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 	return outAttr, nil
 }
 
-func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32) (writeBlockSpec, error) {
+func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, pinned *[]uint64) (writeBlockSpec, error) {
 	data := make([]byte, tailLen)
 	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
 		return writeBlockSpec{}, err
@@ -181,7 +202,7 @@ func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx ui
 			keep:     false,
 		}, nil
 	}
-	ref, err := blobs.Append(ino, data)
+	ref, err := s.appendBlob(blobs, ino, data, pinned)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -204,7 +225,7 @@ type fallocateDataOp struct {
 	target         Inode
 	newSize        uint64
 	bytesDelta     uint64
-	fullDeleteKeys [][]byte
+	fullDeleteKeys []dataKeyEntry
 }
 
 // Fallocate 按 256 KiB 逻辑块网格执行文件空间预留扩展或区间打洞/置零（ADR-0031 §3.2）：
@@ -246,7 +267,10 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	defer inoLock.Unlock()
 
 	zeroRange := mode&FallocPunchHole != 0 || mode&FallocZeroRange != 0
-	var partialSpecs []writeBlockSpec
+	var (
+		partialSpecs []writeBlockSpec
+		pinned       []uint64
+	)
 
 	if zeroRange {
 		// 仅首尾非完整对齐的边界残块（最多 2 个块）需在阶段 1 读取旧块清零并追加写入活跃 .pack；
@@ -270,8 +294,9 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 				// 完整 256 KiB 块交由阶段 2 范围扫描删除
 				continue
 			}
-			spec, hasSpec, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen)
+			spec, hasSpec, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen, &pinned)
 			if err != nil {
+				s.unpinPacks(pinned)
 				return err
 			}
 			if hasSpec {
@@ -291,10 +316,11 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	cmd := s.acquireCmd()
 	cmd.op = opFallocate
 	cmd.req = op
+	cmd.pinnedPacks = pinned
 	return s.enqueueAndWait(cmd)
 }
 
-func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int) (writeBlockSpec, bool, error) {
+func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, pinned *[]uint64) (writeBlockSpec, bool, error) {
 	oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
 	if err != nil || !oldOK {
 		return writeBlockSpec{}, false, err
@@ -320,7 +346,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 		}, true, nil
 	}
 
-	ref, err := blobs.Append(ino, data)
+	ref, err := s.appendBlob(blobs, ino, data, pinned)
 	if err != nil {
 		return writeBlockSpec{}, false, err
 	}
@@ -331,8 +357,8 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	}, true, nil
 }
 
-// collectDataKeysInRange 扫描指定节点在闭区间 [startBlockIdx, endBlockIdx] 内的全部 DataKey。
-func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlockIdx, endBlockIdx uint64) (keys [][]byte, err error) {
+// collectDataKeysInRange 扫描指定节点在闭区间 [startBlockIdx, endBlockIdx] 内的全部 DataKey 及对应 BlobRef。
+func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlockIdx, endBlockIdx uint64) (entries []dataKeyEntry, err error) {
 	if startBlockIdx > endBlockIdx {
 		return nil, nil
 	}
@@ -356,12 +382,19 @@ func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlock
 		if blockIdx < startBlockIdx {
 			continue
 		}
-		keys = append(keys, append([]byte(nil), iter.Key()...))
+		ref, decErr := DecodeBlobRef(iter.Value())
+		if decErr != nil {
+			return nil, decErr
+		}
+		entries = append(entries, dataKeyEntry{
+			key: append([]byte(nil), iter.Key()...),
+			ref: ref,
+		})
 	}
 	if iterErr := iter.Error(); iterErr != nil {
 		return nil, iterErr
 	}
-	return keys, nil
+	return entries, nil
 }
 
 func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
@@ -465,16 +498,22 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 	batchSetDirtyDeferred(s.batch, op.ino)
 
 	if op.zeroRange {
-		for _, k := range op.fullDeleteKeys {
-			batchDeleteDeferred(s.batch, k)
+		for _, entry := range op.fullDeleteKeys {
+			s.removeBlobRef(entry.ref)
+			batchDeleteDeferred(s.batch, entry.key)
 		}
 		for i := range op.partialSpecs {
 			b := &op.partialSpecs[i]
 			if b.keep {
 				if !b.sameRef {
+					if b.oldOK {
+						s.removeBlobRef(b.oldRef)
+					}
+					s.addBlobRef(b.newRef)
 					batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 				}
 			} else if b.oldOK {
+				s.removeBlobRef(b.oldRef)
 				batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 			}
 		}

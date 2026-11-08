@@ -50,6 +50,7 @@ type BlobStore struct {
 	nextPackID     atomic.Uint64
 	reservedPackID atomic.Uint64
 	allocMu        sync.Mutex
+	minPackID      uint64
 	reservePackID  BlobReserveFunc
 
 	// 2. 分片环形热块缓存（16 分片 × 64 槽位，总预算 64 MiB，按 (PackID, Offset) 定位）
@@ -120,6 +121,7 @@ func NewBlobStoreWithAllocator(base string, reserve BlobReserveFunc) *BlobStore 
 	}
 	bs.maxPackSize.Store(PackMaxSize)
 	maxID := bs.scanExistingPacks()
+	bs.minPackID = maxID
 	if bs.reservePackID == nil {
 		bs.setupDefaultAllocator(maxID)
 	}
@@ -142,10 +144,13 @@ func (s *BlobStore) AdvanceMinPackID(minPackID uint64) {
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
-	if next := s.nextPackID.Load(); next != 0 && next <= minPackID {
-		s.nextPackID.Store(minPackID + 1)
-	} else if next == 0 {
-		s.setupDefaultAllocator(minPackID)
+	if minPackID > s.minPackID {
+		s.minPackID = minPackID
+	}
+	if next := s.nextPackID.Load(); next != 0 && next <= s.minPackID {
+		s.nextPackID.Store(s.minPackID + 1)
+	} else if next == 0 && s.reservePackID == nil {
+		s.setupDefaultAllocator(s.minPackID)
 	}
 }
 
@@ -177,21 +182,31 @@ func (s *BlobStore) ActiveOffset() uint32 {
 }
 
 func (s *BlobStore) scanExistingPacks() uint64 {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		return 0
-	}
-	s.dirReady.Store(true)
 	var maxID uint64
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pack") {
-			continue
-		}
-		if id, err := parsePackID(entry.Name()); err == nil && id > maxID {
+	for _, id := range s.existingPackIDs() {
+		if id > maxID {
 			maxID = id
 		}
 	}
 	return maxID
+}
+
+func (s *BlobStore) existingPackIDs() []uint64 {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil
+	}
+	s.dirReady.Store(true)
+	var ids []uint64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pack") {
+			continue
+		}
+		if id, err := parsePackID(entry.Name()); err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (s *BlobStore) setupDefaultAllocator(initialLast uint64) {
@@ -200,6 +215,9 @@ func (s *BlobStore) setupDefaultAllocator(initialLast uint64) {
 	s.reservePackID = func(count uint64) (uint64, uint64, error) {
 		mu.Lock()
 		defer mu.Unlock()
+		if s.minPackID > last {
+			last = s.minPackID
+		}
 		if count == 0 {
 			count = BlobIDSegment
 		}

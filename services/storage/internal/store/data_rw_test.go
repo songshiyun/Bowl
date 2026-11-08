@@ -451,3 +451,289 @@ func TestWriteErrorPathsAndStage1FailureOrClosedCleanup(t *testing.T) {
 	_, _, err = actor.Write(regFile.Ino, 0, blockData)
 	require.ErrorIs(t, err, store.ErrClosed)
 }
+
+func readPackMetaFromDB(t *testing.T, actor *store.StoreActor, packID uint64) (store.PackMeta, bool) {
+	t.Helper()
+	val, closer, err := actor.DB().Get(store.PackStatKey(packID))
+	if err != nil {
+		return store.PackMeta{}, false
+	}
+	defer func() { _ = closer.Close() }()
+	meta, err := store.DecodePackMeta(val)
+	require.NoError(t, err)
+	return meta, true
+}
+
+func sumActualLiveBytesByPack(t *testing.T, actor *store.StoreActor) map[uint64]uint64 {
+	t.Helper()
+	iter, err := actor.DB().NewIter(nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, iter.Close()) }()
+
+	totals := make(map[uint64]uint64)
+	for valid := iter.SeekGE([]byte("data:")); valid && bytes.HasPrefix(iter.Key(), []byte("data:")); valid = iter.Next() {
+		_, _, err := store.DecodeDataKey(iter.Key())
+		require.NoError(t, err)
+		ref, err := store.DecodeBlobRef(iter.Value())
+		require.NoError(t, err)
+		totals[ref.PackID] += uint64(ref.Length)
+	}
+	require.NoError(t, iter.Error())
+	return totals
+}
+
+func TestSysPackLiveBytesAccountingAndReopenRecovery(t *testing.T) {
+	dir := t.TempDir()
+	actor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-sys-pack",
+		BranchID: "main",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+
+	f1, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("f1.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	// 1. 首次写入 4 KiB 随后 ExtendTail 顺延追加 4 KiB：LiveBytes = 8192, TotalBytes = 8192（零死空间）
+	_, _, err = actor.Write(f1.Ino, 0, bytes.Repeat([]byte{0x11}, 4096))
+	require.NoError(t, err)
+	meta1, ok := readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok, "Write 必须在同一 Pebble 批次写入 sys:pack:1")
+	require.Equal(t, store.PackMeta{LiveBytes: 4096, TotalBytes: 4096}, meta1)
+
+	_, _, err = actor.Write(f1.Ino, 4096, bytes.Repeat([]byte{0x22}, 4096))
+	require.NoError(t, err)
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, store.PackMeta{LiveBytes: 8192, TotalBytes: 8192}, meta1)
+
+	// 2. 块内非尾部局部覆写 2 KiB：合并出新 8 KiB 块追加在 Offset 8192，旧 8 KiB 死亡 -> LiveBytes = 8192, TotalBytes = 16384
+	_, _, err = actor.Write(f1.Ino, 1024, bytes.Repeat([]byte{0x33}, 2048))
+	require.NoError(t, err)
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, store.PackMeta{LiveBytes: 8192, TotalBytes: 16384}, meta1)
+
+	// 3. 写入第 1 块 256 KiB 满块与第 2 块 16 KiB：LiveBytes = 8192 + 262144 + 16384
+	_, _, err = actor.Write(f1.Ino, store.BlobSize, bytes.Repeat([]byte{0x44}, store.BlobSize))
+	require.NoError(t, err)
+	_, _, err = actor.Write(f1.Ino, 2*store.BlobSize, bytes.Repeat([]byte{0x55}, 16384))
+	require.NoError(t, err)
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, sumActualLiveBytesByPack(t, actor)[1], meta1.LiveBytes)
+
+	// 4. SetAttr(Size) 截断移除第 2 块并将第 1 块截断至 64 KiB
+	truncSize := uint64(store.BlobSize + 65536)
+	_, err = actor.SetAttr(f1.Ino, store.SetAttrReq{Size: &truncSize})
+	require.NoError(t, err)
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192+65536), meta1.LiveBytes)
+	require.Equal(t, sumActualLiveBytesByPack(t, actor)[1], meta1.LiveBytes)
+
+	// 5. Fallocate 整块打洞清除第 1 块，并对第 0 块局部打洞
+	require.NoError(t, actor.Fallocate(f1.Ino, store.BlobSize, store.BlobSize, store.FallocPunchHole|store.FallocKeepSize))
+	require.NoError(t, actor.Fallocate(f1.Ino, 0, 4096, store.FallocPunchHole|store.FallocKeepSize))
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192), meta1.LiveBytes)
+	require.Equal(t, sumActualLiveBytesByPack(t, actor)[1], meta1.LiveBytes)
+
+	// 6. 创建 f2、f3、f4 分别验证 Rename 覆盖、Unlink+PurgeOrphanInode、CleanOrphans 实时扣减 LiveBytes
+	f2, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f2"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+	_, _, err = actor.Write(f2.Ino, 0, bytes.Repeat([]byte{0x66}, 4096))
+	require.NoError(t, err)
+
+	f3, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f3"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+	_, _, err = actor.Write(f3.Ino, 0, bytes.Repeat([]byte{0x77}, 12288))
+	require.NoError(t, err)
+
+	// Rename f2 覆盖 f3 (TargetOpenHandle=false) -> 扣减 f3 的 12288 字节
+	require.NoError(t, actor.Rename(store.RenameReq{
+		OldParentIno:     store.RootIno,
+		OldName:          []byte("f2"),
+		NewParentIno:     store.RootIno,
+		NewName:          []byte("f3"),
+		TargetOpenHandle: false,
+	}))
+	meta1, ok = readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, sumActualLiveBytesByPack(t, actor)[1], meta1.LiveBytes)
+
+	// Unlink f3 (openHandle=true) 转为孤儿时保留 LiveBytes；PurgeOrphanInode 后扣减 4096 字节
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("f3"), true))
+	metaBeforePurge, ok := readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192+4096), metaBeforePurge.LiveBytes)
+
+	require.NoError(t, actor.PurgeOrphanInode(f2.Ino))
+	metaAfterPurge, ok := readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192), metaAfterPurge.LiveBytes)
+
+	// CleanOrphans 批量回收孤儿节点并扣减 LiveBytes
+	f4, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f4"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+	_, _, err = actor.Write(f4.Ino, 0, bytes.Repeat([]byte{0x88}, 16384))
+	require.NoError(t, err)
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("f4"), true))
+	require.NoError(t, actor.CleanOrphans())
+
+	metaBeforeClose, ok := readPackMetaFromDB(t, actor, 1)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192), metaBeforeClose.LiveBytes)
+	require.Equal(t, sumActualLiveBytesByPack(t, actor)[1], metaBeforeClose.LiveBytes)
+
+	// 7. 关闭并重新打开实例：验证 sys:pack:1 精确恢复，且后续操作在恢复的 packStats 基础上精确扣减
+	require.NoError(t, actor.Close())
+
+	reopened, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-sys-pack",
+		BranchID: "main",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+
+	metaReopened, ok := readPackMetaFromDB(t, reopened, 1)
+	require.True(t, ok)
+	require.Equal(t, metaBeforeClose, metaReopened)
+
+	// 重启后新写入分配 Pack 2 (> 已恢复的最大 packID 1)，同时覆盖 f1 在 Pack 1 中的块使 Pack 1 LiveBytes 归零
+	_, _, err = reopened.Write(f1.Ino, 0, bytes.Repeat([]byte{0x99}, 8192))
+	require.NoError(t, err)
+
+	_, ok = readPackMetaFromDB(t, reopened, 1)
+	require.False(t, ok, "已封口的 Pack 1 在 LiveBytes 归零后必须从 Pebble 删除 sys:pack:1")
+
+	meta2, ok := readPackMetaFromDB(t, reopened, 2)
+	require.True(t, ok)
+	require.Equal(t, store.PackMeta{LiveBytes: 8192, TotalBytes: 8192}, meta2)
+	require.Equal(t, sumActualLiveBytesByPack(t, reopened)[2], meta2.LiveBytes)
+}
+
+func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing.T) {
+	dir := t.TempDir()
+	actor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-dead-pack",
+		BranchID: "main",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+
+	// 将封包阈值设为 1 个 256 KiB 块，使每次满块写入后下一次写入自动滚动至新 .pack
+	actor.Blobs().SetMaxPackSize(store.BlobSize)
+
+	f1, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f1.bin"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+	f2, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f2.bin"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+
+	// 1. 活跃包保护：f1 写入 Pack 1 后立即截断为 0，此时 Pack 1 仍是 activePackID (1)，不得删除物理文件
+	block1Data := bytes.Repeat([]byte{0xA1}, store.BlobSize)
+	_, _, err = actor.Write(f1.Ino, 0, block1Data)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), actor.Blobs().ActivePackID())
+
+	zero := uint64(0)
+	_, err = actor.SetAttr(f1.Ino, store.SetAttrReq{Size: &zero})
+	require.NoError(t, err)
+	require.NoError(t, actor.FlushWAL())
+	require.True(t, actor.Blobs().Exists(1), "活跃 .pack (packID == activePackID) 即使 LiveBytes == 0 也绝不能被提前删除")
+
+	// 2. 写入 f1 新块触发滚动至 Pack 2：此时已封口的 Pack 1 (LiveBytes == 0) 在该批次从 Pebble 删除 sys:pack:1，并在 WAL 落盘后物理删除
+	block2Data := bytes.Repeat([]byte{0xB2}, store.BlobSize)
+	_, _, err = actor.Write(f1.Ino, 0, block2Data)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), actor.Blobs().ActivePackID())
+
+	_, ok := readPackMetaFromDB(t, actor, 1)
+	require.False(t, ok, "滚动至 Pack 2 后，全死封口包 Pack 1 的 sys:pack:1 必须从 Pebble 删除")
+	require.True(t, actor.Blobs().Exists(1), "Soft Updates 铁律：NoSync 批次尚未同步 WAL 前，物理 000001.pack 仍须保留在磁盘上")
+
+	require.NoError(t, actor.FlushWAL())
+	require.False(t, actor.Blobs().Exists(1), "FlushWAL 落盘确认后，全死封口包 000001.pack 必须被物理删除")
+
+	// 3. 快照硬链接隔离（LinkAllTo）：将当前存活的 Pack 2 硬链接至快照目录，随后写入 f2 触发滚动至 Pack 3，并 Unlink(f1) 使 Pack 2 全死
+	snapBlobs := store.NewBlobStore(t.TempDir())
+	defer func() { require.NoError(t, snapBlobs.Close()) }()
+	require.NoError(t, actor.Blobs().LinkAllTo(snapBlobs))
+	require.True(t, snapBlobs.Exists(2))
+
+	block3Data := bytes.Repeat([]byte{0xC3}, store.BlobSize)
+	_, _, err = actor.Write(f2.Ino, 0, block3Data)
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), actor.Blobs().ActivePackID())
+
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("f1.bin"), false))
+	_, ok = readPackMetaFromDB(t, actor, 2)
+	require.False(t, ok, "Unlink 使封口包 Pack 2 的 LiveBytes 归零后，必须同批删除 sys:pack:2")
+	require.True(t, actor.Blobs().Exists(2), "FsyncDir 屏障前 000002.pack 尚未物理移除")
+
+	// 通过 FsyncDir 触发持久化屏障，确认物理删除源分支的 000002.pack
+	require.NoError(t, actor.FsyncDir(store.RootIno))
+	require.False(t, actor.Blobs().Exists(2), "FsyncDir 屏障落盘后，全死封口包 000002.pack 必须被物理删除")
+
+	// 验证快照目录中硬链接的 000002.pack 完好无损且可读出完整历史数据
+	require.True(t, snapBlobs.Exists(2))
+	snapBuf := make([]byte, store.BlobSize)
+	require.NoError(t, snapBlobs.ReadAt(store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, 0, snapBuf))
+	require.Equal(t, block2Data, snapBuf)
+
+	// 4. Fallocate 打洞触发封口包回收 + CloseDiscard 模拟崩溃后重启清理残留死包
+	f3, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f3.bin"), Mode: store.S_IFREG | 0o644})
+	require.NoError(t, err)
+	_, _, err = actor.Write(f3.Ino, 0, bytes.Repeat([]byte{0xD4}, store.BlobSize))
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), actor.Blobs().ActivePackID())
+
+	// 对 f2 (位于已封口 Pack 3) 执行整块打洞，使 Pack 3 LiveBytes 归零，但不调用 FlushWAL/Fsync，直接 CloseDiscard 模拟未执行 RemovePack 前退出
+	require.NoError(t, actor.Fallocate(f2.Ino, 0, store.BlobSize, store.FallocPunchHole|store.FallocKeepSize))
+	_, ok = readPackMetaFromDB(t, actor, 3)
+	require.False(t, ok, "Fallocate 打洞使 Pack 3 LiveBytes 归零后必须同批删除 sys:pack:3")
+	require.True(t, actor.Blobs().Exists(3), "未刷 WAL 前 000003.pack 仍在磁盘上")
+
+	require.NoError(t, actor.CloseDiscard())
+
+	// 重新打开 StoreActor：Open 阶段 syncPackStatsWithBlobs 必须清理磁盘上无存活引用的 000003.pack，且后续分配从 >4 继续递增
+	reopened, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-dead-pack",
+		BranchID: "main",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+
+	require.False(t, reopened.Blobs().Exists(3), "Open 恢复时必须自动物理清理无 sys:pack 存活引用的残留死包 000003.pack")
+	require.True(t, reopened.Blobs().Exists(4), "仍有存活数据的 000004.pack 必须完好保留")
+
+	// 5. 验证自定义 WriteOp (ReadView.PackStat + MutateView.AddBlobRef / RemoveBlobRef)
+	var observedPack4 store.PackMeta
+	var observedOK bool
+	require.NoError(t, reopened.Execute(store.WriteOp{
+		Validate: func(v store.ReadView) error {
+			observedPack4, observedOK = v.PackStat(4)
+			return nil
+		},
+		Mutate: func(m store.MutateView) {
+			m.RemoveBlobRef(store.BlobRef{PackID: 4, Offset: 0, Length: store.BlobSize})
+			store.BatchDeleteDataDeferred(m.Batch(), f3.Ino, 0)
+		},
+	}))
+	require.True(t, observedOK)
+	require.Equal(t, uint64(store.BlobSize), observedPack4.LiveBytes)
+
+	_, ok = readPackMetaFromDB(t, reopened, 4)
+	require.False(t, ok, "自定义 MutateView.RemoveBlobRef 将已封口 Pack 4 扣减至 0 后必须同批删除 sys:pack:4")
+}

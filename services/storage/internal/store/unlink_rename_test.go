@@ -127,6 +127,7 @@ func seedFileWithBlobsAndXattr(t *testing.T, actor *store.StoreActor, ino uint64
 				store.BatchSetXattrDeferred(m.Batch(), ino, []byte(xattrName), []byte("val"))
 			}
 			for idx, ref := range blobs {
+				m.AddBlobRef(ref)
 				store.BatchSetDataDeferred(m.Batch(), ino, idx, ref)
 			}
 			m.AddLogicalBytes(int64(size))

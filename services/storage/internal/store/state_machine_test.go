@@ -888,8 +888,11 @@ func (e *formalEnv) auditFullStateAndBlobConsistency() {
 func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 	t.Helper()
 
-	// 扫描 Pebble 中所有 DataKey -> BlobRef，记录每个被引用 PackID 所需的最大结尾偏移
+	require.NoError(t, actor.FlushWAL())
+
+	// 扫描 Pebble 中所有 DataKey -> BlobRef，记录每个被引用 PackID 所需的最大结尾偏移与存活字节总和
 	referencedPacks := make(map[uint64]uint32)
+	liveBytesByPack := make(map[uint64]uint64)
 	iter, err := actor.DB().NewIter(nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, iter.Close()) }()
@@ -903,8 +906,36 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 		if end > referencedPacks[ref.PackID] {
 			referencedPacks[ref.PackID] = end
 		}
+		liveBytesByPack[ref.PackID] += uint64(ref.Length)
 	}
 	require.NoError(t, iter.Error())
+
+	// 扫描 Pebble 中所有 sys:pack:<pack_id> 记账条目，校验与 DataKey 实际存活字节 100% 吻合
+	activePackID := actor.Blobs().ActivePackID()
+	sysPacks := make(map[uint64]store.PackMeta)
+	packPrefix := store.PackStatPrefix()
+	for valid := iter.SeekGE(packPrefix); valid && bytes.HasPrefix(iter.Key(), packPrefix); valid = iter.Next() {
+		packID, err := store.DecodePackStatKey(iter.Key())
+		require.NoError(t, err)
+		meta, err := store.DecodePackMeta(iter.Value())
+		require.NoError(t, err)
+		sysPacks[packID] = meta
+		if meta.LiveBytes == 0 {
+			require.Equal(t, activePackID, packID, "已封口 .pack (packID=%d != active=%d) 在 LiveBytes==0 时必须已从 Pebble 删除 sys:pack 条目", packID, activePackID)
+		}
+	}
+	require.NoError(t, iter.Error())
+
+	for packID, actualLive := range liveBytesByPack {
+		meta, ok := sysPacks[packID]
+		require.True(t, ok, "存在存活 DataKey 的 pack %d 必须在 Pebble 中有 sys:pack 条目", packID)
+		require.Equal(t, actualLive, meta.LiveBytes, "pack %d 的 sys:pack LiveBytes 必须严格等于存活 DataKey 长度之和", packID)
+		require.GreaterOrEqual(t, meta.TotalBytes, meta.LiveBytes, "pack %d 的 TotalBytes 必须 >= LiveBytes", packID)
+		require.GreaterOrEqual(t, meta.TotalBytes, uint64(referencedPacks[packID]), "pack %d 的 TotalBytes 必须覆盖最大被引用结尾偏移", packID)
+	}
+	for packID, meta := range sysPacks {
+		require.Equal(t, liveBytesByPack[packID], meta.LiveBytes, "sys:pack:%d 的 LiveBytes 必须与 DataKey 汇总一致", packID)
+	}
 
 	// 扫描磁盘 packs/*.pack 实际物理文件
 	diskPacks := make(map[uint64]uint32)
@@ -927,6 +958,13 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 		actualSize, ok := diskPacks[packID]
 		require.True(t, ok, "Pebble DataKey 引用的 pack %d 必须在磁盘 packs/ 下存在", packID)
 		require.GreaterOrEqual(t, actualSize, minEnd, "磁盘 pack %d 大小必须覆盖被引用的最大块结尾偏移", packID)
+	}
+	for packID := range diskPacks {
+		if packID == activePackID {
+			continue
+		}
+		_, referenced := referencedPacks[packID]
+		require.True(t, referenced, "WAL 落盘后磁盘上不得残留无任何存活 DataKey 引用的已封口死包 %d", packID)
 	}
 }
 
@@ -988,6 +1026,9 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	require.True(t, env.actor.Blobs().HasDirty())
 	env.postFsyncCoWCount++
 
+	// 压测跨包自动切包与全死封口包并发回收：将封包上限设为 2 个 256 KiB 块
+	env.actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
+
 	// 执行 240 步随机状态机演进与独立只读探针对拍
 	const totalSteps = 240
 	for step := range totalSteps {
@@ -1048,6 +1089,7 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
+	actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
 
 	const (
 		numWorkers = 6

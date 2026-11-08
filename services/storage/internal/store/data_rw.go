@@ -109,13 +109,15 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 
 	numBlocks := len(data) / BlobSize
 	specs := make([]writeBlockSpec, 0, numBlocks)
+	var pinned []uint64
 
 	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 追加写入满块数据。
 	for i := range numBlocks {
 		blockIdx := (offset / BlobSize) + uint64(i)
 		chunk := data[i*BlobSize : (i+1)*BlobSize]
-		ref, writeErr := blobs.Append(ino, chunk)
+		ref, writeErr := s.appendBlob(blobs, ino, chunk, &pinned)
 		if writeErr != nil {
+			s.unpinPacks(pinned)
 			return 0, Attribute{}, writeErr
 		}
 		specs = append(specs, writeBlockSpec{
@@ -139,6 +141,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
 	cmd.req = op
+	cmd.pinnedPacks = pinned
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return 0, Attribute{}, err
 	}
@@ -161,7 +164,10 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 	inoLock.Lock()
 	defer inoLock.Unlock()
 
-	var specs []writeBlockSpec
+	var (
+		specs  []writeBlockSpec
+		pinned []uint64
+	)
 
 	for pos, consumed := offset, 0; consumed < len(data); {
 		blockIdx := pos / BlobSize
@@ -169,8 +175,9 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 		length := min(len(data)-consumed, BlobSize-inBlock)
 		chunk := data[consumed : consumed+length]
 
-		spec, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk)
+		spec, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk, &pinned)
 		if err != nil {
+			s.unpinPacks(pinned)
 			return 0, Attribute{}, err
 		}
 		specs = append(specs, spec)
@@ -188,13 +195,14 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
 	cmd.req = op
+	cmd.pinnedPacks = pinned
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte) (writeBlockSpec, error) {
+func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, pinned *[]uint64) (writeBlockSpec, error) {
 	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
@@ -203,7 +211,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 				keep:     false,
 			}, nil
 		}
-		ref, err := blobs.Append(ino, chunk)
+		ref, err := s.appendBlob(blobs, ino, chunk, pinned)
 		if err != nil {
 			return writeBlockSpec{}, err
 		}
@@ -229,6 +237,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		if extRef, ok, extErr := blobs.ExtendTail(ino, oldRef, uint32(inBlock), chunk, uint32(newLen)); extErr != nil {
 			return writeBlockSpec{}, extErr
 		} else if ok {
+			s.pinPack(extRef.PackID, pinned)
 			return writeBlockSpec{
 				blockIdx: blockIdx,
 				newRef:   extRef,
@@ -259,7 +268,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		}, nil
 	}
 
-	ref, err := blobs.Append(ino, merged)
+	ref, err := s.appendBlob(blobs, ino, merged, pinned)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -387,9 +396,14 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 		b := &op.blocks[i]
 		if b.keep {
 			if !b.sameRef {
+				if b.oldOK {
+					s.removeBlobRef(b.oldRef)
+				}
+				s.addBlobRef(b.newRef)
 				batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 			}
 		} else if b.oldOK {
+			s.removeBlobRef(b.oldRef)
 			batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 		}
 	}
