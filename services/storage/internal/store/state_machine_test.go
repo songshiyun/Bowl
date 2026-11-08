@@ -36,6 +36,7 @@ type refNode struct {
 
 type formalEnv struct {
 	t          *testing.T
+	dir        string
 	actor      *store.StoreActor
 	actionRng  *rand.Rand
 	probeRng   *rand.Rand
@@ -46,27 +47,28 @@ type formalEnv struct {
 	logicalBytes   uint64
 	liveInodeCount uint64
 
-	// 追踪 WindowLocal -> Fsync 固化 -> CoW 新块生命周期计数
-	windowLocalPatchCount int
-	fsyncSolidifiedCount  int
-	postFsyncCoWCount     int
+	// 追踪 ExtendTail 顺延 -> Fsync 固化 -> 追加写 CoW -> SealActivePack -> CompactPacks 生命周期计数
+	tailExtendCount      int
+	fsyncSolidifiedCount int
+	appendCoWCount       int
+	sealPackCount        int
+	compactPacksCount    int
+	reopenRecoveryCount  int
 }
 
 func newFormalEnv(t *testing.T, seed uint64) *formalEnv {
 	t.Helper()
+	dir := t.TempDir()
 	actor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
+		Dir:      dir,
 		DiskID:   "disk-formal",
 		BranchID: "main",
 		MaxBytes: 512 << 20,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, actor.Close())
-	})
-
 	env := &formalEnv{
 		t:              t,
+		dir:            dir,
 		actor:          actor,
 		actionRng:      rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
 		probeRng:       rand.New(rand.NewPCG(seed^0xbf58476d1ce4e5b9, seed^0x94d049bb133111eb)),
@@ -75,6 +77,11 @@ func newFormalEnv(t *testing.T, seed uint64) *formalEnv {
 		logicalBytes:   0,
 		liveInodeCount: 1,
 	}
+	t.Cleanup(func() {
+		if env.actor != nil {
+			require.NoError(t, env.actor.Close())
+		}
+	})
 	env.nodes[store.RootIno] = &refNode{
 		ino:       store.RootIno,
 		parentIno: store.RootIno,
@@ -650,15 +657,16 @@ func (e *formalEnv) stepWrite() {
 	var payload []byte
 
 	if e.actionRng.IntN(5) == 0 {
-		// 满 1 MiB 对齐整块写入
+		// 满 256 KiB 对齐整块写入（1 ~ 2 块）
 		blockIdx := uint64(e.actionRng.IntN(2))
+		numBlocks := 1 + e.actionRng.IntN(2)
 		offset = blockIdx * store.BlobSize
 		fill := byte(1 + e.actionRng.IntN(250))
-		payload = bytes.Repeat([]byte{fill}, store.BlobSize)
+		payload = bytes.Repeat([]byte{fill}, numBlocks*store.BlobSize)
 	} else {
-		// < 1 MiB 局部写入（可能跨块或块内）
+		// 局部或跨 256 KiB 块边界写入
 		offset = uint64(e.actionRng.IntN(store.BlobSize + 65536))
-		length := 1 + e.actionRng.IntN(32768)
+		length := 1 + e.actionRng.IntN(65536)
 		payload = make([]byte, length)
 		fill := byte(1 + e.actionRng.IntN(250))
 		for i := range payload {
@@ -666,20 +674,15 @@ func (e *formalEnv) stepWrite() {
 		}
 	}
 
-	// 若为单块内的非全零局部写，在写前记录旧块状态以验证 WindowLocal PatchLog vs 固化后 CoW 生命周期
 	firstBlock := offset / store.BlobSize
 	lastBlock := (offset + uint64(len(payload)) - 1) / store.BlobSize
 	singlePartial := firstBlock == lastBlock && len(payload) < store.BlobSize
 	var (
-		preRef         store.BlobRef
-		preOK          bool
-		preWindowLocal bool
+		preRef store.BlobRef
+		preOK  bool
 	)
 	if singlePartial {
 		preRef, preOK = e.getBlockBlobRef(ino, firstBlock)
-		if preOK {
-			preWindowLocal = e.actor.Blobs().HasDirty()
-		}
 	}
 
 	written, attr, err := e.actor.Write(ino, offset, payload)
@@ -702,10 +705,10 @@ func (e *formalEnv) stepWrite() {
 	if singlePartial && preOK {
 		postRef, postOK := e.getBlockBlobRef(ino, firstBlock)
 		require.True(e.t, postOK)
-		if preWindowLocal && postRef.PackID == preRef.PackID && postRef.Offset == preRef.Offset {
-			e.windowLocalPatchCount++
+		if postRef.PackID == preRef.PackID && postRef.Offset == preRef.Offset {
+			e.tailExtendCount++
 		} else {
-			e.postFsyncCoWCount++
+			e.appendCoWCount++
 		}
 	}
 }
@@ -776,6 +779,37 @@ func (e *formalEnv) stepFsyncDir() {
 	dirIno := dirs[e.actionRng.IntN(len(dirs))]
 	require.NoError(e.t, e.actor.FsyncDir(dirIno))
 	require.False(e.t, e.actor.WALDirty())
+}
+
+func (e *formalEnv) stepSealActivePack() {
+	require.NoError(e.t, e.actor.Blobs().SealActivePack())
+	require.Equal(e.t, uint64(0), e.actor.Blobs().ActivePackID())
+	e.sealPackCount++
+}
+
+func (e *formalEnv) stepCompactPacks() {
+	require.NoError(e.t, e.actor.CompactPacks())
+	require.False(e.t, e.actor.WALDirty())
+	e.compactPacksCount++
+}
+
+func (e *formalEnv) stepReopenAndRecover() {
+	// 重启前先清理孤儿节点（模拟真实分支会话切换/重启恢复后 CleanOrphans）
+	e.stepPurgeOrCleanOrphans()
+	maxCap := e.actor.Blobs().MaxPackSize()
+	require.NoError(e.t, e.actor.Close())
+	e.actor = nil
+
+	reopened, err := store.Open(store.Options{
+		Dir:      e.dir,
+		DiskID:   "disk-formal",
+		BranchID: "main",
+		MaxBytes: 512 << 20,
+	})
+	require.NoError(e.t, err)
+	reopened.Blobs().SetMaxPackSize(maxCap)
+	e.actor = reopened
+	e.reopenRecoveryCount++
 }
 
 // runReadProbes 使用独立 ProbeRNG 执行只读探针（不改变主状态机 PRNG 轨迹）。
@@ -973,7 +1007,7 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	t.Logf("Running TestFormalStoreActorStateMachine with BOWL_FORMAL_SEED=%d", seed)
 	env := newFormalEnv(t, seed)
 
-	// 先确定性验证一次完整的 WindowLocal 局部写 -> Fsync 固化 -> 后续局部写自动转 CoW 生命周期
+	// 先确定性验证一次完整的 ExtendTail 尾部顺延 -> Fsync 固化 -> 非尾部局部写 CoW 追加新块段生命周期
 	fAttr, err := env.actor.Create(store.CreateReq{
 		ParentIno: store.RootIno,
 		Name:      []byte("lifecycle_seed.bin"),
@@ -1000,7 +1034,7 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, env.actor.Blobs().HasDirty())
 
-	// 尾部顺延局部写
+	// 活跃 .pack 尾部顺延局部写（ExtendTail）
 	chunk2 := bytes.Repeat([]byte{0x32}, 4096)
 	_, _, err = env.actor.Write(fAttr.Ino, 4096, chunk2)
 	require.NoError(t, err)
@@ -1008,14 +1042,15 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	ref2, ok := env.getBlockBlobRef(fAttr.Ino, 0)
 	require.True(t, ok)
 	require.Equal(t, ref1.PackID, ref2.PackID)
-	env.windowLocalPatchCount++
+	require.Equal(t, ref1.Offset, ref2.Offset)
+	env.tailExtendCount++
 
 	// Fsync 固化
 	require.NoError(t, env.actor.Fsync(fAttr.Ino))
 	require.False(t, env.actor.Blobs().HasDirty())
 	env.fsyncSolidifiedCount++
 
-	// 固化后局部写：自动切换为 CoW 追加新块段
+	// 块内中间局部覆写：追加新块段（CoW）
 	chunk3 := bytes.Repeat([]byte{0x33}, 2048)
 	_, _, err = env.actor.Write(fAttr.Ino, 1024, chunk3)
 	require.NoError(t, err)
@@ -1024,59 +1059,77 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	require.True(t, ok)
 	require.NotEqual(t, ref2, ref3)
 	require.True(t, env.actor.Blobs().HasDirty())
-	env.postFsyncCoWCount++
+	env.appendCoWCount++
 
-	// 压测跨包自动切包与全死封口包并发回收：将封包上限设为 2 个 256 KiB 块
+	// 压测跨包自动切包、SealActivePack、CompactPacks 搬迁与全死封口包并发回收：将封包上限设为 2 个 256 KiB 块
 	env.actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
 
-	// 执行 240 步随机状态机演进与独立只读探针对拍
+	// 执行 240 步随机状态机演进（含 SealActivePack、CompactPacks、重启恢复）与独立只读探针对拍
 	const totalSteps = 240
 	for step := range totalSteps {
 		op := env.actionRng.IntN(100)
 		switch {
 		case op < 12:
 			env.stepCreate()
-		case op < 20:
+		case op < 19:
 			env.stepMkdir()
-		case op < 26:
+		case op < 24:
 			env.stepSymlink()
-		case op < 32:
+		case op < 29:
 			env.stepLink()
-		case op < 52:
+		case op < 49:
 			env.stepWrite()
-		case op < 62:
+		case op < 58:
 			env.stepFallocate()
-		case op < 72:
+		case op < 68:
 			env.stepSetAttr()
-		case op < 80:
+		case op < 75:
 			env.stepXattr()
-		case op < 87:
+		case op < 82:
 			env.stepRename()
-		case op < 92:
+		case op < 87:
 			env.stepUnlink()
-		case op < 95:
+		case op < 90:
 			env.stepRmdir()
-		case op < 98:
+		case op < 93:
 			env.stepFsync()
-		default:
+		case op < 95:
 			env.stepFsyncDir()
+		case op < 97:
+			env.stepSealActivePack()
+		default:
+			env.stepCompactPacks()
 		}
 
 		if step%8 == 0 {
 			env.stepPurgeOrCleanOrphans()
+		}
+		if step%15 == 14 {
+			env.stepSealActivePack()
+			env.stepCompactPacks()
+		}
+		if step == 80 || step == 160 {
+			env.stepReopenAndRecover()
+			env.auditFullStateAndBlobConsistency()
 		}
 		if step%6 == 0 {
 			env.runReadProbes()
 		}
 	}
 
-	// 收尾清理所有孤儿节点并执行全量不变量审计
+	// 收尾清理所有孤儿节点、封口并执行 CompactPacks + 重启恢复，最后执行全量不变量审计
 	env.stepPurgeOrCleanOrphans()
+	env.stepSealActivePack()
+	env.stepCompactPacks()
+	env.stepReopenAndRecover()
 	env.auditFullStateAndBlobConsistency()
 
-	require.Greater(t, env.windowLocalPatchCount, 0, "状态机测试必须触发过 WindowLocal PatchLog 原地合并")
-	require.Greater(t, env.fsyncSolidifiedCount, 0, "状态机测试必须触发过 Fsync 块固化")
-	require.Greater(t, env.postFsyncCoWCount, 0, "状态机测试必须触发过 Fsync 固化后的 CoW 新块分配")
+	require.Greater(t, env.tailExtendCount, 0, "状态机测试必须触发过 ExtendTail 活跃包尾部顺延")
+	require.Greater(t, env.fsyncSolidifiedCount, 0, "状态机测试必须触发过 Fsync 块落盘")
+	require.Greater(t, env.appendCoWCount, 0, "状态机测试必须触发过 Append CoW 新块段分配")
+	require.Greater(t, env.sealPackCount, 0, "状态机测试必须触发过 SealActivePack")
+	require.Greater(t, env.compactPacksCount, 0, "状态机测试必须触发过 CompactPacks")
+	require.Greater(t, env.reopenRecoveryCount, 0, "状态机测试必须触发过重启恢复对拍")
 }
 
 func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
@@ -1343,6 +1396,16 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 						return
 					}
 				}
+				if workerID == 0 && step%6 == 3 {
+					if err := actor.Blobs().SealActivePack(); err != nil {
+						writerErrCh <- fmt.Errorf("worker %d SealActivePack: %w", workerID, err)
+						return
+					}
+					if err := actor.CompactPacks(); err != nil {
+						writerErrCh <- fmt.Errorf("worker %d CompactPacks: %w", workerID, err)
+						return
+					}
+				}
 			}
 		}(w)
 	}
@@ -1361,8 +1424,10 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 	}
 
 	require.NoError(t, actor.CleanOrphans())
+	require.NoError(t, actor.Blobs().SealActivePack())
+	require.NoError(t, actor.CompactPacks())
 	require.NoError(t, actor.FsyncDir(store.RootIno))
 
-	// 压测结束后验证磁盘 blobs/ 目录下的实际 .blob 文件集合与 Pebble DataKey 引用集 100% 精确一致（0 孤儿废块残留）
+	// 压测结束后验证磁盘 packs/ 目录下的实际 .pack 文件集合与 Pebble DataKey 引用集 100% 精确一致（0 孤儿废包残留）
 	auditDiskBlobsMatchPebbleDataKeys(t, actor)
 }

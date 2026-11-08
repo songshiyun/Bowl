@@ -56,6 +56,7 @@ const (
 	opFsyncDir
 	opPurgeOrphan
 	opCleanOrphans
+	opCompactRelocate
 	opMax
 )
 
@@ -190,13 +191,14 @@ type StoreActor struct {
 	closeErr       error
 
 	// 6. Data Layer 协同锁与钩子
-	inodeLocks       [4096]sync.Mutex
-	blobs            any
-	syncInodeFn      func(ino uint64) error
-	inFlightMu       sync.Mutex
-	inFlightPacks    map[uint64]int
-	deadPacksMu      sync.Mutex
-	pendingDeadPacks []uint64
+	inodeLocks                [4096]sync.Mutex
+	blobs                     any
+	syncInodeFn               func(ino uint64) error
+	beforeCompactRelocateHook func()
+	inFlightMu                sync.Mutex
+	inFlightPacks             map[uint64]int
+	deadPacksMu               sync.Mutex
+	pendingDeadPacks          []uint64
 }
 
 // Open 打开或初始化一个 StoreActor 实例。
