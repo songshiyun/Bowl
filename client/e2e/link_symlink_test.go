@@ -231,7 +231,7 @@ func TestE2E_Link_Symlink_ReadOnly(t *testing.T) {
 	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
 
-	prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+	prepareDiskFiles(t, disk.GetDiskId(), func(mp string) {
 		require.NoError(t, os.WriteFile(filepath.Join(mp, "pre_reg.txt"), nil, 0o644))
 		require.NoError(t, os.Symlink("/existing/pre_target", filepath.Join(mp, "pre_symlink")))
 	})

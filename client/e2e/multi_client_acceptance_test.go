@@ -3,10 +3,11 @@
 package e2e_test
 
 import (
+	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,107 +33,132 @@ func permissionErrorSummary(stderr string) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-// TestE2E_MultiClient_ComprehensiveAcceptance 验证分支单写多读与快照隔离。
+// TestE2E_MultiClient_ComprehensiveAcceptance 验证单盘无会话 Epoch 世代号抢占、孤儿自动清扫、只读无状态并发挂载与多用户权限。
 func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 	client := newTestStorageClient(t)
 	disk := createTestDisk(t, client)
 	diskID := disk.GetDiskId()
 	endpoint := getStorageEndpoint()
+
 	mpA := t.TempDir()
 	require.NoError(t, os.Chmod(filepath.Dir(mpA), 0o755), "测试临时目录父级必须可被普通用户穿透")
 	require.NoError(t, os.Chmod(mpA, 0o755), "挂载点必须可被普通用户穿透")
-	cmdA, _, stderrA := startBowlMount(t, endpoint, diskID, mpA, "--allow-other", "--branch", "main")
-	waitForMount(t, mpA, "挂载 main 分支失败: %s", stderrA.String())
+	cmdA, _, stderrA := startBowlMount(t, endpoint, diskID, mpA, "--allow-other")
+	waitForMount(t, mpA, "挂载盘 A 失败: %s", stderrA.String())
 	defer stopBowlMountGracefully(t, cmdA, mpA)
-	require.NotEmpty(t, disk.GetBranches())
+
 	pathA := filepath.Join(mpA, "snapshot.txt")
 	require.NoError(t, os.WriteFile(pathA, []byte("版本一"), 0o644))
 
-	t.Run("同一分支拒绝第二个写会话", func(t *testing.T) {
+	t.Run("只读无状态挂载返回Epoch0且不干扰活跃写端", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		mp := t.TempDir()
-		cmd := exec.CommandContext(ctx, getBowlBin(), "mount", "-f", "--endpoint", endpoint, diskID, mp, "--branch", "main")
-		out, err := cmd.CombinedOutput()
-		var exitErr *exec.ExitError
-		require.ErrorAs(t, err, &exitErr, string(out))
-		require.Equal(t, 1, exitErr.ExitCode(), string(out))
-		require.Contains(t, string(out), "busy")
-		require.False(t, isMounted(mp))
-	})
-
-	t.Run("无只读标志的提交挂载被拒绝", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, getBowlBin(), "mount", "-f", "--endpoint", endpoint, diskID, t.TempDir(), "--commit", disk.GetBranches()[0].GetHeadCommitId())
-		out, err := cmd.CombinedOutput()
-		var exitErr *exec.ExitError
-		require.ErrorAs(t, err, &exitErr, string(out))
-		require.Equal(t, 2, exitErr.ExitCode(), string(out))
-	})
-
-	t.Run("只读分支固定挂载时的快照", func(t *testing.T) {
-		mp := t.TempDir()
-		cmd, _, stderr := startBowlMount(t, endpoint, diskID, mp, "--ro", "--branch", "main")
-		waitForMount(t, mp, "只读挂载失败: %s", stderr.String())
-		defer stopBowlMountGracefully(t, cmd, mp)
-		readonlyPath := filepath.Join(mp, "snapshot.txt")
-		data, err := os.ReadFile(readonlyPath)
+		roHandshake, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+			DiskId:   diskID,
+			ReadOnly: true,
+		}))
 		require.NoError(t, err)
-		require.Equal(t, "版本一", string(data))
-		require.NoError(t, os.WriteFile(pathA, []byte("版本二"), 0o644))
-		data, err = os.ReadFile(readonlyPath)
-		require.NoError(t, err)
-		require.Equal(t, "版本一", string(data))
-		require.NoError(t, os.WriteFile(pathA, []byte("版本一"), 0o644))
-	})
-
-	t.Run("只读快照和独立可写分支", func(t *testing.T) {
-		commitID := commitMain(t, client, diskID)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_, err := client.CreateBranch(ctx, connect.NewRequest(&storagev1.CreateBranchRequest{DiskId: diskID, Name: "feature-x", SourceCommitId: &commitID}))
-		require.NoError(t, err)
+		require.Zero(t, roHandshake.Msg.GetEpoch(), "MountDisk(read_only=true) 必须返回 epoch = 0")
 
 		mpRO := t.TempDir()
-		cmdRO, _, _ := startBowlMount(t, endpoint, diskID, mpRO, "--ro", "--branch", "main")
-		waitForMount(t, mpRO)
+		cmdRO, _, stderrRO := startBowlMount(t, endpoint, diskID, mpRO, "--ro", "--direct-io")
+		waitForMount(t, mpRO, "只读挂载失败: %s", stderrRO.String())
 		defer stopBowlMountGracefully(t, cmdRO, mpRO)
-		data, err := os.ReadFile(filepath.Join(mpRO, "snapshot.txt"))
-		require.NoError(t, err)
-		require.Equal(t, "版本一", string(data))
-		require.ErrorIs(t, os.WriteFile(filepath.Join(mpRO, "new.txt"), nil, 0o644), syscall.EROFS)
 
-		mpFeature := t.TempDir()
-		cmdFeature, _, _ := startBowlMount(t, endpoint, diskID, mpFeature, "--branch", "feature-x")
-		waitForMount(t, mpFeature)
-		defer stopBowlMountGracefully(t, cmdFeature, mpFeature)
-		require.NoError(t, os.WriteFile(filepath.Join(mpFeature, "feature.txt"), []byte("分支"), 0o644))
-		_, err = os.Stat(filepath.Join(mpA, "feature.txt"))
-		require.ErrorIs(t, err, os.ErrNotExist)
-
-		mpCommit := t.TempDir()
-		cmdCommit, _, _ := startBowlMount(t, endpoint, diskID, mpCommit, "--ro", "--commit", commitID)
-		waitForMount(t, mpCommit)
-		defer stopBowlMountGracefully(t, cmdCommit, mpCommit)
-		require.NoError(t, os.WriteFile(pathA, []byte("版本二"), 0o644))
-		require.NotEqual(t, commitID, commitMain(t, client, diskID))
 		requireFileContent(t, filepath.Join(mpRO, "snapshot.txt"), "版本一")
-		requireFileContent(t, filepath.Join(mpCommit, "snapshot.txt"), "版本一")
+		require.ErrorIs(t, os.WriteFile(filepath.Join(mpRO, "new.txt"), nil, 0o644), syscall.EROFS, "只读挂载本地写操作必须直接返回 EROFS")
+
+		// 验证活跃写端 mpA 未被只读挂载踢掉，仍可正常创建并写入新文件，且只读客户端可无状态实时直读
+		liveFileA := filepath.Join(mpA, "live-while-ro.txt")
+		require.NoError(t, os.WriteFile(liveFileA, []byte("实时内容"), 0o644), "只读挂载不得干扰正在运行的活跃写端")
+		requireFileContent(t, filepath.Join(mpRO, "live-while-ro.txt"), "实时内容")
+	})
+
+	mpB := t.TempDir()
+	require.NoError(t, os.Chmod(filepath.Dir(mpB), 0o755), "测试临时目录父级必须可被普通用户穿透")
+	require.NoError(t, os.Chmod(mpB, 0o755), "挂载点必须可被普通用户穿透")
+	var orphanReclaimed bool
+
+	t.Run("新可写挂载零等待递增Epoch抢占旧写端并自动清扫孤儿节点", func(t *testing.T) {
+		// 1. 在旧写端 mpA 创建 64 KiB 文件并在保持打开状态下解链，构造残留 Orphan Inode
+		orphanPath := filepath.Join(mpA, "orphan-unlinked.bin")
+		orphanFile, err := os.OpenFile(orphanPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = orphanFile.Close() })
+
+		orphanPayload := bytes.Repeat([]byte("O"), 65536)
+		_, err = orphanFile.Write(orphanPayload)
+		require.NoError(t, err)
+		require.NoError(t, orphanFile.Sync())
+
+		var orphanStat unix.Stat_t
+		require.NoError(t, unix.Fstat(int(orphanFile.Fd()), &orphanStat))
+		orphanIno := orphanStat.Ino
+
+		require.NoError(t, os.Remove(orphanPath))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err = client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+			DiskId: diskID,
+			Ino:    orphanIno,
+		}))
+		require.NoError(t, err, "接管前已解链但仍打开的 Orphan Inode 必须存在于服务端")
+
+		diskBefore, err := client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
+		require.NoError(t, err)
+		usedBeforeTakeover := diskBefore.Msg.GetDisk().GetUsedBytes()
+		require.GreaterOrEqual(t, usedBeforeTakeover, uint64(len(orphanPayload)))
+
+		// 2. 在旧可写客户端 mpA 未卸载时，新可写客户端 mpB 直接通过 bowl mount 零等待接管写权限
+		takeoverStart := time.Now()
+		cmdB, _, stderrB := startBowlMount(t, endpoint, diskID, mpB, "--allow-other")
+		waitForMount(t, mpB, "新可写客户端零等待接管挂载失败: %s", stderrB.String())
+		t.Cleanup(func() { stopBowlMountGracefully(t, cmdB, mpB) })
+		require.Less(t, time.Since(takeoverStart), 3*time.Second, "新可写挂载必须零 TTL 等待立即接管")
+
+		// 新写端 mpB 正常写入成功
+		require.NoError(t, os.WriteFile(filepath.Join(mpB, "taken-over.txt"), []byte("新写端接管"), 0o644))
+		requireFileContent(t, filepath.Join(mpB, "taken-over.txt"), "新写端接管")
+
+		// 3. 验证前任残留的 Orphan Inode 已被新写端 MountDisk(read_only=false) 自动清扫
+		_, orphanAttrErr := client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+			DiskId: diskID,
+			Ino:    orphanIno,
+		}))
+		require.Error(t, orphanAttrErr, "新可写挂载握手必须自动清扫前任残留的 Orphan Inode")
+		require.Equal(t, connect.CodeNotFound, connect.CodeOf(orphanAttrErr))
+
+		diskAfter, err := client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
+		require.NoError(t, err)
+		require.Less(t, diskAfter.Msg.GetDisk().GetUsedBytes(), usedBeforeTakeover, "清扫孤儿节点后必须释放其占用的逻辑容量")
+		orphanReclaimed = true
+
+		// 4. 被抢占的旧可写客户端 mpA 后续发起写操作立即收到 POSIX EBUSY，且不会自动重连抢回 Epoch
+		errStaleMkdir := os.Mkdir(filepath.Join(mpA, "fenced-dir"), 0o755)
+		require.ErrorIs(t, errStaleMkdir, syscall.EBUSY, "被抢占的旧写端发起目录创建必须立即返回 EBUSY")
+
+		errStaleWrite := os.WriteFile(filepath.Join(mpA, "fenced-file.txt"), []byte("stale"), 0o644)
+		require.ErrorIs(t, errStaleWrite, syscall.EBUSY, "被抢占的旧写端发起文件写入必须立即返回 EBUSY")
+
+		// 再次重试旧写端依然返回 EBUSY，且新写端 mpB 写权限稳固未受影响（证明旧写端未重连抢回 Epoch）
+		errStaleRetry := os.Mkdir(filepath.Join(mpA, "fenced-dir-retry"), 0o755)
+		require.ErrorIs(t, errStaleRetry, syscall.EBUSY, "旧写端不得自动重连抢回 Epoch")
+		require.NoError(t, os.WriteFile(filepath.Join(mpB, "still-leader.txt"), []byte("持续持有写权限"), 0o644))
 	})
 
 	var remove1001Summary, rename1001Summary string
 	t.Run("多用户权限", func(t *testing.T) {
 		// 准备 1: root 属主 0600 文件 secret.txt
-		secretPath := filepath.Join(mpA, "secret.txt")
+		secretPath := filepath.Join(mpB, "secret.txt")
 		require.NoError(t, os.WriteFile(secretPath, []byte("ROOT_TOP_SECRET_DATA"), 0o600))
 
 		// 准备 2: root 属主 0755 目录 readonly-dir
-		roDirPath := filepath.Join(mpA, "readonly-dir")
+		roDirPath := filepath.Join(mpB, "readonly-dir")
 		require.NoError(t, os.Mkdir(roDirPath, 0o755))
 
 		// 准备 3: 01777 带 Sticky Bit 的共享目录 shared-tmp
-		sharedTmpPath := filepath.Join(mpA, "shared-tmp")
+		sharedTmpPath := filepath.Join(mpB, "shared-tmp")
 		require.NoError(t, os.Mkdir(sharedTmpPath, 0o777|os.ModeSticky))
 		require.NoError(t, unix.Chmod(sharedTmpPath, 0o1777), "设置 Sticky Bit (01777) 失败")
 
@@ -188,17 +214,19 @@ func TestE2E_MultiClient_ComprehensiveAcceptance(t *testing.T) {
 	})
 
 	recordArtifact(t, map[string]string{
-		"second_writer":          "EBUSY",
-		"commit_without_ro":      "exit 2",
-		"snapshot_isolation":     "版本一",
-		"readonly_write":         "EROFS",
-		"feature_branch_visible": "false",
-		"uid1000_read_0600":      "EACCES",
-		"uid1000_write_0600":     "EACCES",
-		"uid1000_create_0755":    "EACCES",
-		"uid1000_create_sticky":  "ok",
-		"uid1001_remove_sticky":  remove1001Summary,
-		"uid1001_rename_sticky":  rename1001Summary,
-		"uid1000_remove_own":     "ok",
+		"readonly_epoch":        "0",
+		"readonly_write":        "EROFS",
+		"readonly_live_read":    "实时内容",
+		"writer_takeover":       "新写端接管",
+		"orphan_reclaimed":      strconv.FormatBool(orphanReclaimed),
+		"preempted_writer":      "EBUSY",
+		"no_reconnect_pingpong": "true",
+		"uid1000_read_0600":     "EACCES",
+		"uid1000_write_0600":    "EACCES",
+		"uid1000_create_0755":   "EACCES",
+		"uid1000_create_sticky": "ok",
+		"uid1001_remove_sticky": remove1001Summary,
+		"uid1001_rename_sticky": rename1001Summary,
+		"uid1000_remove_own":    "ok",
 	})
 }

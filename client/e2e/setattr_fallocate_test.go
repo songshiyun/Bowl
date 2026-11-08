@@ -223,7 +223,7 @@ func TestE2E_SetAttr(t *testing.T) {
 	t.Run("readonly_mount_blocks_mutations", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 
-		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+		prepareDiskFiles(t, disk.GetDiskId(), func(mp string) {
 			require.NoError(t, os.WriteFile(filepath.Join(mp, "ro-test.txt"), nil, 0o644))
 		})
 

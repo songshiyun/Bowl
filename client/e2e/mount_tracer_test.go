@@ -59,7 +59,7 @@ func TestE2E_Mount_ValidationFailures(t *testing.T) {
 	})
 }
 
-// TestE2E_Mount_TracerBullet 验证分支根目录、Statfs 配额与优雅卸载。
+// TestE2E_Mount_TracerBullet 验证单盘根目录、Statfs 配额与优雅卸载。
 func TestE2E_Mount_TracerBullet(t *testing.T) {
 	client := newTestStorageClient(t)
 	disk := createTestDisk(t, client)
@@ -79,7 +79,7 @@ func TestE2E_Mount_TracerBullet(t *testing.T) {
 	var stat unix.Stat_t
 	err := unix.Stat(mountpoint, &stat)
 	require.NoError(t, err, "根目录 unix.Stat 必须成功")
-	require.Equal(t, uint64(1), stat.Ino, "分支根节点必须为 1")
+	require.Equal(t, uint64(1), stat.Ino, "磁盘根节点必须为 1")
 	require.Equal(t, uint32(syscall.S_IFDIR), stat.Mode&syscall.S_IFMT, "根目录类型必须为目录")
 
 	// 4. 验证不存在的子路径 Stat: 必须返回 ENOENT (os.ErrNotExist)

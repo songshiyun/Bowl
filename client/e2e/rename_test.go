@@ -298,7 +298,7 @@ func TestE2E_Rename_ReadOnly(t *testing.T) {
 	disk := createTestDisk(t, client)
 	endpoint := getStorageEndpoint()
 
-	prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+	prepareDiskFiles(t, disk.GetDiskId(), func(mp string) {
 		createRegularFile(t, filepath.Join(mp, "ro_rename_src.txt"))
 	})
 	var err error

@@ -15,7 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/e2e/testutil"
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 const (
@@ -64,7 +68,6 @@ func storageProcessEnv(publicPort, internalPort int, dataDir, dsn string) []stri
 		"INTERNAL_SERVER_PORT=" + strconv.Itoa(internalPort),
 		"STORAGE_DATA_DIR=" + dataDir,
 		"DB_DSN=" + dsn,
-		"STORAGE_SESSION_SWEEP_INTERVAL=1m",
 	}
 }
 
@@ -146,5 +149,171 @@ func TestStorageProcessGracefulSIGTERM(t *testing.T) {
 	require.NoError(t, cmd.Wait(), "SIGTERM 必须触发 0 退出: %s", output.String())
 	recordArtifact(t, map[string]string{
 		"sigterm_exit": strconv.Itoa(cmd.ProcessState.ExitCode()),
+	})
+}
+
+// TestSingleDiskStorageLifecycle 从公开 RPC 验证单盘 MountDisk 世代号抢占、数据读写与孤儿节点回收闭环。
+func TestSingleDiskStorageLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	client := testutil.NewStorageClient()
+
+	created, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "single-disk-lifecycle",
+		MaxBytes: 8 * 1024 * 1024,
+	}))
+	require.NoError(t, err)
+	disk := created.Msg.GetDisk()
+	rootIno := disk.GetRootIno()
+	require.Equal(t, uint64(1), rootIno)
+	diskID := disk.GetDiskId()
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		_, deleteErr := client.DeleteDisk(cleanup, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: diskID}))
+		require.NoError(t, deleteErr)
+	})
+
+	// 1. 首次可写挂载分配 Epoch 1，只读挂载返回 Epoch 0 且不推进世代号。
+	mount1, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: false,
+	}))
+	require.NoError(t, err)
+	epoch1 := mount1.Msg.GetEpoch()
+	require.Equal(t, uint64(1), epoch1)
+
+	mountRO, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: true,
+	}))
+	require.NoError(t, err)
+	require.Zero(t, mountRO.Msg.GetEpoch())
+
+	// 2. 使用 Epoch 1 写入文件与扩展属性，并校验磁盘实时用量。
+	file, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    diskID,
+		Epoch:     epoch1,
+		ParentIno: 1,
+		Name:      []byte("shared"),
+		Mode:      0o644,
+	}))
+	require.NoError(t, err)
+	ino := file.Msg.GetInode().GetIno()
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: diskID,
+		Epoch:  epoch1,
+		Ino:    ino,
+		Data:   []byte("hello"),
+	}))
+	require.NoError(t, err)
+	_, err = client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{
+		DiskId: diskID,
+		Epoch:  epoch1,
+		Ino:    ino,
+		Name:   []byte("user.test"),
+		Value:  []byte("value"),
+	}))
+	require.NoError(t, err)
+	xattr, err := client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{
+		DiskId: diskID,
+		Ino:    ino,
+		Name:   []byte("user.test"),
+	}))
+	require.NoError(t, err)
+	xattrValue := string(xattr.Msg.GetValue())
+	require.Equal(t, "value", xattrValue)
+
+	gotDisk, err := client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	usedBytes := gotDisk.Msg.GetDisk().GetUsedBytes()
+	require.Equal(t, uint64(5), usedBytes)
+
+	// 3. 验证打开状态下解链（Orphan Inode）仍可读取，调用 ReclaimOrphan 后返回 ENOENT。
+	_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
+		DiskId:       diskID,
+		Epoch:        epoch1,
+		ParentIno:    1,
+		Name:         []byte("shared"),
+		OpenInClient: new(true),
+	}))
+	require.NoError(t, err)
+	read, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: diskID,
+		Ino:    ino,
+		Size:   5,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, []byte("hello"), read.Msg.GetData())
+
+	_, err = client.ReclaimOrphan(ctx, connect.NewRequest(&storagev1.ReclaimOrphanRequest{
+		DiskId: diskID,
+		Epoch:  epoch1,
+		Ino:    ino,
+	}))
+	require.NoError(t, err)
+	_, err = client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: diskID,
+		Ino:    ino,
+		Size:   5,
+	}))
+	testutil.RequireConnectError(t, err, connect.CodeNotFound, "ENOENT")
+	orphanAfterReclaimReason := testutil.ExtractErrorInfo(err).GetReason()
+
+	// 4. 新可写挂载递增 Epoch = 2 零等待抢占写权限，旧 Epoch = 1 写入立即被拦截返回 EBUSY。
+	mount2, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: false,
+	}))
+	require.NoError(t, err)
+	epoch2 := mount2.Msg.GetEpoch()
+	require.Equal(t, uint64(2), epoch2)
+
+	_, err = client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    diskID,
+		Epoch:     epoch1,
+		ParentIno: 1,
+		Name:      []byte("stale"),
+		Mode:      0o644,
+	}))
+	testutil.RequireConnectError(t, err, connect.CodeFailedPrecondition, "EBUSY")
+	staleEpochReason := testutil.ExtractErrorInfo(err).GetReason()
+
+	// 5. 单次 4 MiB Write/Read RPC 往返：覆盖服务端最大块写入路径。
+	bigPayload := bytes.Repeat([]byte{0x4d}, 4*1024*1024)
+	bigFile, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    diskID,
+		Epoch:     epoch2,
+		ParentIno: 1,
+		Name:      []byte("big.bin"),
+		Mode:      0o644,
+	}))
+	require.NoError(t, err)
+	bigIno := bigFile.Msg.GetInode().GetIno()
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: diskID,
+		Epoch:  epoch2,
+		Ino:    bigIno,
+		Data:   bigPayload,
+	}))
+	require.NoError(t, err)
+	bigRead, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: diskID,
+		Ino:    bigIno,
+		Size:   uint32(len(bigPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, bigPayload, bigRead.Msg.GetData(), "4 MiB 单次 Write/Read 往返必须逐字节一致")
+
+	recordArtifact(t, map[string]string{
+		"epoch_1":              strconv.FormatUint(epoch1, 10),
+		"epoch_2":              strconv.FormatUint(epoch2, 10),
+		"stale_epoch_write":    staleEpochReason,
+		"root_ino":             strconv.FormatUint(rootIno, 10),
+		"used_bytes":           strconv.FormatUint(usedBytes, 10),
+		"xattr_value":          xattrValue,
+		"orphan_after_reclaim": orphanAfterReclaimReason,
+		"big_write_bytes":      strconv.Itoa(len(bigPayload)),
+		"big_write_sha256":     fileSHA256(bigPayload),
 	})
 }

@@ -128,7 +128,7 @@ func (m *TmpFileManager) Create(parent uint64, uid, gid, mode, flags uint32) (ui
 	now := timestamppb.Now()
 	inode := &storagev1.Inode{
 		Ino:        ino,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:    syscall.S_IFREG | (mode & 0o7777),
 			Uid:     uid,

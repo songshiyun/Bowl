@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -31,23 +30,25 @@ func setIoctlFlags(fd, flags int) error {
 	return unix.IoctlSetPointerInt(fd, unix.FS_IOC_SETFLAGS, flags)
 }
 
-// prepareFlagFile 先通过分支写会话准备文件及标志，再关闭会话以允许挂载。
+// prepareFlagFile 通过单次 MountDisk 握手获取写世代号，准备带标志位的文件供后续挂载读取。
 func prepareFlagFile(t *testing.T, client storagev1connect.StorageServiceClient, diskID, name string, flags uint32) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	mgr, err := session.New(ctx, client, session.Config{DiskID: diskID, BranchName: "main"})
+	mounted, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: false,
+	}))
 	require.NoError(t, err)
-	defer mgr.Close()
-	sid := mgr.CurrentSessionID()
+	epoch := mounted.Msg.GetEpoch()
 	created, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: 1, Name: []byte(name), Mode: syscall.S_IFREG | 0o644, Flags: 0o2, SessionId: &sid,
+		DiskId: diskID, Epoch: epoch, ParentIno: 1, Name: []byte(name), Mode: syscall.S_IFREG | 0o644, Flags: 0o2,
 	}))
 	require.NoError(t, err)
 	ino := created.Msg.GetInode().GetIno()
-	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{Ino: ino, Data: []byte("line 1\n"), SessionId: &sid}))
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{DiskId: diskID, Epoch: epoch, Ino: ino, Data: []byte("line 1\n")}))
 	require.NoError(t, err)
-	_, err = client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Flags: &flags, SessionId: &sid}))
+	_, err = client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{DiskId: diskID, Epoch: epoch, Ino: ino, Flags: &flags}))
 	require.NoError(t, err)
 }
 
@@ -159,7 +160,7 @@ func TestE2E_Ioctl(t *testing.T) {
 
 	t.Run("只读挂载", func(t *testing.T) {
 		disk := createTestDisk(t, client)
-		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+		prepareDiskFiles(t, disk.GetDiskId(), func(mp string) {
 			require.NoError(t, os.WriteFile(filepath.Join(mp, "ro-test.txt"), nil, 0o644))
 		})
 		mp := t.TempDir()

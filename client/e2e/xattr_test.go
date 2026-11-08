@@ -206,7 +206,6 @@ func TestE2E_Xattr(t *testing.T) {
 		require.NoError(t, err, "创建只读测试文件成功")
 		require.NoError(t, f.Close(), "关闭只读测试文件成功")
 		require.NoError(t, unix.Setxattr(filePath, "user.ro_key", []byte("ro_value"), 0))
-		commitMain(t, client, disk.GetDiskId())
 		stopBowlMountGracefully(t, cmdRW, mountpointRW)
 
 		mountpointRO := t.TempDir()

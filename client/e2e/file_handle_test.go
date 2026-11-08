@@ -56,7 +56,7 @@ func TestE2E_FileHandle(t *testing.T) {
 	t.Run("readonly_mount_blocks_write_allows_read", func(t *testing.T) {
 		disk := createTestDisk(t, client)
 
-		prepareSnapshot(t, client, disk.GetDiskId(), func(mp string) {
+		prepareDiskFiles(t, disk.GetDiskId(), func(mp string) {
 			require.NoError(t, os.WriteFile(filepath.Join(mp, "ro-target.txt"), []byte("只读"), 0o644))
 		})
 

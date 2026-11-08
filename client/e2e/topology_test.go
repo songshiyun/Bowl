@@ -207,7 +207,6 @@ func TestE2E_Topology_ReadOnly(t *testing.T) {
 	existFifo := filepath.Join(initMountpoint, "exist_fifo")
 	require.NoError(t, unix.Mkfifo(existFifo, 0o644))
 
-	commitMain(t, client, disk.GetDiskId())
 	stopBowlMountGracefully(t, cmdRW, initMountpoint)
 
 	// 2. 以 --ro 只读模式重新挂载

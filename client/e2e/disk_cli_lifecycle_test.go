@@ -125,8 +125,7 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	shrinkOut, shrinkErr := shrinkCmd.CombinedOutput()
 	require.Error(t, shrinkErr, "缩容至已用空间以下必须被拦截: %s", string(shrinkOut))
 
-	// 5. 挂载态删盘拦截（本机快检 + 远端未过期会话拦截 EBUSY）
-	// 5a. 本机 CLI 删盘：被 /proc/self/mountinfo 快检拦截
+	// 5. 本机挂载态删盘拦截：被 /proc/self/mountinfo 快检拦截并提示先执行 bowl umount
 	localDelCmd := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, diskID, "-y")
 	localDelOut, localDelErr := localDelCmd.CombinedOutput()
 	require.Error(t, localDelErr, "本机挂载状态下 bowl disk delete 必须被拦截")
@@ -135,24 +134,13 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.Equal(t, 1, exitErr.ExitCode())
 	require.Contains(t, string(localDelOut), "bowl umount")
 
-	// 5b. 模拟异机/远端直接调用服务端 RPC 删盘：服务端检测到未过期的挂载会话，返回 FailedPrecondition (EBUSY)
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	_, remoteDelErr := client.DeleteDisk(rpcCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-		DiskId: diskID,
-	}))
-	rpcCancel()
-	require.Error(t, remoteDelErr, "活跃挂载期间远端直接调用 DeleteDisk RPC 必须被未过期会话拦截")
-	require.Equal(t, connect.CodeFailedPrecondition, connect.CodeOf(remoteDelErr))
-	require.Contains(t, remoteDelErr.Error(), "busy")
-	remoteDeleteReason := connect.CodeOf(remoteDelErr).String()
-
 	// 验证挂载点内的测试文件依然完好可读
 	readBack, err := os.ReadFile(testFilePath)
 	require.NoError(t, err)
 	require.Equal(t, payload, readBack)
 	writtenBytes := len(readBack)
 
-	// 6. 正常卸载（bowl umount）后交互式删盘（无需等待 60s TTL）
+	// 6. 正常卸载（bowl umount）后交互式删盘
 	umountCmd := exec.Command(bowlBin, "umount", mountpoint)
 	umountOut, err := umountCmd.CombinedOutput()
 	require.NoError(t, err, "bowl umount 失败: %s", string(umountOut))
@@ -184,7 +172,7 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	delOut, err := delCmd.Output()
 	delElapsed := time.Since(delStart)
 	require.NoError(t, err, "卸载后立即执行 bowl disk delete 失败: %s", delStderr.String())
-	require.Less(t, delElapsed, 2*time.Second, "正常卸载后删盘无需等待 60s TTL，应在 2s 内完成")
+	require.Less(t, delElapsed, 2*time.Second, "正常卸载后删盘应在 2s 内完成")
 
 	var delRes struct {
 		DiskID  string `json:"disk_id"`
@@ -202,7 +190,7 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.Equal(t, 1, exitErr.ExitCode())
 	require.Contains(t, string(getAfterOut), "磁盘不存在")
 
-	// 7. 守护进程异常崩溃（kill -9）后等待短租约（2s）过期即可自动清理过期会话并成功删盘
+	// 7. 守护进程被 kill -9 强杀并解除本机挂载后，零等待会话租约 TTL 超时即可立即执行 bowl disk delete 销毁磁盘
 	createCmd2 := exec.Command(bowlBin, "disk", "create", "--endpoint", endpoint, "--size", "1GiB", "--name", "e2e-kill9-disk", "-q")
 	createOut2, err := createCmd2.CombinedOutput()
 	require.NoError(t, err, "创建第二块测试盘失败: %s", string(createOut2))
@@ -222,22 +210,21 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 
 	daemonPID2 := findBowlDaemonPID(t, mountpoint2)
 
-	// 直接发送 SIGKILL (kill -9) 杀死守护进程
+	// 直接发送 SIGKILL (kill -9) 强杀守护进程
 	require.NoError(t, syscall.Kill(daemonPID2, syscall.SIGKILL))
 	waitForProcessExit(t, daemonPID2)
 
-	// 清理内核残留挂载点
+	// 解除本机残留挂载点
 	_ = unix.Unmount(mountpoint2, unix.MNT_DETACH)
 	waitForUnmount(t, mountpoint2)
 
-	// 等待 E2E 环境 2s 租约过期后执行 bowl disk delete
-	var delOut2 []byte
-	require.Eventually(t, func() bool {
-		delCmd2 := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, disk2ID, "-y", "--json")
-		out, delErr := delCmd2.CombinedOutput()
-		delOut2 = out
-		return delErr == nil
-	}, 5*time.Second, 200*time.Millisecond, "kill -9 后等待短租约过期删盘应成功")
+	// 无需等待任何会话租约 TTL 超时，单次调用立即执行 bowl disk delete 销毁磁盘
+	kill9DelStart := time.Now()
+	delCmd2 := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, disk2ID, "-y", "--json")
+	delOut2, delErr2 := delCmd2.CombinedOutput()
+	kill9DelElapsed := time.Since(kill9DelStart)
+	require.NoError(t, delErr2, "kill -9 并解除本机挂载后无需等待 TTL 即可立即删盘: %s", string(delOut2))
+	require.Less(t, kill9DelElapsed, 2*time.Second, "kill -9 后删盘必须零 TTL 等待立即完成")
 
 	var delRes2 struct {
 		DiskID  string `json:"disk_id"`
@@ -254,17 +241,37 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.Equal(t, connect.CodeNotFound, connect.CodeOf(getDisk2Err))
 
 	recordArtifact(t, map[string]string{
-		"created_max_bytes":     strconv.FormatUint(createdMaxBytes, 10),
-		"resized_max_bytes":     strconv.FormatUint(resizedMaxBytes, 10),
-		"written_bytes":         strconv.Itoa(writtenBytes),
-		"shrink_blocked":        strconv.FormatBool(shrinkErr != nil),
-		"local_delete_blocked":  strconv.FormatBool(localDelErr != nil),
-		"remote_delete_blocked": remoteDeleteReason,
-		"interactive_cancel":    "kept",
-		"interactive_confirm":   "deleted",
-		"unmount_delete":        strconv.FormatBool(delRes.Deleted),
-		"kill9_delete":          strconv.FormatBool(delRes2.Deleted),
+		"created_max_bytes":    strconv.FormatUint(createdMaxBytes, 10),
+		"resized_max_bytes":    strconv.FormatUint(resizedMaxBytes, 10),
+		"written_bytes":        strconv.Itoa(writtenBytes),
+		"shrink_blocked":       strconv.FormatBool(shrinkErr != nil),
+		"local_delete_blocked": strconv.FormatBool(localDelErr != nil),
+		"interactive_cancel":   "kept",
+		"interactive_confirm":  "deleted",
+		"unmount_delete":       strconv.FormatBool(delRes.Deleted),
+		"kill9_zero_wait_del":  strconv.FormatBool(delRes2.Deleted),
 	})
+}
+
+type diskListEntry struct {
+	DiskID    string `json:"disk_id"`
+	UsedBytes uint64 `json:"used_bytes"`
+}
+
+type diskListPage struct {
+	Disks         []diskListEntry `json:"disks"`
+	NextPageToken string          `json:"next_page_token"`
+}
+
+// listDiskPage 执行一页 disk list 并解析磁盘与下一页游标。
+func listDiskPage(t *testing.T, limit, pageToken string) diskListPage {
+	t.Helper()
+	cmd := exec.Command(getBowlBin(), "disk", "list", "--endpoint", getStorageEndpoint(), "--json", "--limit", limit, "--page-token", pageToken)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "bowl disk list 分页查询失败: %s", string(out))
+	var page diskListPage
+	require.NoError(t, json.Unmarshal(out, &page))
+	return page
 }
 
 // TestE2E_DiskCLI_Pagination 用两块固定磁盘线性验证 --limit 与 --page-token 分页契约。

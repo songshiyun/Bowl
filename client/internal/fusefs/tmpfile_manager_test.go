@@ -43,7 +43,7 @@ func TestTmpFileManager_CreateGetAttrAndInodeMapping(t *testing.T) {
 	require.NotZero(t, ino1&(uint64(1)<<63), "本地匿名 Inode 必须置最高位 1<<63")
 	require.NotNil(t, inode1)
 	require.Equal(t, ino1, inode1.GetIno())
-	require.Equal(t, uint64(0), inode1.GetGeneration())
+	require.Equal(t, uint64(1), inode1.GetGeneration())
 	require.Equal(t, uint32(syscall.S_IFREG|0o640), inode1.GetAttr().GetMode())
 	require.Equal(t, uint32(1000), inode1.GetAttr().GetUid())
 	require.Equal(t, uint32(1001), inode1.GetAttr().GetGid())
@@ -272,7 +272,7 @@ func (f *fakeMaterializer) CreateTmpInode(_ context.Context, parentIno uint64, n
 	f.createdName = name
 	inode = &storagev1.Inode{
 		Ino:        f.nextServerIno,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:  mode,
 			Uid:   uid,
@@ -301,7 +301,7 @@ func (f *fakeMaterializer) CommitTmpAttr(_ context.Context, serverIno, size uint
 	f.committedSize = size
 	return &storagev1.Inode{
 		Ino:        serverIno,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:  syscall.S_IFREG | 0o644,
 			Size:  size,
@@ -331,7 +331,7 @@ func (f *fakeMaterializer) LinkInode(_ context.Context, serverIno, _ uint64, nam
 	f.linkedNames = append(f.linkedNames, name)
 	return &storagev1.Inode{
 		Ino:        serverIno,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:  syscall.S_IFREG | 0o644,
 			Size:  f.committedSize,
@@ -666,7 +666,7 @@ func (f *fakeStorageClientForTmpFS) Mknod(_ context.Context, req *connect.Reques
 	ino := f.nextIno
 	inode := &storagev1.Inode{
 		Ino:        ino,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:  req.Msg.GetMode(),
 			Uid:   req.Msg.GetUid(),
@@ -697,7 +697,7 @@ func (f *fakeStorageClientForTmpFS) Create(_ context.Context, req *connect.Reque
 		ino = f.nextIno
 		f.inodes[ino] = &storagev1.Inode{
 			Ino:        ino,
-			Generation: 0,
+			Generation: 1,
 			Attr: &storagev1.InodeAttribute{
 				Mode:  syscall.S_IFREG | (req.Msg.GetMode() & 0o7777),
 				Uid:   req.Msg.GetUid(),
@@ -960,6 +960,7 @@ func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
 	}, "materialized.bin", &linkOut)
 	require.Equal(t, fuse.OK, st)
 	require.Equal(t, localIno, linkOut.NodeId)
+	require.Equal(t, createOut.Generation, linkOut.Generation, "FUSE_LINK 返回的 Generation 必须与 FUSE_TMPFILE 一致，防止内核 fuse_link 返回 EIO")
 
 	srvIno, st := fs.ToServerIno(localIno)
 	require.Equal(t, fuse.OK, st)

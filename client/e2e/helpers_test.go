@@ -74,28 +74,14 @@ func createTestDisk(t *testing.T, client storagev1connect.StorageServiceClient) 
 	return disk
 }
 
-// commitMain 创建当前 main 分支的不可变快照。
-func commitMain(t *testing.T, client storagev1connect.StorageServiceClient, diskID string) string {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	resp, err := client.Commit(ctx, connect.NewRequest(&storagev1.CommitRequest{DiskId: diskID, BranchName: "main"}))
-	require.NoError(t, err, "创建分支提交失败")
-	require.NotNil(t, resp.Msg.GetCommit())
-	id := resp.Msg.GetCommit().GetCommitId()
-	require.NotEmpty(t, id)
-	return id
-}
-
-// prepareSnapshot 通过可写挂载准备文件并提交，供只读挂载读取。
-func prepareSnapshot(t *testing.T, client storagev1connect.StorageServiceClient, diskID string, prepare func(string)) string {
+// prepareDiskFiles 通过可写挂载准备初始文件并优雅卸载，供后续只读挂载读取。
+func prepareDiskFiles(t *testing.T, diskID string, prepare func(string)) {
 	t.Helper()
 	mp := t.TempDir()
 	cmd, _, stderr := startBowlMount(t, getStorageEndpoint(), diskID, mp)
-	t.Cleanup(func() { stopBowlMountGracefully(t, cmd, mp) })
 	waitForMount(t, mp, "准备数据时挂载失败: %s", stderr.String())
 	prepare(mp)
-	return commitMain(t, client, diskID)
+	stopBowlMountGracefully(t, cmd, mp)
 }
 
 // isMounted 通过读取 /proc/self/mountinfo 确认目标路径是否为已生效的挂载点。

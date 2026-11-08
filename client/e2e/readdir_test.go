@@ -105,20 +105,11 @@ func TestE2E_ReadDir(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		diskID := disk.GetDiskId()
-		sid := uint64(time.Now().UnixNano())
-		_, err = storageClient.RenewSession(ctx, connect.NewRequest(&storagev1.RenewSessionRequest{SessionId: sid, DiskId: &diskID, ReadOnly: true}))
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			closeCtx, closeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer closeCancel()
-			_, closeErr := storageClient.CloseSession(closeCtx, connect.NewRequest(&storagev1.CloseSessionRequest{SessionId: sid}))
-			require.NoError(t, closeErr)
-		})
-		lookup, err := storageClient.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: 1, Name: []byte("bulk"), SessionId: &sid}))
+		lookup, err := storageClient.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{DiskId: diskID, ParentIno: 1, Name: []byte("bulk")}))
 		require.NoError(t, err)
 		bulkIno := lookup.Msg.GetInode().GetIno()
 
-		first, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: bulkIno, Offset: 0, Limit: 3, SessionId: &sid}))
+		first, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{DiskId: diskID, Ino: bulkIno, Offset: 0, Limit: 3}))
 		require.NoError(t, err)
 		require.Len(t, first.Msg.Entries, 3)
 		require.Equal(t, ".", string(first.Msg.Entries[0].Name))
@@ -127,7 +118,7 @@ func TestE2E_ReadDir(t *testing.T) {
 		next := first.Msg.Entries[2].GetNextOffset()
 		require.Equal(t, uint64(3), next)
 
-		second, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{Ino: bulkIno, Offset: next, Limit: 4096, SessionId: &sid}))
+		second, err := storageClient.ReadDir(ctx, connect.NewRequest(&storagev1.ReadDirRequest{DiskId: diskID, Ino: bulkIno, Offset: next, Limit: 4096}))
 		require.NoError(t, err)
 		require.Len(t, second.Msg.Entries, 3)
 		require.Equal(t, []string{bulkFileNames[1], bulkFileNames[2], bulkFileNames[3]}, []string{
