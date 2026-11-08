@@ -143,7 +143,7 @@ _Avoid_: Collision, Clash, DiffError
 _Avoid_: Compare, DeltaView, ChangeLog, PatchView
 
 **Blob (文件数据块)**:
-常规文件按 `1 MiB` 固定边界编号切分的数据分片载体（与 Linux FUSE `MaxWrite` 1:1 对齐），以不可变物理块文件（`blobs/<shard>/<blob_id>.blob`）存储于所属 Branch 或 Commit 目录内，并由 Pebble `DataKey` 维护轻量 `BlobRef` 引用索引；整块覆盖写直接写入新块文件并删除当前分支旧块文件，局部修改通过写时复制（CoW）生成新块文件替换旧块文件，跨分支与快照通过硬链接零拷贝共享。
+常规文件按 `256 KiB` 固定边界编号切分的逻辑数据分片载体（对齐云盘 SSD 最大 I/O 切片粒度），按实际字节长度追加合装于所属 Branch 或 Commit 目录下的 `64 MiB` 只追加封包文件（`packs/<pack_id>.pack`）内，并由 Pebble `DataKey` 维护 16 字节 `BlobRef`（`PackID`、包内偏移 `Offset` 与有效长度 `Length`）定位索引；跨分支与快照通过封口后的 `.pack` 硬链接零拷贝共享，覆写与删除产生的旧空间在 `.pack` 存活率低于水位线时通过搬迁回收。
 _Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 
 **Read (文件数据读取)**:
@@ -151,7 +151,7 @@ _Avoid_: Chunk, Slice, Block, Page, Cell, Sector, ObjectFile, Delta
 _Avoid_: FetchData, GetBytes, ReadFile, PullStream
 
 **Write (文件数据写入)**:
-可写客户端将写入改动提交至目标 Branch 存储引擎（块数据写入分支 `blobs/` 目录下的不可变块文件进入 OS Page Cache，轻量 `BlobRef` 与 Inode 元数据异步提交至 Pebble WAL）、按整棵 Disk 树跨分支同 Inode 最大逻辑体积去重核算配额，并在替换旧块时即时释放当前分支未共享块文件的写入操作。
+可写客户端将写入改动提交至目标 Branch 存储引擎（块数据按实际长度追加写入分支 `packs/` 目录下的活跃 `.pack` 封包文件进入 OS Page Cache，轻量 `BlobRef` 与 Inode 元数据异步提交至 Pebble WAL），并按整棵 Disk 树跨分支同 Inode 最大逻辑体积去重核算配额的写入操作。
 _Avoid_: PutData, WriteBytes, AppendFile, PushStream
 
 **CreateDisk (磁盘创建)**:
