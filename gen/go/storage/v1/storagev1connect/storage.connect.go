@@ -83,12 +83,9 @@ const (
 	// StorageServiceRemoveXattrProcedure is the fully-qualified name of the StorageService's
 	// RemoveXattr RPC.
 	StorageServiceRemoveXattrProcedure = "/storage.v1.StorageService/RemoveXattr"
-	// StorageServiceRenewSessionProcedure is the fully-qualified name of the StorageService's
-	// RenewSession RPC.
-	StorageServiceRenewSessionProcedure = "/storage.v1.StorageService/RenewSession"
-	// StorageServiceCloseSessionProcedure is the fully-qualified name of the StorageService's
-	// CloseSession RPC.
-	StorageServiceCloseSessionProcedure = "/storage.v1.StorageService/CloseSession"
+	// StorageServiceMountDiskProcedure is the fully-qualified name of the StorageService's MountDisk
+	// RPC.
+	StorageServiceMountDiskProcedure = "/storage.v1.StorageService/MountDisk"
 	// StorageServiceCreateDiskProcedure is the fully-qualified name of the StorageService's CreateDisk
 	// RPC.
 	StorageServiceCreateDiskProcedure = "/storage.v1.StorageService/CreateDisk"
@@ -105,32 +102,9 @@ const (
 	StorageServiceDeleteDiskProcedure = "/storage.v1.StorageService/DeleteDisk"
 	// StorageServiceStatFSProcedure is the fully-qualified name of the StorageService's StatFS RPC.
 	StorageServiceStatFSProcedure = "/storage.v1.StorageService/StatFS"
-	// StorageServiceCreateBranchProcedure is the fully-qualified name of the StorageService's
-	// CreateBranch RPC.
-	StorageServiceCreateBranchProcedure = "/storage.v1.StorageService/CreateBranch"
 	// StorageServiceReclaimOrphanProcedure is the fully-qualified name of the StorageService's
 	// ReclaimOrphan RPC.
 	StorageServiceReclaimOrphanProcedure = "/storage.v1.StorageService/ReclaimOrphan"
-	// StorageServiceListBranchesProcedure is the fully-qualified name of the StorageService's
-	// ListBranches RPC.
-	StorageServiceListBranchesProcedure = "/storage.v1.StorageService/ListBranches"
-	// StorageServiceDeleteBranchProcedure is the fully-qualified name of the StorageService's
-	// DeleteBranch RPC.
-	StorageServiceDeleteBranchProcedure = "/storage.v1.StorageService/DeleteBranch"
-	// StorageServiceCommitProcedure is the fully-qualified name of the StorageService's Commit RPC.
-	StorageServiceCommitProcedure = "/storage.v1.StorageService/Commit"
-	// StorageServiceRollbackProcedure is the fully-qualified name of the StorageService's Rollback RPC.
-	StorageServiceRollbackProcedure = "/storage.v1.StorageService/Rollback"
-	// StorageServiceMergeProcedure is the fully-qualified name of the StorageService's Merge RPC.
-	StorageServiceMergeProcedure = "/storage.v1.StorageService/Merge"
-	// StorageServiceResolveMergeProcedure is the fully-qualified name of the StorageService's
-	// ResolveMerge RPC.
-	StorageServiceResolveMergeProcedure = "/storage.v1.StorageService/ResolveMerge"
-	// StorageServiceAbortMergeProcedure is the fully-qualified name of the StorageService's AbortMerge
-	// RPC.
-	StorageServiceAbortMergeProcedure = "/storage.v1.StorageService/AbortMerge"
-	// StorageServiceDiffProcedure is the fully-qualified name of the StorageService's Diff RPC.
-	StorageServiceDiffProcedure = "/storage.v1.StorageService/Diff"
 )
 
 // StorageServiceClient is a client for the storage.v1.StorageService service.
@@ -259,15 +233,10 @@ type StorageServiceClient interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(context.Context, *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error)
-	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
-	// 续期成功返回刷新后的租约截止时间 expires_at。
-	RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error)
-	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标会话已不存在或已过期，按幂等成功返回。
-	CloseSession(context.Context, *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error)
+	// MountDisk 执行单盘挂载握手。
+	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
+	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
+	MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -285,35 +254,16 @@ type StorageServiceClient interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(context.Context, *connect.Request[v1.UpdateDiskRequest]) (*connect.Response[v1.UpdateDiskResponse], error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
-	// 接收目标节点的 uint64 ino，按 root_ino O(1) 查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
+	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(context.Context, *connect.Request[v1.StatFSRequest]) (*connect.Response[v1.StatFSResponse], error)
-	// CreateBranch 从已有分支或快照派生逻辑分支。
-	CreateBranch(context.Context, *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error)
 	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
 	ReclaimOrphan(context.Context, *connect.Request[v1.ReclaimOrphanRequest]) (*connect.Response[v1.ReclaimOrphanResponse], error)
-	// ListBranches 列出磁盘中的逻辑分支。
-	ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error)
-	// DeleteBranch 删除指定逻辑分支。
-	DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error)
-	// Commit 将分支工作区定格为快照。
-	Commit(context.Context, *connect.Request[v1.CommitRequest]) (*connect.Response[v1.CommitResponse], error)
-	// Rollback 在目标分支无活跃写端时回档。
-	Rollback(context.Context, *connect.Request[v1.RollbackRequest]) (*connect.Response[v1.RollbackResponse], error)
-	// Merge 在目标分支无活跃写端时执行三路合并。
-	Merge(context.Context, *connect.Request[v1.MergeRequest]) (*connect.Response[v1.MergeResponse], error)
-	// ResolveMerge 完成冲突物化后的合并。
-	ResolveMerge(context.Context, *connect.Request[v1.ResolveMergeRequest]) (*connect.Response[v1.ResolveMergeResponse], error)
-	// AbortMerge 放弃合并并恢复目标分支。
-	AbortMerge(context.Context, *connect.Request[v1.AbortMergeRequest]) (*connect.Response[v1.AbortMergeResponse], error)
-	// Diff 比较两个分支或快照的文件与数据块变化。
-	Diff(context.Context, *connect.Request[v1.DiffRequest]) (*connect.Response[v1.DiffResponse], error)
 }
 
 // NewStorageServiceClient constructs a client for the storage.v1.StorageService service. By
@@ -465,16 +415,10 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("RemoveXattr")),
 			connect.WithClientOptions(opts...),
 		),
-		renewSession: connect.NewClient[v1.RenewSessionRequest, v1.RenewSessionResponse](
+		mountDisk: connect.NewClient[v1.MountDiskRequest, v1.MountDiskResponse](
 			httpClient,
-			baseURL+StorageServiceRenewSessionProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("RenewSession")),
-			connect.WithClientOptions(opts...),
-		),
-		closeSession: connect.NewClient[v1.CloseSessionRequest, v1.CloseSessionResponse](
-			httpClient,
-			baseURL+StorageServiceCloseSessionProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("CloseSession")),
+			baseURL+StorageServiceMountDiskProcedure,
+			connect.WithSchema(storageServiceMethods.ByName("MountDisk")),
 			connect.WithClientOptions(opts...),
 		),
 		createDisk: connect.NewClient[v1.CreateDiskRequest, v1.CreateDiskResponse](
@@ -513,64 +457,10 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("StatFS")),
 			connect.WithClientOptions(opts...),
 		),
-		createBranch: connect.NewClient[v1.CreateBranchRequest, v1.CreateBranchResponse](
-			httpClient,
-			baseURL+StorageServiceCreateBranchProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("CreateBranch")),
-			connect.WithClientOptions(opts...),
-		),
 		reclaimOrphan: connect.NewClient[v1.ReclaimOrphanRequest, v1.ReclaimOrphanResponse](
 			httpClient,
 			baseURL+StorageServiceReclaimOrphanProcedure,
 			connect.WithSchema(storageServiceMethods.ByName("ReclaimOrphan")),
-			connect.WithClientOptions(opts...),
-		),
-		listBranches: connect.NewClient[v1.ListBranchesRequest, v1.ListBranchesResponse](
-			httpClient,
-			baseURL+StorageServiceListBranchesProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("ListBranches")),
-			connect.WithClientOptions(opts...),
-		),
-		deleteBranch: connect.NewClient[v1.DeleteBranchRequest, v1.DeleteBranchResponse](
-			httpClient,
-			baseURL+StorageServiceDeleteBranchProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("DeleteBranch")),
-			connect.WithClientOptions(opts...),
-		),
-		commit: connect.NewClient[v1.CommitRequest, v1.CommitResponse](
-			httpClient,
-			baseURL+StorageServiceCommitProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Commit")),
-			connect.WithClientOptions(opts...),
-		),
-		rollback: connect.NewClient[v1.RollbackRequest, v1.RollbackResponse](
-			httpClient,
-			baseURL+StorageServiceRollbackProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Rollback")),
-			connect.WithClientOptions(opts...),
-		),
-		merge: connect.NewClient[v1.MergeRequest, v1.MergeResponse](
-			httpClient,
-			baseURL+StorageServiceMergeProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Merge")),
-			connect.WithClientOptions(opts...),
-		),
-		resolveMerge: connect.NewClient[v1.ResolveMergeRequest, v1.ResolveMergeResponse](
-			httpClient,
-			baseURL+StorageServiceResolveMergeProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("ResolveMerge")),
-			connect.WithClientOptions(opts...),
-		),
-		abortMerge: connect.NewClient[v1.AbortMergeRequest, v1.AbortMergeResponse](
-			httpClient,
-			baseURL+StorageServiceAbortMergeProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("AbortMerge")),
-			connect.WithClientOptions(opts...),
-		),
-		diff: connect.NewClient[v1.DiffRequest, v1.DiffResponse](
-			httpClient,
-			baseURL+StorageServiceDiffProcedure,
-			connect.WithSchema(storageServiceMethods.ByName("Diff")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -601,24 +491,14 @@ type storageServiceClient struct {
 	getXattr      *connect.Client[v1.GetXattrRequest, v1.GetXattrResponse]
 	listXattr     *connect.Client[v1.ListXattrRequest, v1.ListXattrResponse]
 	removeXattr   *connect.Client[v1.RemoveXattrRequest, v1.RemoveXattrResponse]
-	renewSession  *connect.Client[v1.RenewSessionRequest, v1.RenewSessionResponse]
-	closeSession  *connect.Client[v1.CloseSessionRequest, v1.CloseSessionResponse]
+	mountDisk     *connect.Client[v1.MountDiskRequest, v1.MountDiskResponse]
 	createDisk    *connect.Client[v1.CreateDiskRequest, v1.CreateDiskResponse]
 	getDisk       *connect.Client[v1.GetDiskRequest, v1.GetDiskResponse]
 	listDisks     *connect.Client[v1.ListDisksRequest, v1.ListDisksResponse]
 	updateDisk    *connect.Client[v1.UpdateDiskRequest, v1.UpdateDiskResponse]
 	deleteDisk    *connect.Client[v1.DeleteDiskRequest, v1.DeleteDiskResponse]
 	statFS        *connect.Client[v1.StatFSRequest, v1.StatFSResponse]
-	createBranch  *connect.Client[v1.CreateBranchRequest, v1.CreateBranchResponse]
 	reclaimOrphan *connect.Client[v1.ReclaimOrphanRequest, v1.ReclaimOrphanResponse]
-	listBranches  *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
-	deleteBranch  *connect.Client[v1.DeleteBranchRequest, v1.DeleteBranchResponse]
-	commit        *connect.Client[v1.CommitRequest, v1.CommitResponse]
-	rollback      *connect.Client[v1.RollbackRequest, v1.RollbackResponse]
-	merge         *connect.Client[v1.MergeRequest, v1.MergeResponse]
-	resolveMerge  *connect.Client[v1.ResolveMergeRequest, v1.ResolveMergeResponse]
-	abortMerge    *connect.Client[v1.AbortMergeRequest, v1.AbortMergeResponse]
-	diff          *connect.Client[v1.DiffRequest, v1.DiffResponse]
 }
 
 // Lookup calls storage.v1.StorageService.Lookup.
@@ -736,14 +616,9 @@ func (c *storageServiceClient) RemoveXattr(ctx context.Context, req *connect.Req
 	return c.removeXattr.CallUnary(ctx, req)
 }
 
-// RenewSession calls storage.v1.StorageService.RenewSession.
-func (c *storageServiceClient) RenewSession(ctx context.Context, req *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error) {
-	return c.renewSession.CallUnary(ctx, req)
-}
-
-// CloseSession calls storage.v1.StorageService.CloseSession.
-func (c *storageServiceClient) CloseSession(ctx context.Context, req *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error) {
-	return c.closeSession.CallUnary(ctx, req)
+// MountDisk calls storage.v1.StorageService.MountDisk.
+func (c *storageServiceClient) MountDisk(ctx context.Context, req *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error) {
+	return c.mountDisk.CallUnary(ctx, req)
 }
 
 // CreateDisk calls storage.v1.StorageService.CreateDisk.
@@ -776,54 +651,9 @@ func (c *storageServiceClient) StatFS(ctx context.Context, req *connect.Request[
 	return c.statFS.CallUnary(ctx, req)
 }
 
-// CreateBranch calls storage.v1.StorageService.CreateBranch.
-func (c *storageServiceClient) CreateBranch(ctx context.Context, req *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error) {
-	return c.createBranch.CallUnary(ctx, req)
-}
-
 // ReclaimOrphan calls storage.v1.StorageService.ReclaimOrphan.
 func (c *storageServiceClient) ReclaimOrphan(ctx context.Context, req *connect.Request[v1.ReclaimOrphanRequest]) (*connect.Response[v1.ReclaimOrphanResponse], error) {
 	return c.reclaimOrphan.CallUnary(ctx, req)
-}
-
-// ListBranches calls storage.v1.StorageService.ListBranches.
-func (c *storageServiceClient) ListBranches(ctx context.Context, req *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error) {
-	return c.listBranches.CallUnary(ctx, req)
-}
-
-// DeleteBranch calls storage.v1.StorageService.DeleteBranch.
-func (c *storageServiceClient) DeleteBranch(ctx context.Context, req *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error) {
-	return c.deleteBranch.CallUnary(ctx, req)
-}
-
-// Commit calls storage.v1.StorageService.Commit.
-func (c *storageServiceClient) Commit(ctx context.Context, req *connect.Request[v1.CommitRequest]) (*connect.Response[v1.CommitResponse], error) {
-	return c.commit.CallUnary(ctx, req)
-}
-
-// Rollback calls storage.v1.StorageService.Rollback.
-func (c *storageServiceClient) Rollback(ctx context.Context, req *connect.Request[v1.RollbackRequest]) (*connect.Response[v1.RollbackResponse], error) {
-	return c.rollback.CallUnary(ctx, req)
-}
-
-// Merge calls storage.v1.StorageService.Merge.
-func (c *storageServiceClient) Merge(ctx context.Context, req *connect.Request[v1.MergeRequest]) (*connect.Response[v1.MergeResponse], error) {
-	return c.merge.CallUnary(ctx, req)
-}
-
-// ResolveMerge calls storage.v1.StorageService.ResolveMerge.
-func (c *storageServiceClient) ResolveMerge(ctx context.Context, req *connect.Request[v1.ResolveMergeRequest]) (*connect.Response[v1.ResolveMergeResponse], error) {
-	return c.resolveMerge.CallUnary(ctx, req)
-}
-
-// AbortMerge calls storage.v1.StorageService.AbortMerge.
-func (c *storageServiceClient) AbortMerge(ctx context.Context, req *connect.Request[v1.AbortMergeRequest]) (*connect.Response[v1.AbortMergeResponse], error) {
-	return c.abortMerge.CallUnary(ctx, req)
-}
-
-// Diff calls storage.v1.StorageService.Diff.
-func (c *storageServiceClient) Diff(ctx context.Context, req *connect.Request[v1.DiffRequest]) (*connect.Response[v1.DiffResponse], error) {
-	return c.diff.CallUnary(ctx, req)
 }
 
 // StorageServiceHandler is an implementation of the storage.v1.StorageService service.
@@ -952,15 +782,10 @@ type StorageServiceHandler interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(context.Context, *connect.Request[v1.RemoveXattrRequest]) (*connect.Response[v1.RemoveXattrResponse], error)
-	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
-	// 续期成功返回刷新后的租约截止时间 expires_at。
-	RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error)
-	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标会话已不存在或已过期，按幂等成功返回。
-	CloseSession(context.Context, *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error)
+	// MountDisk 执行单盘挂载握手。
+	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
+	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
+	MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -978,35 +803,16 @@ type StorageServiceHandler interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(context.Context, *connect.Request[v1.UpdateDiskRequest]) (*connect.Response[v1.UpdateDiskResponse], error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
-	// 接收目标节点的 uint64 ino，按 root_ino O(1) 查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
+	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(context.Context, *connect.Request[v1.StatFSRequest]) (*connect.Response[v1.StatFSResponse], error)
-	// CreateBranch 从已有分支或快照派生逻辑分支。
-	CreateBranch(context.Context, *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error)
 	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
 	ReclaimOrphan(context.Context, *connect.Request[v1.ReclaimOrphanRequest]) (*connect.Response[v1.ReclaimOrphanResponse], error)
-	// ListBranches 列出磁盘中的逻辑分支。
-	ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error)
-	// DeleteBranch 删除指定逻辑分支。
-	DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error)
-	// Commit 将分支工作区定格为快照。
-	Commit(context.Context, *connect.Request[v1.CommitRequest]) (*connect.Response[v1.CommitResponse], error)
-	// Rollback 在目标分支无活跃写端时回档。
-	Rollback(context.Context, *connect.Request[v1.RollbackRequest]) (*connect.Response[v1.RollbackResponse], error)
-	// Merge 在目标分支无活跃写端时执行三路合并。
-	Merge(context.Context, *connect.Request[v1.MergeRequest]) (*connect.Response[v1.MergeResponse], error)
-	// ResolveMerge 完成冲突物化后的合并。
-	ResolveMerge(context.Context, *connect.Request[v1.ResolveMergeRequest]) (*connect.Response[v1.ResolveMergeResponse], error)
-	// AbortMerge 放弃合并并恢复目标分支。
-	AbortMerge(context.Context, *connect.Request[v1.AbortMergeRequest]) (*connect.Response[v1.AbortMergeResponse], error)
-	// Diff 比较两个分支或快照的文件与数据块变化。
-	Diff(context.Context, *connect.Request[v1.DiffRequest]) (*connect.Response[v1.DiffResponse], error)
 }
 
 // NewStorageServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -1154,16 +960,10 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("RemoveXattr")),
 		connect.WithHandlerOptions(opts...),
 	)
-	storageServiceRenewSessionHandler := connect.NewUnaryHandler(
-		StorageServiceRenewSessionProcedure,
-		svc.RenewSession,
-		connect.WithSchema(storageServiceMethods.ByName("RenewSession")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceCloseSessionHandler := connect.NewUnaryHandler(
-		StorageServiceCloseSessionProcedure,
-		svc.CloseSession,
-		connect.WithSchema(storageServiceMethods.ByName("CloseSession")),
+	storageServiceMountDiskHandler := connect.NewUnaryHandler(
+		StorageServiceMountDiskProcedure,
+		svc.MountDisk,
+		connect.WithSchema(storageServiceMethods.ByName("MountDisk")),
 		connect.WithHandlerOptions(opts...),
 	)
 	storageServiceCreateDiskHandler := connect.NewUnaryHandler(
@@ -1202,64 +1002,10 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("StatFS")),
 		connect.WithHandlerOptions(opts...),
 	)
-	storageServiceCreateBranchHandler := connect.NewUnaryHandler(
-		StorageServiceCreateBranchProcedure,
-		svc.CreateBranch,
-		connect.WithSchema(storageServiceMethods.ByName("CreateBranch")),
-		connect.WithHandlerOptions(opts...),
-	)
 	storageServiceReclaimOrphanHandler := connect.NewUnaryHandler(
 		StorageServiceReclaimOrphanProcedure,
 		svc.ReclaimOrphan,
 		connect.WithSchema(storageServiceMethods.ByName("ReclaimOrphan")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceListBranchesHandler := connect.NewUnaryHandler(
-		StorageServiceListBranchesProcedure,
-		svc.ListBranches,
-		connect.WithSchema(storageServiceMethods.ByName("ListBranches")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceDeleteBranchHandler := connect.NewUnaryHandler(
-		StorageServiceDeleteBranchProcedure,
-		svc.DeleteBranch,
-		connect.WithSchema(storageServiceMethods.ByName("DeleteBranch")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceCommitHandler := connect.NewUnaryHandler(
-		StorageServiceCommitProcedure,
-		svc.Commit,
-		connect.WithSchema(storageServiceMethods.ByName("Commit")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceRollbackHandler := connect.NewUnaryHandler(
-		StorageServiceRollbackProcedure,
-		svc.Rollback,
-		connect.WithSchema(storageServiceMethods.ByName("Rollback")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceMergeHandler := connect.NewUnaryHandler(
-		StorageServiceMergeProcedure,
-		svc.Merge,
-		connect.WithSchema(storageServiceMethods.ByName("Merge")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceResolveMergeHandler := connect.NewUnaryHandler(
-		StorageServiceResolveMergeProcedure,
-		svc.ResolveMerge,
-		connect.WithSchema(storageServiceMethods.ByName("ResolveMerge")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceAbortMergeHandler := connect.NewUnaryHandler(
-		StorageServiceAbortMergeProcedure,
-		svc.AbortMerge,
-		connect.WithSchema(storageServiceMethods.ByName("AbortMerge")),
-		connect.WithHandlerOptions(opts...),
-	)
-	storageServiceDiffHandler := connect.NewUnaryHandler(
-		StorageServiceDiffProcedure,
-		svc.Diff,
-		connect.WithSchema(storageServiceMethods.ByName("Diff")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/storage.v1.StorageService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1310,10 +1056,8 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceListXattrHandler.ServeHTTP(w, r)
 		case StorageServiceRemoveXattrProcedure:
 			storageServiceRemoveXattrHandler.ServeHTTP(w, r)
-		case StorageServiceRenewSessionProcedure:
-			storageServiceRenewSessionHandler.ServeHTTP(w, r)
-		case StorageServiceCloseSessionProcedure:
-			storageServiceCloseSessionHandler.ServeHTTP(w, r)
+		case StorageServiceMountDiskProcedure:
+			storageServiceMountDiskHandler.ServeHTTP(w, r)
 		case StorageServiceCreateDiskProcedure:
 			storageServiceCreateDiskHandler.ServeHTTP(w, r)
 		case StorageServiceGetDiskProcedure:
@@ -1326,26 +1070,8 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceDeleteDiskHandler.ServeHTTP(w, r)
 		case StorageServiceStatFSProcedure:
 			storageServiceStatFSHandler.ServeHTTP(w, r)
-		case StorageServiceCreateBranchProcedure:
-			storageServiceCreateBranchHandler.ServeHTTP(w, r)
 		case StorageServiceReclaimOrphanProcedure:
 			storageServiceReclaimOrphanHandler.ServeHTTP(w, r)
-		case StorageServiceListBranchesProcedure:
-			storageServiceListBranchesHandler.ServeHTTP(w, r)
-		case StorageServiceDeleteBranchProcedure:
-			storageServiceDeleteBranchHandler.ServeHTTP(w, r)
-		case StorageServiceCommitProcedure:
-			storageServiceCommitHandler.ServeHTTP(w, r)
-		case StorageServiceRollbackProcedure:
-			storageServiceRollbackHandler.ServeHTTP(w, r)
-		case StorageServiceMergeProcedure:
-			storageServiceMergeHandler.ServeHTTP(w, r)
-		case StorageServiceResolveMergeProcedure:
-			storageServiceResolveMergeHandler.ServeHTTP(w, r)
-		case StorageServiceAbortMergeProcedure:
-			storageServiceAbortMergeHandler.ServeHTTP(w, r)
-		case StorageServiceDiffProcedure:
-			storageServiceDiffHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1447,12 +1173,8 @@ func (UnimplementedStorageServiceHandler) RemoveXattr(context.Context, *connect.
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.RemoveXattr is not implemented"))
 }
 
-func (UnimplementedStorageServiceHandler) RenewSession(context.Context, *connect.Request[v1.RenewSessionRequest]) (*connect.Response[v1.RenewSessionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.RenewSession is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) CloseSession(context.Context, *connect.Request[v1.CloseSessionRequest]) (*connect.Response[v1.CloseSessionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.CloseSession is not implemented"))
+func (UnimplementedStorageServiceHandler) MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.MountDisk is not implemented"))
 }
 
 func (UnimplementedStorageServiceHandler) CreateDisk(context.Context, *connect.Request[v1.CreateDiskRequest]) (*connect.Response[v1.CreateDiskResponse], error) {
@@ -1479,42 +1201,6 @@ func (UnimplementedStorageServiceHandler) StatFS(context.Context, *connect.Reque
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.StatFS is not implemented"))
 }
 
-func (UnimplementedStorageServiceHandler) CreateBranch(context.Context, *connect.Request[v1.CreateBranchRequest]) (*connect.Response[v1.CreateBranchResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.CreateBranch is not implemented"))
-}
-
 func (UnimplementedStorageServiceHandler) ReclaimOrphan(context.Context, *connect.Request[v1.ReclaimOrphanRequest]) (*connect.Response[v1.ReclaimOrphanResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.ReclaimOrphan is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) ListBranches(context.Context, *connect.Request[v1.ListBranchesRequest]) (*connect.Response[v1.ListBranchesResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.ListBranches is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) DeleteBranch(context.Context, *connect.Request[v1.DeleteBranchRequest]) (*connect.Response[v1.DeleteBranchResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.DeleteBranch is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) Commit(context.Context, *connect.Request[v1.CommitRequest]) (*connect.Response[v1.CommitResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Commit is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) Rollback(context.Context, *connect.Request[v1.RollbackRequest]) (*connect.Response[v1.RollbackResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Rollback is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) Merge(context.Context, *connect.Request[v1.MergeRequest]) (*connect.Response[v1.MergeResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Merge is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) ResolveMerge(context.Context, *connect.Request[v1.ResolveMergeRequest]) (*connect.Response[v1.ResolveMergeResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.ResolveMerge is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) AbortMerge(context.Context, *connect.Request[v1.AbortMergeRequest]) (*connect.Response[v1.AbortMergeResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.AbortMerge is not implemented"))
-}
-
-func (UnimplementedStorageServiceHandler) Diff(context.Context, *connect.Request[v1.DiffRequest]) (*connect.Response[v1.DiffResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.Diff is not implemented"))
 }
