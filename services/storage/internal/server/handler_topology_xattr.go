@@ -6,32 +6,45 @@ import (
 	"connectrpc.com/connect"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/services/storage/internal/meta"
+	"github.com/starsrc/bowl/services/storage/internal/store"
 )
 
 // Link 创建硬链接，返回更新后的 Inode 实体元数据与内核缓存超时时长。
 func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRequest]) (*connect.Response[storagev1.LinkResponse], error) {
-	inode, err := s.metaManager.Link(ctx, meta.LinkParams{
-		SessionID:    req.Msg.SessionId,
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	attr, err := actor.Link(store.LinkReq{
 		Ino:          req.Msg.GetIno(),
 		NewParentIno: req.Msg.GetNewParentIno(),
 		NewName:      req.Msg.GetNewName(),
+		Epoch:        req.Msg.GetEpoch(),
 	})
 	if err != nil {
 		return nil, toConnectError(err)
 	}
 
 	return connect.NewResponse(&storagev1.LinkResponse{
-		Inode:               toProtoInode(inode),
-		EntryTimeoutSeconds: inode.EntryTimeoutSeconds,
-		AttrTimeoutSeconds:  inode.AttrTimeoutSeconds,
+		Inode:               toProtoInode(&attr),
+		EntryTimeoutSeconds: s.control.EntryTimeoutForMode(attr.Mode),
+		AttrTimeoutSeconds:  s.control.AttrTimeoutSeconds(),
 	}), nil
 }
 
 // Unlink 删除指定父目录下的非目录项（解链）。
 func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.UnlinkRequest]) (*connect.Response[storagev1.UnlinkResponse], error) {
-	err := s.metaManager.Unlink(ctx, req.Msg.SessionId, req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetOpenInClient())
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
 	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if err := actor.Unlink(req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetOpenInClient(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -40,8 +53,14 @@ func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.Unli
 
 // Rmdir 移除指定父目录下的空目录项。
 func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.RmdirRequest]) (*connect.Response[storagev1.RmdirResponse], error) {
-	err := s.metaManager.Rmdir(ctx, req.Msg.SessionId, req.Msg.GetParentIno(), req.Msg.GetName())
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
 	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if err := actor.Rmdir(req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -50,14 +69,21 @@ func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.Rmdir
 
 // Rename 执行原子文件/目录重命名、移动或双向交换。
 func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.RenameRequest]) (*connect.Response[storagev1.RenameResponse], error) {
-	err := s.metaManager.Rename(ctx, meta.RenameParams{
-		SessionID:          req.Msg.SessionId,
-		OldParentIno:       req.Msg.GetOldParentIno(),
-		OldName:            req.Msg.GetOldName(),
-		NewParentIno:       req.Msg.GetNewParentIno(),
-		NewName:            req.Msg.GetNewName(),
-		Flags:              req.Msg.GetFlags(),
-		TargetOpenInClient: req.Msg.GetTargetOpenInClient(),
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	err = actor.Rename(store.RenameReq{
+		OldParentIno:     req.Msg.GetOldParentIno(),
+		OldName:          req.Msg.GetOldName(),
+		NewParentIno:     req.Msg.GetNewParentIno(),
+		NewName:          req.Msg.GetNewName(),
+		Flags:            req.Msg.GetFlags(),
+		TargetOpenHandle: req.Msg.GetTargetOpenInClient(),
+		Epoch:            req.Msg.GetEpoch(),
 	})
 	if err != nil {
 		return nil, toConnectError(err)
@@ -68,14 +94,14 @@ func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.Rena
 
 // SetXattr 设置目标节点的扩展属性键值。
 func (s *Server) SetXattr(ctx context.Context, req *connect.Request[storagev1.SetXattrRequest]) (*connect.Response[storagev1.SetXattrResponse], error) {
-	err := s.metaManager.SetXattr(ctx, meta.SetXattrParams{
-		SessionID: req.Msg.SessionId,
-		Ino:       req.Msg.GetIno(),
-		Name:      req.Msg.GetName(),
-		Value:     req.Msg.GetValue(),
-		Flags:     req.Msg.GetFlags(),
-	})
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
 	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if err := actor.SetXattr(req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetValue(), req.Msg.GetFlags(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -84,7 +110,11 @@ func (s *Server) SetXattr(ctx context.Context, req *connect.Request[storagev1.Se
 
 // GetXattr 获取目标节点指定扩展属性键的属性值。
 func (s *Server) GetXattr(ctx context.Context, req *connect.Request[storagev1.GetXattrRequest]) (*connect.Response[storagev1.GetXattrResponse], error) {
-	val, err := s.metaManager.GetXattr(ctx, req.Msg.SessionId, req.Msg.GetIno(), req.Msg.GetName())
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	val, err := actor.GetXattr(req.Msg.GetIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -96,7 +126,11 @@ func (s *Server) GetXattr(ctx context.Context, req *connect.Request[storagev1.Ge
 
 // ListXattr 列出目标节点绑定的所有扩展属性名称列表。
 func (s *Server) ListXattr(ctx context.Context, req *connect.Request[storagev1.ListXattrRequest]) (*connect.Response[storagev1.ListXattrResponse], error) {
-	names, err := s.metaManager.ListXattr(ctx, req.Msg.SessionId, req.Msg.GetIno())
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	names, err := actor.ListXattr(req.Msg.GetIno())
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -108,10 +142,31 @@ func (s *Server) ListXattr(ctx context.Context, req *connect.Request[storagev1.L
 
 // RemoveXattr 移除目标节点指定的扩展属性键。
 func (s *Server) RemoveXattr(ctx context.Context, req *connect.Request[storagev1.RemoveXattrRequest]) (*connect.Response[storagev1.RemoveXattrResponse], error) {
-	err := s.metaManager.RemoveXattr(ctx, req.Msg.SessionId, req.Msg.GetIno(), req.Msg.GetName())
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
 	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if err := actor.RemoveXattr(req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
 	return connect.NewResponse(&storagev1.RemoveXattrResponse{}), nil
+}
+
+// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
+func (s *Server) ReclaimOrphan(ctx context.Context, req *connect.Request[storagev1.ReclaimOrphanRequest]) (*connect.Response[storagev1.ReclaimOrphanResponse], error) {
+	if err := validateWriteEpoch(req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	actor, err := s.control.Actor(ctx, req.Msg.GetDiskId())
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if err := actor.PurgeOrphanInode(req.Msg.GetIno(), req.Msg.GetEpoch()); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.ReclaimOrphanResponse{}), nil
 }
