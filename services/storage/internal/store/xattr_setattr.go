@@ -188,7 +188,6 @@ func (s *StoreActor) mutateSetXattrCmd(cmd *writeCmd) {
 
 	BatchSetXattrDeferred(s.batch, op.ino, op.name, op.value)
 	_ = BatchSetInodeDeferred(s.batch, op.inode)
-	BatchSetDirtyDeferred(s.batch, op.ino)
 }
 
 // GetXattr 在并发直读快路径（lifecycleMu.RLock()）直接调用 db.Get(XattrKey) 读取节点扩展属性值。
@@ -333,7 +332,6 @@ func (s *StoreActor) mutateRemoveXattrCmd(cmd *writeCmd) {
 
 	BatchDeleteXattrDeferred(s.batch, op.ino, op.name)
 	_ = BatchSetInodeDeferred(s.batch, op.inode)
-	BatchSetDirtyDeferred(s.batch, op.ino)
 }
 
 func validateSetAttrReq(req SetAttrReq) error {
@@ -534,6 +532,5 @@ func (s *StoreActor) mutateSetAttrCmd(cmd *writeCmd) {
 	}
 
 	_ = BatchSetInodeDeferred(s.batch, op.inode)
-	BatchSetDirtyDeferred(s.batch, op.ino)
 	op.attr = op.inode.ToAttribute()
 }

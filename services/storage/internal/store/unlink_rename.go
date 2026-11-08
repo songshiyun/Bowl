@@ -156,7 +156,6 @@ func (s *StoreActor) applyInodeReclaimPlan(plan *inodeReclaimPlan) {
 	if plan.staleOnAlive {
 		if plan.hasOrphan {
 			BatchDeleteOrphanDeferred(s.batch, plan.ino)
-			BatchSetDirtyDeferred(s.batch, plan.ino)
 		}
 		return
 	}
@@ -166,7 +165,6 @@ func (s *StoreActor) applyInodeReclaimPlan(plan *inodeReclaimPlan) {
 		BatchDeleteDeferred(s.batch, k)
 	}
 	s.deleteDataKeyEntries(plan.dataKeys)
-	BatchSetDirtyDeferred(s.batch, plan.ino)
 	s.discardDirtyAtime(plan.ino)
 	if plan.hasInode {
 		s.stat.Inodes -= min(s.stat.Inodes, 1)
@@ -268,8 +266,6 @@ func (s *StoreActor) mutateRmdirCmd(cmd *writeCmd) {
 		BatchDeleteDeferred(s.batch, k)
 	}
 	_ = BatchSetInodeDeferred(s.batch, op.parent)
-	BatchSetDirtyDeferred(s.batch, op.parentIno)
-	BatchSetDirtyDeferred(s.batch, op.target.Ino)
 
 	s.stat.Inodes -= min(s.stat.Inodes, 1)
 	s.stat.LogicalBytes -= min(s.stat.LogicalBytes, op.target.Size)
@@ -376,7 +372,6 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 
 	BatchDeleteEntryDeferred(s.batch, op.parentIno, op.name)
 	_ = BatchSetInodeDeferred(s.batch, op.parent)
-	BatchSetDirtyDeferred(s.batch, op.parentIno)
 
 	if op.target.Nlink > 1 {
 		op.target.Nlink--
@@ -384,7 +379,6 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 		op.target.WriteSeq = seq
 		_ = BatchSetInodeDeferred(s.batch, op.target)
 		BatchDeleteOrphanDeferred(s.batch, op.target.Ino)
-		BatchSetDirtyDeferred(s.batch, op.target.Ino)
 		return
 	}
 
@@ -394,7 +388,6 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 		op.target.WriteSeq = seq
 		_ = BatchSetInodeDeferred(s.batch, op.target)
 		BatchSetOrphanDeferred(s.batch, op.target.Ino)
-		BatchSetDirtyDeferred(s.batch, op.target.Ino)
 		return
 	}
 
@@ -817,8 +810,6 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 		op.newInode.WriteSeq = seq
 		_ = BatchSetInodeDeferred(s.batch, op.oldInode)
 		_ = BatchSetInodeDeferred(s.batch, op.newInode)
-		BatchSetDirtyDeferred(s.batch, op.oldInode.Ino)
-		BatchSetDirtyDeferred(s.batch, op.newInode.Ino)
 	} else {
 		BatchDeleteEntryDeferred(s.batch, req.OldParentIno, req.OldName)
 		BatchSetEntryDeferred(s.batch, req.NewParentIno, req.NewName, Entry{
@@ -831,7 +822,6 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 		op.oldInode.Ctime = nowNano
 		op.oldInode.WriteSeq = seq
 		_ = BatchSetInodeDeferred(s.batch, op.oldInode)
-		BatchSetDirtyDeferred(s.batch, op.oldInode.Ino)
 
 		if op.oldIsDir {
 			if op.crossParent {
@@ -858,14 +848,12 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 				op.newInode.WriteSeq = seq
 				_ = BatchSetInodeDeferred(s.batch, op.newInode)
 				BatchDeleteOrphanDeferred(s.batch, op.newInode.Ino)
-				BatchSetDirtyDeferred(s.batch, op.newInode.Ino)
 			default:
 				op.newInode.Nlink = 0
 				op.newInode.Ctime = nowNano
 				op.newInode.WriteSeq = seq
 				_ = BatchSetInodeDeferred(s.batch, op.newInode)
 				BatchSetOrphanDeferred(s.batch, op.newInode.Ino)
-				BatchSetDirtyDeferred(s.batch, op.newInode.Ino)
 			}
 		}
 	}
@@ -874,13 +862,11 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 	op.oldParent.Ctime = nowNano
 	op.oldParent.WriteSeq = seq
 	_ = BatchSetInodeDeferred(s.batch, op.oldParent)
-	BatchSetDirtyDeferred(s.batch, req.OldParentIno)
 
 	if op.crossParent {
 		op.newParent.Mtime = nowNano
 		op.newParent.Ctime = nowNano
 		op.newParent.WriteSeq = seq
 		_ = BatchSetInodeDeferred(s.batch, op.newParent)
-		BatchSetDirtyDeferred(s.batch, req.NewParentIno)
 	}
 }

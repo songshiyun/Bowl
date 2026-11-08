@@ -14,11 +14,14 @@ func TestCompactPacksLowWatermarkRelocationAndDualPersistenceBarrier(t *testing.
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-compact-basic",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
+	defer func() {
+		if actor != nil {
+			require.NoError(t, actor.Close())
+		}
+	}()
 
 	// 单个 .pack 容量上限设为 2 个 256 KiB 块（512 KiB）
 	actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
@@ -53,10 +56,17 @@ func TestCompactPacksLowWatermarkRelocationAndDualPersistenceBarrier(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), actor.Blobs().ActivePackID())
 
-	// 3. 封口 Pack 2，随后 Unlink(f2.bin)：
+	// 3. 重新打开实例使 Pack 1 与 Pack 2 均处于封口状态，随后 Unlink(f2.bin)：
 	//    - Pack 1: LiveBytes = 256 KiB, TotalBytes = 512 KiB (50% <= 50%, 命中搬迁)
 	//    - Pack 2: LiveBytes = 384 KiB, TotalBytes = 512 KiB (75% > 50%, 不搬迁)
-	require.NoError(t, actor.SealActivePack())
+	require.NoError(t, actor.Close())
+	actor, err = store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-compact-basic",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+	actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f2.bin"), false))
 
 	meta1Before, ok := readPackMetaFromDB(t, actor, 1)
@@ -108,11 +118,14 @@ func TestCompactPacksPhaseACASFenceAgainstConcurrentOverwriteTruncateAndUnlink(t
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-compact-cas",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
+	defer func() {
+		if actor != nil {
+			require.NoError(t, actor.Close())
+		}
+	}()
 
 	// 在 Pack 1 中写入 5 个文件：
 	// - fDead: 256 KiB (将在封口后先删除，使 Pack 1 存活率降至 <= 50% 触发搬迁)
@@ -139,7 +152,13 @@ func TestCompactPacksPhaseACASFenceAgainstConcurrentOverwriteTruncateAndUnlink(t
 	fUnlink := createAndWrite("unlink.bin", 0xEE, 32768)
 
 	require.Equal(t, uint64(1), actor.Blobs().ActivePackID())
-	require.NoError(t, actor.SealActivePack())
+	require.NoError(t, actor.Close())
+	actor, err = store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-compact-cas",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
 
 	// 删除 dead.bin，使 Pack 1 的 LiveBytes = 4 * 32 KiB = 128 KiB, TotalBytes = 384 KiB (LiveBytes * 2 <= TotalBytes)
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("dead.bin"), false))
@@ -215,7 +234,6 @@ func TestCompactPacksEdgeCasesReadOnlyAndClosed(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-compact-edge",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
@@ -231,69 +249,48 @@ func TestCompactPacksEdgeCasesReadOnlyAndClosed(t *testing.T) {
 	roActor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-compact-edge",
-		BranchID: "main",
 		ReadOnly: true,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, roActor.Close()) }()
 	require.ErrorIs(t, roActor.CompactPacks(), store.ErrReadOnly)
-	require.ErrorIs(t, roActor.SealActivePack(), store.ErrReadOnly)
 }
 
-func TestSealActivePackImmediatelyReclaimsZeroLivePackAndLinkAllPacksTo(t *testing.T) {
-	srcDir := t.TempDir()
-	srcActor, err := store.Open(store.Options{
-		Dir:      srcDir,
+func TestCompactPacksReclaimsZeroLivePackAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	actor, err := store.Open(store.Options{
+		Dir:      dir,
 		DiskID:   "disk-seal-reap",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, srcActor.Close()) }()
 
-	// 1. 在 Pack 1 写入临时文件后立即删除，使活跃包 Pack 1 的 LiveBytes 归零
-	tmpFile, err := srcActor.Create(store.CreateReq{
+	// 1. 在活跃包 Pack 1 写入临时文件后立即删除，使活跃包 Pack 1 的 LiveBytes 归零（作为当前活跃包暂不删除）
+	tmpFile, err := actor.Create(store.CreateReq{
 		ParentIno: store.RootIno,
 		Name:      []byte("ephemeral.bin"),
 		Mode:      store.S_IFREG | 0o644,
 	})
 	require.NoError(t, err)
-	_, _, err = srcActor.Write(tmpFile.Ino, 0, bytes.Repeat([]byte{0x7A}, 65536))
+	_, _, err = actor.Write(tmpFile.Ino, 0, bytes.Repeat([]byte{0x7A}, 65536))
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), srcActor.Blobs().ActivePackID())
-	require.NoError(t, srcActor.Unlink(store.RootIno, []byte("ephemeral.bin"), false))
+	require.Equal(t, uint64(1), actor.Blobs().ActivePackID())
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("ephemeral.bin"), false))
+	require.NoError(t, actor.Close())
 
-	// 2. 调用 srcActor.SealActivePack()：必须当场清理 sys:pack:1、同步 WAL 并物理删除 0000000000000001.pack
-	require.NoError(t, srcActor.SealActivePack())
-	require.Equal(t, uint64(0), srcActor.Blobs().ActivePackID())
-	_, ok := readPackMetaFromDB(t, srcActor, 1)
-	require.False(t, ok, "SealActivePack 后 0 活字节包的 sys:pack:1 必须当场从 Pebble 删除")
-	require.False(t, srcActor.Blobs().Exists(1), "SealActivePack 后 0 活字节包的物理文件必须当场删除")
-
-	// 3. 写入真实存活文件至 Pack 2，并通过 LinkAllPacksTo 硬链接至子分支 dstActor
-	liveFile, err := srcActor.Create(store.CreateReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("live.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
-	livePayload := bytes.Repeat([]byte{0x9B}, 32768)
-	_, _, err = srcActor.Write(liveFile.Ino, 0, livePayload)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), srcActor.Blobs().ActivePackID())
-
-	dstActor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
+	// 2. 重启实例后 Pack 1 已成封口包且 LiveBytes == 0，调用 CompactPacks 必须当场清理 sys:pack:1、同步 WAL 并物理删除 0000000000000001.pack
+	reopened, err := store.Open(store.Options{
+		Dir:      dir,
 		DiskID:   "disk-seal-reap",
-		BranchID: "child",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, dstActor.Close()) }()
+	defer func() { require.NoError(t, reopened.Close()) }()
 
-	require.NoError(t, srcActor.LinkAllPacksTo(dstActor))
-	require.False(t, dstActor.Blobs().Exists(1), "已回收的全死包 Pack 1 绝不应被硬链接至目标分支")
-	require.True(t, dstActor.Blobs().Exists(2), "存活包 Pack 2 必须被封口并硬链接至目标分支")
+	require.NoError(t, reopened.CompactPacks())
+	_, ok := readPackMetaFromDB(t, reopened, 1)
+	require.False(t, ok, "CompactPacks 后 0 活字节包的 sys:pack:1 必须当场从 Pebble 删除")
+	require.False(t, reopened.Blobs().Exists(1), "CompactPacks 后 0 活字节包的物理文件必须当场删除")
 }
 
 func TestStageOnePrewritePhaseAFailureRecordsTotalBytesForCompaction(t *testing.T) {
@@ -301,11 +298,14 @@ func TestStageOnePrewritePhaseAFailureRecordsTotalBytesForCompaction(t *testing.
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-phase-a-dead-bytes",
-		BranchID: "main",
 		MaxBytes: 64 * 1024, // 配额上限 64 KiB
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
+	defer func() {
+		if actor != nil {
+			require.NoError(t, actor.Close())
+		}
+	}()
 
 	f1, err := actor.Create(store.CreateReq{
 		ParentIno: store.RootIno,
@@ -329,8 +329,14 @@ func TestStageOnePrewritePhaseAFailureRecordsTotalBytesForCompaction(t *testing.
 	require.Equal(t, uint64(32*1024), meta1.LiveBytes)
 	require.Equal(t, uint64(32*1024+store.BlobSize), meta1.TotalBytes, "Phase A 失败的 Stage 1 预写块必须推进 TotalBytes")
 
-	// 4. 封口 Pack 1 后执行 CompactPacks：由于 LiveBytes (32 KiB) * 2 <= TotalBytes (288 KiB)，Pack 1 必须被识别为低水位包并搬迁回收
-	require.NoError(t, actor.SealActivePack())
+	// 4. 重新打开使 Pack 1 封口后执行 CompactPacks：由于 LiveBytes (32 KiB) * 2 <= TotalBytes (288 KiB)，Pack 1 必须被识别为低水位包并搬迁回收
+	require.NoError(t, actor.Close())
+	actor, err = store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-phase-a-dead-bytes",
+		MaxBytes: 64 * 1024,
+	})
+	require.NoError(t, err)
 	require.NoError(t, actor.CompactPacks())
 	require.False(t, actor.Blobs().Exists(1), "包含大量 Stage 1 预写死空间的 Pack 1 必须被 CompactPacks 搬迁回收")
 

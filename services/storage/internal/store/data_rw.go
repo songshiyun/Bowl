@@ -351,7 +351,6 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 
 	_ = BatchSetInodeDeferred(s.batch, inode)
 	BatchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
-	BatchSetDirtyDeferred(s.batch, op.ino)
 
 	s.applyWriteBlockSpecs(op.ino, op.blocks)
 

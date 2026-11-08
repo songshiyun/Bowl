@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 )
 
-// 键物理编码长度常量（ADR-0030 §2.1 & ADR-0031 §2.2）。
+// 键物理编码长度常量（ADR-0030 §2.1, ADR-0031 §2.2 & ADR-0032 §4）。
 const (
 	StatKeyLen        = 8  // "sys:stat"
 	PackStatPrefixLen = 9  // "sys:pack:"
@@ -13,7 +13,6 @@ const (
 	InodeKeyLen       = 14 // "inode:" + 8B
 	EntryPrefixLen    = 15 // "entry:" + 8B + ":"
 	XattrPrefixLen    = 15 // "xattr:" + 8B + ":"
-	DirtyKeyLen       = 14 // "dirty:" + 8B
 	OrphanKeyLen      = 15 // "orphan:" + 8B
 	DataPrefixLen     = 14 // "data:" + 8B + ":"
 	DataKeyLen        = 22 // "data:" + 8B + ":" + 8B
@@ -25,7 +24,6 @@ var (
 	inodePrefixBytes    = []byte("inode:")
 	entryPrefixBytes    = []byte("entry:")
 	xattrPrefixBytes    = []byte("xattr:")
-	dirtyPrefixBytes    = []byte("dirty:")
 	orphanPrefixBytes   = []byte("orphan:")
 	dataPrefixBytes     = []byte("data:")
 )
@@ -33,7 +31,7 @@ var (
 // SplitKey 实现 Pebble Comparer.Split 切分函数：
 //   - 对 "entry:<8B>:" 与 "xattr:<8B>:" 返回 15；
 //   - 对 "data:<8B>:" 返回 14；
-//   - 对其余单键（"inode:"、"dirty:"、"orphan:"、"sys:stat"、"sys:pack:<8B>"）返回 len(key)。
+//   - 对其余单键（"inode:"、"orphan:"、"sys:stat"、"sys:pack:<8B>"）返回 len(key)。
 func SplitKey(key []byte) int {
 	if len(key) >= EntryPrefixLen && key[14] == ':' {
 		if bytes.HasPrefix(key, entryPrefixBytes) || bytes.HasPrefix(key, xattrPrefixBytes) {
@@ -168,26 +166,6 @@ func DecodeXattrKey(key []byte) (ino uint64, name []byte, err error) {
 	}
 	name = append([]byte(nil), key[15:]...)
 	return binary.BigEndian.Uint64(key[6:14]), name, nil
-}
-
-// DirtyKey 编码变更节点键 "dirty:<8B_ino>"（14B）。
-func DirtyKey(ino uint64) []byte {
-	out := make([]byte, DirtyKeyLen)
-	putDirtyKey(out, ino)
-	return out
-}
-
-func putDirtyKey(dst []byte, ino uint64) {
-	copy(dst, dirtyPrefixBytes)
-	binary.BigEndian.PutUint64(dst[6:14], ino)
-}
-
-// DecodeDirtyKey 解码变更节点键。
-func DecodeDirtyKey(key []byte) (uint64, error) {
-	if len(key) != DirtyKeyLen || !bytes.HasPrefix(key, dirtyPrefixBytes) {
-		return 0, ErrInvalidKey
-	}
-	return binary.BigEndian.Uint64(key[6:14]), nil
 }
 
 // OrphanPrefix 返回孤儿节点键公共前缀 "orphan:"。

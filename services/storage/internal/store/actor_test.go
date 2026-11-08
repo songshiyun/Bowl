@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"bytes"
 	"errors"
 	"strconv"
 	"testing"
@@ -23,7 +24,6 @@ func TestPebbleOptionsAndPrefixBloom(t *testing.T) {
 	require.Equal(t, 15, opts.Comparer.Split(store.XattrKey(1, []byte("user.k"))))
 	require.Equal(t, 14, opts.Comparer.Split(store.DataKey(1, 0)))
 	require.Equal(t, 14, opts.Comparer.Split(store.InodeKey(1)))
-	require.Equal(t, 14, opts.Comparer.Split(store.DirtyKey(1)))
 	require.Equal(t, 15, opts.Comparer.Split(store.OrphanKey(1)))
 	require.Equal(t, 17, opts.Comparer.Split(store.PackStatKey(1)))
 	require.Equal(t, 8, opts.Comparer.Split(store.StatKey()))
@@ -49,10 +49,19 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-1",
-		BranchID: "main",
 		MaxBytes: maxBytes,
 	})
 	require.NoError(t, err)
+
+	// 验证初始 41B sys:stat 已落盘 WriterEpoch=0 与 MaxBytes=maxBytes
+	rawStat, statCloser, err := actor.DB().Get(store.StatKey())
+	require.NoError(t, err)
+	require.Len(t, rawStat, store.BranchStatSize)
+	gotInitStat, err := store.DecodeBranchStat(rawStat)
+	require.NoError(t, statCloser.Close())
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), gotInitStat.WriterEpoch)
+	require.Equal(t, maxBytes, gotInitStat.MaxBytes)
 
 	// 1. StatFS 零 I/O 原子直读校验
 	statFS, err := actor.StatFS()
@@ -92,19 +101,20 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 
 	require.NoError(t, actor.Close())
 
-	// 4. 以只读模式重新打开，验证根 Inode、统计值及 Close 刷盘的 dirtyAtime 均已持久化恢复
+	// 4. 以只读模式重新打开且不传 Options.MaxBytes，验证从持久化 sys:stat 恢复 MaxBytes 至内存原子镜像与 StatFS
 	roActor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-1",
-		BranchID: "main",
 		ReadOnly: true,
-		MaxBytes: maxBytes,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, roActor.Close()) }()
 
+	require.Equal(t, maxBytes, roActor.MaxBytes())
 	roStat, err := roActor.StatFS()
 	require.NoError(t, err)
+	require.Equal(t, maxBytes, roStat.TotalBytes)
+	require.Equal(t, maxBytes, roStat.AvailBytes)
 	require.Equal(t, uint64(1), roStat.Files)
 	require.Equal(t, uint64(0), roStat.UsedBytes)
 
@@ -123,11 +133,47 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrReadOnly)
 }
 
+func TestNoDirtyKeysWrittenAcrossWritePaths(t *testing.T) {
+	actor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-no-dirty",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	d, err := actor.Mkdir(store.MkdirReq{ParentIno: store.RootIno, Name: []byte("d"), Mode: 0o755})
+	require.NoError(t, err)
+	f, err := actor.Create(store.CreateReq{ParentIno: d.Ino, Name: []byte("f"), Mode: 0o644})
+	require.NoError(t, err)
+	_, _, err = actor.Write(f.Ino, 0, []byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, actor.Fallocate(f.Ino, 0, 4096, 0))
+	require.NoError(t, actor.SetXattr(f.Ino, []byte("user.k"), []byte("v"), 0))
+	require.NoError(t, actor.RemoveXattr(f.Ino, []byte("user.k")))
+	uid := uint32(1000)
+	_, err = actor.SetAttr(f.Ino, store.SetAttrReq{UID: &uid})
+	require.NoError(t, err)
+	_, err = actor.Link(store.LinkReq{Ino: f.Ino, NewParentIno: d.Ino, NewName: []byte("f2")})
+	require.NoError(t, err)
+	require.NoError(t, actor.Rename(store.RenameReq{OldParentIno: d.Ino, OldName: []byte("f2"), NewParentIno: d.Ino, NewName: []byte("f3")}))
+	require.NoError(t, actor.Unlink(d.Ino, []byte("f3"), false))
+	require.NoError(t, actor.Unlink(d.Ino, []byte("f"), false))
+	require.NoError(t, actor.Rmdir(store.RootIno, []byte("d")))
+
+	iter, err := actor.DB().NewIter(nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, iter.Close()) }()
+	for valid := iter.First(); valid; valid = iter.Next() {
+		require.False(t, bytes.HasPrefix(iter.Key(), []byte("dirty:")), "unexpected dirty key: %q", iter.Key())
+	}
+	require.NoError(t, iter.Error())
+}
+
 func TestGroupCommitPhaseAFailureIsolationAndReadYourWrites(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-1",
-		BranchID: "main",
 		MaxBytes: 16384,
 	})
 	require.NoError(t, err)
@@ -213,37 +259,17 @@ func TestGroupCommitPhaseAFailureIsolationAndReadYourWrites(t *testing.T) {
 	require.Equal(t, uint64(4096), attr4.Size)
 }
 
-func TestInodeSegmentReservation4096AndExhaustion(t *testing.T) {
-	var (
-		reserveCalls int
-		lastReserved uint64 = 1
-		exhaust      bool
-	)
-
+func TestBuiltinInodeAllocatorAndReopenRecovery(t *testing.T) {
+	dir := t.TempDir()
 	actor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
-		DiskID:   "disk-seg",
-		BranchID: "main",
-		ReserveInode: func(count uint64) (uint64, uint64, error) {
-			if count != store.InodeSegment {
-				return 0, 0, store.ErrInvalid
-			}
-			if exhaust {
-				return 0, 0, store.ErrInodeExhausted
-			}
-			reserveCalls++
-			first := lastReserved + 1
-			last := lastReserved + count
-			lastReserved = last
-			return first, last, nil
-		},
+		Dir:    dir,
+		DiskID: "disk-seg",
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
 
-	// 连续执行 4096 次 Inode 分配（编号 2..4097），仅触发 1 次底层号段预留
-	var firstIno, lastInoInFirstSeg uint64
-	for i := range int(store.InodeSegment) {
+	// 连续执行 4097 次 Inode 分配（编号 2..4098）
+	var firstIno, lastIno uint64
+	for i := range int(store.InodeSegment) + 1 {
 		var attr store.Attribute
 		attr, err = actor.Create(store.CreateReq{
 			ParentIno: store.RootIno,
@@ -254,47 +280,33 @@ func TestInodeSegmentReservation4096AndExhaustion(t *testing.T) {
 		if i == 0 {
 			firstIno = attr.Ino
 		}
-		if i == int(store.InodeSegment)-1 {
-			lastInoInFirstSeg = attr.Ino
-		}
+		lastIno = attr.Ino
 	}
 	require.Equal(t, uint64(2), firstIno)
-	require.Equal(t, uint64(4097), lastInoInFirstSeg)
-	require.Equal(t, 1, reserveCalls)
+	require.Equal(t, uint64(4098), lastIno)
+	require.NoError(t, actor.Close())
 
-	// 第 4097 次分配触发第 2 次 4096 步长预留，拿到 4098
-	nextAttr, err := actor.Create(store.CreateReq{
+	// 重新打开后内置分配器从已有最大 Inode + 1 (4099) 继续分配
+	reopened, err := store.Open(store.Options{
+		Dir:    dir,
+		DiskID: "disk-seg",
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+
+	nextAttr, err := reopened.Create(store.CreateReq{
 		ParentIno: store.RootIno,
-		Name:      []byte("f-next-seg"),
+		Name:      []byte("f-after-reopen"),
 		Mode:      0o644,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(4098), nextAttr.Ino)
-	require.Equal(t, 2, reserveCalls)
-
-	// 耗尽测试：将剩余预留消费完后触发 ErrInodeExhausted
-	for i := range int(store.InodeSegment) - 1 {
-		_, err = actor.Create(store.CreateReq{
-			ParentIno: store.RootIno,
-			Name:      []byte("f-rem-" + strconv.Itoa(i)),
-			Mode:      0o644,
-		})
-		require.NoError(t, err)
-	}
-	exhaust = true
-	_, err = actor.Create(store.CreateReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("f-exhausted"),
-		Mode:      0o644,
-	})
-	require.ErrorIs(t, err, store.ErrInodeExhausted)
+	require.Equal(t, uint64(4099), nextAttr.Ino)
 }
 
 func TestIndexedBatchSkiplistBloatResetGuard(t *testing.T) {
 	actor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
-		DiskID:   "disk-reset",
-		BranchID: "main",
+		Dir:    t.TempDir(),
+		DiskID: "disk-reset",
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
@@ -335,9 +347,8 @@ func TestIndexedBatchSkiplistBloatResetGuard(t *testing.T) {
 func TestCloseDiscardSkipsAtimeAndWALFlush(t *testing.T) {
 	dir := t.TempDir()
 	actor, err := store.Open(store.Options{
-		Dir:      dir,
-		DiskID:   "disk-discard",
-		BranchID: "main",
+		Dir:    dir,
+		DiskID: "disk-discard",
 	})
 	require.NoError(t, err)
 
@@ -357,9 +368,8 @@ func TestCloseDiscardSkipsAtimeAndWALFlush(t *testing.T) {
 
 	// 重新打开后应保持原始 Atime，而非未刷盘的 dirtyTime
 	reopened, err := store.Open(store.Options{
-		Dir:      dir,
-		DiskID:   "disk-discard",
-		BranchID: "main",
+		Dir:    dir,
+		DiskID: "disk-discard",
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
@@ -375,7 +385,6 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 			actor, err := store.Open(store.Options{
 				Dir:      t.TempDir(),
 				DiskID:   "disk-race",
-				BranchID: "main",
 				MaxBytes: 1 << 30,
 			})
 			require.NoError(t, err)

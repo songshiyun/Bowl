@@ -21,9 +21,6 @@ const (
 	hotBlobShardBudget        = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
 )
 
-// BlobReserveFunc 向盘级分配器持久化预留一段连续 PackID 编号，返回闭区间 [first, last]。
-type BlobReserveFunc func(count uint64) (first uint64, last uint64, err error)
-
 type hotBlob struct {
 	packID uint64
 	offset uint32
@@ -39,19 +36,19 @@ type hotShard struct {
 	bytes int
 }
 
-// BlobStore 管理单个分支或快照目录下扁平的 packs/<pack_id_hex16>.pack 封包文件（单包上限 64 MiB）、
-// 常驻活跃写句柄与已封口只读句柄池、64 MiB 分片环形热块缓存及脏包屏障追踪表（ADR-0031 §1.2 & §3）。
+// BlobStore 管理单盘目录下扁平的 packs/<pack_id_hex16>.pack 封包文件（单包上限 64 MiB）、
+// 常驻活跃写句柄与已封口只读句柄池、64 MiB 分片环形热块缓存及脏包屏障追踪表（ADR-0031 §1.2 & §3, ADR-0032 §4）。
 type BlobStore struct {
 	dir         string
 	dirReady    atomic.Bool
 	maxPackSize atomic.Uint32
 
-	// 1. 无锁 PackID 分配游标（步长 4096 向分配器预留）
+	// 1. 内置无锁 PackID 分配游标（步长 4096 预留）
 	nextPackID     atomic.Uint64
 	reservedPackID atomic.Uint64
 	allocMu        sync.Mutex
 	minPackID      uint64
-	reservePackID  BlobReserveFunc
+	lastReserved   uint64
 
 	// 2. 分片环形热块缓存（16 分片 × 64 槽位，总预算 64 MiB，按 (PackID, Offset) 定位）
 	hot [hotBlobShards]hotShard
@@ -81,28 +78,20 @@ func (s *StoreActor) Blobs() *BlobStore {
 	return s.blobs
 }
 
-// NewBlobStore 创建以 base（分支或快照根目录）为根的 BlobStore，并在未注入外部分配器时扫描已有最大 PackID 初始化默认分配器。
+// NewBlobStore 创建以 base（磁盘根目录）为根的 BlobStore，扫描已有最大 PackID 初始化内置分配器。
 func NewBlobStore(base string) *BlobStore {
-	return NewBlobStoreWithAllocator(base, nil)
-}
-
-// NewBlobStoreWithAllocator 创建指定号段预留分配器的 BlobStore。
-func NewBlobStoreWithAllocator(base string, reserve BlobReserveFunc) *BlobStore {
 	bs := &BlobStore{
-		dir:           filepath.Join(base, "packs"),
-		reservePackID: reserve,
-		dirtyPacks:    make(map[uint64]struct{}),
-		unownedDirty:  make(map[uint64]struct{}),
-		inoPacks:      make(map[uint64]map[uint64]struct{}),
-		dirtyNew:      make(map[uint64]struct{}),
-		packFiles:     make(map[uint64]*os.File),
+		dir:          filepath.Join(base, "packs"),
+		dirtyPacks:   make(map[uint64]struct{}),
+		unownedDirty: make(map[uint64]struct{}),
+		inoPacks:     make(map[uint64]map[uint64]struct{}),
+		dirtyNew:     make(map[uint64]struct{}),
+		packFiles:    make(map[uint64]*os.File),
 	}
 	bs.maxPackSize.Store(PackMaxSize)
 	maxID := bs.scanExistingPacks()
 	bs.minPackID = maxID
-	if bs.reservePackID == nil {
-		bs.setupDefaultAllocator(maxID)
-	}
+	bs.lastReserved = maxID
 	return bs
 }
 
@@ -116,10 +105,11 @@ func (s *BlobStore) AdvanceMinPackID(minPackID uint64) {
 	if minPackID > s.minPackID {
 		s.minPackID = minPackID
 	}
+	if s.minPackID > s.lastReserved {
+		s.lastReserved = s.minPackID
+	}
 	if next := s.nextPackID.Load(); next != 0 && next <= s.minPackID {
 		s.nextPackID.Store(s.minPackID + 1)
-	} else if next == 0 && s.reservePackID == nil {
-		s.setupDefaultAllocator(s.minPackID)
 	}
 }
 
@@ -178,33 +168,6 @@ func (s *BlobStore) existingPackIDs() []uint64 {
 	return ids
 }
 
-func (s *BlobStore) setupDefaultAllocator(initialLast uint64) {
-	last := initialLast
-	var mu sync.Mutex
-	s.reservePackID = func(count uint64) (uint64, uint64, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if s.minPackID > last {
-			last = s.minPackID
-		}
-		if count == 0 {
-			count = BlobIDSegment
-		}
-		if last == math.MaxUint64 {
-			return 0, 0, ErrNoSpace
-		}
-		first := last + 1
-		var reserved uint64
-		if math.MaxUint64-last < count {
-			reserved = math.MaxUint64
-		} else {
-			reserved = last + count
-		}
-		last = reserved
-		return first, reserved, nil
-	}
-}
-
 // NextPackID 无锁分配下一个唯一 PackID；当本地号段耗尽时加 allocMu 按 4096 步长预留新号段。
 func (s *BlobStore) NextPackID() (uint64, error) {
 	for {
@@ -223,23 +186,25 @@ func (s *BlobStore) NextPackID() (uint64, error) {
 			s.allocMu.Unlock()
 			continue
 		}
-		if s.reservePackID == nil {
-			s.setupDefaultAllocator(0)
+		if s.minPackID > s.lastReserved {
+			s.lastReserved = s.minPackID
 		}
-		first, last, err := s.reservePackID(BlobIDSegment)
-		if err != nil {
-			s.allocMu.Unlock()
-			return 0, err
-		}
-		if first == 0 || first > last {
+		if s.lastReserved == math.MaxUint64 {
 			s.allocMu.Unlock()
 			return 0, ErrNoSpace
 		}
-		id := first
+		first := s.lastReserved + 1
+		var last uint64
+		if math.MaxUint64-s.lastReserved < BlobIDSegment {
+			last = math.MaxUint64
+		} else {
+			last = s.lastReserved + BlobIDSegment
+		}
+		s.lastReserved = last
 		s.reservedPackID.Store(last)
 		s.nextPackID.Store(first + 1)
 		s.allocMu.Unlock()
-		return id, nil
+		return first, nil
 	}
 }
 
@@ -787,84 +752,6 @@ func (s *BlobStore) syncBatch(packs []uint64, needSyncDir bool) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// SealActivePack 将当前活跃 .pack 封口（不再接受任何后续 Append 或 ExtendTail 追加）并同步刷盘（ADR-0031 §4.1）。
-func (s *BlobStore) SealActivePack() error {
-	s.mu.Lock()
-	s.activePackID = 0
-	s.activeFile = nil
-	s.activeOffset = 0
-	s.mu.Unlock()
-	return s.Sync()
-}
-
-// LinkAllTo 先将当前活跃 .pack 封口并刷盘，再将 packs/*.pack 扁平硬链接至目标快照或子分支目录（遇 EMLINK 回退流式复制）。
-func (s *BlobStore) LinkAllTo(dst *BlobStore) error {
-	if dst == nil {
-		return ErrInvalidValue
-	}
-	if err := s.SealActivePack(); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(s.dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dst.dir, 0o755); err != nil {
-		return err
-	}
-	dst.dirReady.Store(true)
-
-	var maxLinkedID uint64
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pack") {
-			continue
-		}
-		packID, parseErr := parsePackID(entry.Name())
-		if parseErr == nil && packID > maxLinkedID {
-			maxLinkedID = packID
-		}
-		from := filepath.Join(s.dir, entry.Name())
-		to := filepath.Join(dst.dir, entry.Name())
-		if _, statErr := os.Stat(to); statErr == nil {
-			continue
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return statErr
-		}
-		if linkErr := os.Link(from, to); linkErr != nil {
-			if copyErr := copyPackFile(from, to); copyErr != nil {
-				return errors.Join(linkErr, copyErr)
-			}
-			if parseErr == nil {
-				dst.reMarkPackDirty(packID)
-			}
-		}
-		dst.mu.Lock()
-		dst.dirDirty = true
-		dst.mu.Unlock()
-	}
-	if maxLinkedID > 0 {
-		dst.AdvanceMinPackID(maxLinkedID)
-	}
-	return dst.Sync()
-}
-
-func copyPackFile(from, to string) error {
-	in, err := os.Open(from)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	return errors.Join(copyErr, out.Close())
 }
 
 // RemovePack 关闭指定 .pack 的常驻文件句柄、剔除热块缓存并从宿主机删除物理 .pack 文件（ADR-0031 §4.2）。

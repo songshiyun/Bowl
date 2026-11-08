@@ -14,17 +14,7 @@ import (
 
 func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	base := t.TempDir()
-	var reserveCalls int
-	var lastReserved uint64
-
-	blobs := store.NewBlobStoreWithAllocator(base, func(count uint64) (uint64, uint64, error) {
-		require.Equal(t, store.BlobIDSegment, count)
-		reserveCalls++
-		first := lastReserved + 1
-		last := lastReserved + count
-		lastReserved = last
-		return first, last, nil
-	})
+	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
 
 	require.Equal(t, filepath.Join(base, "packs"), blobs.Root())
@@ -43,12 +33,10 @@ func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	}
 	require.Equal(t, uint64(1), firstID)
 	require.Equal(t, uint64(4096), lastInFirstSeg)
-	require.Equal(t, 1, reserveCalls)
 
 	nextID, err := blobs.NextPackID()
 	require.NoError(t, err)
 	require.Equal(t, uint64(4097), nextID)
-	require.Equal(t, 2, reserveCalls)
 
 	// 验证重启扫描已有 .pack 文件恢复最大 packID
 	base2 := t.TempDir()
@@ -182,8 +170,11 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, ok, "非活跃包最末尾的块必须拒绝原地顺延")
 
-	// 6. 封口后原末尾块 otherRef 也不再允许 ExtendTail
-	require.NoError(t, blobs.SealActivePack())
+	// 6. 滚动封口后原末尾块 otherRef 也不再允许 ExtendTail
+	blobs.SetMaxPackSize(otherRef.Offset + otherRef.Length)
+	nextPackRef, err := blobs.Append(6, []byte("next-pack"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), nextPackRef.PackID)
 	_, ok, err = blobs.ExtendTail(6, otherRef, otherRef.Length, []byte("more"), otherRef.Length+4)
 	require.NoError(t, err)
 	require.False(t, ok, "已封口包中的块必须拒绝 ExtendTail")
@@ -235,9 +226,8 @@ func TestBlobStoreHotShardCacheEvictionAndReadAt(t *testing.T) {
 	require.Equal(t, sameShardPayloads[0][512:512+4096], buf)
 }
 
-func TestBlobStoreSyncInodeSealLinkAllToAndRemovePack(t *testing.T) {
+func TestBlobStoreSyncInodeAndRemovePack(t *testing.T) {
 	srcBase := t.TempDir()
-	dstBase := t.TempDir()
 
 	src := store.NewBlobStore(srcBase)
 	defer func() { require.NoError(t, src.Close()) }()
@@ -266,27 +256,15 @@ func TestBlobStoreSyncInodeSealLinkAllToAndRemovePack(t *testing.T) {
 	require.Equal(t, uint64(2), src.SyncFileCount())
 	require.Equal(t, uint64(1), src.SyncDirCount(), "已同步过的 .pack 继续追加写不得重复触发目录 fsync")
 
-	// 4. SealActivePack + LinkAllTo 将封口 .pack 硬链接至快照目录 dst
-	dst := store.NewBlobStore(dstBase)
-	defer func() { require.NoError(t, dst.Close()) }()
+	// 4. 触发滚动切包至 Pack 2 后，调用 RemovePack(packID) 删除已封口的 Pack 1 并关闭源句柄
+	src.SetMaxPackSize(src.ActiveOffset())
+	refPack2, err := src.Append(10, []byte("rollover"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), refPack2.PackID)
 
-	require.NoError(t, src.SealActivePack())
-	require.Equal(t, uint64(0), src.ActivePackID())
-	require.NoError(t, src.LinkAllTo(dst))
-	require.True(t, dst.Exists(refA.PackID))
-
-	// 5. 源目录调用 RemovePack(packID) 删除物理包并关闭源句柄，验证不影响快照目录 dst 读取
 	require.NoError(t, src.RemovePack(refA.PackID))
 	require.False(t, src.Exists(refA.PackID))
-	require.True(t, dst.Exists(refA.PackID))
-
-	gotSnapA := make([]byte, len(dataA))
-	require.NoError(t, dst.ReadAt(refA, 0, gotSnapA))
-	require.Equal(t, dataA, gotSnapA)
-
-	gotSnapB := make([]byte, len(dataB))
-	require.NoError(t, dst.ReadAt(refB, 0, gotSnapB))
-	require.Equal(t, dataB, gotSnapB)
+	require.True(t, src.Exists(refPack2.PackID))
 }
 
 func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {

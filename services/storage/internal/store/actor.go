@@ -73,22 +73,16 @@ type writeCmd struct {
 	stagedBlobs []BlobRef
 }
 
-// InodeReserveFunc 向盘级分配器持久化预留一段连续 Inode 编号，返回闭区间 [first, last]。
-type InodeReserveFunc func(count uint64) (first uint64, last uint64, err error)
-
 // Options 配置 StoreActor 实例打开参数。
 type Options struct {
-	Dir          string
-	DiskID       string
-	BranchID     string
-	ReadOnly     bool
-	MaxBytes     uint64
-	MaxInodes    uint64
-	AtimeMode    AtimeMode
-	Cache        *pebble.Cache
-	ReserveInode InodeReserveFunc
-	ReservePack  BlobReserveFunc
-	Now          func() time.Time
+	Dir       string
+	DiskID    string
+	ReadOnly  bool
+	MaxBytes  uint64
+	MaxInodes uint64
+	AtimeMode AtimeMode
+	Cache     *pebble.Cache
+	Now       func() time.Time
 }
 
 // NewPebbleOptions 构建符合 ADR-0030 §2.2 规范的 *pebble.Options：
@@ -122,13 +116,12 @@ func NewPebbleOptions(cache *pebble.Cache, readOnly bool) *pebble.Options {
 	}
 }
 
-// StoreActor 是单分支（或只读快照）存储引擎实例（ADR-0030 §2.3）。
+// StoreActor 是单盘（或只读快照）存储引擎实例（ADR-0030 §2.3、ADR-0032）。
 //
 //nolint:revive // exported: StoreActor 为 ADR-0030 与领域词汇表锁定的核心实体名称。
 type StoreActor struct {
 	dir        string
 	diskID     string
-	branchID   string
 	readOnly   bool
 	atimeMode  AtimeMode
 	now        func() time.Time
@@ -156,7 +149,6 @@ type StoreActor struct {
 	lastActivePackID uint64
 	nextIno          uint64
 	reservedIno      uint64
-	reserveInode     InodeReserveFunc
 	walDirty         atomic.Bool
 	tickCount        atomic.Uint64
 	batchResetCnt    atomic.Uint64
@@ -229,7 +221,6 @@ func Open(opts Options) (*StoreActor, error) {
 	s := &StoreActor{
 		dir:            opts.Dir,
 		diskID:         opts.DiskID,
-		branchID:       opts.BranchID,
 		readOnly:       opts.ReadOnly,
 		atimeMode:      opts.AtimeMode,
 		now:            nowFn,
@@ -237,7 +228,6 @@ func Open(opts Options) (*StoreActor, error) {
 		ownedCache:     ownedCache,
 		packStats:      make(map[uint64]PackMeta),
 		dirtyPackStats: make(map[uint64]struct{}),
-		reserveInode:   opts.ReserveInode,
 		dirtyAtime:     make(map[uint64]int64),
 		loopDone:       make(chan struct{}),
 		inFlightPacks:  make(map[uint64]int),
@@ -259,7 +249,7 @@ func Open(opts Options) (*StoreActor, error) {
 		return nil, err
 	}
 
-	s.blobs = NewBlobStoreWithAllocator(s.dir, opts.ReservePack)
+	s.blobs = NewBlobStore(s.dir)
 
 	if err := s.syncPackStatsWithBlobs(); err != nil {
 		_ = s.blobs.Close()
@@ -303,6 +293,8 @@ func (s *StoreActor) initOrLoadState() error {
 			LogicalBytes: 0,
 			Inodes:       1,
 			NextWriteSeq: 1,
+			WriterEpoch:  0,
+			MaxBytes:     s.maxBytes.Load(),
 		}
 		initBatch := s.db.NewBatch()
 		defer func() { _ = initBatch.Close() }()
@@ -318,7 +310,7 @@ func (s *StoreActor) initOrLoadState() error {
 		s.stat = stat
 		s.atomicLogicalBytes.Store(stat.LogicalBytes)
 		s.atomicInodes.Store(stat.Inodes)
-		s.setupDefaultInodeAllocator(RootIno)
+		s.reservedIno = RootIno
 		return nil
 	}
 	if err != nil {
@@ -328,16 +320,21 @@ func (s *StoreActor) initOrLoadState() error {
 	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
 		return errors.Join(decErr, closeErr)
 	}
+	if stat.MaxBytes > 0 {
+		s.maxBytes.Store(stat.MaxBytes)
+	} else if maxB := s.maxBytes.Load(); maxB > 0 {
+		stat.MaxBytes = maxB
+	}
 	s.stat = stat
 	s.atomicLogicalBytes.Store(stat.LogicalBytes)
 	s.atomicInodes.Store(stat.Inodes)
 
-	if !s.readOnly && s.reserveInode == nil {
+	if !s.readOnly {
 		maxIno, err := s.scanMaxInode()
 		if err != nil {
 			return err
 		}
-		s.setupDefaultInodeAllocator(maxIno)
+		s.reservedIno = max(maxIno, RootIno)
 	}
 	return s.loadPackStats()
 }
@@ -358,33 +355,6 @@ func (s *StoreActor) scanMaxInode() (uint64, error) {
 		return ino, iter.Error()
 	}
 	return RootIno, iter.Error()
-}
-
-func (s *StoreActor) setupDefaultInodeAllocator(initialLast uint64) {
-	if s.reserveInode != nil {
-		return
-	}
-	last := max(initialLast, RootIno)
-	var mu sync.Mutex
-	s.reserveInode = func(count uint64) (uint64, uint64, error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if count == 0 {
-			count = InodeSegment
-		}
-		if last >= uint64(math.MaxInt64) {
-			return 0, 0, ErrInodeExhausted
-		}
-		first := last + 1
-		var reserved uint64
-		if uint64(math.MaxInt64)-last < count {
-			reserved = uint64(math.MaxInt64)
-		} else {
-			reserved = last + count
-		}
-		last = reserved
-		return first, reserved, nil
-	}
 }
 
 // enter 是所有直读路径与写阶段 1 预读的统一生命周期读守卫（ADR-0030 §2.6）。
@@ -644,18 +614,19 @@ func (s *StoreActor) prepareIno() (uint64, error) {
 }
 
 func (s *StoreActor) reserveInoSegment() error {
-	if s.reserveInode == nil {
-		s.setupDefaultInodeAllocator(RootIno)
-	}
-	first, last, err := s.reserveInode(InodeSegment)
-	if err != nil {
-		return err
-	}
-	if first == 0 || first > last || first > uint64(math.MaxInt64) {
+	last := max(s.reservedIno, RootIno)
+	if last >= uint64(math.MaxInt64) {
 		return ErrInodeExhausted
 	}
+	first := last + 1
+	var reserved uint64
+	if uint64(math.MaxInt64)-last < InodeSegment {
+		reserved = uint64(math.MaxInt64)
+	} else {
+		reserved = last + InodeSegment
+	}
 	s.nextIno = first
-	s.reservedIno = last
+	s.reservedIno = reserved
 	return nil
 }
 
@@ -942,7 +913,6 @@ func (s *StoreActor) flushDirtyAtimeToBatch(batch *pebble.Batch) bool {
 		if err := BatchSetInodeDeferred(batch, inode); err != nil {
 			continue
 		}
-		BatchSetDirtyDeferred(batch, ino)
 		wrote = true
 	}
 	return wrote

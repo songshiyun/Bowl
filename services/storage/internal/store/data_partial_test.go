@@ -43,7 +43,6 @@ func TestPartialWriteTailExtendAppendAndHotRead(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-partial-append",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -122,7 +121,6 @@ func TestPartialWriteSyncedBlockCoWAndPhaseAFailureIsolation(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-partial-cow",
-		BranchID: "main",
 		MaxBytes: 16 * 1024, // 配额上限 16 KiB
 	})
 	require.NoError(t, err)
@@ -189,7 +187,6 @@ func TestSetAttrSizeTruncateAndExpandAcrossBlocks(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-truncate",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -323,7 +320,6 @@ func TestFallocateExtendKeepSizeAndPunchHole(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-falloc",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -437,7 +433,6 @@ func TestDataKeyCleanupOnUnlinkRenamePurgeOrphanAndCleanOrphans(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-reclaim-e2e",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
@@ -534,7 +529,6 @@ func TestCrossBlockPartialWriteAndHotShardBudgetEviction(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-cross-partial",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)

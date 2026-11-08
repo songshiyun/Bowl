@@ -16,7 +16,6 @@ func TestFsyncAndFsyncDirValidationAndOrphanLiveness(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-fsync-val",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -86,7 +85,6 @@ func TestFsyncAndFsyncDirValidationAndOrphanLiveness(t *testing.T) {
 	roActor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-fsync-val",
-		BranchID: "main",
 		ReadOnly: true,
 	})
 	require.NoError(t, err)
@@ -101,7 +99,6 @@ func TestFsyncFlushesPendingDirtyAtimeAndClearsWALDirty(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:       dir,
 		DiskID:    "disk-fsync-atime",
-		BranchID:  "main",
 		AtimeMode: store.AtimeModeStrictAtime,
 		MaxBytes:  64 << 20,
 	})
@@ -136,7 +133,6 @@ func TestFsyncFlushesPendingDirtyAtimeAndClearsWALDirty(t *testing.T) {
 	roActor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-fsync-atime",
-		BranchID: "main",
 		ReadOnly: true,
 	})
 	require.NoError(t, err)
@@ -151,7 +147,6 @@ func TestFsyncPerInodeIsolationDirectorySyncAndWindowSolidification(t *testing.T
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-fsync-iso",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -221,7 +216,6 @@ func TestGroupCommitFsyncAndFsyncDirDualLayerBarrier(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-fsync-batch",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)

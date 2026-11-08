@@ -14,7 +14,6 @@ func TestMkdirCreateMknodSymlinkAndLookupReadlink(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-ns",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -150,7 +149,6 @@ func TestLinkAndNamespaceErrorPaths(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-link",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -280,7 +278,6 @@ func TestReadDirAndReadDirPlusWithPaginationAndAscendingBatchSeek(t *testing.T) 
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-readdir",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -408,7 +405,6 @@ func TestNamespaceIntraBatchReadYourWritesAndPhaseAFailureIsolation(t *testing.T
 	actor, err := store.Open(store.Options{
 		Dir:       t.TempDir(),
 		DiskID:    "disk-batch-ns",
-		BranchID:  "main",
 		MaxBytes:  100 << 20,
 		MaxInodes: 100,
 	})

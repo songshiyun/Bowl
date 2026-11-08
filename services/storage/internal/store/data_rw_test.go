@@ -18,7 +18,6 @@ func TestFullBlockWriteMaxWrite1MiBAndLocklessReadRoundTrip(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-rw",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -136,7 +135,6 @@ func TestCross256KiBBoundaryPartialWriteAndTailExtension(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-partial-pack",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -227,7 +225,6 @@ func TestFullBlockOverwriteAndPhaseAFailureIsolation(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-overwrite",
-		BranchID: "main",
 		MaxBytes: 2 * store.BlobSize, // 配额上限 2 块 (512 KiB)
 	})
 	require.NoError(t, err)
@@ -300,7 +297,6 @@ func TestConcurrentWritesAndLocklessReadsOnPack(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-conc",
-		BranchID: "main",
 		MaxBytes: 512 << 20,
 	})
 	require.NoError(t, err)
@@ -381,7 +377,6 @@ func TestWriteErrorPathsAndStage1FailureOrClosedCleanup(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-err",
-		BranchID: "main",
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
@@ -473,7 +468,6 @@ func TestSysPackLiveBytesAccountingAndReopenRecovery(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-sys-pack",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
@@ -584,7 +578,6 @@ func TestSysPackLiveBytesAccountingAndReopenRecovery(t *testing.T) {
 	reopened, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-sys-pack",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
@@ -607,12 +600,11 @@ func TestSysPackLiveBytesAccountingAndReopenRecovery(t *testing.T) {
 	require.Equal(t, sumActualLiveBytesByPack(t, reopened)[2], meta2.LiveBytes)
 }
 
-func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing.T) {
+func TestDeadSealedPackPhysicalReclaimSoftUpdates(t *testing.T) {
 	dir := t.TempDir()
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-dead-pack",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)
@@ -650,18 +642,7 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	require.NoError(t, actor.FlushWAL())
 	require.False(t, actor.Blobs().Exists(1), "FlushWAL 落盘确认后，全死封口包 000001.pack 必须被物理删除")
 
-	// 3. 快照硬链接隔离（LinkAllPacksTo）：将当前存活的 Pack 2 硬链接至快照分支实例，随后写入 f2 触发滚动至 Pack 3，并 Unlink(f1) 使 Pack 2 全死
-	snapActor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
-		DiskID:   "disk-pack-reclaim",
-		BranchID: "snap",
-		MaxBytes: 128 << 20,
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, snapActor.Close()) }()
-	require.NoError(t, actor.LinkAllPacksTo(snapActor))
-	require.True(t, snapActor.Blobs().Exists(2))
-
+	// 3. 写入 f2 触发滚动至 Pack 3，并 Unlink(f1) 使已封口的 Pack 2 全死
 	block3Data := bytes.Repeat([]byte{0xC3}, store.BlobSize)
 	_, _, err = actor.Write(f2.Ino, 0, block3Data)
 	require.NoError(t, err)
@@ -672,15 +653,9 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	require.False(t, ok, "Unlink 使封口包 Pack 2 的 LiveBytes 归零后，必须同批删除 sys:pack:2")
 	require.True(t, actor.Blobs().Exists(2), "FsyncDir 屏障前 000002.pack 尚未物理移除")
 
-	// 通过 FsyncDir 触发持久化屏障，确认物理删除源分支的 000002.pack
+	// 通过 FsyncDir 触发持久化屏障，确认物理删除 000002.pack
 	require.NoError(t, actor.FsyncDir(store.RootIno))
 	require.False(t, actor.Blobs().Exists(2), "FsyncDir 屏障落盘后，全死封口包 000002.pack 必须被物理删除")
-
-	// 验证快照目录中硬链接的 000002.pack 完好无损且可读出完整历史数据
-	require.True(t, snapActor.Blobs().Exists(2))
-	snapBuf := make([]byte, store.BlobSize)
-	require.NoError(t, snapActor.Blobs().ReadAt(store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, 0, snapBuf))
-	require.Equal(t, block2Data, snapBuf)
 
 	// 4. Fallocate 打洞触发封口包回收 + CloseDiscard 模拟崩溃后重启清理残留死包
 	f3, err := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("f3.bin"), Mode: store.S_IFREG | 0o644})
@@ -701,7 +676,6 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	reopened, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-dead-pack",
-		BranchID: "main",
 		MaxBytes: 128 << 20,
 	})
 	require.NoError(t, err)

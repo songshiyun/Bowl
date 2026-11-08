@@ -59,18 +59,7 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 	_, _, err = store.DecodeXattrKey([]byte("xattr:bad"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)
 
-	// 5. DirtyKey: "dirty:" + 8B BigEndian (14B), SplitKey -> len(key) (14)
-	dirtyKey := store.DirtyKey(77)
-	require.Len(t, dirtyKey, 14)
-	require.Equal(t, 14, store.SplitKey(dirtyKey))
-	dIno, err := store.DecodeDirtyKey(dirtyKey)
-	require.NoError(t, err)
-	require.Equal(t, uint64(77), dIno)
-
-	_, err = store.DecodeDirtyKey([]byte("dirty:bad"))
-	require.ErrorIs(t, err, store.ErrInvalidKey)
-
-	// 6. OrphanKey: "orphan:" + 8B BigEndian, SplitKey -> len(key)
+	// 5. OrphanKey: "orphan:" + 8B BigEndian, SplitKey -> len(key)
 	orphanKey := store.OrphanKey(88)
 	require.Equal(t, len(orphanKey), store.SplitKey(orphanKey))
 	oIno, err := store.DecodeOrphanKey(orphanKey)
@@ -80,7 +69,7 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 	_, err = store.DecodeOrphanKey([]byte("orphan:bad"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)
 
-	// 7. DataKey: "data:" + 8B BigEndian(ino) + ":" + 8B BigEndian(blockIdx) (22B), SplitKey -> 14
+	// 6. DataKey: "data:" + 8B BigEndian(ino) + ":" + 8B BigEndian(blockIdx) (22B), SplitKey -> 14
 	dataKey := store.DataKey(0x0102030405060708, 0x1122334455667788)
 	require.Equal(t, []byte{'d', 'a', 't', 'a', ':', 1, 2, 3, 4, 5, 6, 7, 8, ':', 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}, dataKey)
 	require.Len(t, dataKey, 22)

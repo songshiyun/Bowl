@@ -10,20 +10,22 @@ import (
 )
 
 func TestValuesCodecRoundTripAndValidation(t *testing.T) {
-	// 1. BranchStat (25B)
+	// 1. BranchStat (41B: [ver(1B) | LogicalBytes(8B) | Inodes(8B) | NextWriteSeq(8B) | WriterEpoch(8B) | MaxBytes(8B)])
 	stat := store.BranchStat{
 		LogicalBytes: 1048576,
 		Inodes:       42,
 		NextWriteSeq: 999,
+		WriterEpoch:  7,
+		MaxBytes:     100 << 30,
 	}
 	statBytes := store.EncodeBranchStat(stat)
 	require.Len(t, statBytes, store.BranchStatSize)
-	require.Len(t, statBytes, 25)
+	require.Len(t, statBytes, 41)
 	gotStat, err := store.DecodeBranchStat(statBytes)
 	require.NoError(t, err)
 	require.Equal(t, stat, gotStat)
 
-	_, err = store.DecodeBranchStat(statBytes[:24])
+	_, err = store.DecodeBranchStat(statBytes[:40])
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 	badStat := append([]byte(nil), statBytes...)
 	badStat[0] = 2
@@ -166,7 +168,7 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	batch := db.NewIndexedBatch()
 	defer func() { _ = batch.Close() }()
 
-	stat := store.BranchStat{LogicalBytes: 4096, Inodes: 2, NextWriteSeq: 5}
+	stat := store.BranchStat{LogicalBytes: 4096, Inodes: 2, NextWriteSeq: 5, WriterEpoch: 3, MaxBytes: 64 << 20}
 	inode := store.Inode{
 		Ino:       2,
 		ParentIno: 1,
@@ -186,7 +188,6 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	require.NoError(t, store.BatchSetInodeDeferred(batch, inode))
 	store.BatchSetEntryDeferred(batch, 1, []byte("hello.txt"), entry)
 	store.BatchSetXattrDeferred(batch, 2, []byte("user.tag"), []byte("v1"))
-	store.BatchSetDirtyDeferred(batch, 2)
 	store.BatchSetOrphanDeferred(batch, 2)
 	store.BatchSetDataDeferred(batch, 2, 0, ref)
 
@@ -218,7 +219,6 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	defer func() { _ = batch3.Close() }()
 	store.BatchDeleteEntryDeferred(batch3, 1, []byte("hello.txt"))
 	store.BatchDeleteXattrDeferred(batch3, 2, []byte("user.tag"))
-	store.BatchDeleteDirtyDeferred(batch3, 2)
 	store.BatchDeleteOrphanDeferred(batch3, 2)
 	store.BatchDeleteDataDeferred(batch3, 2, 0)
 	store.BatchDeleteInodeDeferred(batch3, 2)
@@ -229,7 +229,6 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	for _, k := range [][]byte{
 		store.EntryKey(1, []byte("hello.txt")),
 		store.XattrKey(2, []byte("user.tag")),
-		store.DirtyKey(2),
 		store.OrphanKey(2),
 		store.DataKey(2, 0),
 		store.InodeKey(2),

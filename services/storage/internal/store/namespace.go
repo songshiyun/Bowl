@@ -402,8 +402,6 @@ func (s *StoreActor) mutateCreateNodeCmd(cmd *writeCmd) {
 		Ino:  ino,
 		Mode: mode,
 	})
-	BatchSetDirtyDeferred(s.batch, ino)
-	BatchSetDirtyDeferred(s.batch, op.parentIno)
 
 	op.attr = child.ToAttribute()
 }
@@ -458,10 +456,6 @@ func (s *StoreActor) mutateLinkCmd(cmd *writeCmd) {
 		Ino:  op.target.Ino,
 		Mode: op.target.Mode,
 	})
-	BatchSetDirtyDeferred(s.batch, op.target.Ino)
-	if op.newParentIno != op.target.Ino {
-		BatchSetDirtyDeferred(s.batch, op.newParentIno)
-	}
 
 	op.attr = op.target.ToAttribute()
 }

@@ -24,7 +24,6 @@ func TestRmdirEmptyNonEmptyAndErrorPaths(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-rmdir",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -120,7 +119,6 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-unlink",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -260,7 +258,6 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-rename",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -433,7 +430,6 @@ func TestRenameExchangeAndSubdirCyclePrevention(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-exchange",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -540,7 +536,6 @@ func TestUnlinkRenameIntraBatchReadYourWritesAndPhaseAIsolation(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-ryow",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)

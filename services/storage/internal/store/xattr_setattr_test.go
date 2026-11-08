@@ -15,7 +15,6 @@ func TestSetAndGetXattrSemantics(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-xattr",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -42,7 +41,7 @@ func TestSetAndGetXattrSemantics(t *testing.T) {
 	err = actor.SetXattr(fileAttr.Ino, []byte("user.author"), []byte("alice"), store.XattrReplace)
 	require.ErrorIs(t, err, store.ErrNoData)
 
-	// 2. XattrCreate 创建新扩展属性，Ctime 与 WriteSeq 推进，DirtyKey 落盘
+	// 2. XattrCreate 创建新扩展属性，Ctime 与 WriteSeq 推进
 	require.NoError(t, actor.SetXattr(fileAttr.Ino, []byte("user.author"), []byte("alice"), store.XattrCreate))
 
 	val, err := actor.GetXattr(fileAttr.Ino, []byte("user.author"))
@@ -107,7 +106,6 @@ func TestListRemoveXattrAndIntraBatchReadYourWrites(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-xattr-list",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -228,7 +226,6 @@ func TestSetAttrKillPrivDirtyAtimeAndFlags(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-setattr",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -373,7 +370,6 @@ func TestXattrListLimitReadOnlyAndClosedGuards(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-xattr-guard",
-		BranchID: "main",
 		MaxBytes: 100 << 20,
 	})
 	require.NoError(t, err)
@@ -405,12 +401,6 @@ func TestXattrListLimitReadOnlyAndClosedGuards(t *testing.T) {
 	firstKey := append([]byte("user.aa"), bytes.Repeat([]byte("x"), store.MaxXattrNameBytes-7)...)
 	require.NoError(t, actor.SetXattr(f.Ino, firstKey, []byte("updated"), store.XattrReplace))
 
-	// 验证 DirtyKey 已写入底层 Pebble
-	rawDirty, closer, err := actor.DB().Get(store.DirtyKey(f.Ino))
-	require.NoError(t, err)
-	require.Equal(t, []byte{1}, append([]byte(nil), rawDirty...))
-	require.NoError(t, closer.Close())
-
 	require.NoError(t, actor.Close())
 
 	// 2. 已关闭实例全部读写操作返回 ErrClosed
@@ -428,7 +418,6 @@ func TestXattrListLimitReadOnlyAndClosedGuards(t *testing.T) {
 	roActor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-xattr-guard",
-		BranchID: "main",
 		ReadOnly: true,
 	})
 	require.NoError(t, err)

@@ -7,9 +7,9 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// 定长值物理编码字节数常量（ADR-0030 §2.1 & ADR-0031 §2.1/§2.2）。
+// 定长值物理编码字节数常量（ADR-0030 §2.1, ADR-0031 §2.1/§2.2 & ADR-0032 §4）。
 const (
-	BranchStatSize  = 25 // [ver(1B) | LogicalBytes(8B) | Inodes(8B) | NextWriteSeq(8B)]
+	BranchStatSize  = 41 // [ver(1B) | LogicalBytes(8B) | Inodes(8B) | NextWriteSeq(8B) | WriterEpoch(8B) | MaxBytes(8B)]
 	PackMetaSize    = 17 // [ver(1B) | LiveBytes(8B) | TotalBytes(8B)]
 	EntryValueSize  = 13 // [ver(1B) | Ino(8B) | Mode(4B)]
 	InodeHeaderSize = 93 // 93B 定长属性头 + 可变长 SymlinkTarget
@@ -18,14 +18,16 @@ const (
 
 const codecVersion byte = 1
 
-// BranchStat 表示分支实时逻辑用量、节点计数与写序列号。
+// BranchStat 表示单盘实时逻辑用量、节点计数、写序列号、最高已激活写世代（WriterEpoch）与逻辑容量配额上限（MaxBytes）。
 type BranchStat struct {
 	LogicalBytes uint64
 	Inodes       uint64
 	NextWriteSeq uint64
+	WriterEpoch  uint64
+	MaxBytes     uint64
 }
 
-// EncodeBranchStat 编码 25 字节定长 BranchStat。
+// EncodeBranchStat 编码 41 字节定长 BranchStat。
 func EncodeBranchStat(s BranchStat) []byte {
 	out := make([]byte, BranchStatSize)
 	putBranchStat(out, s)
@@ -37,9 +39,11 @@ func putBranchStat(dst []byte, s BranchStat) {
 	binary.BigEndian.PutUint64(dst[1:9], s.LogicalBytes)
 	binary.BigEndian.PutUint64(dst[9:17], s.Inodes)
 	binary.BigEndian.PutUint64(dst[17:25], s.NextWriteSeq)
+	binary.BigEndian.PutUint64(dst[25:33], s.WriterEpoch)
+	binary.BigEndian.PutUint64(dst[33:41], s.MaxBytes)
 }
 
-// DecodeBranchStat 解码 25 字节 BranchStat。
+// DecodeBranchStat 解码 41 字节 BranchStat。
 func DecodeBranchStat(b []byte) (BranchStat, error) {
 	if len(b) != BranchStatSize || b[0] != codecVersion {
 		return BranchStat{}, ErrInvalidValue
@@ -48,6 +52,8 @@ func DecodeBranchStat(b []byte) (BranchStat, error) {
 		LogicalBytes: binary.BigEndian.Uint64(b[1:9]),
 		Inodes:       binary.BigEndian.Uint64(b[9:17]),
 		NextWriteSeq: binary.BigEndian.Uint64(b[17:25]),
+		WriterEpoch:  binary.BigEndian.Uint64(b[25:33]),
+		MaxBytes:     binary.BigEndian.Uint64(b[33:41]),
 	}, nil
 }
 
@@ -357,14 +363,6 @@ func BatchSetXattrDeferred(b *pebble.Batch, ino uint64, name, val []byte) {
 	_ = op.Finish()
 }
 
-// BatchSetDirtyDeferred 使用 SetDeferred 原地零拷贝写入 DirtyKey。
-func BatchSetDirtyDeferred(b *pebble.Batch, ino uint64) {
-	op := b.SetDeferred(DirtyKeyLen, 1)
-	putDirtyKey(op.Key, ino)
-	op.Value[0] = 1
-	_ = op.Finish()
-}
-
 // BatchSetOrphanDeferred 使用 SetDeferred 原地零拷贝写入 OrphanKey。
 func BatchSetOrphanDeferred(b *pebble.Batch, ino uint64) {
 	op := b.SetDeferred(OrphanKeyLen, 1)
@@ -406,13 +404,6 @@ func BatchDeleteEntryDeferred(b *pebble.Batch, parent uint64, name []byte) {
 func BatchDeleteXattrDeferred(b *pebble.Batch, ino uint64, name []byte) {
 	op := b.DeleteDeferred(XattrPrefixLen + len(name))
 	putXattrKey(op.Key, ino, name)
-	_ = op.Finish()
-}
-
-// BatchDeleteDirtyDeferred 使用 DeleteDeferred 原地零拷贝删除 DirtyKey。
-func BatchDeleteDirtyDeferred(b *pebble.Batch, ino uint64) {
-	op := b.DeleteDeferred(DirtyKeyLen)
-	putDirtyKey(op.Key, ino)
 	_ = op.Finish()
 }
 

@@ -47,11 +47,10 @@ type formalEnv struct {
 	logicalBytes   uint64
 	liveInodeCount uint64
 
-	// 追踪 ExtendTail 顺延 -> Fsync 固化 -> 追加写 CoW -> SealActivePack -> CompactPacks 生命周期计数
+	// 追踪 ExtendTail 顺延 -> Fsync 固化 -> 追加写 CoW -> CompactPacks 生命周期计数
 	tailExtendCount      int
 	fsyncSolidifiedCount int
 	appendCoWCount       int
-	sealPackCount        int
 	compactPacksCount    int
 	reopenRecoveryCount  int
 }
@@ -62,7 +61,6 @@ func newFormalEnv(t *testing.T, seed uint64) *formalEnv {
 	actor, err := store.Open(store.Options{
 		Dir:      dir,
 		DiskID:   "disk-formal",
-		BranchID: "main",
 		MaxBytes: 512 << 20,
 	})
 	require.NoError(t, err)
@@ -781,12 +779,6 @@ func (e *formalEnv) stepFsyncDir() {
 	require.False(e.t, e.actor.WALDirty())
 }
 
-func (e *formalEnv) stepSealActivePack() {
-	require.NoError(e.t, e.actor.SealActivePack())
-	require.Equal(e.t, uint64(0), e.actor.Blobs().ActivePackID())
-	e.sealPackCount++
-}
-
 func (e *formalEnv) stepCompactPacks() {
 	require.NoError(e.t, e.actor.CompactPacks())
 	require.False(e.t, e.actor.WALDirty())
@@ -803,7 +795,6 @@ func (e *formalEnv) stepReopenAndRecover() {
 	reopened, err := store.Open(store.Options{
 		Dir:      e.dir,
 		DiskID:   "disk-formal",
-		BranchID: "main",
 		MaxBytes: 512 << 20,
 	})
 	require.NoError(e.t, err)
@@ -1071,10 +1062,10 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	require.True(t, env.actor.Blobs().HasDirty())
 	env.appendCoWCount++
 
-	// 压测跨包自动切包、SealActivePack、CompactPacks 搬迁与全死封口包并发回收：将封包上限设为 2 个 256 KiB 块
+	// 压测跨包自动切包、CompactPacks 搬迁与全死封口包并发回收：将封包上限设为 2 个 256 KiB 块
 	env.actor.Blobs().SetMaxPackSize(2 * store.BlobSize)
 
-	// 执行 240 步随机状态机演进（含 SealActivePack、CompactPacks、重启恢复）与独立只读探针对拍
+	// 执行 240 步随机状态机演进（含 CompactPacks、重启恢复）与独立只读探针对拍
 	const totalSteps = 240
 	for step := range totalSteps {
 		op := env.actionRng.IntN(100)
@@ -1105,8 +1096,6 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 			env.stepFsync()
 		case op < 95:
 			env.stepFsyncDir()
-		case op < 97:
-			env.stepSealActivePack()
 		default:
 			env.stepCompactPacks()
 		}
@@ -1115,7 +1104,6 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 			env.stepPurgeOrCleanOrphans()
 		}
 		if step%15 == 14 {
-			env.stepSealActivePack()
 			env.stepCompactPacks()
 		}
 		if step == 80 || step == 160 {
@@ -1127,9 +1115,8 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 		}
 	}
 
-	// 收尾清理所有孤儿节点、封口并执行 CompactPacks + 重启恢复，最后执行全量不变量审计
+	// 收尾清理所有孤儿节点、执行 CompactPacks + 重启恢复，最后执行全量不变量审计
 	env.stepPurgeOrCleanOrphans()
-	env.stepSealActivePack()
 	env.stepCompactPacks()
 	env.stepReopenAndRecover()
 	env.auditFullStateAndBlobConsistency()
@@ -1137,7 +1124,6 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	require.Positive(t, env.tailExtendCount, "状态机测试必须触发过 ExtendTail 活跃包尾部顺延")
 	require.Positive(t, env.fsyncSolidifiedCount, "状态机测试必须触发过 Fsync 块落盘")
 	require.Positive(t, env.appendCoWCount, "状态机测试必须触发过 Append CoW 新块段分配")
-	require.Positive(t, env.sealPackCount, "状态机测试必须触发过 SealActivePack")
 	require.Positive(t, env.compactPacksCount, "状态机测试必须触发过 CompactPacks")
 	require.Positive(t, env.reopenRecoveryCount, "状态机测试必须触发过重启恢复对拍")
 }
@@ -1146,7 +1132,6 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:       t.TempDir(),
 		DiskID:    "disk-concurrent-stress",
-		BranchID:  "main",
 		AtimeMode: store.AtimeModeRelAtime,
 		MaxBytes:  512 << 20,
 	})
@@ -1421,11 +1406,6 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 					}
 				}
 				if workerID == 0 && step%6 == 3 {
-					err = actor.SealActivePack()
-					if err != nil {
-						writerErrCh <- fmt.Errorf("worker %d SealActivePack: %w", workerID, err)
-						return
-					}
 					err = actor.CompactPacks()
 					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d CompactPacks: %w", workerID, err)
@@ -1450,7 +1430,6 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 	}
 
 	require.NoError(t, actor.CleanOrphans())
-	require.NoError(t, actor.Blobs().SealActivePack())
 	require.NoError(t, actor.CompactPacks())
 	require.NoError(t, actor.FsyncDir(store.RootIno))
 

@@ -324,7 +324,6 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 
 	_ = BatchSetInodeDeferred(s.batch, inode)
 	BatchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
-	BatchSetDirtyDeferred(s.batch, op.ino)
 
 	if op.zeroRange {
 		s.applyBlockMutations(op.ino, op.partialSpecs, op.fullDeleteKeys)
