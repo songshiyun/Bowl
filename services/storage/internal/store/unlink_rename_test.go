@@ -134,10 +134,14 @@ func seedFileWithBlobsAndXattr(t *testing.T, actor *store.StoreActor, ino uint64
 	}))
 }
 
-func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
-	var detached []uint64
-	var removed []uint64
+func assertKeyExists(t *testing.T, db *pebble.DB, key []byte) {
+	t.Helper()
+	_, closer, err := db.Get(key)
+	require.NoError(t, err)
+	require.NoError(t, closer.Close())
+}
 
+func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-unlink",
@@ -146,13 +150,6 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
-
-	store.OnBlobDeleteForTest(actor, func(ids []uint64) {
-		detached = append(detached, ids...)
-	}, func(ids []uint64) error {
-		removed = append(removed, ids...)
-		return nil
-	})
 
 	// 1. 错误分支校验：目录返 ErrIsDir、"."/".." 返 ErrInvalid、不存在返 ErrNotFound
 	dirAttr, err := actor.Mkdir(store.MkdirReq{
@@ -193,43 +190,38 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f1"), false))
 	assertKeyNotFound(t, actor.DB(), store.EntryKey(store.RootIno, []byte("f1")))
 	assertKeyNotFound(t, actor.DB(), store.OrphanKey(f1Attr.Ino))
+	assertKeyExists(t, actor.DB(), store.DataKey(f1Attr.Ino, 0))
+	assertKeyExists(t, actor.DB(), store.DataKey(f1Attr.Ino, 1))
 
 	f1AfterFirstUnlink, err := actor.GetAttr(f1Attr.Ino)
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), f1AfterFirstUnlink.Nlink)
 	require.Equal(t, uint64(4096), f1AfterFirstUnlink.Size)
-	require.Empty(t, detached)
-	require.Empty(t, removed)
 
-	// 4. Unlink("f1_link", openHandle=true)：Nlink 降为 0，写入 OrphanKey(ino)，保留 Inode 与 Size 不扣减逻辑空间
+	// 4. Unlink("f1_link", openHandle=true)：Nlink 降为 0，写入 OrphanKey(ino)，保留 Inode、DataKey 与 Size 不扣减逻辑空间
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f1_link"), true))
 	assertKeyNotFound(t, actor.DB(), store.EntryKey(store.RootIno, []byte("f1_link")))
-
-	_, closer, err := actor.DB().Get(store.OrphanKey(f1Attr.Ino))
-	require.NoError(t, err)
-	require.NoError(t, closer.Close())
+	assertKeyExists(t, actor.DB(), store.OrphanKey(f1Attr.Ino))
+	assertKeyExists(t, actor.DB(), store.DataKey(f1Attr.Ino, 0))
+	assertKeyExists(t, actor.DB(), store.DataKey(f1Attr.Ino, 1))
 
 	orphanAttr, err := actor.GetAttr(f1Attr.Ino)
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), orphanAttr.Nlink)
 	require.Equal(t, uint64(4096), orphanAttr.Size)
-	require.Empty(t, detached)
-	require.Empty(t, removed)
 
 	stBeforePurge, err := actor.StatFS()
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), stBeforePurge.Files) // Root + dir1 + orphaned f1
 	require.Equal(t, uint64(4096), stBeforePurge.UsedBytes)
 
-	// 5. PurgeOrphanInode(f1Attr.Ino)：清理 OrphanKey、InodeKey、XattrKey、DataKey，将 BlobRef.ID 加入 cmd.toDelete，扣减统计
+	// 5. PurgeOrphanInode(f1Attr.Ino)：清理 OrphanKey、InodeKey、XattrKey、DataKey 并扣减统计
 	require.NoError(t, actor.PurgeOrphanInode(f1Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.OrphanKey(f1Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.InodeKey(f1Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.XattrKey(f1Attr.Ino, []byte("user.k1")))
 	assertKeyNotFound(t, actor.DB(), store.DataKey(f1Attr.Ino, 0))
 	assertKeyNotFound(t, actor.DB(), store.DataKey(f1Attr.Ino, 1))
-	require.Equal(t, []uint64{blob1, blob2}, detached)
-	require.Equal(t, []uint64{blob1, blob2}, removed)
 
 	stAfterPurge, err := actor.StatFS()
 	require.NoError(t, err)
@@ -240,9 +232,7 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	require.NoError(t, actor.PurgeOrphanInode(f1Attr.Ino))
 	require.ErrorIs(t, actor.PurgeOrphanInode(dirAttr.Ino), store.ErrInvalid)
 
-	// 6. Unlink(openHandle=false) 直接删除 InodeKey、XattrKey、OrphanKey、DataKey 并回收 BlobRef.ID 与配额
-	detached = nil
-	removed = nil
+	// 6. Unlink(openHandle=false) 直接删除 InodeKey、XattrKey、OrphanKey、DataKey 并回收配额
 	f2Attr, err := actor.Create(store.CreateReq{
 		ParentIno: store.RootIno,
 		Name:      []byte("f2"),
@@ -260,12 +250,8 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	assertKeyNotFound(t, actor.DB(), store.InodeKey(f2Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.XattrKey(f2Attr.Ino, []byte("user.k2")))
 	assertKeyNotFound(t, actor.DB(), store.DataKey(f2Attr.Ino, 0))
-	require.Equal(t, []uint64{blob3}, detached)
-	require.Equal(t, []uint64{blob3}, removed)
 
 	// 7. CleanOrphans 批量回收多个孤儿节点
-	detached = nil
-	removed = nil
 	o1Attr, err := actor.Symlink(store.SymlinkReq{
 		ParentIno: store.RootIno,
 		Name:      []byte("sym1"),
@@ -292,8 +278,6 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	assertKeyNotFound(t, actor.DB(), store.OrphanKey(o2Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.InodeKey(o2Attr.Ino))
 	assertKeyNotFound(t, actor.DB(), store.DataKey(o2Attr.Ino, 0))
-	require.Equal(t, []uint64{blob4}, detached)
-	require.Equal(t, []uint64{blob4}, removed)
 
 	stFinal, err := actor.StatFS()
 	require.NoError(t, err)
@@ -302,9 +286,6 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 }
 
 func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
-	var detached []uint64
-	var removed []uint64
-
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-rename",
@@ -313,13 +294,6 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
-
-	store.OnBlobDeleteForTest(actor, func(ids []uint64) {
-		detached = append(detached, ids...)
-	}, func(ids []uint64) error {
-		removed = append(removed, ids...)
-		return nil
-	})
 
 	dirA, err := actor.Mkdir(store.MkdirReq{
 		ParentIno: store.RootIno,
@@ -377,7 +351,7 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	require.Equal(t, f1.Ino, movedEntry.Ino)
 	require.Equal(t, f1.Ino, movedAttr.Ino)
 
-	// 2. 默认覆盖非目录且 TargetOpenHandle=false：立即删除被覆盖目标的 InodeKey、XattrKey、DataKey 并回收 BlobRef.ID
+	// 2. 默认覆盖非目录且 TargetOpenHandle=false：立即删除被覆盖目标的 InodeKey、XattrKey 与 DataKey
 	const blobF2 uint64 = 201
 	seedFileWithBlobsAndXattr(t, actor, f2.Ino, 2048, "user.f2", map[uint64]store.BlobRef{
 		0: {PackID: blobF2, Offset: 0, Length: 2048},
@@ -394,12 +368,8 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	assertKeyNotFound(t, actor.DB(), store.InodeKey(f2.Ino))
 	assertKeyNotFound(t, actor.DB(), store.XattrKey(f2.Ino, []byte("user.f2")))
 	assertKeyNotFound(t, actor.DB(), store.DataKey(f2.Ino, 0))
-	require.Equal(t, []uint64{blobF2}, detached)
-	require.Equal(t, []uint64{blobF2}, removed)
 
-	// 3. 默认覆盖非目录且 TargetOpenHandle=true：被覆盖目标转为 OrphanKey，保留 Inode 与配额直至 PurgeOrphanInode
-	detached = nil
-	removed = nil
+	// 3. 默认覆盖非目录且 TargetOpenHandle=true：被覆盖目标转为 OrphanKey，保留 Inode、DataKey 与配额直至 PurgeOrphanInode
 	f3, err := actor.Create(store.CreateReq{
 		ParentIno: dirB.Ino,
 		Name:      []byte("f3"),
@@ -418,19 +388,16 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 		NewName:          []byte("f3"),
 		TargetOpenHandle: true,
 	}))
-	_, closer, err := actor.DB().Get(store.OrphanKey(f3.Ino))
-	require.NoError(t, err)
-	require.NoError(t, closer.Close())
+	assertKeyExists(t, actor.DB(), store.OrphanKey(f3.Ino))
+	assertKeyExists(t, actor.DB(), store.DataKey(f3.Ino, 0))
 	f3OrphanAttr, err := actor.GetAttr(f3.Ino)
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), f3OrphanAttr.Nlink)
-	require.Empty(t, detached)
 
 	require.NoError(t, actor.PurgeOrphanInode(f3.Ino))
 	assertKeyNotFound(t, actor.DB(), store.InodeKey(f3.Ino))
 	assertKeyNotFound(t, actor.DB(), store.OrphanKey(f3.Ino))
-	require.Equal(t, []uint64{blobF3}, detached)
-	require.Equal(t, []uint64{blobF3}, removed)
+	assertKeyNotFound(t, actor.DB(), store.DataKey(f3.Ino, 0))
 
 	// 4. 目录覆盖类型校验与空目录覆盖：非目录覆盖目录返 ErrIsDir，目录覆盖非目录返 ErrNotDir，目录覆盖非空目录返 ErrNotEmpty
 	require.ErrorIs(t, actor.Rename(store.RenameReq{

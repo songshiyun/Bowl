@@ -112,33 +112,26 @@ func (s *StoreActor) collectXattrKeys(reader pebbleReader, ino uint64) (keys [][
 	return keys, nil
 }
 
-// collectDataKeysAndBlobs 通过 reader.NewIter(nil) + iter.SeekPrefixGE(DataPrefix(ino)) 激活 14B Prefix Bloom Filter，
-// 收集指定节点的全部 DataKey 与对应的 BlobRef.ID。
-func (s *StoreActor) collectDataKeysAndBlobs(reader pebbleReader, ino uint64) (keys [][]byte, blobIDs []uint64, err error) {
+// collectDataKeys 通过 reader.NewIter(nil) + iter.SeekPrefixGE(DataPrefix(ino)) 激活 14B Prefix Bloom Filter，
+// 收集指定节点的全部 DataKey。
+func (s *StoreActor) collectDataKeys(reader pebbleReader, ino uint64) (keys [][]byte, err error) {
 	iter, err := reader.NewIter(nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, iter.Close()) }()
 
 	prefix := DataPrefix(ino)
 	for valid := iter.SeekPrefixGE(prefix); valid; valid = iter.Next() {
 		if _, _, decErr := DecodeDataKey(iter.Key()); decErr != nil {
-			return nil, nil, decErr
-		}
-		ref, decErr := DecodeBlobRef(iter.Value())
-		if decErr != nil {
-			return nil, nil, decErr
+			return nil, decErr
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
-		if ref.PackID != 0 {
-			blobIDs = append(blobIDs, ref.PackID)
-		}
 	}
 	if iterErr := iter.Error(); iterErr != nil {
-		return nil, nil, iterErr
+		return nil, iterErr
 	}
-	return keys, blobIDs, nil
+	return keys, nil
 }
 
 type inodeReclaimPlan struct {
@@ -149,7 +142,6 @@ type inodeReclaimPlan struct {
 	staleOnAlive bool
 	xattrKeys    [][]byte
 	dataKeys     [][]byte
-	blobIDs      []uint64
 }
 
 func (p inodeReclaimPlan) isNoop() bool {
@@ -177,7 +169,7 @@ func (s *StoreActor) buildInodeReclaimPlan(reader pebbleReader, ino uint64, targ
 	if err != nil {
 		return inodeReclaimPlan{}, err
 	}
-	dataKeys, blobIDs, err := s.collectDataKeysAndBlobs(reader, ino)
+	dataKeys, err := s.collectDataKeys(reader, ino)
 	if err != nil {
 		return inodeReclaimPlan{}, err
 	}
@@ -187,11 +179,10 @@ func (s *StoreActor) buildInodeReclaimPlan(reader pebbleReader, ino uint64, targ
 		hasInode:  hasInode,
 		xattrKeys: xattrKeys,
 		dataKeys:  dataKeys,
-		blobIDs:   blobIDs,
 	}, nil
 }
 
-func (s *StoreActor) applyInodeReclaimPlan(cmd *writeCmd, plan inodeReclaimPlan) {
+func (s *StoreActor) applyInodeReclaimPlan(plan inodeReclaimPlan) {
 	if plan.staleOnAlive {
 		if plan.hasOrphan {
 			batchDeleteOrphanDeferred(s.batch, plan.ino)
@@ -439,7 +430,7 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 		return
 	}
 
-	s.applyInodeReclaimPlan(cmd, op.reclaim)
+	s.applyInodeReclaimPlan(op.reclaim)
 }
 
 // PurgeOrphanInode 在 Actor 双阶段循环内物理清理指定孤儿节点及其关联 XattrKey、DataKey 与配额统计。
@@ -491,7 +482,7 @@ func (s *StoreActor) mutatePurgeOrphanCmd(cmd *writeCmd) {
 		return
 	}
 	s.stat.NextWriteSeq++
-	s.applyInodeReclaimPlan(cmd, op.plan)
+	s.applyInodeReclaimPlan(op.plan)
 }
 
 // CleanOrphans 在 Actor 双阶段循环内批量扫描并清理分支内所有孤儿节点。
@@ -589,7 +580,7 @@ func (s *StoreActor) mutateCleanOrphansCmd(cmd *writeCmd) {
 	}
 	s.stat.NextWriteSeq++
 	for _, plan := range op.plans {
-		s.applyInodeReclaimPlan(cmd, plan)
+		s.applyInodeReclaimPlan(plan)
 	}
 }
 
@@ -888,7 +879,7 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 
 		if op.hasNew {
 			if op.reclaimTarget {
-				s.applyInodeReclaimPlan(cmd, op.reclaim)
+				s.applyInodeReclaimPlan(op.reclaim)
 			} else if !op.newIsDir && op.newInode.Nlink > 1 {
 				op.newInode.Nlink--
 				op.newInode.Ctime = nowNano
@@ -920,8 +911,4 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 		_ = batchSetInodeDeferred(s.batch, op.newParent)
 		batchSetDirtyDeferred(s.batch, req.NewParentIno)
 	}
-}
-
-// OnBlobDeleteForTest 保留空实现兼容旧测试签名（将在 STARSRC-627 移除）。
-func OnBlobDeleteForTest(_ *StoreActor, _ func(ids []uint64), _ func(ids []uint64) error) {
 }
