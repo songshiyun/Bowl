@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -48,13 +49,8 @@ func TestRmdirEmptyNonEmptyAndErrorPaths(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchSetXattrDeferred(m.Batch(), dirAttr.Ino, []byte("user.tag"), []byte("v1"))
-			store.BatchSetXattrDeferred(m.Batch(), dirAttr.Ino, []byte("user.meta"), []byte("v2"))
-		},
-	}))
+	require.NoError(t, actor.SetXattr(dirAttr.Ino, []byte("user.tag"), []byte("v1"), 0))
+	require.NoError(t, actor.SetXattr(dirAttr.Ino, []byte("user.meta"), []byte("v2"), 0))
 
 	// 2. 非空目录 Rmdir 必须返回 ErrNotEmpty，且不破坏目录或统计
 	err = actor.Rmdir(store.RootIno, []byte("dirA"))
@@ -77,14 +73,7 @@ func TestRmdirEmptyNonEmptyAndErrorPaths(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrNotFound)
 
 	// 4. 先移除子项使 dirA 变为空目录，再执行 Rmdir("dirA")
-	require.NoError(t, actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchDeleteEntryDeferred(m.Batch(), dirAttr.Ino, []byte("child.txt"))
-			store.BatchDeleteInodeDeferred(m.Batch(), childAttr.Ino)
-			m.AddInodes(-1)
-		},
-	}))
+	require.NoError(t, actor.Unlink(dirAttr.Ino, []byte("child.txt"), false))
 
 	require.NoError(t, actor.Rmdir(store.RootIno, []byte("dirA")))
 
@@ -103,36 +92,21 @@ func TestRmdirEmptyNonEmptyAndErrorPaths(t *testing.T) {
 	require.Equal(t, uint64(1), st.Files)
 }
 
-func seedFileWithBlobsAndXattr(t *testing.T, actor *store.StoreActor, ino uint64, size uint64, xattrName string, blobs map[uint64]store.BlobRef) {
+func seedFileWithBlobsAndXattr(t *testing.T, actor *store.StoreActor, ino uint64, xattrName string, blockLens map[uint64]uint32) uint64 {
 	t.Helper()
-	var current store.Inode
-	require.NoError(t, actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error {
-			val, closer, err := v.Get(store.InodeKey(ino))
-			if err != nil {
-				return err
-			}
-			defer func() { _ = closer.Close() }()
-			dec, err := store.DecodeInode(val)
-			if err != nil {
-				return err
-			}
-			current = dec
-			return nil
-		},
-		Mutate: func(m store.MutateView) {
-			current.Size = size
-			require.NoError(t, store.BatchSetInodeDeferred(m.Batch(), current))
-			if xattrName != "" {
-				store.BatchSetXattrDeferred(m.Batch(), ino, []byte(xattrName), []byte("val"))
-			}
-			for idx, ref := range blobs {
-				m.AddBlobRef(ref)
-				store.BatchSetDataDeferred(m.Batch(), ino, idx, ref)
-			}
-			m.AddLogicalBytes(int64(size))
-		},
-	}))
+	if xattrName != "" {
+		require.NoError(t, actor.SetXattr(ino, []byte(xattrName), []byte("val"), 0))
+	}
+	var maxEnd uint64
+	for idx, length := range blockLens {
+		off := idx * store.BlobSize
+		_, _, err := actor.Write(ino, off, bytes.Repeat([]byte{0x5a}, int(length)))
+		require.NoError(t, err)
+		if end := off + uint64(length); end > maxEnd {
+			maxEnd = end
+		}
+	}
+	return maxEnd
 }
 
 func assertKeyExists(t *testing.T, db *pebble.DB, key []byte) {
@@ -180,11 +154,9 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	const blob1 uint64 = 101
-	const blob2 uint64 = 102
-	seedFileWithBlobsAndXattr(t, actor, f1Attr.Ino, 4096, "user.k1", map[uint64]store.BlobRef{
-		0: {PackID: blob1, Offset: 0, Length: 2048},
-		1: {PackID: blob2, Offset: 0, Length: 2048},
+	f1Size := seedFileWithBlobsAndXattr(t, actor, f1Attr.Ino, "user.k1", map[uint64]uint32{
+		0: 2048,
+		1: 2048,
 	})
 
 	// 3. Unlink("f1")：Nlink 从 2 降为 1，仅更新 InodeKey(Ctime)，不写 OrphanKey，不扣减统计或删 DataKey
@@ -197,7 +169,7 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	f1AfterFirstUnlink, err := actor.GetAttr(f1Attr.Ino)
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), f1AfterFirstUnlink.Nlink)
-	require.Equal(t, uint64(4096), f1AfterFirstUnlink.Size)
+	require.Equal(t, f1Size, f1AfterFirstUnlink.Size)
 
 	// 4. Unlink("f1_link", openHandle=true)：Nlink 降为 0，写入 OrphanKey(ino)，保留 Inode、DataKey 与 Size 不扣减逻辑空间
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f1_link"), true))
@@ -209,12 +181,12 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	orphanAttr, err := actor.GetAttr(f1Attr.Ino)
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), orphanAttr.Nlink)
-	require.Equal(t, uint64(4096), orphanAttr.Size)
+	require.Equal(t, f1Size, orphanAttr.Size)
 
 	stBeforePurge, err := actor.StatFS()
 	require.NoError(t, err)
 	require.Equal(t, uint64(3), stBeforePurge.Files) // Root + dir1 + orphaned f1
-	require.Equal(t, uint64(4096), stBeforePurge.UsedBytes)
+	require.Equal(t, f1Size, stBeforePurge.UsedBytes)
 
 	// 5. PurgeOrphanInode(f1Attr.Ino)：清理 OrphanKey、InodeKey、XattrKey、DataKey 并扣减统计
 	require.NoError(t, actor.PurgeOrphanInode(f1Attr.Ino))
@@ -241,9 +213,8 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	const blob3 uint64 = 103
-	seedFileWithBlobsAndXattr(t, actor, f2Attr.Ino, 1024, "user.k2", map[uint64]store.BlobRef{
-		0: {PackID: blob3, Offset: 0, Length: 1024},
+	seedFileWithBlobsAndXattr(t, actor, f2Attr.Ino, "user.k2", map[uint64]uint32{
+		0: 1024,
 	})
 
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f2"), false))
@@ -265,9 +236,8 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 		Mode:      0o644,
 	})
 	require.NoError(t, err)
-	const blob4 uint64 = 104
-	seedFileWithBlobsAndXattr(t, actor, o2Attr.Ino, 512, "", map[uint64]store.BlobRef{
-		0: {PackID: blob4, Offset: 0, Length: 512},
+	seedFileWithBlobsAndXattr(t, actor, o2Attr.Ino, "", map[uint64]uint32{
+		0: 512,
 	})
 
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("sym1"), true))
@@ -353,9 +323,8 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	require.Equal(t, f1.Ino, movedAttr.Ino)
 
 	// 2. 默认覆盖非目录且 TargetOpenHandle=false：立即删除被覆盖目标的 InodeKey、XattrKey 与 DataKey
-	const blobF2 uint64 = 201
-	seedFileWithBlobsAndXattr(t, actor, f2.Ino, 2048, "user.f2", map[uint64]store.BlobRef{
-		0: {PackID: blobF2, Offset: 0, Length: 2048},
+	seedFileWithBlobsAndXattr(t, actor, f2.Ino, "user.f2", map[uint64]uint32{
+		0: 2048,
 	})
 
 	require.NoError(t, actor.Rename(store.RenameReq{
@@ -377,9 +346,8 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 		Mode:      0o644,
 	})
 	require.NoError(t, err)
-	const blobF3 uint64 = 202
-	seedFileWithBlobsAndXattr(t, actor, f3.Ino, 1024, "user.f3", map[uint64]store.BlobRef{
-		0: {PackID: blobF3, Offset: 0, Length: 1024},
+	seedFileWithBlobsAndXattr(t, actor, f3.Ino, "user.f3", map[uint64]uint32{
+		0: 1024,
 	})
 
 	require.NoError(t, actor.Rename(store.RenameReq{
@@ -442,12 +410,7 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 		Mode:      0o755,
 	})
 	require.NoError(t, err)
-	require.NoError(t, actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchSetXattrDeferred(m.Batch(), emptyDir.Ino, []byte("user.empty"), []byte("1"))
-		},
-	}))
+	require.NoError(t, actor.SetXattr(emptyDir.Ino, []byte("user.empty"), []byte("1"), 0))
 
 	// 跨父目录将 dirB/subA 覆盖到 Root/emptyDir
 	require.NoError(t, actor.Rename(store.RenameReq{
@@ -463,7 +426,7 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	require.Equal(t, uint32(2), dirBAttrAfter.Nlink)
 	rootAttrAfter, err := actor.GetAttr(store.RootIno)
 	require.NoError(t, err)
-	require.Equal(t, uint32(4), rootAttrAfter.Nlink) // Root(2) + dirB(1) + emptyDir(subA)(1) = 4
+	require.Equal(t, uint32(4), rootAttrAfter.Nlink) // 根目录基础链接数 2 加上 dirB 与 emptyDir 两个子目录共 4 个链接
 }
 
 func TestRenameExchangeAndSubdirCyclePrevention(t *testing.T) {
@@ -597,20 +560,7 @@ func TestUnlinkRenameIntraBatchReadYourWritesAndPhaseAIsolation(t *testing.T) {
 	require.NoError(t, err)
 
 	// 用门控命令占住当前 Tick，使后续 6 条命令在下一轮 Tick 内合并执行
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	gateDone := make(chan error, 1)
-	go func() {
-		gateDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
+	release := store.HoldTickForTest(actor)
 
 	// 按序入队 6 条命令：
 	// 1. Rename: Root/"f_init" -> Root/"f_step1"
@@ -688,8 +638,7 @@ func TestUnlinkRenameIntraBatchReadYourWritesAndPhaseAIsolation(t *testing.T) {
 	}
 
 	ticksBefore := actor.TickCount()
-	close(blockCh)
-	require.NoError(t, <-gateDone)
+	release()
 
 	require.NoError(t, <-steps[0].done)
 	require.NoError(t, <-steps[1].done)

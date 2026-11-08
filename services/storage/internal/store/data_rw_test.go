@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/starsrc/bowl/services/storage/internal/store"
@@ -32,12 +33,7 @@ func TestFullBlockWriteMaxWrite1MiBAndLocklessReadRoundTrip(t *testing.T) {
 	ino := fileAttr.Ino
 
 	// 预先写入 security.capability 扩展属性，验证 Write 会通过 DeleteDeferred 原子清除它并清理 S_ISUID/S_ISGID
-	require.NoError(t, actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchSetXattrDeferred(m.Batch(), ino, []byte("security.capability"), []byte("cap-data"))
-		},
-	}))
+	require.NoError(t, actor.SetXattr(ino, []byte("security.capability"), []byte("cap-data"), 0))
 
 	block0 := bytes.Repeat([]byte{0x11}, store.BlobSize)
 	block2 := bytes.Repeat([]byte{0x33}, store.BlobSize)
@@ -48,7 +44,7 @@ func TestFullBlockWriteMaxWrite1MiBAndLocklessReadRoundTrip(t *testing.T) {
 	require.Equal(t, uint32(store.BlobSize), written)
 	require.Equal(t, uint64(store.BlobSize), attr.Size)
 	require.Equal(t, uint64(store.BlobSize/512), attr.Blocks)
-	require.Equal(t, uint32(store.S_IFREG|0o644), attr.Mode, "Write 必须清除非目录节点的 S_ISUID/S_ISGID")
+	require.Equal(t, store.S_IFREG|uint32(0o644), attr.Mode, "Write 必须清除非目录节点的 S_ISUID/S_ISGID")
 
 	// 验证 security.capability 已被清除
 	_, closer, err := actor.DB().Get(store.XattrKey(ino, []byte("security.capability")))
@@ -271,20 +267,7 @@ func TestFullBlockOverwriteAndPhaseAFailureIsolation(t *testing.T) {
 	// 构造同批提交：
 	// - f1 写入第 2 块 (offset = 2 * BlobSize，使 f1 Size 从 1 块增至 3 块，净增 2 块超出总配额 2 块 -> Phase A ErrNoSpace)
 	// - f2 写入第 0 块 (offset = 0，净增 1 块，总用量变为 2 块 <= 2 块 -> 同批成功提交)
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	gateDone := make(chan error, 1)
-	go func() {
-		gateDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
+	release := store.HoldTickForTest(actor)
 
 	errF1Ch := make(chan error, 1)
 	errF2Ch := make(chan error, 1)
@@ -299,9 +282,8 @@ func TestFullBlockOverwriteAndPhaseAFailureIsolation(t *testing.T) {
 		errF2Ch <- wErr
 	}()
 	time.Sleep(15 * time.Millisecond)
-	close(blockCh)
+	release()
 
-	require.NoError(t, <-gateDone)
 	require.ErrorIs(t, <-errF1Ch, store.ErrNoSpace)
 	require.NoError(t, <-errF2Ch)
 
@@ -328,7 +310,8 @@ func TestConcurrentWritesAndLocklessReadsOnPack(t *testing.T) {
 	const blocksPerFile = 4
 	inos := make([]uint64, fileCount)
 	for i := range fileCount {
-		attr, err := actor.Create(store.CreateReq{
+		var attr store.Attribute
+		attr, err = actor.Create(store.CreateReq{
 			ParentIno: store.RootIno,
 			Name:      []byte{byte('a' + i)},
 			Mode:      store.S_IFREG | 0o644,
@@ -348,8 +331,9 @@ func TestConcurrentWritesAndLocklessReadsOnPack(t *testing.T) {
 					fill := byte((fileIndex+1)*16 + blockIndex*4 + round)
 					data := bytes.Repeat([]byte{fill}, store.BlobSize)
 					n, _, wErr := actor.Write(fileIno, uint64(blockIndex)*store.BlobSize, data)
-					require.NoError(t, wErr)
-					require.Equal(t, uint32(store.BlobSize), n)
+					if !assert.NoError(t, wErr) || !assert.Equal(t, uint32(store.BlobSize), n) {
+						return
+					}
 				}
 			}(fIdx, ino, bIdx)
 		}
@@ -369,7 +353,9 @@ func TestConcurrentWritesAndLocklessReadsOnPack(t *testing.T) {
 				default:
 				}
 				_, rErr := actor.Read(fileIno, 0, 2*store.BlobSize)
-				require.NoError(t, rErr)
+				if !assert.NoError(t, rErr) {
+					return
+				}
 			}
 		}(ino)
 	}
@@ -718,22 +704,12 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdatesAndSnapshotIsolation(t *testing
 	require.False(t, reopened.Blobs().Exists(3), "Open 恢复时必须自动物理清理无 sys:pack 存活引用的残留死包 000003.pack")
 	require.True(t, reopened.Blobs().Exists(4), "仍有存活数据的 000004.pack 必须完好保留")
 
-	// 5. 验证自定义 WriteOp (ReadView.PackStat + MutateView.AddBlobRef / RemoveBlobRef)
-	var observedPack4 store.PackMeta
-	var observedOK bool
-	require.NoError(t, reopened.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error {
-			observedPack4, observedOK = v.PackStat(4)
-			return nil
-		},
-		Mutate: func(m store.MutateView) {
-			m.RemoveBlobRef(store.BlobRef{PackID: 4, Offset: 0, Length: store.BlobSize})
-			store.BatchDeleteDataDeferred(m.Batch(), f3.Ino, 0)
-		},
-	}))
-	require.True(t, observedOK)
-	require.Equal(t, uint64(store.BlobSize), observedPack4.LiveBytes)
+	// 5. 验证 Unlink 删除 f3 后将已封口 Pack 4 的 LiveBytes 扣减至 0 并同批删除 sys:pack:4
+	meta4, ok := readPackMetaFromDB(t, reopened, 4)
+	require.True(t, ok)
+	require.Equal(t, uint64(store.BlobSize), meta4.LiveBytes)
 
+	require.NoError(t, reopened.Unlink(store.RootIno, []byte("f3.bin"), false))
 	_, ok = readPackMetaFromDB(t, reopened, 4)
-	require.False(t, ok, "自定义 MutateView.RemoveBlobRef 将已封口 Pack 4 扣减至 0 后必须同批删除 sys:pack:4")
+	require.False(t, ok, "Unlink 将已封口 Pack 4 扣减至 0 后必须同批删除 sys:pack:4")
 }

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -26,7 +27,6 @@ type refNode struct {
 	uid           uint32
 	gid           uint32
 	size          uint64
-	flags         uint32
 	symlinkTarget []byte
 	data          []byte
 	xattrs        map[string][]byte
@@ -173,7 +173,7 @@ func (e *formalEnv) pickDir(rng *rand.Rand) *refNode {
 
 func (e *formalEnv) getBlockBlobRef(ino, blockIdx uint64) (store.BlobRef, bool) {
 	val, closer, err := e.actor.DB().Get(store.DataKey(ino, blockIdx))
-	if err == pebble.ErrNotFound {
+	if errors.Is(err, pebble.ErrNotFound) {
 		return store.BlobRef{}, false
 	}
 	require.NoError(e.t, err)
@@ -230,7 +230,7 @@ func (e *formalEnv) stepMkdir() {
 	require.NoError(e.t, err)
 
 	effGID := gid
-	effMode := uint32(store.S_IFDIR | 0o755)
+	effMode := store.S_IFDIR | uint32(0o755)
 	if parent.mode&store.S_ISGID != 0 {
 		effGID = parent.gid
 		effMode |= store.S_ISGID
@@ -254,7 +254,7 @@ func (e *formalEnv) stepMkdir() {
 func (e *formalEnv) stepSymlink() {
 	parent := e.pickDir(e.actionRng)
 	name := e.nextName("s")
-	target := fmt.Sprintf("/target/%s", name)
+	target := "/target/" + name
 	attr, err := e.actor.Symlink(store.SymlinkReq{
 		ParentIno: parent.ino,
 		Name:      []byte(name),
@@ -838,27 +838,33 @@ func (e *formalEnv) runReadProbes() {
 		switch n.mode & store.S_IFMT {
 		case store.S_IFREG:
 			require.Equal(e.t, n.size, attr.Size)
-			gotData, err := e.actor.Read(ino, 0, uint32(n.size)+64)
+			var gotData []byte
+			gotData, err = e.actor.Read(ino, 0, uint32(n.size)+64)
 			require.NoError(e.t, err)
 			require.True(e.t, bytes.Equal(n.data, gotData), "ino %d data mismatch (len expected=%d got=%d)", ino, len(n.data), len(gotData))
 
 		case store.S_IFLNK:
-			target, err := e.actor.Readlink(ino)
+			var target []byte
+			target, err = e.actor.Readlink(ino)
 			require.NoError(e.t, err)
 			require.Equal(e.t, n.symlinkTarget, target)
 
 		case store.S_IFDIR:
-			entries, err := e.actor.ReadDir(ino, 0, store.MaxReadDirLimit)
+			var entries []store.DirEntry
+			entries, err = e.actor.ReadDir(ino, 0, store.MaxReadDirLimit)
 			require.NoError(e.t, err)
-			plusEntries, err := e.actor.ReadDirPlus(ino, 0, store.MaxReadDirLimit)
+			var plusEntries []store.DirEntryPlus
+			plusEntries, err = e.actor.ReadDirPlus(ino, 0, store.MaxReadDirLimit)
 			require.NoError(e.t, err)
-			require.Equal(e.t, len(entries), len(plusEntries))
-			require.Equal(e.t, len(n.children)+2, len(entries))
+			require.Len(e.t, plusEntries, len(entries))
+			require.Len(e.t, entries, len(n.children)+2)
 
 			for _, name := range sortedMapKeys(n.children) {
 				childIno := n.children[name]
 				childModel := e.nodes[childIno]
-				ent, cAttr, err := e.actor.Lookup(ino, []byte(name))
+				var ent store.Entry
+				var cAttr store.Attribute
+				ent, cAttr, err = e.actor.Lookup(ino, []byte(name))
 				require.NoError(e.t, err)
 				require.Equal(e.t, childIno, ent.Ino)
 				require.Equal(e.t, childModel.mode, cAttr.Mode)
@@ -868,10 +874,11 @@ func (e *formalEnv) runReadProbes() {
 		xattrNames, err := e.actor.ListXattr(ino)
 		require.NoError(e.t, err)
 		expectedXattrKeys := sortedMapKeys(n.xattrs)
-		require.Equal(e.t, len(expectedXattrKeys), len(xattrNames))
+		require.Len(e.t, xattrNames, len(expectedXattrKeys))
 		for i, k := range expectedXattrKeys {
 			require.Equal(e.t, k, string(xattrNames[i]))
-			v, err := e.actor.GetXattr(ino, []byte(k))
+			var v []byte
+			v, err = e.actor.GetXattr(ino, []byte(k))
 			require.NoError(e.t, err)
 			require.Equal(e.t, n.xattrs[k], v)
 		}
@@ -889,7 +896,8 @@ func (e *formalEnv) auditFullStateAndBlobConsistency() {
 		require.Equal(e.t, n.nlink, attr.Nlink)
 		if n.mode&store.S_IFMT == store.S_IFREG {
 			require.Equal(e.t, n.size, attr.Size)
-			got, err := e.actor.Read(ino, 0, uint32(n.size)+16)
+			var got []byte
+			got, err = e.actor.Read(ino, 0, uint32(n.size)+16)
 			require.NoError(e.t, err)
 			require.True(e.t, bytes.Equal(n.data, got))
 		}
@@ -932,10 +940,10 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 	defer func() { require.NoError(t, iter.Close()) }()
 
 	for valid := iter.SeekGE([]byte("data:")); valid && bytes.HasPrefix(iter.Key(), []byte("data:")); valid = iter.Next() {
-		_, _, err := store.DecodeDataKey(iter.Key())
+		_, _, err = store.DecodeDataKey(iter.Key())
 		require.NoError(t, err)
-		ref, err := store.DecodeBlobRef(iter.Value())
-		require.NoError(t, err)
+		ref, decErr := store.DecodeBlobRef(iter.Value())
+		require.NoError(t, decErr)
 		end := ref.Offset + ref.Length
 		if end > referencedPacks[ref.PackID] {
 			referencedPacks[ref.PackID] = end
@@ -949,10 +957,10 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 	sysPacks := make(map[uint64]store.PackMeta)
 	packPrefix := store.PackStatPrefix()
 	for valid := iter.SeekGE(packPrefix); valid && bytes.HasPrefix(iter.Key(), packPrefix); valid = iter.Next() {
-		packID, err := store.DecodePackStatKey(iter.Key())
-		require.NoError(t, err)
-		meta, err := store.DecodePackMeta(iter.Value())
-		require.NoError(t, err)
+		packID, decErr := store.DecodePackStatKey(iter.Key())
+		require.NoError(t, decErr)
+		meta, decErr := store.DecodePackMeta(iter.Value())
+		require.NoError(t, decErr)
 		sysPacks[packID] = meta
 		if meta.LiveBytes == 0 {
 			require.Equal(t, activePackID, packID, "已封口 .pack (packID=%d != active=%d) 在 LiveBytes==0 时必须已从 Pebble 删除 sys:pack 条目", packID, activePackID)
@@ -980,9 +988,11 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 			if f.IsDir() || !strings.HasSuffix(f.Name(), ".pack") {
 				continue
 			}
-			id, err := strconv.ParseUint(strings.TrimSuffix(f.Name(), ".pack"), 16, 64)
+			var id uint64
+			id, err = strconv.ParseUint(strings.TrimSuffix(f.Name(), ".pack"), 16, 64)
 			require.NoError(t, err)
-			info, err := f.Info()
+			var info os.FileInfo
+			info, err = f.Info()
 			require.NoError(t, err)
 			diskPacks[id] = uint32(info.Size())
 		}
@@ -1124,12 +1134,12 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	env.stepReopenAndRecover()
 	env.auditFullStateAndBlobConsistency()
 
-	require.Greater(t, env.tailExtendCount, 0, "状态机测试必须触发过 ExtendTail 活跃包尾部顺延")
-	require.Greater(t, env.fsyncSolidifiedCount, 0, "状态机测试必须触发过 Fsync 块落盘")
-	require.Greater(t, env.appendCoWCount, 0, "状态机测试必须触发过 Append CoW 新块段分配")
-	require.Greater(t, env.sealPackCount, 0, "状态机测试必须触发过 SealActivePack")
-	require.Greater(t, env.compactPacksCount, 0, "状态机测试必须触发过 CompactPacks")
-	require.Greater(t, env.reopenRecoveryCount, 0, "状态机测试必须触发过重启恢复对拍")
+	require.Positive(t, env.tailExtendCount, "状态机测试必须触发过 ExtendTail 活跃包尾部顺延")
+	require.Positive(t, env.fsyncSolidifiedCount, "状态机测试必须触发过 Fsync 块落盘")
+	require.Positive(t, env.appendCoWCount, "状态机测试必须触发过 Append CoW 新块段分配")
+	require.Positive(t, env.sealPackCount, "状态机测试必须触发过 SealActivePack")
+	require.Positive(t, env.compactPacksCount, "状态机测试必须触发过 CompactPacks")
+	require.Positive(t, env.reopenRecoveryCount, "状态机测试必须触发过重启恢复对拍")
 }
 
 func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
@@ -1215,7 +1225,7 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 					return
 				}
 				_, xErr := actor.GetXattr(fileIno, []byte("user.tag"))
-				if xErr != nil && xErr != store.ErrNoData {
+				if xErr != nil && !errors.Is(xErr, store.ErrNoData) {
 					readerErrCh <- fmt.Errorf("GetXattr: %w", xErr)
 					return
 				}
@@ -1293,12 +1303,14 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 
 				// 2. Xattr 设置与移除
 				tagVal := fmt.Appendf(nil, "w%d_s%d", workerID, step)
-				if err := actor.SetXattr(primaryIno, []byte("user.tag"), tagVal, 0); err != nil {
+				err = actor.SetXattr(primaryIno, []byte("user.tag"), tagVal, 0)
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d SetXattr: %w", workerID, err)
 					return
 				}
 				if step%5 == 0 {
-					if err := actor.RemoveXattr(primaryIno, []byte("user.tag")); err != nil {
+					err = actor.RemoveXattr(primaryIno, []byte("user.tag"))
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d RemoveXattr: %w", workerID, err)
 						return
 					}
@@ -1318,38 +1330,44 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 					writerErrCh <- fmt.Errorf("worker %d Create tmp: %w", workerID, err)
 					return
 				}
-				if _, _, err := actor.Write(tmpAttr.Ino, 0, chunk); err != nil {
+				_, _, err = actor.Write(tmpAttr.Ino, 0, chunk)
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d Write tmp: %w", workerID, err)
 					return
 				}
-				if _, err := actor.Link(store.LinkReq{
+				_, err = actor.Link(store.LinkReq{
 					Ino:          tmpAttr.Ino,
 					NewParentIno: dirIno,
 					NewName:      linkName,
-				}); err != nil {
+				})
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d Link tmp: %w", workerID, err)
 					return
 				}
-				if err := actor.Rename(store.RenameReq{
+				err = actor.Rename(store.RenameReq{
 					OldParentIno: dirIno,
 					OldName:      tmpName,
 					NewParentIno: dirIno,
 					NewName:      renamedName,
-				}); err != nil {
+				})
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d Rename tmp: %w", workerID, err)
 					return
 				}
-				if err := actor.Unlink(dirIno, linkName, false); err != nil {
+				err = actor.Unlink(dirIno, linkName, false)
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d Unlink link: %w", workerID, err)
 					return
 				}
 				openH := step%2 == 0
-				if err := actor.Unlink(dirIno, renamedName, openH); err != nil {
+				err = actor.Unlink(dirIno, renamedName, openH)
+				if err != nil {
 					writerErrCh <- fmt.Errorf("worker %d Unlink renamed: %w", workerID, err)
 					return
 				}
 				if openH {
-					if err := actor.PurgeOrphanInode(tmpAttr.Ino); err != nil {
+					err = actor.PurgeOrphanInode(tmpAttr.Ino)
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d PurgeOrphanInode: %w", workerID, err)
 						return
 					}
@@ -1357,21 +1375,24 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 
 				if step%5 == 1 {
 					subName := fmt.Appendf(nil, "sub_%d", step)
-					if _, err := actor.Mkdir(store.MkdirReq{
+					_, err = actor.Mkdir(store.MkdirReq{
 						ParentIno: dirIno,
 						Name:      subName,
 						Mode:      store.S_IFDIR | 0o755,
-					}); err != nil {
+					})
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d Mkdir: %w", workerID, err)
 						return
 					}
-					if err := actor.Rmdir(dirIno, subName); err != nil {
+					err = actor.Rmdir(dirIno, subName)
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d Rmdir: %w", workerID, err)
 						return
 					}
 
 					symName := fmt.Appendf(nil, "sym_%d", step)
-					symAttr, err := actor.Symlink(store.SymlinkReq{
+					var symAttr store.Attribute
+					symAttr, err = actor.Symlink(store.SymlinkReq{
 						ParentIno: dirIno,
 						Name:      symName,
 						Target:    []byte("primary.bin"),
@@ -1380,28 +1401,33 @@ func TestStoreActorConcurrentReadWriteStressAndBlobReclaim(t *testing.T) {
 						writerErrCh <- fmt.Errorf("worker %d Symlink: %w", workerID, err)
 						return
 					}
-					if _, err := actor.Readlink(symAttr.Ino); err != nil {
+					_, err = actor.Readlink(symAttr.Ino)
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d Readlink: %w", workerID, err)
 						return
 					}
-					if err := actor.Unlink(dirIno, symName, false); err != nil {
+					err = actor.Unlink(dirIno, symName, false)
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d Unlink sym: %w", workerID, err)
 						return
 					}
 				}
 
 				if step%8 == 0 {
-					if err := actor.FsyncDir(dirIno); err != nil {
+					err = actor.FsyncDir(dirIno)
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d FsyncDir: %w", workerID, err)
 						return
 					}
 				}
 				if workerID == 0 && step%6 == 3 {
-					if err := actor.Blobs().SealActivePack(); err != nil {
+					err = actor.Blobs().SealActivePack()
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d SealActivePack: %w", workerID, err)
 						return
 					}
-					if err := actor.CompactPacks(); err != nil {
+					err = actor.CompactPacks()
+					if err != nil {
 						writerErrCh <- fmt.Errorf("worker %d CompactPacks: %w", workerID, err)
 						return
 					}

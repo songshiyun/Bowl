@@ -3,7 +3,6 @@ package store
 import (
 	"encoding/binary"
 	"math"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
@@ -121,17 +120,8 @@ type Attribute struct {
 	Flags      uint32
 }
 
-// AtimeTime 返回 UTC 访问时间。
-func (a Attribute) AtimeTime() time.Time { return time.Unix(0, a.Atime).UTC() }
-
-// MtimeTime 返回 UTC 修改时间。
-func (a Attribute) MtimeTime() time.Time { return time.Unix(0, a.Mtime).UTC() }
-
-// CtimeTime 返回 UTC 状态变更时间。
-func (a Attribute) CtimeTime() time.Time { return time.Unix(0, a.Ctime).UTC() }
-
 // ToAttribute 将持久化 Inode 转换为 POSIX Attribute。
-func (i Inode) ToAttribute() Attribute {
+func (i *Inode) ToAttribute() Attribute {
 	size := i.Size
 	if i.Mode&S_IFMT == S_IFDIR && size == 0 {
 		size = DefaultDirSize
@@ -143,8 +133,6 @@ func (i Inode) ToAttribute() Attribute {
 	}
 	var rdev uint32
 	if i.Mode&S_IFMT == S_IFCHR || i.Mode&S_IFMT == S_IFBLK {
-		rdev = i.Rdev
-	} else {
 		rdev = i.Rdev
 	}
 	return Attribute{
@@ -168,16 +156,18 @@ func (i Inode) ToAttribute() Attribute {
 }
 
 // EncodeInode 编码 93 字节定长属性头与可变长 SymlinkTarget。
+//
+//nolint:gocritic // hugeParam: 保持与 Inode 编解码公开契约按值传参一致。
 func EncodeInode(i Inode) ([]byte, error) {
 	if uint64(len(i.SymlinkTarget)) > math.MaxUint32 {
 		return nil, ErrInvalidValue
 	}
 	out := make([]byte, InodeHeaderSize+len(i.SymlinkTarget))
-	putInode(out, i)
+	putInode(out, &i)
 	return out, nil
 }
 
-func putInode(dst []byte, i Inode) {
+func putInode(dst []byte, i *Inode) {
 	dst[0] = codecVersion
 	binary.BigEndian.PutUint64(dst[1:9], i.Ino)
 	binary.BigEndian.PutUint64(dst[9:17], i.ParentIno)
@@ -316,188 +306,126 @@ type StatFSResult struct {
 
 // BatchSetStatDeferred 使用 SetDeferred 原地零拷贝写入 "sys:stat"。
 func BatchSetStatDeferred(b *pebble.Batch, s BranchStat) {
-	batchSetStatDeferred(b, s)
-}
-
-func batchSetStatDeferred(b *pebble.Batch, s BranchStat) {
 	op := b.SetDeferred(StatKeyLen, BranchStatSize)
 	putStatKey(op.Key)
 	putBranchStat(op.Value, s)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetPackMetaDeferred 使用 SetDeferred 原地零拷贝写入 PackStatKey ("sys:pack:<pack_id>")。
 func BatchSetPackMetaDeferred(b *pebble.Batch, packID uint64, m PackMeta) {
-	batchSetPackMetaDeferred(b, packID, m)
-}
-
-func batchSetPackMetaDeferred(b *pebble.Batch, packID uint64, m PackMeta) {
 	op := b.SetDeferred(PackStatKeyLen, PackMetaSize)
 	putPackStatKey(op.Key, packID)
 	putPackMeta(op.Value, m)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeletePackMetaDeferred 使用 DeleteDeferred 原地零拷贝删除 PackStatKey ("sys:pack:<pack_id>")。
 func BatchDeletePackMetaDeferred(b *pebble.Batch, packID uint64) {
-	batchDeletePackMetaDeferred(b, packID)
-}
-
-func batchDeletePackMetaDeferred(b *pebble.Batch, packID uint64) {
 	op := b.DeleteDeferred(PackStatKeyLen)
 	putPackStatKey(op.Key, packID)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetInodeDeferred 使用 SetDeferred 原地零拷贝写入 InodeKey。
+//
+//nolint:gocritic // hugeParam: 保持与 BatchSet*Deferred 零拷贝批次写入公开契约一致。
 func BatchSetInodeDeferred(b *pebble.Batch, i Inode) error {
-	return batchSetInodeDeferred(b, i)
-}
-
-func batchSetInodeDeferred(b *pebble.Batch, i Inode) error {
 	if uint64(len(i.SymlinkTarget)) > math.MaxUint32 {
 		return ErrInvalidValue
 	}
 	op := b.SetDeferred(InodeKeyLen, InodeHeaderSize+len(i.SymlinkTarget))
 	putInodeKey(op.Key, i.Ino)
-	putInode(op.Value, i)
-	op.Finish()
+	putInode(op.Value, &i)
+	_ = op.Finish()
 	return nil
 }
 
 // BatchSetEntryDeferred 使用 SetDeferred 原地零拷贝写入 EntryKey。
 func BatchSetEntryDeferred(b *pebble.Batch, parent uint64, name []byte, e Entry) {
-	batchSetEntryDeferred(b, parent, name, e)
-}
-
-func batchSetEntryDeferred(b *pebble.Batch, parent uint64, name []byte, e Entry) {
 	op := b.SetDeferred(EntryPrefixLen+len(name), EntryValueSize)
 	putEntryKey(op.Key, parent, name)
 	putEntry(op.Value, e)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetXattrDeferred 使用 SetDeferred 原地零拷贝写入 XattrKey。
 func BatchSetXattrDeferred(b *pebble.Batch, ino uint64, name, val []byte) {
-	batchSetXattrDeferred(b, ino, name, val)
-}
-
-func batchSetXattrDeferred(b *pebble.Batch, ino uint64, name, val []byte) {
 	op := b.SetDeferred(XattrPrefixLen+len(name), len(val))
 	putXattrKey(op.Key, ino, name)
 	copy(op.Value, val)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetDirtyDeferred 使用 SetDeferred 原地零拷贝写入 DirtyKey。
 func BatchSetDirtyDeferred(b *pebble.Batch, ino uint64) {
-	batchSetDirtyDeferred(b, ino)
-}
-
-func batchSetDirtyDeferred(b *pebble.Batch, ino uint64) {
 	op := b.SetDeferred(DirtyKeyLen, 1)
 	putDirtyKey(op.Key, ino)
 	op.Value[0] = 1
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetOrphanDeferred 使用 SetDeferred 原地零拷贝写入 OrphanKey。
 func BatchSetOrphanDeferred(b *pebble.Batch, ino uint64) {
-	batchSetOrphanDeferred(b, ino)
-}
-
-func batchSetOrphanDeferred(b *pebble.Batch, ino uint64) {
 	op := b.SetDeferred(OrphanKeyLen, 1)
 	putOrphanKey(op.Key, ino)
 	op.Value[0] = 1
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchSetDataDeferred 使用 SetDeferred 原地零拷贝写入 DataKey。
 func BatchSetDataDeferred(b *pebble.Batch, ino, blockIdx uint64, ref BlobRef) {
-	batchSetDataDeferred(b, ino, blockIdx, ref)
-}
-
-func batchSetDataDeferred(b *pebble.Batch, ino, blockIdx uint64, ref BlobRef) {
 	op := b.SetDeferred(DataKeyLen, BlobRefSize)
 	putDataKey(op.Key, ino, blockIdx)
 	putBlobRef(op.Value, ref)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteDeferred 使用 DeleteDeferred 原地零拷贝删除任意键（严禁使用 SingleDelete）。
 func BatchDeleteDeferred(b *pebble.Batch, key []byte) {
-	batchDeleteDeferred(b, key)
-}
-
-func batchDeleteDeferred(b *pebble.Batch, key []byte) {
 	op := b.DeleteDeferred(len(key))
 	copy(op.Key, key)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteInodeDeferred 使用 DeleteDeferred 原地零拷贝删除 InodeKey。
 func BatchDeleteInodeDeferred(b *pebble.Batch, ino uint64) {
-	batchDeleteInodeDeferred(b, ino)
-}
-
-func batchDeleteInodeDeferred(b *pebble.Batch, ino uint64) {
 	op := b.DeleteDeferred(InodeKeyLen)
 	putInodeKey(op.Key, ino)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteEntryDeferred 使用 DeleteDeferred 原地零拷贝删除 EntryKey。
 func BatchDeleteEntryDeferred(b *pebble.Batch, parent uint64, name []byte) {
-	batchDeleteEntryDeferred(b, parent, name)
-}
-
-func batchDeleteEntryDeferred(b *pebble.Batch, parent uint64, name []byte) {
 	op := b.DeleteDeferred(EntryPrefixLen + len(name))
 	putEntryKey(op.Key, parent, name)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteXattrDeferred 使用 DeleteDeferred 原地零拷贝删除 XattrKey。
 func BatchDeleteXattrDeferred(b *pebble.Batch, ino uint64, name []byte) {
-	batchDeleteXattrDeferred(b, ino, name)
-}
-
-func batchDeleteXattrDeferred(b *pebble.Batch, ino uint64, name []byte) {
 	op := b.DeleteDeferred(XattrPrefixLen + len(name))
 	putXattrKey(op.Key, ino, name)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteDirtyDeferred 使用 DeleteDeferred 原地零拷贝删除 DirtyKey。
 func BatchDeleteDirtyDeferred(b *pebble.Batch, ino uint64) {
-	batchDeleteDirtyDeferred(b, ino)
-}
-
-func batchDeleteDirtyDeferred(b *pebble.Batch, ino uint64) {
 	op := b.DeleteDeferred(DirtyKeyLen)
 	putDirtyKey(op.Key, ino)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteOrphanDeferred 使用 DeleteDeferred 原地零拷贝删除 OrphanKey。
 func BatchDeleteOrphanDeferred(b *pebble.Batch, ino uint64) {
-	batchDeleteOrphanDeferred(b, ino)
-}
-
-func batchDeleteOrphanDeferred(b *pebble.Batch, ino uint64) {
 	op := b.DeleteDeferred(OrphanKeyLen)
 	putOrphanKey(op.Key, ino)
-	op.Finish()
+	_ = op.Finish()
 }
 
 // BatchDeleteDataDeferred 使用 DeleteDeferred 原地零拷贝删除 DataKey。
 func BatchDeleteDataDeferred(b *pebble.Batch, ino, blockIdx uint64) {
-	batchDeleteDataDeferred(b, ino, blockIdx)
-}
-
-func batchDeleteDataDeferred(b *pebble.Batch, ino, blockIdx uint64) {
 	op := b.DeleteDeferred(DataKeyLen)
 	putDataKey(op.Key, ino, blockIdx)
-	op.Finish()
+	_ = op.Finish()
 }

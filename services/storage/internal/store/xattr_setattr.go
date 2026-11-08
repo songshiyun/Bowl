@@ -14,12 +14,6 @@ var (
 	securityCapabilityXattr = []byte("security.capability")
 )
 
-func init() {
-	registerOp(opSetXattr, (*StoreActor).validateSetXattrCmd, (*StoreActor).mutateSetXattrCmd)
-	registerOp(opRemoveXattr, (*StoreActor).validateRemoveXattrCmd, (*StoreActor).mutateRemoveXattrCmd)
-	registerOp(opSetAttr, (*StoreActor).validateSetAttrCmd, (*StoreActor).mutateSetAttrCmd)
-}
-
 // SetAttrReq 定义 SetAttr 属性变更请求参数。
 type SetAttrReq struct {
 	Mode     *uint32
@@ -33,9 +27,6 @@ type SetAttrReq struct {
 	CtimeNow bool
 	Flags    *uint32
 }
-
-// setAttrSizeHook 供数据层（STARSRC-622）挂载含 Size 截断/扩容的四阶段 SetAttr 处理逻辑。
-var setAttrSizeHook func(s *StoreActor, ino uint64, req SetAttrReq) (Attribute, error)
 
 type setXattrOp struct {
 	ino   uint64
@@ -56,12 +47,15 @@ type removeXattrOp struct {
 }
 
 type setAttrOp struct {
-	ino uint64
-	req SetAttrReq
+	ino         uint64
+	req         SetAttrReq
+	hasTailSpec bool
+	tailSpec    writeBlockSpec
 
 	// Phase A 校验缓存至 Phase B
-	inode Inode
-	attr  Attribute
+	inode      Inode
+	deleteKeys []dataKeyEntry
+	attr       Attribute
 }
 
 func validateXattrName(name []byte) error {
@@ -149,7 +143,7 @@ func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32) erro
 }
 
 func (s *StoreActor) validateSetXattrCmd(cmd *writeCmd) error {
-	op := cmd.req.(*setXattrOp)
+	op, _ := cmd.req.(*setXattrOp)
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
 	}
@@ -157,7 +151,8 @@ func (s *StoreActor) validateSetXattrCmd(cmd *writeCmd) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	err = s.checkInodeLive(s.batch, &inode)
+	if err != nil {
 		return err
 	}
 	if bytes.HasPrefix(op.name, userXattrPrefix) && !isAllowedUserXattrFileType(inode.Mode) {
@@ -184,7 +179,7 @@ func (s *StoreActor) validateSetXattrCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateSetXattrCmd(cmd *writeCmd) {
-	op := cmd.req.(*setXattrOp)
+	op, _ := cmd.req.(*setXattrOp)
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
 	nowNano := s.now().UnixNano()
@@ -192,9 +187,9 @@ func (s *StoreActor) mutateSetXattrCmd(cmd *writeCmd) {
 	op.inode.Ctime = nowNano
 	op.inode.WriteSeq = seq
 
-	batchSetXattrDeferred(s.batch, op.ino, op.name, op.value)
-	_ = batchSetInodeDeferred(s.batch, op.inode)
-	batchSetDirtyDeferred(s.batch, op.ino)
+	BatchSetXattrDeferred(s.batch, op.ino, op.name, op.value)
+	_ = BatchSetInodeDeferred(s.batch, op.inode)
+	BatchSetDirtyDeferred(s.batch, op.ino)
 }
 
 // GetXattr 在并发直读快路径（lifecycleMu.RLock()）直接调用 db.Get(XattrKey) 读取节点扩展属性值。
@@ -215,7 +210,8 @@ func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, inode); err != nil {
+	err = s.checkInodeLive(s.db, &inode)
+	if err != nil {
 		return nil, err
 	}
 	if bytes.HasPrefix(name, userXattrPrefix) && !isAllowedUserXattrFileType(inode.Mode) {
@@ -239,7 +235,8 @@ func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
 // ListXattr 在并发直读快路径（lifecycleMu.RLock()）通过 db.NewIter(nil) + iter.SeekPrefixGE(XattrPrefix(ino))
 // 触发 15B 前缀布隆过滤器，按字节字典序升序返回节点扩展属性名列表。
 func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
-	if err := validateNodeIno(ino); err != nil {
+	err = validateNodeIno(ino)
+	if err != nil {
 		return nil, err
 	}
 	unlock, err := s.enter()
@@ -252,7 +249,8 @@ func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, inode); err != nil {
+	err = s.checkInodeLive(s.db, &inode)
+	if err != nil {
 		return nil, err
 	}
 
@@ -299,7 +297,7 @@ func (s *StoreActor) RemoveXattr(ino uint64, name []byte) error {
 }
 
 func (s *StoreActor) validateRemoveXattrCmd(cmd *writeCmd) error {
-	op := cmd.req.(*removeXattrOp)
+	op, _ := cmd.req.(*removeXattrOp)
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
 	}
@@ -307,7 +305,8 @@ func (s *StoreActor) validateRemoveXattrCmd(cmd *writeCmd) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	err = s.checkInodeLive(s.batch, &inode)
+	if err != nil {
 		return err
 	}
 	if bytes.HasPrefix(op.name, userXattrPrefix) && !isAllowedUserXattrFileType(inode.Mode) {
@@ -325,7 +324,7 @@ func (s *StoreActor) validateRemoveXattrCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateRemoveXattrCmd(cmd *writeCmd) {
-	op := cmd.req.(*removeXattrOp)
+	op, _ := cmd.req.(*removeXattrOp)
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
 	nowNano := s.now().UnixNano()
@@ -333,9 +332,9 @@ func (s *StoreActor) mutateRemoveXattrCmd(cmd *writeCmd) {
 	op.inode.Ctime = nowNano
 	op.inode.WriteSeq = seq
 
-	batchDeleteXattrDeferred(s.batch, op.ino, op.name)
-	_ = batchSetInodeDeferred(s.batch, op.inode)
-	batchSetDirtyDeferred(s.batch, op.ino)
+	BatchDeleteXattrDeferred(s.batch, op.ino, op.name)
+	_ = BatchSetInodeDeferred(s.batch, op.inode)
+	BatchSetDirtyDeferred(s.batch, op.ino)
 }
 
 func validateSetAttrReq(req SetAttrReq) error {
@@ -366,7 +365,7 @@ func validateSetAttrReq(req SetAttrReq) error {
 }
 
 // validateSetAttrInode 在 Phase A 校验目标 Inode 是否允许执行 req 指定的属性变更（供 SetAttr 及 setAttrSizeHook 复用）。
-func (s *StoreActor) validateSetAttrInode(inode Inode, req SetAttrReq) error {
+func (s *StoreActor) validateSetAttrInode(inode *Inode, req SetAttrReq) error {
 	fileType := inode.Mode & S_IFMT
 	if req.Size != nil {
 		if fileType == S_IFDIR {
@@ -432,13 +431,14 @@ func (s *StoreActor) applySetAttrFields(inode *Inode, req SetAttrReq, nowNano in
 			}
 		}
 	}
-	if req.AtimeNow {
+	switch {
+	case req.AtimeNow:
 		inode.Atime = nowNano
 		s.discardDirtyAtime(inode.Ino)
-	} else if req.Atime != nil {
+	case req.Atime != nil:
 		inode.Atime = req.Atime.UnixNano()
 		s.discardDirtyAtime(inode.Ino)
-	} else {
+	default:
 		s.overlayAtime(inode)
 	}
 	if req.MtimeNow || (req.Size != nil && req.Mtime == nil) {
@@ -450,7 +450,7 @@ func (s *StoreActor) applySetAttrFields(inode *Inode, req SetAttrReq, nowNano in
 	inode.WriteSeq = seq
 
 	if req.Size != nil || req.UID != nil || req.GID != nil || req.Mode != nil {
-		batchDeleteXattrDeferred(s.batch, inode.Ino, securityCapabilityXattr)
+		BatchDeleteXattrDeferred(s.batch, inode.Ino, securityCapabilityXattr)
 	}
 }
 
@@ -465,8 +465,8 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq) (Attribute, error) {
 	if err := validateSetAttrReq(req); err != nil {
 		return Attribute{}, err
 	}
-	if req.Size != nil && setAttrSizeHook != nil {
-		return setAttrSizeHook(s, ino, req)
+	if req.Size != nil {
+		return s.setAttrWithSize(ino, req)
 	}
 
 	op := &setAttrOp{
@@ -483,7 +483,7 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq) (Attribute, error) {
 }
 
 func (s *StoreActor) validateSetAttrCmd(cmd *writeCmd) error {
-	op := cmd.req.(*setAttrOp)
+	op, _ := cmd.req.(*setAttrOp)
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
 	}
@@ -491,25 +491,72 @@ func (s *StoreActor) validateSetAttrCmd(cmd *writeCmd) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	if err := s.checkInodeLive(s.batch, &inode); err != nil {
 		return err
 	}
-	if err := s.validateSetAttrInode(inode, op.req); err != nil {
+	if err := s.validateSetAttrInode(&inode, op.req); err != nil {
 		return err
+	}
+	if op.req.Size != nil {
+		newSize := *op.req.Size
+		if newSize < inode.Size {
+			var startDelBlock uint64
+			if newSize > 0 {
+				startDelBlock = ((newSize - 1) / BlobSize) + 1
+			}
+			keys, err := s.collectDataKeysFrom(s.batch, op.ino, startDelBlock)
+			if err != nil {
+				return err
+			}
+			op.deleteKeys = keys
+
+			if op.hasTailSpec {
+				oldRef, oldOK, err := s.readDataBlobRef(s.batch, op.ino, op.tailSpec.blockIdx)
+				if err != nil {
+					return err
+				}
+				op.tailSpec.oldRef = oldRef
+				op.tailSpec.oldOK = oldOK
+			}
+		} else {
+			op.hasTailSpec = false
+		}
 	}
 	op.inode = inode
 	return nil
 }
 
 func (s *StoreActor) mutateSetAttrCmd(cmd *writeCmd) {
-	op := cmd.req.(*setAttrOp)
+	op, _ := cmd.req.(*setAttrOp)
+	oldSize := op.inode.Size
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
 	nowNano := s.now().UnixNano()
 
 	s.applySetAttrFields(&op.inode, op.req, nowNano, seq)
 
-	_ = batchSetInodeDeferred(s.batch, op.inode)
-	batchSetDirtyDeferred(s.batch, op.ino)
+	if op.req.Size != nil && *op.req.Size < oldSize {
+		for _, entry := range op.deleteKeys {
+			s.removeBlobRef(entry.ref)
+			BatchDeleteDeferred(s.batch, entry.key)
+		}
+		if op.hasTailSpec {
+			if op.tailSpec.keep {
+				if !op.tailSpec.sameRef {
+					if op.tailSpec.oldOK {
+						s.removeBlobRef(op.tailSpec.oldRef)
+					}
+					s.addBlobRef(op.tailSpec.newRef)
+					BatchSetDataDeferred(s.batch, op.ino, op.tailSpec.blockIdx, op.tailSpec.newRef)
+				}
+			} else if op.tailSpec.oldOK {
+				s.removeBlobRef(op.tailSpec.oldRef)
+				BatchDeleteDataDeferred(s.batch, op.ino, op.tailSpec.blockIdx)
+			}
+		}
+	}
+
+	_ = BatchSetInodeDeferred(s.batch, op.inode)
+	BatchSetDirtyDeferred(s.batch, op.ino)
 	op.attr = op.inode.ToAttribute()
 }

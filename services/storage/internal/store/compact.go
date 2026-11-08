@@ -6,10 +6,6 @@ import (
 	"slices"
 )
 
-func init() {
-	registerOp(opCompactRelocate, (*StoreActor).validateCompactRelocateCmd, (*StoreActor).mutateCompactRelocateCmd)
-}
-
 type relocateBlockSpec struct {
 	ino      uint64
 	blockIdx uint64
@@ -22,11 +18,6 @@ type relocateBlockSpec struct {
 
 type compactRelocateOp struct {
 	specs []relocateBlockSpec
-}
-
-// SetBeforeCompactRelocateHookForTest 注册在搬迁活块读取追加完成、向 StoreActor 投递 opCompactRelocate 前触发的测试钩子。
-func (s *StoreActor) SetBeforeCompactRelocateHookForTest(hook func()) {
-	s.beforeCompactRelocateHook = hook
 }
 
 // CompactPacks 执行基于 ShardStore (SOSP '21) 的低水位已封口 .pack 搬迁回收（ADR-0031 §4.2）：
@@ -46,7 +37,7 @@ func (s *StoreActor) CompactPacks() error {
 	}
 	defer unlock()
 
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return ErrIO
 	}
@@ -148,24 +139,27 @@ func filterNonCandidatePins(pinned []uint64, candSet map[uint64]struct{}) []uint
 func (s *StoreActor) selectLowWatermarkPacks() ([]uint64, error) {
 	var candidates []uint64
 	cmd := s.acquireCmd()
-	cmd.op = opCustom
-	cmd.validate = func(actor *StoreActor, _ *writeCmd) error {
-		activeID := actor.activePackID()
-		for packID, meta := range actor.packStats {
-			if packID == 0 || packID == activeID {
-				continue
-			}
-			if meta.LiveBytes > 0 && meta.LiveBytes*2 <= meta.TotalBytes {
-				candidates = append(candidates, packID)
-			}
-		}
-		slices.Sort(candidates)
-		return nil
-	}
+	cmd.op = opCompactSelect
+	cmd.req = &candidates
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return nil, err
 	}
 	return candidates, nil
+}
+
+func (s *StoreActor) validateCompactSelectCmd(cmd *writeCmd) error {
+	out, _ := cmd.req.(*[]uint64)
+	activeID := s.activePackID()
+	for packID, meta := range s.packStats {
+		if packID == 0 || packID == activeID {
+			continue
+		}
+		if meta.LiveBytes > 0 && meta.LiveBytes*2 <= meta.TotalBytes {
+			*out = append(*out, packID)
+		}
+	}
+	slices.Sort(*out)
+	return nil
 }
 
 type liveBlockCandidate struct {
@@ -207,7 +201,7 @@ func (s *StoreActor) scanLiveBlocksInPacks(candSet map[uint64]struct{}) (out []l
 // validateCompactRelocateCmd 执行 Phase A 原子 CAS 校验（防御 ShardStore 论文 Bug #1）：
 // 严格通过 s.batch.Get(DataKey(ino, blockIdx)) 校验目标节点仍存活且 curRef == oldRef。
 func (s *StoreActor) validateCompactRelocateCmd(cmd *writeCmd) error {
-	op := cmd.req.(*compactRelocateOp)
+	op, _ := cmd.req.(*compactRelocateOp)
 	for i := range op.specs {
 		spec := &op.specs[i]
 		spec.matched = false
@@ -219,7 +213,7 @@ func (s *StoreActor) validateCompactRelocateCmd(cmd *writeCmd) error {
 		if err != nil {
 			return err
 		}
-		if err := s.checkInodeLive(s.batch, inode); errors.Is(err, ErrNotFound) {
+		if err = s.checkInodeLive(s.batch, &inode); errors.Is(err, ErrNotFound) {
 			continue
 		} else if err != nil {
 			return err
@@ -246,7 +240,7 @@ func (s *StoreActor) validateCompactRelocateCmd(cmd *writeCmd) error {
 // mutateCompactRelocateCmd 执行 Phase B 原子指针切换与 sys:pack 记账更新：
 // 仅对 Phase A 通过 CAS 校验的块更新 DataKey -> newRef；未通过 CAS 校验的预写块仅推进目标包的 TotalBytes（LiveBytes 不增加）。
 func (s *StoreActor) mutateCompactRelocateCmd(cmd *writeCmd) {
-	op := cmd.req.(*compactRelocateOp)
+	op, _ := cmd.req.(*compactRelocateOp)
 	for i := range op.specs {
 		spec := &op.specs[i]
 		if !spec.matched {
@@ -255,7 +249,7 @@ func (s *StoreActor) mutateCompactRelocateCmd(cmd *writeCmd) {
 		}
 		s.removeBlobRef(spec.oldRef)
 		s.addBlobRef(spec.newRef)
-		batchSetDataDeferred(s.batch, spec.ino, spec.blockIdx, spec.newRef)
+		BatchSetDataDeferred(s.batch, spec.ino, spec.blockIdx, spec.newRef)
 	}
 }
 
@@ -277,13 +271,16 @@ func (s *StoreActor) reapZeroLiveCandidatePacks(candidates []uint64) error {
 		return nil
 	}
 	cmd := s.acquireCmd()
-	cmd.op = opCustom
-	cmd.mutate = func(actor *StoreActor, _ *writeCmd) {
-		for _, id := range candidates {
-			if meta, ok := actor.packStats[id]; ok && meta.LiveBytes == 0 {
-				actor.dirtyPackStats[id] = struct{}{}
-			}
+	cmd.op = opCompactReap
+	cmd.req = candidates
+	return s.enqueueAndWait(cmd)
+}
+
+func (s *StoreActor) mutateCompactReapCmd(cmd *writeCmd) {
+	ids, _ := cmd.req.([]uint64)
+	for _, id := range ids {
+		if meta, ok := s.packStats[id]; ok && meta.LiveBytes == 0 {
+			s.dirtyPackStats[id] = struct{}{}
 		}
 	}
-	return s.enqueueAndWait(cmd)
 }

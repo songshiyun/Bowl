@@ -56,10 +56,7 @@ type BlobStore struct {
 	// 2. 分片环形热块缓存（16 分片 × 64 槽位，总预算 64 MiB，按 (PackID, Offset) 定位）
 	hot [hotBlobShards]hotShard
 
-	// 3. Per-Inode 轻量分片定序锁（4096 分片 Mutex）
-	inodeLocks [4096]sync.Mutex
-
-	// 4. 活跃 .pack 写句柄与脏包追踪表
+	// 3. 活跃 .pack 写句柄与脏包追踪表
 	mu           sync.Mutex
 	closed       bool
 	activePackID uint64
@@ -71,7 +68,7 @@ type BlobStore struct {
 	dirtyNew     map[uint64]struct{}            // 新建尚未执行 packs/ 目录 fsync 的 packID 集合
 	dirDirty     bool                           // packs/ 目录项发生变更（如 RemovePack）需执行目录 fsync
 
-	// 5. 常驻 .pack 文件句柄表（涵盖活跃包与已封口只读包，0 open/close 并发 ReadAt）
+	// 4. 常驻 .pack 文件句柄表（涵盖活跃包与已封口只读包，0 open/close 并发 ReadAt）
 	filesMu   sync.RWMutex
 	packFiles map[uint64]*os.File
 
@@ -79,28 +76,9 @@ type BlobStore struct {
 	syncDirCount  atomic.Uint64
 }
 
-func init() {
-	openInitHooks = append(openInitHooks, func(s *StoreActor) error {
-		bs := NewBlobStore(s.dir)
-		s.blobs = bs
-		s.syncInodeFn = bs.SyncInode
-		return nil
-	})
-}
-
 // Blobs 返回当前 StoreActor 绑定的 *BlobStore 实例。
 func (s *StoreActor) Blobs() *BlobStore {
-	if bs, ok := s.blobs.(*BlobStore); ok {
-		return bs
-	}
-	return nil
-}
-
-// SetBlobReserveFunc 为当前 StoreActor 的 BlobStore 注入自定义 PackID 号段预留器。
-func (s *StoreActor) SetBlobReserveFunc(fn BlobReserveFunc) {
-	if bs := s.Blobs(); bs != nil {
-		bs.SetReserveFunc(fn)
-	}
+	return s.blobs
 }
 
 // NewBlobStore 创建以 base（分支或快照根目录）为根的 BlobStore，并在未注入外部分配器时扫描已有最大 PackID 初始化默认分配器。
@@ -126,15 +104,6 @@ func NewBlobStoreWithAllocator(base string, reserve BlobReserveFunc) *BlobStore 
 		bs.setupDefaultAllocator(maxID)
 	}
 	return bs
-}
-
-// SetReserveFunc 动态注入外部 PackID 号段预留函数并重置本地预留游标。
-func (s *BlobStore) SetReserveFunc(fn BlobReserveFunc) {
-	s.allocMu.Lock()
-	defer s.allocMu.Unlock()
-	s.reservePackID = fn
-	s.nextPackID.Store(0)
-	s.reservedPackID.Store(0)
 }
 
 // AdvanceMinPackID 确保后续分配的 PackID 严格大于 minPackID（供 StoreActor 启动恢复 sys:pack 时对齐游标）。
@@ -276,11 +245,6 @@ func (s *BlobStore) NextPackID() (uint64, error) {
 
 // Root 返回 packs 根目录路径（<branch_dir>/packs）。
 func (s *BlobStore) Root() string { return s.dir }
-
-// InodeLock 返回指定 Inode 对应的分片互斥锁指针（按 ino & 0xfff 索引）。
-func (s *BlobStore) InodeLock(ino uint64) *sync.Mutex {
-	return &s.inodeLocks[ino&0xfff]
-}
 
 // Path 返回指定编号封包文件的物理路径 <branch_dir>/packs/<pack_id_hex16>.pack。
 func (s *BlobStore) Path(packID uint64) string {

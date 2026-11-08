@@ -18,7 +18,7 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	}
 	statBytes := store.EncodeBranchStat(stat)
 	require.Len(t, statBytes, store.BranchStatSize)
-	require.Equal(t, 25, len(statBytes))
+	require.Len(t, statBytes, 25)
 	gotStat, err := store.DecodeBranchStat(statBytes)
 	require.NoError(t, err)
 	require.Equal(t, stat, gotStat)
@@ -37,7 +37,7 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	}
 	entryBytes := store.EncodeEntry(entry)
 	require.Len(t, entryBytes, store.EntryValueSize)
-	require.Equal(t, 13, len(entryBytes))
+	require.Len(t, entryBytes, 13)
 	gotEntry, err := store.DecodeEntry(entryBytes)
 	require.NoError(t, err)
 	require.Equal(t, entry, gotEntry)
@@ -93,9 +93,9 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 		Ctime:     300,
 	}
 	dirAttr := dirInode.ToAttribute()
-	require.Equal(t, uint64(store.DefaultDirSize), dirAttr.Size)
-	require.Equal(t, uint32(store.DefaultBlockSize), dirAttr.Blksize)
-	require.Equal(t, uint64(store.DefaultDirSize/512), dirAttr.Blocks)
+	require.Equal(t, store.DefaultDirSize, dirAttr.Size)
+	require.Equal(t, store.DefaultBlockSize, dirAttr.Blksize)
+	require.Equal(t, store.DefaultDirSize/512, dirAttr.Blocks)
 
 	// 4. BlobRef (16B: [PackID(8B) | Offset(4B) | Length(4B)])
 	ref := store.BlobRef{
@@ -105,7 +105,7 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	}
 	refBytes := store.EncodeBlobRef(ref)
 	require.Len(t, refBytes, store.BlobRefSize)
-	require.Equal(t, 16, len(refBytes))
+	require.Len(t, refBytes, 16)
 	gotRef, err := store.DecodeBlobRef(refBytes)
 	require.NoError(t, err)
 	require.Equal(t, ref, gotRef)
@@ -141,7 +141,7 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	}
 	packMetaBytes := store.EncodePackMeta(packMeta)
 	require.Len(t, packMetaBytes, store.PackMetaSize)
-	require.Equal(t, 17, len(packMetaBytes))
+	require.Len(t, packMetaBytes, 17)
 	gotPackMeta, err := store.DecodePackMeta(packMetaBytes)
 	require.NoError(t, err)
 	require.Equal(t, packMeta, gotPackMeta)

@@ -24,7 +24,7 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 	gotIno, err := store.DecodeInodeKey(inodeKey)
 	require.NoError(t, err)
 	require.Equal(t, uint64(0x0102030405060708), gotIno)
-	require.True(t, bytes.Compare(store.InodeKey(1), store.InodeKey(256)) < 0)
+	require.Negative(t, bytes.Compare(store.InodeKey(1), store.InodeKey(256)))
 
 	_, err = store.DecodeInodeKey([]byte("inode:short"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)
@@ -91,8 +91,8 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(0x0102030405060708), dKeyIno)
 	require.Equal(t, uint64(0x1122334455667788), dKeyBlock)
-	require.True(t, bytes.Compare(store.DataKey(10, 1), store.DataKey(10, 2)) < 0)
-	require.True(t, bytes.Compare(store.DataKey(10, ^uint64(0)), store.DataKey(11, 0)) < 0)
+	require.Negative(t, bytes.Compare(store.DataKey(10, 1), store.DataKey(10, 2)))
+	require.Negative(t, bytes.Compare(store.DataKey(10, ^uint64(0)), store.DataKey(11, 0)))
 
 	_, _, err = store.DecodeDataKey([]byte("data:bad"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)
@@ -114,7 +114,7 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 	gotPackID, err := store.DecodePackStatKey(packKey)
 	require.NoError(t, err)
 	require.Equal(t, packID, gotPackID)
-	require.True(t, bytes.Compare(store.PackStatKey(1), store.PackStatKey(256)) < 0)
+	require.Negative(t, bytes.Compare(store.PackStatKey(1), store.PackStatKey(256)))
 
 	_, err = store.DecodePackStatKey([]byte("sys:pack:short"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)

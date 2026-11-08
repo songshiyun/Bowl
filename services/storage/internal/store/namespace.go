@@ -10,14 +10,6 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-func init() {
-	registerOp(opMknod, (*StoreActor).validateCreateNodeCmd, (*StoreActor).mutateCreateNodeCmd)
-	registerOp(opMkdir, (*StoreActor).validateCreateNodeCmd, (*StoreActor).mutateCreateNodeCmd)
-	registerOp(opCreate, (*StoreActor).validateCreateNodeCmd, (*StoreActor).mutateCreateNodeCmd)
-	registerOp(opSymlink, (*StoreActor).validateCreateNodeCmd, (*StoreActor).mutateCreateNodeCmd)
-	registerOp(opLink, (*StoreActor).validateLinkCmd, (*StoreActor).mutateLinkCmd)
-}
-
 // MknodReq 定义 Mknod 节点创建参数。
 type MknodReq struct {
 	ParentIno uint64
@@ -321,7 +313,7 @@ func (s *StoreActor) checkEntryNotExists(reader pebbleReader, parentIno uint64, 
 }
 
 func (s *StoreActor) validateCreateNodeCmd(cmd *writeCmd) error {
-	op := cmd.req.(*createNodeOp)
+	op, _ := cmd.req.(*createNodeOp)
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
 	}
@@ -351,7 +343,7 @@ func (s *StoreActor) validateCreateNodeCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateCreateNodeCmd(cmd *writeCmd) {
-	op := cmd.req.(*createNodeOp)
+	op, _ := cmd.req.(*createNodeOp)
 	ino := s.consumeIno()
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
@@ -404,20 +396,20 @@ func (s *StoreActor) mutateCreateNodeCmd(cmd *writeCmd) {
 	s.stat.Inodes++
 	s.stat.LogicalBytes += size
 
-	_ = batchSetInodeDeferred(s.batch, child)
-	_ = batchSetInodeDeferred(s.batch, op.parent)
-	batchSetEntryDeferred(s.batch, op.parentIno, op.name, Entry{
+	_ = BatchSetInodeDeferred(s.batch, child)
+	_ = BatchSetInodeDeferred(s.batch, op.parent)
+	BatchSetEntryDeferred(s.batch, op.parentIno, op.name, Entry{
 		Ino:  ino,
 		Mode: mode,
 	})
-	batchSetDirtyDeferred(s.batch, ino)
-	batchSetDirtyDeferred(s.batch, op.parentIno)
+	BatchSetDirtyDeferred(s.batch, ino)
+	BatchSetDirtyDeferred(s.batch, op.parentIno)
 
 	op.attr = child.ToAttribute()
 }
 
 func (s *StoreActor) validateLinkCmd(cmd *writeCmd) error {
-	op := cmd.req.(*linkNodeOp)
+	op, _ := cmd.req.(*linkNodeOp)
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
 	}
@@ -447,7 +439,7 @@ func (s *StoreActor) validateLinkCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateLinkCmd(cmd *writeCmd) {
-	op := cmd.req.(*linkNodeOp)
+	op, _ := cmd.req.(*linkNodeOp)
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
 	nowNano := s.now().UnixNano()
@@ -460,15 +452,15 @@ func (s *StoreActor) mutateLinkCmd(cmd *writeCmd) {
 	op.parent.Ctime = nowNano
 	op.parent.WriteSeq = seq
 
-	_ = batchSetInodeDeferred(s.batch, op.target)
-	_ = batchSetInodeDeferred(s.batch, op.parent)
-	batchSetEntryDeferred(s.batch, op.newParentIno, op.newName, Entry{
+	_ = BatchSetInodeDeferred(s.batch, op.target)
+	_ = BatchSetInodeDeferred(s.batch, op.parent)
+	BatchSetEntryDeferred(s.batch, op.newParentIno, op.newName, Entry{
 		Ino:  op.target.Ino,
 		Mode: op.target.Mode,
 	})
-	batchSetDirtyDeferred(s.batch, op.target.Ino)
+	BatchSetDirtyDeferred(s.batch, op.target.Ino)
 	if op.newParentIno != op.target.Ino {
-		batchSetDirtyDeferred(s.batch, op.newParentIno)
+		BatchSetDirtyDeferred(s.batch, op.newParentIno)
 	}
 
 	op.attr = op.target.ToAttribute()
@@ -501,7 +493,8 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 	}
 
 	if bytes.Equal(name, []byte("..")) {
-		if err := s.checkInodeLive(s.db, parent); err != nil {
+		err = s.checkInodeLive(s.db, &parent)
+		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
 		if parentIno == RootIno {
@@ -511,11 +504,13 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 		if parent.ParentIno == 0 || parent.ParentIno == parentIno {
 			return Entry{}, Attribute{}, ErrNotFound
 		}
-		grandparent, err := s.readInode(s.db, parent.ParentIno)
+		var grandparent Inode
+		grandparent, err = s.readInode(s.db, parent.ParentIno)
 		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
-		if err := s.checkInodeLive(s.db, grandparent); err != nil {
+		err = s.checkInodeLive(s.db, &grandparent)
+		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
 		s.overlayAtime(&grandparent)
@@ -578,7 +573,7 @@ func (s *StoreActor) Readlink(ino uint64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, inode); err != nil {
+	if err := s.checkInodeLive(s.db, &inode); err != nil {
 		return nil, err
 	}
 	if inode.Mode&S_IFMT != S_IFLNK {
@@ -587,11 +582,11 @@ func (s *StoreActor) Readlink(ino uint64) ([]byte, error) {
 	if len(inode.SymlinkTarget) == 0 {
 		return nil, ErrIO
 	}
-	s.touchReadAtime(inode)
+	s.touchReadAtime(&inode)
 	return append([]byte(nil), inode.SymlinkTarget...), nil
 }
 
-func (s *StoreActor) touchReadAtime(inode Inode) {
+func (s *StoreActor) touchReadAtime(inode *Inode) {
 	if s.readOnly || s.closing.Load() {
 		return
 	}
@@ -619,7 +614,8 @@ func (s *StoreActor) touchReadAtime(inode Inode) {
 // ReadDir 在并发直读快路径（lifecycleMu.RLock()）通过 db.NewIter(nil) + iter.SeekPrefixGE(EntryPrefix(ino))
 // 触发 15B 前缀布隆过滤器扫描目录项，合成 "." 与 ".." 并按游标 offset 分页返回。
 func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []DirEntry, err error) {
-	if err := validateNodeIno(ino); err != nil {
+	err = validateNodeIno(ino)
+	if err != nil {
 		return nil, err
 	}
 	if maxEntries == 0 || maxEntries > MaxReadDirLimit || offset > math.MaxInt64 {
@@ -639,7 +635,8 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 		return nil, ErrNotDir
 	}
 	if dir.Nlink == 0 {
-		if err := s.checkInodeLive(s.db, dir); err != nil {
+		err = s.checkInodeLive(s.db, &dir)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -658,12 +655,12 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 		dotDotIno := dir.Ino
 		dotDotMode := dir.Mode
 		if ino != RootIno && dir.ParentIno > 0 {
-			parent, err := s.readInode(s.db, dir.ParentIno)
-			if err == nil {
+			parent, readErr := s.readInode(s.db, dir.ParentIno)
+			if readErr == nil {
 				dotDotIno = parent.Ino
 				dotDotMode = parent.Mode
-			} else if !errors.Is(err, ErrNotFound) {
-				return nil, err
+			} else if !errors.Is(readErr, ErrNotFound) {
+				return nil, readErr
 			}
 		}
 		entries = append(entries, DirEntry{
@@ -725,7 +722,8 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 // 将子项按 Ino 升序排序并复用同一个 iter 循环调用 iter.SeekPrefixGE(InodeKey(ino))
 // 激活 Pebble TrySeekUsingNext 批量获取子项 Attribute。
 func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries []DirEntryPlus, err error) {
-	if err := validateNodeIno(ino); err != nil {
+	err = validateNodeIno(ino)
+	if err != nil {
 		return nil, err
 	}
 	if maxEntries == 0 || maxEntries > MaxReadDirLimit || offset > math.MaxInt64 {
@@ -745,7 +743,8 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 		return nil, ErrNotDir
 	}
 	if dir.Nlink == 0 {
-		if err := s.checkInodeLive(s.db, dir); err != nil {
+		err = s.checkInodeLive(s.db, &dir)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -768,14 +767,14 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 		parentIno := dir.Ino
 		parentMode := dir.Mode
 		if ino != RootIno && dir.ParentIno > 0 {
-			parent, err := s.readInode(s.db, dir.ParentIno)
-			if err == nil {
+			parent, readErr := s.readInode(s.db, dir.ParentIno)
+			if readErr == nil {
 				s.overlayAtime(&parent)
 				parentAttr = parent.ToAttribute()
 				parentIno = parent.Ino
 				parentMode = parent.Mode
-			} else if !errors.Is(err, ErrNotFound) {
-				return nil, err
+			} else if !errors.Is(readErr, ErrNotFound) {
+				return nil, readErr
 			}
 		}
 		entries = append(entries, DirEntryPlus{

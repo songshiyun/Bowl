@@ -5,11 +5,6 @@ import (
 	"math"
 )
 
-func init() {
-	setAttrSizeHook = (*StoreActor).setAttrWithSize
-	registerOp(opFallocate, (*StoreActor).validateFallocateCmd, (*StoreActor).mutateFallocateCmd)
-}
-
 type dataKeyEntry struct {
 	key []byte
 	ref BlobRef
@@ -62,7 +57,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 	}
 	defer unlock()
 
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return Attribute{}, ErrIO
 	}
@@ -99,96 +94,20 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 		}
 	}
 
-	var (
-		cachedInode Inode
-		deleteKeys  []dataKeyEntry
-		outAttr     Attribute
-	)
-
+	op := &setAttrOp{
+		ino:         ino,
+		req:         req,
+		hasTailSpec: hasTailSpec,
+		tailSpec:    tailSpec,
+	}
 	cmd := s.acquireCmd()
-	cmd.op = opCustom
+	cmd.op = opSetAttr
+	cmd.req = op
 	cmd.pinnedPacks = pinned
-	cmd.validate = func(actor *StoreActor, _ *writeCmd) error {
-		if actor.stat.NextWriteSeq == math.MaxUint64 {
-			return ErrNoSpace
-		}
-		inode, err := actor.readInode(actor.batch, ino)
-		if err != nil {
-			return err
-		}
-		if err := actor.checkInodeLive(actor.batch, inode); err != nil {
-			return err
-		}
-		if err := actor.validateSetAttrInode(inode, req); err != nil {
-			return err
-		}
-
-		if newSize < inode.Size {
-			var startDelBlock uint64
-			if newSize == 0 {
-				startDelBlock = 0
-			} else {
-				startDelBlock = ((newSize - 1) / BlobSize) + 1
-			}
-			keys, err := actor.collectDataKeysFrom(actor.batch, ino, startDelBlock)
-			if err != nil {
-				return err
-			}
-			deleteKeys = keys
-
-			if hasTailSpec {
-				oldRef, oldOK, err := actor.readDataBlobRef(actor.batch, ino, tailSpec.blockIdx)
-				if err != nil {
-					return err
-				}
-				tailSpec.oldRef = oldRef
-				tailSpec.oldOK = oldOK
-			}
-		} else {
-			hasTailSpec = false
-		}
-
-		cachedInode = inode
-		return nil
-	}
-	cmd.mutate = func(actor *StoreActor, _ *writeCmd) {
-		oldSize := cachedInode.Size
-		seq := actor.stat.NextWriteSeq + 1
-		actor.stat.NextWriteSeq = seq
-		nowNano := actor.now().UnixNano()
-
-		actor.applySetAttrFields(&cachedInode, req, nowNano, seq)
-
-		if newSize < oldSize {
-			for _, entry := range deleteKeys {
-				actor.removeBlobRef(entry.ref)
-				batchDeleteDeferred(actor.batch, entry.key)
-			}
-			if hasTailSpec {
-				if tailSpec.keep {
-					if !tailSpec.sameRef {
-						if tailSpec.oldOK {
-							actor.removeBlobRef(tailSpec.oldRef)
-						}
-						actor.addBlobRef(tailSpec.newRef)
-						batchSetDataDeferred(actor.batch, ino, tailSpec.blockIdx, tailSpec.newRef)
-					}
-				} else if tailSpec.oldOK {
-					actor.removeBlobRef(tailSpec.oldRef)
-					batchDeleteDataDeferred(actor.batch, ino, tailSpec.blockIdx)
-				}
-			}
-		}
-
-		_ = batchSetInodeDeferred(actor.batch, cachedInode)
-		batchSetDirtyDeferred(actor.batch, ino)
-		outAttr = cachedInode.ToAttribute()
-	}
-
 	if err := s.enqueueAndWait(cmd); err != nil {
 		return Attribute{}, err
 	}
-	return outAttr, nil
+	return op.attr, nil
 }
 
 func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, pinned *[]uint64) (writeBlockSpec, error) {
@@ -257,7 +176,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	}
 	defer unlock()
 
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return ErrIO
 	}
@@ -331,7 +250,8 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	clearEnd := min(inBlock+clearLen, int(oldRef.Length))
 
 	data := make([]byte, oldRef.Length)
-	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
+	err = blobs.ReadAt(oldRef, 0, data)
+	if err != nil {
 		return writeBlockSpec{}, false, err
 	}
 	if isAllZero(data[inBlock:clearEnd]) {
@@ -398,7 +318,7 @@ func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlock
 }
 
 func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
-	op := cmd.req.(*fallocateDataOp)
+	op, _ := cmd.req.(*fallocateDataOp)
 
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
@@ -407,7 +327,7 @@ func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	if err := s.checkInodeLive(s.batch, &inode); err != nil {
 		return err
 	}
 	switch inode.Mode & S_IFMT {
@@ -474,7 +394,7 @@ func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
-	op := cmd.req.(*fallocateDataOp)
+	op, _ := cmd.req.(*fallocateDataOp)
 	seq := s.stat.NextWriteSeq + 1
 	s.stat.NextWriteSeq = seq
 	nowNano := s.now().UnixNano()
@@ -493,14 +413,14 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 
 	s.stat.LogicalBytes += op.bytesDelta
 
-	_ = batchSetInodeDeferred(s.batch, inode)
-	batchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
-	batchSetDirtyDeferred(s.batch, op.ino)
+	_ = BatchSetInodeDeferred(s.batch, inode)
+	BatchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
+	BatchSetDirtyDeferred(s.batch, op.ino)
 
 	if op.zeroRange {
 		for _, entry := range op.fullDeleteKeys {
 			s.removeBlobRef(entry.ref)
-			batchDeleteDeferred(s.batch, entry.key)
+			BatchDeleteDeferred(s.batch, entry.key)
 		}
 		for i := range op.partialSpecs {
 			b := &op.partialSpecs[i]
@@ -510,11 +430,11 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 						s.removeBlobRef(b.oldRef)
 					}
 					s.addBlobRef(b.newRef)
-					batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
+					BatchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 				}
 			} else if b.oldOK {
 				s.removeBlobRef(b.oldRef)
-				batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
+				BatchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 			}
 		}
 	}

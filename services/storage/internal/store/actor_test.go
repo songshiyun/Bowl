@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -59,7 +61,7 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 	require.Equal(t, uint64(0), statFS.UsedBytes)
 	require.Equal(t, maxBytes, statFS.AvailBytes)
 	require.Equal(t, uint64(1), statFS.Files)
-	require.Equal(t, uint32(store.DefaultStatFSBlockSize), statFS.Bsize)
+	require.Equal(t, store.DefaultStatFSBlockSize, statFS.Bsize)
 	require.Equal(t, uint32(store.MaxFileNameBytes), statFS.Namelen)
 
 	// 2. GetAttr(1) 并发直读根 Inode(1)
@@ -69,10 +71,10 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 	require.Equal(t, store.RootIno, attr.ParentIno)
 	require.Equal(t, store.S_IFDIR|uint32(0o755), attr.Mode)
 	require.Equal(t, uint32(2), attr.Nlink)
-	require.Equal(t, uint64(store.DefaultDirSize), attr.Size)
-	require.Equal(t, uint32(store.DefaultBlockSize), attr.Blksize)
-	require.Equal(t, uint64(store.DefaultDirSize/512), attr.Blocks)
-	require.Greater(t, attr.Atime, int64(0))
+	require.Equal(t, store.DefaultDirSize, attr.Size)
+	require.Equal(t, store.DefaultBlockSize, attr.Blksize)
+	require.Equal(t, store.DefaultDirSize/512, attr.Blocks)
+	require.Positive(t, attr.Atime)
 
 	// 不存在的节点返回 ErrNotFound，非法编号 0 返回 ErrInvalid
 	_, err = actor.GetAttr(9999)
@@ -113,9 +115,10 @@ func TestOpenInitializesRootAndRecoversOnReopen(t *testing.T) {
 	require.Equal(t, uint32(2), roAttr.Nlink)
 
 	// 只读实例拦截一切写操作
-	err = roActor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate:   func(m store.MutateView) {},
+	_, err = roActor.Mkdir(store.MkdirReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("ro-dir"),
+		Mode:      0o755,
 	})
 	require.ErrorIs(t, err, store.ErrReadOnly)
 }
@@ -130,178 +133,84 @@ func TestGroupCommitPhaseAFailureIsolationAndReadYourWrites(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
 
-	// 通过栅栏让 3 条写命令在同一轮或者连续批次中演进：
-	// Cmd 1: 正常分配 Inode(2) 并写入 4096 字节
-	// Cmd 2: Phase A 先调用 PrepareIno() 预览 Inode(3)，随后因配额超限失败（验证不消耗 Inode(3)、不污染 s.batch）
-	// Cmd 3: Phase A 通过 ReadView.Get 读取 Cmd 1 写入的 Inode(2)，并分配 Inode(3) 写入 4096 字节
-	var (
-		ino1, ino3       uint64
-		err1, err2, err3 error
-	)
-
-	err1 = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error {
-			if err := v.CheckQuota(4096, 1); err != nil {
-				return err
-			}
-			_, err := v.PrepareIno()
-			return err
-		},
-		Mutate: func(m store.MutateView) {
-			ino1 = m.ConsumeIno()
-			seq := m.NextWriteSeq()
-			now := time.Now().UnixNano()
-			_ = store.BatchSetInodeDeferred(m.Batch(), store.Inode{
-				Ino:       ino1,
-				ParentIno: store.RootIno,
-				Mode:      store.S_IFREG | 0o644,
-				Nlink:     1,
-				Size:      4096,
-				Atime:     now,
-				Mtime:     now,
-				Ctime:     now,
-				WriteSeq:  seq,
-			})
-			store.BatchSetEntryDeferred(m.Batch(), store.RootIno, []byte("file1"), store.Entry{
-				Ino:  ino1,
-				Mode: store.S_IFREG | 0o644,
-			})
-			m.AddInodes(1)
-			m.AddLogicalBytes(4096)
-		},
+	// 1. 先创建 file1 (Ino=2) 并预留 4096 字节
+	f1, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("file1"),
+		Mode:      0o644,
 	})
-	require.NoError(t, err1)
-	require.Equal(t, uint64(2), ino1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), f1.Ino)
+	require.NoError(t, actor.Fallocate(f1.Ino, 0, 4096, 0))
 
-	// 构造同批提交：先用 1 条阻塞在信号上的命令占住 Actor 循环，使后续命令同时进入 mb.active 队列并在单次 Tick 内合并执行
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
+	// 2. 占住当前 Tick，使后续 5 条真实命令同时进入 mb.active 并在下一轮单次 Tick 内合并演进：
+	//   Sub-Cmd A: Mkdir(RootIno, "batch-dir") -> 分配 Ino=3
+	//   Sub-Cmd B: Create(RootIno, "batch-dir") -> Phase A 先 PrepareIno() 预览 4，再因同名冲突返回 ErrExist（验证不消耗 Ino=4、不污染 s.batch）
+	//   Sub-Cmd C: Create(3, "inside") -> Phase A 同批写后读（Intra-Batch Read-Your-Writes）读取 Sub-Cmd A 刚写入的目录 Ino=3，并成功分配 Ino=4
+	//   Sub-Cmd D: Fallocate(4, 0, 32768, 0) -> 超出 16384 配额上限，Phase A 返回 ErrNoSpace（0 污染）
+	//   Sub-Cmd E: Fallocate(4, 0, 4096, 0) -> 同批成功扩容 Ino=4 至 4096 字节
+	release := store.HoldTickForTest(actor)
 
-	// 此时 Actor 正在当前 Tick 等待 blockCh，我们按序投递 3 条命令进入 mb.active（保证在下一轮 Tick 同批合并执行）：
-	// Sub-Cmd A: 写入 Entry("batch-a") -> Ino(2)
-	// Sub-Cmd B: Phase A 预览 PrepareIno() 后返回 ErrNoSpace 失败（验证 0 污染）
-	// Sub-Cmd C: Phase A 通过 ReadView.Get 同批写后读验证 "batch-a" 已存在，然后分配 Inode(3)
-	doneA := make(chan error, 1)
-	doneB := make(chan error, 1)
-	doneC := make(chan error, 1)
-	enqueued := make(chan struct{}, 3)
-
-	go func() {
-		enqueued <- struct{}{}
-		doneA <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error { return nil },
-			Mutate: func(m store.MutateView) {
-				store.BatchSetEntryDeferred(m.Batch(), store.RootIno, []byte("batch-a"), store.Entry{
-					Ino:  ino1,
-					Mode: store.S_IFREG | 0o644,
-				})
-			},
-		})
-	}()
-
-	time.Sleep(5 * time.Millisecond)
-	var subCmdBPhaseBCalled bool
-	go func() {
-		enqueued <- struct{}{}
-		doneB <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				candIno, err := v.PrepareIno()
-				if err != nil {
-					return err
-				}
-				if candIno != 3 {
-					return store.ErrInvalidValue
-				}
-				// 超出 16384 配额上限，触发 Phase A 失败
-				return v.CheckQuota(32768, 1)
-			},
-			Mutate: func(m store.MutateView) {
-				subCmdBPhaseBCalled = true
-			},
-		})
-	}()
-
-	time.Sleep(5 * time.Millisecond)
-	go func() {
-		enqueued <- struct{}{}
-		doneC <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				// 验证同批写后读（Intra-Batch Read-Your-Writes）：能够读到同批 Sub-Cmd A 刚写入的 "batch-a"
-				val, closer, err := v.Get(store.EntryKey(store.RootIno, []byte("batch-a")))
-				if err != nil {
-					return err
-				}
-				e, decErr := store.DecodeEntry(val)
-				_ = closer.Close()
-				if decErr != nil {
-					return decErr
-				}
-				if e.Ino != ino1 {
-					return store.ErrInvalidValue
-				}
-				if err := v.CheckQuota(4096, 1); err != nil {
-					return err
-				}
-				_, err = v.PrepareIno()
-				return err
-			},
-			Mutate: func(m store.MutateView) {
-				ino3 = m.ConsumeIno()
-				seq := m.NextWriteSeq()
-				now := time.Now().UnixNano()
-				_ = store.BatchSetInodeDeferred(m.Batch(), store.Inode{
-					Ino:       ino3,
-					ParentIno: store.RootIno,
-					Mode:      store.S_IFREG | 0o600,
-					Nlink:     1,
-					Size:      4096,
-					Atime:     now,
-					Mtime:     now,
-					Ctime:     now,
-					WriteSeq:  seq,
-				})
-				m.AddInodes(1)
-				m.AddLogicalBytes(4096)
-			},
-		})
-	}()
-
-	for range 3 {
-		<-enqueued
+	type attrRes struct {
+		attr store.Attribute
+		err  error
 	}
-	time.Sleep(10 * time.Millisecond)
-	close(blockCh)
+	chA := make(chan attrRes, 1)
+	chB := make(chan attrRes, 1)
+	chC := make(chan attrRes, 1)
+	chD := make(chan error, 1)
+	chE := make(chan error, 1)
 
-	require.NoError(t, <-firstDone)
-	require.NoError(t, <-doneA)
-	err2 = <-doneB
-	err3 = <-doneC
-	require.ErrorIs(t, err2, store.ErrNoSpace)
-	require.False(t, subCmdBPhaseBCalled)
-	require.NoError(t, err3)
-	// Sub-Cmd B 失败未消耗 Inode 3，Sub-Cmd C 成功拿到 Inode 3
-	require.Equal(t, uint64(3), ino3)
+	go func() {
+		a, e := actor.Mkdir(store.MkdirReq{ParentIno: store.RootIno, Name: []byte("batch-dir"), Mode: 0o755})
+		chA <- attrRes{a, e}
+	}()
+	time.Sleep(5 * time.Millisecond)
+
+	go func() {
+		a, e := actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("batch-dir"), Mode: 0o644})
+		chB <- attrRes{a, e}
+	}()
+	time.Sleep(5 * time.Millisecond)
+
+	go func() {
+		a, e := actor.Create(store.CreateReq{ParentIno: 3, Name: []byte("inside"), Mode: 0o600})
+		chC <- attrRes{a, e}
+	}()
+	time.Sleep(5 * time.Millisecond)
+
+	go func() {
+		chD <- actor.Fallocate(4, 0, 32768, 0)
+	}()
+	time.Sleep(5 * time.Millisecond)
+
+	go func() {
+		chE <- actor.Fallocate(4, 0, 4096, 0)
+	}()
+	time.Sleep(10 * time.Millisecond)
+
+	release()
+
+	resA := <-chA
+	resB := <-chB
+	resC := <-chC
+	require.NoError(t, resA.err)
+	require.Equal(t, uint64(3), resA.attr.Ino)
+	require.ErrorIs(t, resB.err, store.ErrExist)
+	require.NoError(t, resC.err)
+	// Sub-Cmd B 失败未消耗 Inode 4，Sub-Cmd C 成功拿到 Inode 4
+	require.Equal(t, uint64(4), resC.attr.Ino)
+	require.ErrorIs(t, <-chD, store.ErrNoSpace)
+	require.NoError(t, <-chE)
 
 	st, err := actor.StatFS()
 	require.NoError(t, err)
-	require.Equal(t, uint64(3), st.Files)
+	require.Equal(t, uint64(4), st.Files)
 	require.Equal(t, uint64(8192), st.UsedBytes)
 
-	attr3, err := actor.GetAttr(3)
+	attr4, err := actor.GetAttr(4)
 	require.NoError(t, err)
-	require.Equal(t, uint64(4096), attr3.Size)
+	require.Equal(t, uint64(4096), attr4.Size)
 }
 
 func TestInodeSegmentReservation4096AndExhaustion(t *testing.T) {
@@ -335,22 +244,18 @@ func TestInodeSegmentReservation4096AndExhaustion(t *testing.T) {
 	// 连续执行 4096 次 Inode 分配（编号 2..4097），仅触发 1 次底层号段预留
 	var firstIno, lastInoInFirstSeg uint64
 	for i := range int(store.InodeSegment) {
-		var allocated uint64
-		err := actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				_, err := v.PrepareIno()
-				return err
-			},
-			Mutate: func(m store.MutateView) {
-				allocated = m.ConsumeIno()
-			},
+		var attr store.Attribute
+		attr, err = actor.Create(store.CreateReq{
+			ParentIno: store.RootIno,
+			Name:      []byte("f-" + strconv.Itoa(i)),
+			Mode:      0o644,
 		})
 		require.NoError(t, err)
 		if i == 0 {
-			firstIno = allocated
+			firstIno = attr.Ino
 		}
 		if i == int(store.InodeSegment)-1 {
-			lastInoInFirstSeg = allocated
+			lastInoInFirstSeg = attr.Ino
 		}
 	}
 	require.Equal(t, uint64(2), firstIno)
@@ -358,45 +263,31 @@ func TestInodeSegmentReservation4096AndExhaustion(t *testing.T) {
 	require.Equal(t, 1, reserveCalls)
 
 	// 第 4097 次分配触发第 2 次 4096 步长预留，拿到 4098
-	var nextSegIno uint64
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error {
-			_, err := v.PrepareIno()
-			return err
-		},
-		Mutate: func(m store.MutateView) {
-			nextSegIno = m.ConsumeIno()
-		},
+	nextAttr, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("f-next-seg"),
+		Mode:      0o644,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(4098), nextSegIno)
+	require.Equal(t, uint64(4098), nextAttr.Ino)
 	require.Equal(t, 2, reserveCalls)
 
 	// 耗尽测试：将剩余预留消费完后触发 ErrInodeExhausted
-	for range int(store.InodeSegment) - 1 {
-		require.NoError(t, actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				_, err := v.PrepareIno()
-				return err
-			},
-			Mutate: func(m store.MutateView) {
-				_ = m.ConsumeIno()
-			},
-		}))
+	for i := range int(store.InodeSegment) - 1 {
+		_, err = actor.Create(store.CreateReq{
+			ParentIno: store.RootIno,
+			Name:      []byte("f-rem-" + strconv.Itoa(i)),
+			Mode:      0o644,
+		})
+		require.NoError(t, err)
 	}
 	exhaust = true
-	var exhaustedMutateCalled bool
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error {
-			_, err := v.PrepareIno()
-			return err
-		},
-		Mutate: func(m store.MutateView) {
-			exhaustedMutateCalled = true
-		},
+	_, err = actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("f-exhausted"),
+		Mode:      0o644,
 	})
 	require.ErrorIs(t, err, store.ErrInodeExhausted)
-	require.False(t, exhaustedMutateCalled)
 }
 
 func TestIndexedBatchSkiplistBloatResetGuard(t *testing.T) {
@@ -409,46 +300,33 @@ func TestIndexedBatchSkiplistBloatResetGuard(t *testing.T) {
 	defer func() { require.NoError(t, actor.Close()) }()
 
 	// 1. 普通小批次仅执行 s.batch.Reset()，不触发重建
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchSetXattrDeferred(m.Batch(), store.RootIno, []byte("user.small"), []byte("val"))
-		},
-	})
-	require.NoError(t, err)
+	require.NoError(t, actor.SetXattr(store.RootIno, []byte("user.small"), []byte("val"), 0))
 	require.Equal(t, uint64(0), actor.BatchReallocCount())
 
-	// 2. 写入超过 1 MiB (len(s.batch.Repr()) > 1<<20) 触发跳表防膨胀重建
-	bigPayload := make([]byte, (1<<20)+1024)
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			store.BatchSetXattrDeferred(m.Batch(), store.RootIno, []byte("user.big"), bigPayload)
-		},
-	})
-	require.NoError(t, err)
+	// 2. 在单次 Tick 内合并写入 17 条 64 KiB 扩展属性（总计 > 1 MiB），触发跳表防膨胀重建
+	release := store.HoldTickForTest(actor)
+	chunk := make([]byte, store.MaxXattrValueBytes)
+	errCh := make(chan error, 17)
+	for i := range 17 {
+		go func(idx int) {
+			errCh <- actor.SetXattr(store.RootIno, []byte("user.big."+strconv.Itoa(idx)), chunk, 0)
+		}(i)
+	}
+	time.Sleep(15 * time.Millisecond)
+	release()
+	for range 17 {
+		require.NoError(t, <-errCh)
+	}
 	require.Equal(t, uint64(1), actor.BatchReallocCount())
 
-	// 3. 写入超过 8192 条操作 (s.batch.Count() > 8192) 触发跳表防膨胀重建
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			for i := range 8193 {
-				store.BatchSetDirtyDeferred(m.Batch(), uint64(i+10))
-			}
-		},
+	// 3. 重建后后续正常写入依然工作正常
+	f, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("after-reset"),
+		Mode:      0o644,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), actor.BatchReallocCount())
-
-	// 4. 重建后后续正常写入依然工作正常
-	err = actor.Execute(store.WriteOp{
-		Validate: func(v store.ReadView) error { return nil },
-		Mutate: func(m store.MutateView) {
-			m.AddLogicalBytes(128)
-		},
-	})
-	require.NoError(t, err)
+	require.NoError(t, actor.Fallocate(f.Ino, 0, 128, 0))
 	st, err := actor.StatFS()
 	require.NoError(t, err)
 	require.Equal(t, uint64(128), st.UsedBytes)
@@ -506,61 +384,40 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 			errCh := make(chan error, 64)
 
 			// 16 个并发直读协程（GetAttr + StatFS + MarkAtimeDirty）
-			for i := range 16 {
-				go func(worker int) {
+			for range 16 {
+				go func() {
 					for {
 						select {
 						case <-stopCh:
 							return
 						default:
 						}
-						if _, err := actor.GetAttr(store.RootIno); err != nil && err != store.ErrClosed {
-							errCh <- err
+						if _, rErr := actor.GetAttr(store.RootIno); rErr != nil && !errors.Is(rErr, store.ErrClosed) {
+							errCh <- rErr
 							return
 						}
-						if _, err := actor.StatFS(); err != nil && err != store.ErrClosed {
-							errCh <- err
+						if _, rErr := actor.StatFS(); rErr != nil && !errors.Is(rErr, store.ErrClosed) {
+							errCh <- rErr
 							return
 						}
 						actor.MarkAtimeDirty(store.RootIno, time.Now())
 					}
-				}(i)
+				}()
 			}
 
 			// 16 个并发写协程（双缓冲 MPSC 入队 + Group Commit）
 			for i := range 16 {
 				go func(worker int) {
+					key := []byte("user.w." + strconv.Itoa(worker))
 					for {
 						select {
 						case <-stopCh:
 							return
 						default:
 						}
-						err := actor.Execute(store.WriteOp{
-							Validate: func(v store.ReadView) error {
-								_, err := v.PrepareIno()
-								return err
-							},
-							Mutate: func(m store.MutateView) {
-								ino := m.ConsumeIno()
-								now := time.Now().UnixNano()
-								_ = store.BatchSetInodeDeferred(m.Batch(), store.Inode{
-									Ino:       ino,
-									ParentIno: store.RootIno,
-									Mode:      store.S_IFREG | 0o644,
-									Nlink:     1,
-									Size:      64,
-									Atime:     now,
-									Mtime:     now,
-									Ctime:     now,
-									WriteSeq:  m.NextWriteSeq(),
-								})
-								m.AddInodes(1)
-								m.AddLogicalBytes(64)
-							},
-						})
-						if err != nil && err != store.ErrClosed {
-							errCh <- err
+						wErr := actor.SetXattr(store.RootIno, key, []byte("v"), 0)
+						if wErr != nil && !errors.Is(wErr, store.ErrClosed) {
+							errCh <- wErr
 							return
 						}
 					}
@@ -576,8 +433,8 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 							return
 						default:
 						}
-						if err := actor.FlushWAL(); err != nil && err != store.ErrClosed {
-							errCh <- err
+						if fErr := actor.FlushWAL(); fErr != nil && !errors.Is(fErr, store.ErrClosed) {
+							errCh <- fErr
 							return
 						}
 					}
@@ -607,10 +464,7 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 			require.ErrorIs(t, err, store.ErrClosed)
 			err = actor.FlushWAL()
 			require.ErrorIs(t, err, store.ErrClosed)
-			err = actor.Execute(store.WriteOp{
-				Validate: func(v store.ReadView) error { return nil },
-				Mutate:   func(m store.MutateView) {},
-			})
+			err = actor.SetXattr(store.RootIno, []byte("user.after"), []byte("v"), 0)
 			require.ErrorIs(t, err, store.ErrClosed)
 			_, err = actor.Blobs().Append(store.RootIno, []byte("after-close"))
 			require.ErrorIs(t, err, store.ErrClosed)

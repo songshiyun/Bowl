@@ -174,20 +174,7 @@ func TestListRemoveXattrAndIntraBatchReadYourWrites(t *testing.T) {
 	//   Cmd 3: SetXattr(f2, "user.batch", "v3", XattrReplace) -> 读到同批 Cmd 1 已存在，成功覆盖为 "v3"
 	//   Cmd 4: RemoveXattr(f2, "user.batch") -> 读到同批已存在，成功删除
 	//   Cmd 5: RemoveXattr(f2, "user.batch") -> 读到同批 Cmd 4 已删除，返回 ErrNoData
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	blockerDone := make(chan error, 1)
-	go func() {
-		blockerDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
+	release := store.HoldTickForTest(actor)
 
 	errCh := make([]chan error, 5)
 	for i := range errCh {
@@ -219,8 +206,7 @@ func TestListRemoveXattrAndIntraBatchReadYourWrites(t *testing.T) {
 	}()
 	waitQueued(t, actor, 5)
 
-	close(blockCh)
-	require.NoError(t, <-blockerDone)
+	release()
 
 	require.NoError(t, <-errCh[0])
 	require.ErrorIs(t, <-errCh[1], store.ErrExist)
@@ -402,7 +388,7 @@ func TestXattrListLimitReadOnlyAndClosedGuards(t *testing.T) {
 	// 1. 填充扩展属性名称直至逼近 MaxXattrListBytes (65536)：
 	// 每条名称 255 字节，计入 '\x00' 占 256 字节，256 * 255 = 65280 字节；
 	// 第 256 条 255 字节名称使总长度达 256 * 256 = 65536（恰好允许），第 257 条超出上限返回 ErrNoSpace。
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		prefix := []byte("user.")
 		suffix := []byte{byte('a' + (i / 26)), byte('a' + (i % 26))}
 		padLen := store.MaxXattrNameBytes - len(prefix) - len(suffix)

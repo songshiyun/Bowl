@@ -241,20 +241,7 @@ func TestGroupCommitFsyncAndFsyncDirDualLayerBarrier(t *testing.T) {
 	require.NoError(t, err)
 
 	// 先占住当前 Tick，使后续 Write(fileA)、Write(fileB)、Fsync(fileA)、FsyncDir(RootIno) 在同一轮 Tick (s.batch.Count() > 0) 中通过 ApplyNoSyncWait + SyncInode + SyncWait 合并提交
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	holdDone := make(chan error, 1)
-	go func() {
-		holdDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
+	release := store.HoldTickForTest(actor)
 
 	errCh := make(chan error, 4)
 	go func() {
@@ -275,8 +262,7 @@ func TestGroupCommitFsyncAndFsyncDirDualLayerBarrier(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	ticksBeforeRelease := actor.TickCount()
-	close(blockCh)
-	require.NoError(t, <-holdDone)
+	release()
 	for range 4 {
 		require.NoError(t, <-errCh)
 	}

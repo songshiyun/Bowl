@@ -1,10 +1,5 @@
 package store
 
-func init() {
-	registerOp(opFsync, (*StoreActor).validateFsyncCmd, (*StoreActor).mutateFsyncCmd)
-	registerOp(opFsyncDir, (*StoreActor).validateFsyncDirCmd, (*StoreActor).mutateFsyncDirCmd)
-}
-
 type fsyncOp struct {
 	ino uint64
 }
@@ -40,12 +35,12 @@ func (s *StoreActor) FsyncDir(ino uint64) error {
 }
 
 func (s *StoreActor) validateFsyncCmd(cmd *writeCmd) error {
-	op := cmd.req.(*fsyncOp)
+	op, _ := cmd.req.(*fsyncOp)
 	inode, err := s.readInode(s.batch, op.ino)
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	if err := s.checkInodeLive(s.batch, &inode); err != nil {
 		return err
 	}
 	if inode.Mode&S_IFMT == S_IFDIR {
@@ -55,18 +50,18 @@ func (s *StoreActor) validateFsyncCmd(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) mutateFsyncCmd(cmd *writeCmd) {
-	op := cmd.req.(*fsyncOp)
+	op, _ := cmd.req.(*fsyncOp)
 	cmd.syncBarrier = true
 	cmd.syncIno = op.ino
 }
 
 func (s *StoreActor) validateFsyncDirCmd(cmd *writeCmd) error {
-	op := cmd.req.(*fsyncOp)
+	op, _ := cmd.req.(*fsyncOp)
 	inode, err := s.readInode(s.batch, op.ino)
 	if err != nil {
 		return err
 	}
-	if err := s.checkInodeLive(s.batch, inode); err != nil {
+	if err := s.checkInodeLive(s.batch, &inode); err != nil {
 		return err
 	}
 	if inode.Mode&S_IFMT != S_IFDIR {

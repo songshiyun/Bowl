@@ -38,7 +38,7 @@ type pebbleReader interface {
 type opKind uint8
 
 const (
-	opCustom opKind = iota
+	opNoop opKind = iota
 	opMknod
 	opMkdir
 	opCreate
@@ -56,35 +56,18 @@ const (
 	opFsyncDir
 	opPurgeOrphan
 	opCleanOrphans
+	opCompactSelect
 	opCompactRelocate
-	opMax
+	opCompactReap
 )
-
-type opHandler struct {
-	validate func(s *StoreActor, cmd *writeCmd) error
-	mutate   func(s *StoreActor, cmd *writeCmd)
-}
-
-var (
-	opHandlers    [opMax]opHandler
-	openInitHooks []func(s *StoreActor) error
-)
-
-// registerOp 注册指定 opKind 的 Phase A 校验与 Phase B 变更处理器（供同包扩展文件在 init 中挂载）。
-func registerOp(op opKind, validate func(*StoreActor, *writeCmd) error, mutate func(*StoreActor, *writeCmd)) {
-	opHandlers[op] = opHandler{validate: validate, mutate: mutate}
-}
 
 // writeCmd 是投递至 StoreActor 双缓冲 MPSC 队列的命令载体（由 sync.Pool 复用）。
 type writeCmd struct {
 	op   opKind
 	req  any
-	resp any
 	err  error
 	done chan struct{} // 容量为 1 的完成信号
 
-	validate    func(s *StoreActor, cmd *writeCmd) error
-	mutate      func(s *StoreActor, cmd *writeCmd)
 	syncBarrier bool
 	syncIno     uint64
 	pinnedPacks []uint64
@@ -104,6 +87,7 @@ type Options struct {
 	AtimeMode    AtimeMode
 	Cache        *pebble.Cache
 	ReserveInode InodeReserveFunc
+	ReservePack  BlobReserveFunc
 	Now          func() time.Time
 }
 
@@ -139,6 +123,8 @@ func NewPebbleOptions(cache *pebble.Cache, readOnly bool) *pebble.Options {
 }
 
 // StoreActor 是单分支（或只读快照）存储引擎实例（ADR-0030 §2.3）。
+//
+//nolint:revive // exported: StoreActor 为 ADR-0030 与领域词汇表锁定的核心实体名称。
 type StoreActor struct {
 	dir        string
 	diskID     string
@@ -163,16 +149,17 @@ type StoreActor struct {
 	cmdPool sync.Pool
 
 	// 2. Actor 写协程私有状态（仅在单协程 Loop 内无锁读写）
-	batch          *pebble.Batch
-	stat           BranchStat
-	packStats      map[uint64]PackMeta
-	dirtyPackStats map[uint64]struct{}
-	nextIno        uint64
-	reservedIno    uint64
-	reserveInode   InodeReserveFunc
-	walDirty       atomic.Bool
-	tickCount      atomic.Uint64
-	batchResetCnt  atomic.Uint64
+	batch            *pebble.Batch
+	stat             BranchStat
+	packStats        map[uint64]PackMeta
+	dirtyPackStats   map[uint64]struct{}
+	lastActivePackID uint64
+	nextIno          uint64
+	reservedIno      uint64
+	reserveInode     InodeReserveFunc
+	walDirty         atomic.Bool
+	tickCount        atomic.Uint64
+	batchResetCnt    atomic.Uint64
 
 	// 3. 并发读路径无锁镜像（每次 Batch 提交后刷新）
 	atomicLogicalBytes atomic.Uint64
@@ -192,8 +179,8 @@ type StoreActor struct {
 
 	// 6. Data Layer 协同锁与钩子
 	inodeLocks                [4096]sync.Mutex
-	blobs                     any
-	syncInodeFn               func(ino uint64) error
+	blobs                     *BlobStore
+	beforeTickHook            func()
 	beforeCompactRelocateHook func()
 	inFlightMu                sync.Mutex
 	inFlightPacks             map[uint64]int
@@ -203,6 +190,8 @@ type StoreActor struct {
 
 // Open 打开或初始化一个 StoreActor 实例。
 // 空库首次可写打开时通过单次 Batch 初始化根目录 Inode(1)（S_IFDIR | 0755, Nlink = 2）与 "sys:stat"（Inodes = 1, LogicalBytes = 0）。
+//
+//nolint:gocritic // hugeParam: Open 公开构造契约按值接收 Options。
 func Open(opts Options) (*StoreActor, error) {
 	if opts.Dir == "" {
 		return nil, ErrInvalid
@@ -270,23 +259,10 @@ func Open(opts Options) (*StoreActor, error) {
 		return nil, err
 	}
 
-	for _, hook := range openInitHooks {
-		if err := hook(s); err != nil {
-			if bs := s.Blobs(); bs != nil {
-				_ = bs.Close()
-			}
-			_ = db.Close()
-			if ownedCache != nil {
-				ownedCache.Unref()
-			}
-			return nil, err
-		}
-	}
+	s.blobs = NewBlobStoreWithAllocator(s.dir, opts.ReservePack)
 
 	if err := s.syncPackStatsWithBlobs(); err != nil {
-		if bs := s.Blobs(); bs != nil {
-			_ = bs.Close()
-		}
+		_ = s.blobs.Close()
 		_ = db.Close()
 		if ownedCache != nil {
 			ownedCache.Unref()
@@ -330,11 +306,13 @@ func (s *StoreActor) initOrLoadState() error {
 		}
 		initBatch := s.db.NewBatch()
 		defer func() { _ = initBatch.Close() }()
-		if err := batchSetInodeDeferred(initBatch, root); err != nil {
+		err = BatchSetInodeDeferred(initBatch, root)
+		if err != nil {
 			return err
 		}
-		batchSetStatDeferred(initBatch, stat)
-		if err := s.db.Apply(initBatch, pebble.Sync); err != nil {
+		BatchSetStatDeferred(initBatch, stat)
+		err = s.db.Apply(initBatch, pebble.Sync)
+		if err != nil {
 			return err
 		}
 		s.stat = stat
@@ -387,7 +365,7 @@ func (s *StoreActor) loadPackStats() error {
 }
 
 func (s *StoreActor) syncPackStatsWithBlobs() error {
-	bs := s.Blobs()
+	bs := s.blobs
 	if bs == nil {
 		return nil
 	}
@@ -424,7 +402,7 @@ func (s *StoreActor) syncPackStatsWithBlobs() error {
 		defer func() { _ = cleanBatch.Close() }()
 		for _, packID := range zeroLiveMetaPacks {
 			delete(s.packStats, packID)
-			batchDeletePackMetaDeferred(cleanBatch, packID)
+			BatchDeletePackMetaDeferred(cleanBatch, packID)
 			if !slices.Contains(deadDiskPacks, packID) {
 				deadDiskPacks = append(deadDiskPacks, packID)
 			}
@@ -582,7 +560,7 @@ func (s *StoreActor) GetAttr(ino uint64) (Attribute, error) {
 	if err != nil {
 		return Attribute{}, err
 	}
-	if err := s.checkInodeLive(s.db, inode); err != nil {
+	if err := s.checkInodeLive(s.db, &inode); err != nil {
 		return Attribute{}, err
 	}
 	s.overlayAtime(&inode)
@@ -609,7 +587,7 @@ func (s *StoreActor) readInode(reader pebbleReader, ino uint64) (Inode, error) {
 	return inode, nil
 }
 
-func (s *StoreActor) checkInodeLive(reader pebbleReader, inode Inode) error {
+func (s *StoreActor) checkInodeLive(reader pebbleReader, inode *Inode) error {
 	if inode.Nlink != 0 {
 		return nil
 	}
@@ -690,141 +668,15 @@ func (s *StoreActor) FlushWAL() error {
 	return nil
 }
 
-// ReadView 为 Actor Step 2 Phase A 提供纯内存只读预校验视图（底层读取 s.batch 以支持同批写后读，绝不暴露写方法）。
-type ReadView struct {
-	s *StoreActor
-}
-
-// Get 在当前 IndexedBatch 视图上执行点查（包含同批前序命令已写入但尚未 Apply 的数据）。
-func (v ReadView) Get(key []byte) ([]byte, io.Closer, error) {
-	return v.s.batch.Get(key)
-}
-
-// NewIter 在当前 IndexedBatch 视图上创建前缀/范围扫描迭代器。
-func (v ReadView) NewIter(opts *pebble.IterOptions) (*pebble.Iterator, error) {
-	return v.s.batch.NewIter(opts)
-}
-
-// Stat 返回当前批次实时分支统计副本。
-func (v ReadView) Stat() BranchStat { return v.s.stat }
-
-// PackStat 返回指定 packID 在当前 Actor 内存中的 PackMeta 统计。
-func (v ReadView) PackStat(packID uint64) (PackMeta, bool) {
-	meta, ok := v.s.packStats[packID]
-	return meta, ok
-}
-
-// Now 返回当前时间戳。
-func (v ReadView) Now() time.Time { return v.s.now() }
-
-// PrepareIno 检查并按 4096 步长预留 Inode 号段，返回下一个可用 Inode 编号（Phase A 只读预览，不推进游标）。
-func (v ReadView) PrepareIno() (uint64, error) { return v.s.prepareIno() }
-
-// CheckQuota 校验新增 bytesDelta 与 inodesDelta 是否超出配额上限。
-func (v ReadView) CheckQuota(bytesDelta, inodesDelta uint64) error {
-	return v.s.checkQuota(bytesDelta, inodesDelta)
-}
-
-// MutateView 为 Actor Step 2 Phase B 提供内存记账与零拷贝批次写入视图。
-type MutateView struct {
-	s   *StoreActor
-	cmd *writeCmd
-}
-
-// Batch 返回当前共享 *pebble.IndexedBatch 以供调用 SetDeferred / DeleteDeferred。
-func (m MutateView) Batch() *pebble.Batch { return m.s.batch }
-
-// Stat 返回当前 Actor 权威分支统计指针。
-func (m MutateView) Stat() *BranchStat { return &m.s.stat }
-
-// NextWriteSeq 递增并返回下一条写序列号。
-func (m MutateView) NextWriteSeq() uint64 {
-	m.s.stat.NextWriteSeq++
-	return m.s.stat.NextWriteSeq
-}
-
-// ConsumeIno 消费并推进 Phase A 已预留的本地 Inode 游标（s.nextIno++）。
-func (m MutateView) ConsumeIno() uint64 { return m.s.consumeIno() }
-
-// AddInodes 增减分支节点计数。
-func (m MutateView) AddInodes(delta int64) {
-	if delta >= 0 {
-		m.s.stat.Inodes += uint64(delta)
-	} else if uint64(-delta) <= m.s.stat.Inodes {
-		m.s.stat.Inodes -= uint64(-delta)
-	} else {
-		m.s.stat.Inodes = 0
-	}
-}
-
-// AddLogicalBytes 增减分支逻辑字节数。
-func (m MutateView) AddLogicalBytes(delta int64) {
-	if delta >= 0 {
-		m.s.stat.LogicalBytes += uint64(delta)
-	} else if uint64(-delta) <= m.s.stat.LogicalBytes {
-		m.s.stat.LogicalBytes -= uint64(-delta)
-	} else {
-		m.s.stat.LogicalBytes = 0
-	}
-}
-
-// AddBlobRef 在 Phase B 登记新增或更新后的 DataKey 引用块，累加目标 .pack 的 LiveBytes 并更新 TotalBytes。
-func (m MutateView) AddBlobRef(ref BlobRef) {
-	m.s.addBlobRef(ref)
-}
-
-// RemoveBlobRef 在 Phase B 登记被覆盖或删除的旧 DataKey 引用块，扣减目标 .pack 的 LiveBytes。
-func (m MutateView) RemoveBlobRef(ref BlobRef) {
-	m.s.removeBlobRef(ref)
-}
-
-// WriteOp 定义投递至 StoreActor 双阶段 Group Commit 循环的写操作契约。
-type WriteOp struct {
-	Validate    func(v ReadView) error
-	Mutate      func(m MutateView)
-	SyncBarrier bool   // 是否作为 Fsync / FsyncDir 持久化屏障批次提交
-	SyncIno     uint64 // Fsync 目标文件 Inode（0 表示仅刷 WAL）
-}
-
-// Execute 将一条写操作投递至双缓冲 MPSC 队列并等待所属 Group Commit 批次完成。
-func (s *StoreActor) Execute(op WriteOp) error {
-	if s.readOnly {
-		return ErrReadOnly
-	}
-	unlock, err := s.enter()
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
-	cmd := s.acquireCmd()
-	cmd.op = opCustom
-	cmd.syncBarrier = op.SyncBarrier
-	cmd.syncIno = op.SyncIno
-	if op.Validate != nil {
-		cmd.validate = func(actor *StoreActor, _ *writeCmd) error {
-			return op.Validate(ReadView{s: actor})
-		}
-	}
-	if op.Mutate != nil {
-		cmd.mutate = func(actor *StoreActor, c *writeCmd) {
-			op.Mutate(MutateView{s: actor, cmd: c})
-		}
-	}
-	return s.enqueueAndWait(cmd)
-}
-
 func (s *StoreActor) acquireCmd() *writeCmd {
-	return s.cmdPool.Get().(*writeCmd)
+	cmd, _ := s.cmdPool.Get().(*writeCmd)
+	return cmd
 }
 
 func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.op = 0
 	cmd.req = nil
-	cmd.resp = nil
 	cmd.err = nil
-	cmd.validate = nil
-	cmd.mutate = nil
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
 	cmd.pinnedPacks = cmd.pinnedPacks[:0]
@@ -947,6 +799,9 @@ func (s *StoreActor) runLoop() {
 
 // processTick 严格执行 ADR-0030 §2.5 与 ADR-0031 §3 的 Step 2 ~ Step 4。
 func (s *StoreActor) processTick() {
+	if s.beforeTickHook != nil {
+		s.beforeTickHook()
+	}
 	cmds := s.mb.draining
 
 	var (
@@ -961,8 +816,10 @@ func (s *StoreActor) processTick() {
 		if err := s.validateCmd(cmd); err != nil {
 			for _, id := range cmd.pinnedPacks {
 				if id != 0 {
-					if _, ok := s.packStats[id]; !ok {
+					if meta, ok := s.packStats[id]; !ok {
 						s.packStats[id] = PackMeta{}
+						s.dirtyPackStats[id] = struct{}{}
+					} else if meta.LiveBytes == 0 {
 						s.dirtyPackStats[id] = struct{}{}
 					}
 				}
@@ -977,6 +834,11 @@ func (s *StoreActor) processTick() {
 		prevCount := s.batch.Count()
 		prevStat := s.stat
 		s.mutateCmd(cmd)
+		for _, id := range cmd.pinnedPacks {
+			if meta, ok := s.packStats[id]; ok && meta.LiveBytes == 0 {
+				s.dirtyPackStats[id] = struct{}{}
+			}
+		}
 		s.unpinPacks(cmd.pinnedPacks)
 		cmd.pinnedPacks = cmd.pinnedPacks[:0]
 		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.dirtyPackStats) > 0 {
@@ -1006,7 +868,7 @@ func (s *StoreActor) processTick() {
 	}
 	if mutated {
 		// 批次末尾仅写 1 次 "sys:stat"
-		batchSetStatDeferred(s.batch, s.stat)
+		BatchSetStatDeferred(s.batch, s.stat)
 	}
 	if s.batch.Count() > 0 {
 		if hasSyncBarrier {
@@ -1046,26 +908,82 @@ func (s *StoreActor) processTick() {
 }
 
 func (s *StoreActor) validateCmd(cmd *writeCmd) error {
-	if cmd.validate != nil {
-		return cmd.validate(s, cmd)
+	switch cmd.op {
+	case opMknod, opMkdir, opCreate, opSymlink:
+		return s.validateCreateNodeCmd(cmd)
+	case opLink:
+		return s.validateLinkCmd(cmd)
+	case opUnlink:
+		return s.validateUnlinkCmd(cmd)
+	case opRmdir:
+		return s.validateRmdirCmd(cmd)
+	case opRename:
+		return s.validateRenameCmd(cmd)
+	case opSetAttr:
+		return s.validateSetAttrCmd(cmd)
+	case opSetXattr:
+		return s.validateSetXattrCmd(cmd)
+	case opRemoveXattr:
+		return s.validateRemoveXattrCmd(cmd)
+	case opWrite:
+		return s.validateWriteCmd(cmd)
+	case opFallocate:
+		return s.validateFallocateCmd(cmd)
+	case opFsync:
+		return s.validateFsyncCmd(cmd)
+	case opFsyncDir:
+		return s.validateFsyncDirCmd(cmd)
+	case opPurgeOrphan:
+		return s.validatePurgeOrphanCmd(cmd)
+	case opCleanOrphans:
+		return s.validateCleanOrphansCmd(cmd)
+	case opCompactSelect:
+		return s.validateCompactSelectCmd(cmd)
+	case opCompactRelocate:
+		return s.validateCompactRelocateCmd(cmd)
+	default:
+		return nil
 	}
-	if int(cmd.op) < len(opHandlers) && opHandlers[cmd.op].validate != nil {
-		return opHandlers[cmd.op].validate(s, cmd)
-	}
-	return nil
 }
 
 func (s *StoreActor) mutateCmd(cmd *writeCmd) {
-	if cmd.mutate != nil {
-		cmd.mutate(s, cmd)
-		return
-	}
-	if int(cmd.op) < len(opHandlers) && opHandlers[cmd.op].mutate != nil {
-		opHandlers[cmd.op].mutate(s, cmd)
+	switch cmd.op {
+	case opMknod, opMkdir, opCreate, opSymlink:
+		s.mutateCreateNodeCmd(cmd)
+	case opLink:
+		s.mutateLinkCmd(cmd)
+	case opUnlink:
+		s.mutateUnlinkCmd(cmd)
+	case opRmdir:
+		s.mutateRmdirCmd(cmd)
+	case opRename:
+		s.mutateRenameCmd(cmd)
+	case opSetAttr:
+		s.mutateSetAttrCmd(cmd)
+	case opSetXattr:
+		s.mutateSetXattrCmd(cmd)
+	case opRemoveXattr:
+		s.mutateRemoveXattrCmd(cmd)
+	case opWrite:
+		s.mutateWriteCmd(cmd)
+	case opFallocate:
+		s.mutateFallocateCmd(cmd)
+	case opFsync:
+		s.mutateFsyncCmd(cmd)
+	case opFsyncDir:
+		s.mutateFsyncDirCmd(cmd)
+	case opPurgeOrphan:
+		s.mutatePurgeOrphanCmd(cmd)
+	case opCleanOrphans:
+		s.mutateCleanOrphansCmd(cmd)
+	case opCompactRelocate:
+		s.mutateCompactRelocateCmd(cmd)
+	case opCompactReap:
+		s.mutateCompactReapCmd(cmd)
 	}
 }
 
-func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes []uint64, deadPacks []uint64) error {
+func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) error {
 	toReclaim := s.takePendingDeadPacks()
 	if err := s.db.ApplyNoSyncWait(s.batch, pebble.Sync); err != nil {
 		s.restorePendingDeadPacks(toReclaim)
@@ -1073,9 +991,9 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes []uint64, deadPacks [
 	}
 	toReclaim = append(toReclaim, deadPacks...)
 	var dataErr error
-	if s.syncInodeFn != nil {
+	if s.blobs != nil {
 		for _, ino := range fsyncFileInodes {
-			dataErr = errors.Join(dataErr, s.syncInodeFn(ino))
+			dataErr = errors.Join(dataErr, s.blobs.SyncInode(ino))
 		}
 	}
 	walErr := s.batch.SyncWait()
@@ -1093,9 +1011,9 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes []uint64, deadPacks [
 
 func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) error {
 	var dataErr error
-	if s.syncInodeFn != nil {
+	if s.blobs != nil {
 		for _, ino := range fsyncFileInodes {
-			dataErr = errors.Join(dataErr, s.syncInodeFn(ino))
+			dataErr = errors.Join(dataErr, s.blobs.SyncInode(ino))
 		}
 	}
 	toReclaim := s.takePendingDeadPacks()
@@ -1148,8 +1066,8 @@ func (s *StoreActor) removeBlobRef(ref BlobRef) {
 }
 
 func (s *StoreActor) activePackID() uint64 {
-	if bs := s.Blobs(); bs != nil {
-		return bs.ActivePackID()
+	if s.blobs != nil {
+		return s.blobs.ActivePackID()
 	}
 	return 0
 }
@@ -1199,6 +1117,13 @@ func (s *StoreActor) isPackPinned(packID uint64) bool {
 
 func (s *StoreActor) flushDirtyPackStatsToBatch(batch *pebble.Batch) (deadPacks []uint64, wrote bool) {
 	activeID := s.activePackID()
+	if s.lastActivePackID != 0 && s.lastActivePackID != activeID {
+		if meta, ok := s.packStats[s.lastActivePackID]; ok && meta.LiveBytes == 0 {
+			s.dirtyPackStats[s.lastActivePackID] = struct{}{}
+		}
+	}
+	s.lastActivePackID = activeID
+
 	for packID := range s.dirtyPackStats {
 		meta, ok := s.packStats[packID]
 		if !ok {
@@ -1206,24 +1131,15 @@ func (s *StoreActor) flushDirtyPackStatsToBatch(batch *pebble.Batch) (deadPacks 
 		}
 		if meta.LiveBytes == 0 && packID != activeID && !s.isPackPinned(packID) {
 			delete(s.packStats, packID)
-			batchDeletePackMetaDeferred(batch, packID)
+			BatchDeletePackMetaDeferred(batch, packID)
 			deadPacks = append(deadPacks, packID)
 			wrote = true
 			continue
 		}
-		batchSetPackMetaDeferred(batch, packID, meta)
+		BatchSetPackMetaDeferred(batch, packID, meta)
 		wrote = true
 	}
 	clear(s.dirtyPackStats)
-
-	for packID, meta := range s.packStats {
-		if meta.LiveBytes == 0 && packID != activeID && !s.isPackPinned(packID) {
-			delete(s.packStats, packID)
-			batchDeletePackMetaDeferred(batch, packID)
-			deadPacks = append(deadPacks, packID)
-			wrote = true
-		}
-	}
 	return deadPacks, wrote
 }
 
@@ -1256,15 +1172,11 @@ func (s *StoreActor) restorePendingDeadPacks(packIDs []uint64) {
 }
 
 func (s *StoreActor) removePacks(packIDs []uint64) {
-	if len(packIDs) == 0 {
-		return
-	}
-	bs := s.Blobs()
-	if bs == nil {
+	if len(packIDs) == 0 || s.blobs == nil {
 		return
 	}
 	for _, packID := range packIDs {
-		_ = bs.RemovePack(packID)
+		_ = s.blobs.RemovePack(packID)
 	}
 }
 
@@ -1294,10 +1206,10 @@ func (s *StoreActor) flushDirtyAtimeToBatch(batch *pebble.Batch) bool {
 			continue
 		}
 		inode.Atime = ns
-		if err := batchSetInodeDeferred(batch, inode); err != nil {
+		if err := BatchSetInodeDeferred(batch, inode); err != nil {
 			continue
 		}
-		batchSetDirtyDeferred(batch, ino)
+		BatchSetDirtyDeferred(batch, ino)
 		wrote = true
 	}
 	return wrote
@@ -1369,8 +1281,8 @@ func (s *StoreActor) closeInternal(discard bool) error {
 			s.ownedCache = nil
 		}
 		var blobErr error
-		if bs := s.Blobs(); bs != nil {
-			blobErr = bs.Close()
+		if s.blobs != nil {
+			blobErr = s.blobs.Close()
 		}
 		s.lifecycleMu.Unlock()
 

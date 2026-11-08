@@ -86,11 +86,6 @@ func DecodePackStatKey(key []byte) (uint64, error) {
 	return packID, nil
 }
 
-// InodePrefix 返回节点属性键公共前缀 "inode:"。
-func InodePrefix() []byte {
-	return append([]byte(nil), inodePrefixBytes...)
-}
-
 // InodeKey 编码节点属性键 "inode:<8B_ino>"（14B）。
 func InodeKey(ino uint64) []byte {
 	out := make([]byte, InodeKeyLen)
@@ -135,11 +130,11 @@ func putEntryKey(dst []byte, parent uint64, name []byte) {
 }
 
 // DecodeEntryKey 解码目录项键，返回父节点编号与独立拷贝的名称切片。
-func DecodeEntryKey(key []byte) (uint64, []byte, error) {
+func DecodeEntryKey(key []byte) (parent uint64, name []byte, err error) {
 	if len(key) < EntryPrefixLen || !bytes.HasPrefix(key, entryPrefixBytes) || key[14] != ':' {
 		return 0, nil, ErrInvalidKey
 	}
-	name := append([]byte(nil), key[15:]...)
+	name = append([]byte(nil), key[15:]...)
 	return binary.BigEndian.Uint64(key[6:14]), name, nil
 }
 
@@ -167,17 +162,12 @@ func putXattrKey(dst []byte, ino uint64, name []byte) {
 }
 
 // DecodeXattrKey 解码扩展属性键，返回节点编号与独立拷贝的属性名切片。
-func DecodeXattrKey(key []byte) (uint64, []byte, error) {
+func DecodeXattrKey(key []byte) (ino uint64, name []byte, err error) {
 	if len(key) < XattrPrefixLen || !bytes.HasPrefix(key, xattrPrefixBytes) || key[14] != ':' {
 		return 0, nil, ErrInvalidKey
 	}
-	name := append([]byte(nil), key[15:]...)
+	name = append([]byte(nil), key[15:]...)
 	return binary.BigEndian.Uint64(key[6:14]), name, nil
-}
-
-// DirtyPrefix 返回变更节点键公共前缀 "dirty:"。
-func DirtyPrefix() []byte {
-	return append([]byte(nil), dirtyPrefixBytes...)
 }
 
 // DirtyKey 编码变更节点键 "dirty:<8B_ino>"（14B）。
@@ -249,7 +239,7 @@ func putDataKey(dst []byte, ino, blockIdx uint64) {
 }
 
 // DecodeDataKey 解码数据块索引键，返回 (ino, blockIdx)。
-func DecodeDataKey(key []byte) (uint64, uint64, error) {
+func DecodeDataKey(key []byte) (ino, blockIdx uint64, err error) {
 	if len(key) != DataKeyLen || !bytes.HasPrefix(key, dataPrefixBytes) || key[13] != ':' {
 		return 0, 0, ErrInvalidKey
 	}

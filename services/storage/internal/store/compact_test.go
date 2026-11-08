@@ -121,14 +121,14 @@ func TestCompactPacksPhaseACASFenceAgainstConcurrentOverwriteTruncateAndUnlink(t
 	// - fTruncate: 32 KiB (搬迁读取后、提交 opCompactRelocate 前被前台 SetAttr 截断为 0，CAS 必须拒绝旧块恢复)
 	// - fUnlink: 32 KiB (搬迁读取后、提交 opCompactRelocate 前被前台 Unlink 删除，CAS 必须拒绝死文件复活)
 	createAndWrite := func(name string, fill byte, size int) store.Attribute {
-		attr, err := actor.Create(store.CreateReq{
+		attr, cErr := actor.Create(store.CreateReq{
 			ParentIno: store.RootIno,
 			Name:      []byte(name),
 			Mode:      store.S_IFREG | 0o644,
 		})
-		require.NoError(t, err)
-		_, _, err = actor.Write(attr.Ino, 0, bytes.Repeat([]byte{fill}, size))
-		require.NoError(t, err)
+		require.NoError(t, cErr)
+		_, _, cErr = actor.Write(attr.Ino, 0, bytes.Repeat([]byte{fill}, size))
+		require.NoError(t, cErr)
 		return attr
 	}
 
@@ -149,17 +149,17 @@ func TestCompactPacksPhaseACASFenceAgainstConcurrentOverwriteTruncateAndUnlink(t
 	actor.SetBeforeCompactRelocateHookForTest(func() {
 		hookTriggered = true
 		// 1. 前台并发覆写 fOverwrite
-		_, _, err := actor.Write(fOverwrite.Ino, 0, newOverwritePayload)
-		require.NoError(t, err)
+		_, _, hErr := actor.Write(fOverwrite.Ino, 0, newOverwritePayload)
+		require.NoError(t, hErr)
 
 		// 2. 前台并发截断 fTruncate 至 0
 		zero := uint64(0)
-		_, err = actor.SetAttr(fTruncate.Ino, store.SetAttrReq{Size: &zero})
-		require.NoError(t, err)
+		_, hErr = actor.SetAttr(fTruncate.Ino, store.SetAttrReq{Size: &zero})
+		require.NoError(t, hErr)
 
 		// 3. 前台并发删除 fUnlink
-		err = actor.Unlink(store.RootIno, []byte("unlink.bin"), false)
-		require.NoError(t, err)
+		hErr = actor.Unlink(store.RootIno, []byte("unlink.bin"), false)
+		require.NoError(t, hErr)
 	})
 	defer actor.SetBeforeCompactRelocateHookForTest(nil)
 

@@ -339,7 +339,8 @@ func TestReadDirAndReadDirPlusWithPaginationAndAscendingBatchSeek(t *testing.T) 
 	var allDirEntries []store.DirEntry
 	var cursor uint64
 	for {
-		page, err := actor.ReadDir(subAttr.Ino, cursor, 2)
+		var page []store.DirEntry
+		page, err = actor.ReadDir(subAttr.Ino, cursor, 2)
 		require.NoError(t, err)
 		if len(page) == 0 {
 			break
@@ -377,7 +378,8 @@ func TestReadDirAndReadDirPlusWithPaginationAndAscendingBatchSeek(t *testing.T) 
 	var allPlusEntries []store.DirEntryPlus
 	cursor = 0
 	for {
-		page, err := actor.ReadDirPlus(subAttr.Ino, cursor, 2)
+		var page []store.DirEntryPlus
+		page, err = actor.ReadDirPlus(subAttr.Ino, cursor, 2)
 		require.NoError(t, err)
 		if len(page) == 0 {
 			break
@@ -419,21 +421,7 @@ func TestNamespaceIntraBatchReadYourWritesAndPhaseAFailureIsolation(t *testing.T
 	// Cmd 3: Create(2, "inside.txt") -> 同批写后读（Intra-Batch Read-Your-Writes）依赖 Cmd 1 创建的目录 Ino=2，成功拿到 Ino=3
 	// Cmd 4: Link(2, 1, "illegal_dir_link") -> 对目录(Ino=2)创建硬链接在 Phase A 返回 ErrPerm，零污染
 	// Cmd 5: Link(3, 2, "inside_link.txt") -> 同批写后读对 Cmd 3 创建的文件(Ino=3)创建硬链接，Nlink 变为 2
-	blockCh := make(chan struct{})
-	enteredCh := make(chan struct{})
-	gateDone := make(chan error, 1)
-	go func() {
-		gateDone <- actor.Execute(store.WriteOp{
-			Validate: func(v store.ReadView) error {
-				close(enteredCh)
-				<-blockCh
-				return nil
-			},
-			Mutate: func(m store.MutateView) {},
-		})
-	}()
-	<-enteredCh
-
+	release := store.HoldTickForTest(actor)
 	ticksBefore := actor.TickCount()
 
 	type res struct {
@@ -476,8 +464,7 @@ func TestNamespaceIntraBatchReadYourWritesAndPhaseAFailureIsolation(t *testing.T
 	}()
 	time.Sleep(15 * time.Millisecond)
 
-	close(blockCh)
-	require.NoError(t, <-gateDone)
+	release()
 
 	r1 := <-ch1
 	r2 := <-ch2

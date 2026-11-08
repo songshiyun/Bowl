@@ -7,10 +7,6 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-func init() {
-	registerOp(opWrite, (*StoreActor).validateWriteCmd, (*StoreActor).mutateWriteCmd)
-}
-
 type writeBlockSpec struct {
 	blockIdx uint64
 	newRef   BlobRef
@@ -102,7 +98,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	}
 	defer unlock()
 
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return 0, Attribute{}, ErrIO
 	}
@@ -155,7 +151,7 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 	}
 	defer unlock()
 
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return 0, Attribute{}, ErrIO
 	}
@@ -256,7 +252,8 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 
 	merged := make([]byte, newLen)
 	if oldOK {
-		if err := blobs.ReadAt(oldRef, 0, merged[:oldRef.Length]); err != nil {
+		err = blobs.ReadAt(oldRef, 0, merged[:oldRef.Length])
+		if err != nil {
 			return writeBlockSpec{}, err
 		}
 	}
@@ -296,12 +293,12 @@ func (s *StoreActor) readDataBlobRef(reader pebbleReader, ino, blockIdx uint64) 
 	return ref, true, nil
 }
 
-func (s *StoreActor) validateWritableFileInode(reader pebbleReader, ino uint64, offset uint64, dataLen uint32) (Inode, error) {
+func (s *StoreActor) validateWritableFileInode(reader pebbleReader, ino, offset uint64, dataLen uint32) (Inode, error) {
 	inode, err := s.readInode(reader, ino)
 	if err != nil {
 		return Inode{}, err
 	}
-	if err := s.checkInodeLive(reader, inode); err != nil {
+	if err := s.checkInodeLive(reader, &inode); err != nil {
 		return Inode{}, err
 	}
 	switch inode.Mode & S_IFMT {
@@ -322,7 +319,7 @@ func (s *StoreActor) validateWritableFileInode(reader pebbleReader, ino uint64, 
 
 // validateWriteCmd 执行阶段 2 Phase A 纯内存只读预校验（绝不触碰 s.batch 写接口）。
 func (s *StoreActor) validateWriteCmd(cmd *writeCmd) error {
-	op := cmd.req.(*writeDataOp)
+	op, _ := cmd.req.(*writeDataOp)
 
 	if s.stat.NextWriteSeq == math.MaxUint64 {
 		return ErrNoSpace
@@ -368,7 +365,7 @@ func (s *StoreActor) validateWriteCmd(cmd *writeCmd) error {
 
 // mutateWriteCmd 执行阶段 2 Phase B 内存记账与零拷贝批次编码。
 func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
-	op := cmd.req.(*writeDataOp)
+	op, _ := cmd.req.(*writeDataOp)
 	if op.dataLen == 0 {
 		s.overlayAtime(&op.target)
 		op.attr = op.target.ToAttribute()
@@ -388,9 +385,9 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 
 	s.stat.LogicalBytes += op.bytesDelta
 
-	_ = batchSetInodeDeferred(s.batch, inode)
-	batchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
-	batchSetDirtyDeferred(s.batch, op.ino)
+	_ = BatchSetInodeDeferred(s.batch, inode)
+	BatchDeleteXattrDeferred(s.batch, op.ino, securityCapabilityXattr)
+	BatchSetDirtyDeferred(s.batch, op.ino)
 
 	for i := range op.blocks {
 		b := &op.blocks[i]
@@ -400,11 +397,11 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 					s.removeBlobRef(b.oldRef)
 				}
 				s.addBlobRef(b.newRef)
-				batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
+				BatchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 			}
 		} else if b.oldOK {
 			s.removeBlobRef(b.oldRef)
-			batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
+			BatchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 		}
 	}
 
@@ -434,7 +431,7 @@ func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, inode); err != nil {
+	if err := s.checkInodeLive(s.db, &inode); err != nil {
 		return nil, err
 	}
 	switch inode.Mode & S_IFMT {
@@ -466,7 +463,7 @@ func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
 		}
 	}
 
-	s.touchReadAtime(inode)
+	s.touchReadAtime(&inode)
 	return out, nil
 }
 
@@ -517,7 +514,7 @@ func (s *StoreActor) readMultiBlocks(ino, firstBlock, lastBlock, offset, end uin
 
 // readBlockSlice 从 ref 指向的物理封包区间读取 [rangeStart, rangeEnd) 填入 out。
 func (s *StoreActor) readBlockSlice(ref BlobRef, rangeStart, rangeEnd, baseOffset uint64, out []byte) error {
-	blobs := s.Blobs()
+	blobs := s.blobs
 	if blobs == nil {
 		return ErrIO
 	}
