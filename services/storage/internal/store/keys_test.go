@@ -96,4 +96,30 @@ func TestKeyEncodingAndSplitKey(t *testing.T) {
 
 	_, _, err = store.DecodeDataKey([]byte("data:bad"))
 	require.ErrorIs(t, err, store.ErrInvalidKey)
+
+	// 8. PackStatKey: "sys:pack:" + 8B BigEndian(packID) (17B), SplitKey -> len(key) (17)
+	require.Equal(t, 256<<10, store.BlobSize)
+	require.Equal(t, 64<<20, store.PackMaxSize)
+	require.Equal(t, []byte("sys:pack:"), store.PackStatPrefix())
+	require.Len(t, store.PackStatPrefix(), store.PackStatPrefixLen)
+	require.Equal(t, 9, store.PackStatPrefixLen)
+	require.Equal(t, 17, store.PackStatKeyLen)
+
+	packID := uint64(0x010203043a3a0708) // 含 ':' (0x3a) 字节以验证 SplitKey 不会误切分
+	packKey := store.PackStatKey(packID)
+	require.Equal(t, []byte{'s', 'y', 's', ':', 'p', 'a', 'c', 'k', ':', 1, 2, 3, 4, 0x3a, 0x3a, 7, 8}, packKey)
+	require.Len(t, packKey, store.PackStatKeyLen)
+	require.Equal(t, 17, store.SplitKey(packKey))
+	require.True(t, bytes.HasPrefix(packKey, store.PackStatPrefix()))
+	gotPackID, err := store.DecodePackStatKey(packKey)
+	require.NoError(t, err)
+	require.Equal(t, packID, gotPackID)
+	require.True(t, bytes.Compare(store.PackStatKey(1), store.PackStatKey(256)) < 0)
+
+	_, err = store.DecodePackStatKey([]byte("sys:pack:short"))
+	require.ErrorIs(t, err, store.ErrInvalidKey)
+	_, err = store.DecodePackStatKey([]byte("sys:stat:12345678"))
+	require.ErrorIs(t, err, store.ErrInvalidKey)
+	_, err = store.DecodePackStatKey(store.PackStatKey(0))
+	require.ErrorIs(t, err, store.ErrInvalidKey)
 }

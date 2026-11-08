@@ -8,12 +8,13 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// 定长值物理编码字节数常量（ADR-0030 §2.1）。
+// 定长值物理编码字节数常量（ADR-0030 §2.1 & ADR-0031 §2.1/§2.2）。
 const (
 	BranchStatSize  = 25 // [ver(1B) | LogicalBytes(8B) | Inodes(8B) | NextWriteSeq(8B)]
+	PackMetaSize    = 17 // [ver(1B) | LiveBytes(8B) | TotalBytes(8B)]
 	EntryValueSize  = 13 // [ver(1B) | Ino(8B) | Mode(4B)]
 	InodeHeaderSize = 93 // 93B 定长属性头 + 可变长 SymlinkTarget
-	BlobRefSize     = 12 // [BlobID(8B) | Length(4B)]
+	BlobRefSize     = 16 // [PackID(8B) | Offset(4B) | Length(4B)]
 )
 
 const codecVersion byte = 1
@@ -228,13 +229,14 @@ func DecodeInode(b []byte) (Inode, error) {
 	}, nil
 }
 
-// BlobRef 表示 DataKey 指向的 12 字节定长数据块引用。
+// BlobRef 表示 DataKey 指向的 16 字节定长数据块定位指针（ADR-0031 §2.1）。
 type BlobRef struct {
-	ID     uint64
+	PackID uint64
+	Offset uint32
 	Length uint32
 }
 
-// EncodeBlobRef 编码 12 字节定长 BlobRef。
+// EncodeBlobRef 编码 16 字节定长 BlobRef。
 func EncodeBlobRef(ref BlobRef) []byte {
 	out := make([]byte, BlobRefSize)
 	putBlobRef(out, ref)
@@ -242,23 +244,59 @@ func EncodeBlobRef(ref BlobRef) []byte {
 }
 
 func putBlobRef(dst []byte, ref BlobRef) {
-	binary.BigEndian.PutUint64(dst[0:8], ref.ID)
-	binary.BigEndian.PutUint32(dst[8:12], ref.Length)
+	binary.BigEndian.PutUint64(dst[0:8], ref.PackID)
+	binary.BigEndian.PutUint32(dst[8:12], ref.Offset)
+	binary.BigEndian.PutUint32(dst[12:16], ref.Length)
 }
 
-// DecodeBlobRef 解码并校验 12 字节 BlobRef。
+// DecodeBlobRef 解码并校验 16 字节 BlobRef。
 func DecodeBlobRef(b []byte) (BlobRef, error) {
 	if len(b) != BlobRefSize {
 		return BlobRef{}, ErrInvalidValue
 	}
 	ref := BlobRef{
-		ID:     binary.BigEndian.Uint64(b[0:8]),
-		Length: binary.BigEndian.Uint32(b[8:12]),
+		PackID: binary.BigEndian.Uint64(b[0:8]),
+		Offset: binary.BigEndian.Uint32(b[8:12]),
+		Length: binary.BigEndian.Uint32(b[12:16]),
 	}
-	if ref.ID == 0 || ref.Length == 0 || ref.Length > BlobSize {
+	if ref.PackID == 0 || ref.Length == 0 || ref.Length > BlobSize || uint64(ref.Offset)+uint64(ref.Length) > PackMaxSize {
 		return BlobRef{}, ErrInvalidValue
 	}
 	return ref, nil
+}
+
+// PackMeta 表示 "sys:pack:<pack_id>" 持久化的 17 字节封包存活字节与总字节统计（ADR-0031 §2.2）。
+type PackMeta struct {
+	LiveBytes  uint64
+	TotalBytes uint64
+}
+
+// EncodePackMeta 编码 17 字节定长 PackMeta。
+func EncodePackMeta(m PackMeta) []byte {
+	out := make([]byte, PackMetaSize)
+	putPackMeta(out, m)
+	return out
+}
+
+func putPackMeta(dst []byte, m PackMeta) {
+	dst[0] = codecVersion
+	binary.BigEndian.PutUint64(dst[1:9], m.LiveBytes)
+	binary.BigEndian.PutUint64(dst[9:17], m.TotalBytes)
+}
+
+// DecodePackMeta 解码并校验 17 字节 PackMeta。
+func DecodePackMeta(b []byte) (PackMeta, error) {
+	if len(b) != PackMetaSize || b[0] != codecVersion {
+		return PackMeta{}, ErrInvalidValue
+	}
+	m := PackMeta{
+		LiveBytes:  binary.BigEndian.Uint64(b[1:9]),
+		TotalBytes: binary.BigEndian.Uint64(b[9:17]),
+	}
+	if m.LiveBytes > m.TotalBytes || m.TotalBytes > PackMaxSize {
+		return PackMeta{}, ErrInvalidValue
+	}
+	return m, nil
 }
 
 // StatFSResult 表示文件系统容量与节点统计结果。
@@ -285,6 +323,29 @@ func batchSetStatDeferred(b *pebble.Batch, s BranchStat) {
 	op := b.SetDeferred(StatKeyLen, BranchStatSize)
 	putStatKey(op.Key)
 	putBranchStat(op.Value, s)
+	op.Finish()
+}
+
+// BatchSetPackMetaDeferred 使用 SetDeferred 原地零拷贝写入 PackStatKey ("sys:pack:<pack_id>")。
+func BatchSetPackMetaDeferred(b *pebble.Batch, packID uint64, m PackMeta) {
+	batchSetPackMetaDeferred(b, packID, m)
+}
+
+func batchSetPackMetaDeferred(b *pebble.Batch, packID uint64, m PackMeta) {
+	op := b.SetDeferred(PackStatKeyLen, PackMetaSize)
+	putPackStatKey(op.Key, packID)
+	putPackMeta(op.Value, m)
+	op.Finish()
+}
+
+// BatchDeletePackMetaDeferred 使用 DeleteDeferred 原地零拷贝删除 PackStatKey ("sys:pack:<pack_id>")。
+func BatchDeletePackMetaDeferred(b *pebble.Batch, packID uint64) {
+	batchDeletePackMetaDeferred(b, packID)
+}
+
+func batchDeletePackMetaDeferred(b *pebble.Batch, packID uint64) {
+	op := b.DeleteDeferred(PackStatKeyLen)
+	putPackStatKey(op.Key, packID)
 	op.Finish()
 }
 

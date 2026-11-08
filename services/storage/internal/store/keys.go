@@ -5,32 +5,35 @@ import (
 	"encoding/binary"
 )
 
-// 键物理编码长度常量（ADR-0030 §2.1）。
+// 键物理编码长度常量（ADR-0030 §2.1 & ADR-0031 §2.2）。
 const (
-	StatKeyLen     = 8  // "sys:stat"
-	InodeKeyLen    = 14 // "inode:" + 8B
-	EntryPrefixLen = 15 // "entry:" + 8B + ":"
-	XattrPrefixLen = 15 // "xattr:" + 8B + ":"
-	DirtyKeyLen    = 14 // "dirty:" + 8B
-	OrphanKeyLen   = 15 // "orphan:" + 8B
-	DataPrefixLen  = 14 // "data:" + 8B + ":"
-	DataKeyLen     = 22 // "data:" + 8B + ":" + 8B
+	StatKeyLen        = 8  // "sys:stat"
+	PackStatPrefixLen = 9  // "sys:pack:"
+	PackStatKeyLen    = 17 // "sys:pack:" + 8B
+	InodeKeyLen       = 14 // "inode:" + 8B
+	EntryPrefixLen    = 15 // "entry:" + 8B + ":"
+	XattrPrefixLen    = 15 // "xattr:" + 8B + ":"
+	DirtyKeyLen       = 14 // "dirty:" + 8B
+	OrphanKeyLen      = 15 // "orphan:" + 8B
+	DataPrefixLen     = 14 // "data:" + 8B + ":"
+	DataKeyLen        = 22 // "data:" + 8B + ":" + 8B
 )
 
 var (
-	statKeyBytes      = []byte("sys:stat")
-	inodePrefixBytes  = []byte("inode:")
-	entryPrefixBytes  = []byte("entry:")
-	xattrPrefixBytes  = []byte("xattr:")
-	dirtyPrefixBytes  = []byte("dirty:")
-	orphanPrefixBytes = []byte("orphan:")
-	dataPrefixBytes   = []byte("data:")
+	statKeyBytes        = []byte("sys:stat")
+	packStatPrefixBytes = []byte("sys:pack:")
+	inodePrefixBytes    = []byte("inode:")
+	entryPrefixBytes    = []byte("entry:")
+	xattrPrefixBytes    = []byte("xattr:")
+	dirtyPrefixBytes    = []byte("dirty:")
+	orphanPrefixBytes   = []byte("orphan:")
+	dataPrefixBytes     = []byte("data:")
 )
 
 // SplitKey 实现 Pebble Comparer.Split 切分函数：
 //   - 对 "entry:<8B>:" 与 "xattr:<8B>:" 返回 15；
 //   - 对 "data:<8B>:" 返回 14；
-//   - 对其余单键（"inode:"、"dirty:"、"orphan:"、"sys:stat"）返回 len(key)。
+//   - 对其余单键（"inode:"、"dirty:"、"orphan:"、"sys:stat"、"sys:pack:<8B>"）返回 len(key)。
 func SplitKey(key []byte) int {
 	if len(key) >= EntryPrefixLen && key[14] == ':' {
 		if bytes.HasPrefix(key, entryPrefixBytes) || bytes.HasPrefix(key, xattrPrefixBytes) {
@@ -52,6 +55,35 @@ func StatKey() []byte {
 
 func putStatKey(dst []byte) {
 	copy(dst, statKeyBytes)
+}
+
+// PackStatPrefix 返回 .pack 存活字节统计键公共前缀 "sys:pack:"（9B）。
+func PackStatPrefix() []byte {
+	return append([]byte(nil), packStatPrefixBytes...)
+}
+
+// PackStatKey 编码 .pack 存活字节统计键 "sys:pack:<8B_packID>"（17B）。
+func PackStatKey(packID uint64) []byte {
+	out := make([]byte, PackStatKeyLen)
+	putPackStatKey(out, packID)
+	return out
+}
+
+func putPackStatKey(dst []byte, packID uint64) {
+	copy(dst, packStatPrefixBytes)
+	binary.BigEndian.PutUint64(dst[9:17], packID)
+}
+
+// DecodePackStatKey 解码 .pack 存活字节统计键，校验 packID > 0。
+func DecodePackStatKey(key []byte) (uint64, error) {
+	if len(key) != PackStatKeyLen || !bytes.HasPrefix(key, packStatPrefixBytes) {
+		return 0, ErrInvalidKey
+	}
+	packID := binary.BigEndian.Uint64(key[9:17])
+	if packID == 0 {
+		return 0, ErrInvalidKey
+	}
+	return packID, nil
 }
 
 // InodePrefix 返回节点属性键公共前缀 "inode:"。

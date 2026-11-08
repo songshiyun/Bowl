@@ -97,25 +97,64 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	require.Equal(t, uint32(store.DefaultBlockSize), dirAttr.Blksize)
 	require.Equal(t, uint64(store.DefaultDirSize/512), dirAttr.Blocks)
 
-	// 4. BlobRef (12B)
+	// 4. BlobRef (16B: [PackID(8B) | Offset(4B) | Length(4B)])
 	ref := store.BlobRef{
-		ID:     4096,
-		Length: 524288,
+		PackID: 4096,
+		Offset: 1048576,
+		Length: store.BlobSize,
 	}
 	refBytes := store.EncodeBlobRef(ref)
 	require.Len(t, refBytes, store.BlobRefSize)
-	require.Equal(t, 12, len(refBytes))
+	require.Equal(t, 16, len(refBytes))
 	gotRef, err := store.DecodeBlobRef(refBytes)
 	require.NoError(t, err)
 	require.Equal(t, ref, gotRef)
 
-	_, err = store.DecodeBlobRef(refBytes[:11])
+	// 刚好贴齐 PackMaxSize 上界 (Offset + Length == PackMaxSize) 合法
+	edgeRef := store.BlobRef{
+		PackID: 1,
+		Offset: store.PackMaxSize - store.BlobSize,
+		Length: store.BlobSize,
+	}
+	gotEdgeRef, err := store.DecodeBlobRef(store.EncodeBlobRef(edgeRef))
+	require.NoError(t, err)
+	require.Equal(t, edgeRef, gotEdgeRef)
+
+	// 长度、PackID、Length 与 Offset+Length 越界校验
+	_, err = store.DecodeBlobRef(refBytes[:15])
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{ID: 0, Length: 10}))
+	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{PackID: 0, Offset: 0, Length: 10}))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{ID: 1, Length: 0}))
+	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{PackID: 1, Offset: 0, Length: 0}))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{ID: 1, Length: store.BlobSize + 1}))
+	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize + 1}))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{PackID: 1, Offset: store.PackMaxSize - store.BlobSize + 1, Length: store.BlobSize}))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = store.DecodeBlobRef(store.EncodeBlobRef(store.BlobRef{PackID: 1, Offset: store.PackMaxSize, Length: 1}))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+
+	// 5. PackMeta (17B: [ver(1B) | LiveBytes(8B) | TotalBytes(8B)])
+	packMeta := store.PackMeta{
+		LiveBytes:  16 << 20,
+		TotalBytes: 64 << 20,
+	}
+	packMetaBytes := store.EncodePackMeta(packMeta)
+	require.Len(t, packMetaBytes, store.PackMetaSize)
+	require.Equal(t, 17, len(packMetaBytes))
+	gotPackMeta, err := store.DecodePackMeta(packMetaBytes)
+	require.NoError(t, err)
+	require.Equal(t, packMeta, gotPackMeta)
+
+	_, err = store.DecodePackMeta(packMetaBytes[:16])
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	badPackMetaVer := append([]byte(nil), packMetaBytes...)
+	badPackMetaVer[0] = 2
+	_, err = store.DecodePackMeta(badPackMetaVer)
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = store.DecodePackMeta(store.EncodePackMeta(store.PackMeta{LiveBytes: 8192, TotalBytes: 4096}))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = store.DecodePackMeta(store.EncodePackMeta(store.PackMeta{LiveBytes: 0, TotalBytes: store.PackMaxSize + 1}))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 }
 
@@ -139,9 +178,11 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 		Ctime:     333,
 	}
 	entry := store.Entry{Ino: 2, Mode: inode.Mode}
-	ref := store.BlobRef{ID: 7, Length: 4096}
+	ref := store.BlobRef{PackID: 7, Offset: 4096, Length: 4096}
+	packMeta := store.PackMeta{LiveBytes: 4096, TotalBytes: 8192}
 
 	store.BatchSetStatDeferred(batch, stat)
+	store.BatchSetPackMetaDeferred(batch, 7, packMeta)
 	require.NoError(t, store.BatchSetInodeDeferred(batch, inode))
 	store.BatchSetEntryDeferred(batch, 1, []byte("hello.txt"), entry)
 	store.BatchSetXattrDeferred(batch, 2, []byte("user.tag"), []byte("v1"))
@@ -156,6 +197,13 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	require.NoError(t, closer.Close())
 	require.NoError(t, err)
 	require.Equal(t, inode, gotIno)
+
+	pmVal, pmCloser, err := batch.Get(store.PackStatKey(7))
+	require.NoError(t, err)
+	gotPM, err := store.DecodePackMeta(pmVal)
+	require.NoError(t, pmCloser.Close())
+	require.NoError(t, err)
+	require.Equal(t, packMeta, gotPM)
 
 	require.NoError(t, db.Apply(batch, pebble.NoSync))
 
@@ -174,6 +222,7 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 	store.BatchDeleteOrphanDeferred(batch3, 2)
 	store.BatchDeleteDataDeferred(batch3, 2, 0)
 	store.BatchDeleteInodeDeferred(batch3, 2)
+	store.BatchDeletePackMetaDeferred(batch3, 7)
 	store.BatchDeleteDeferred(batch3, store.StatKey())
 	require.NoError(t, db.Apply(batch3, pebble.NoSync))
 
@@ -184,6 +233,7 @@ func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
 		store.OrphanKey(2),
 		store.DataKey(2, 0),
 		store.InodeKey(2),
+		store.PackStatKey(7),
 		store.StatKey(),
 	} {
 		_, _, err := db.Get(k)

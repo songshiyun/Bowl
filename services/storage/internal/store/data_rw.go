@@ -126,26 +126,18 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	specs := make([]writeBlockSpec, 0, numBlocks)
 	preAllocated := make([]uint64, 0, numBlocks)
 
-	// 阶段 1：在不持有 inodeLocks 的状态下无锁分配 newBlobID 并并行写入 <newBlobID>.blob。
-	// 若磁盘写入失败，当场清理已写出的临时块并返回，绝不进入 Actor 队列。
+	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 追加写入满块数据。
 	for i := range numBlocks {
 		blockIdx := (offset / BlobSize) + uint64(i)
 		chunk := data[i*BlobSize : (i+1)*BlobSize]
-		newID, allocErr := blobs.NextBlobID()
-		if allocErr != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
-			return 0, Attribute{}, allocErr
-		}
-		if writeErr := blobs.WriteForInode(ino, newID, chunk); writeErr != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
+		ref, writeErr := blobs.Append(ino, chunk)
+		if writeErr != nil {
 			return 0, Attribute{}, writeErr
 		}
-		preAllocated = append(preAllocated, newID)
+		preAllocated = append(preAllocated, ref.PackID)
 		specs = append(specs, writeBlockSpec{
 			blockIdx: blockIdx,
-			newRef:   BlobRef{ID: newID, Length: BlobSize},
+			newRef:   ref,
 			keep:     true,
 		})
 	}
@@ -198,8 +190,6 @@ func (s *StoreActor) writePartialFallback(ino, offset uint64, data []byte) (uint
 
 		oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
 		if err != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
 			return 0, Attribute{}, err
 		}
 
@@ -210,29 +200,20 @@ func (s *StoreActor) writePartialFallback(ino, offset uint64, data []byte) (uint
 
 		merged := make([]byte, newLen)
 		if oldOK {
-			if err := blobs.ReadAt(oldRef.ID, 0, merged[:oldRef.Length]); err != nil {
-				blobs.DetachMeta(preAllocated)
-				_ = blobs.RemoveFiles(preAllocated)
+			if err := blobs.ReadAt(oldRef, 0, merged[:oldRef.Length]); err != nil {
 				return 0, Attribute{}, err
 			}
 		}
 		copy(merged[inBlock:], chunk)
 
-		newID, err := blobs.NextBlobID()
+		ref, err := blobs.Append(ino, merged)
 		if err != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
 			return 0, Attribute{}, err
 		}
-		if err := blobs.WriteForInode(ino, newID, merged); err != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
-			return 0, Attribute{}, err
-		}
-		preAllocated = append(preAllocated, newID)
+		preAllocated = append(preAllocated, ref.PackID)
 		specs = append(specs, writeBlockSpec{
 			blockIdx: blockIdx,
-			newRef:   BlobRef{ID: newID, Length: uint32(newLen)},
+			newRef:   ref,
 			keep:     true,
 		})
 
@@ -382,15 +363,15 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 			s.mergedPatches = append(s.mergedPatches, *b.patch)
 		}
 		if b.keep {
-			if b.oldOK && b.oldRef.ID != b.newRef.ID {
-				cmd.toDelete = append(cmd.toDelete, b.oldRef.ID)
+			if b.oldOK && b.oldRef != b.newRef {
+				cmd.toDelete = append(cmd.toDelete, b.oldRef.PackID)
 			}
 			if !b.sameRef {
 				batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 			}
 		} else {
 			if b.oldOK {
-				cmd.toDelete = append(cmd.toDelete, b.oldRef.ID)
+				cmd.toDelete = append(cmd.toDelete, b.oldRef.PackID)
 				batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 			}
 		}
@@ -526,10 +507,10 @@ func (s *StoreActor) readBlockSliceWithRetry(ino, blockIdx uint64, initialRef Bl
 		n := min(reqLen, uint64(curRef.Length)-inBlockStart)
 
 		if hookPtr := testBeforeBlobReadHook.Load(); hookPtr != nil && *hookPtr != nil {
-			(*hookPtr)(ino, blockIdx, curRef.ID, attempt)
+			(*hookPtr)(ino, blockIdx, curRef.PackID, attempt)
 		}
 
-		err := blobs.ReadAt(curRef.ID, int64(inBlockStart), dst[:n])
+		err := blobs.ReadAt(curRef, int64(inBlockStart), dst[:n])
 		if err == nil {
 			return nil
 		}

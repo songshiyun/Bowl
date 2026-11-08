@@ -51,8 +51,6 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 
 		spec, newID, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk)
 		if err != nil {
-			blobs.DetachMeta(preAllocated)
-			_ = blobs.RemoveFiles(preAllocated)
 			return 0, Attribute{}, err
 		}
 		if newID != 0 {
@@ -81,7 +79,7 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 }
 
 func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte) (writeBlockSpec, uint64, error) {
-	// 跨块局部写中可能包含中间满 1 MiB 的对齐整块：直接写出新块，无需读旧块。
+	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
 			return writeBlockSpec{
@@ -89,18 +87,15 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 				keep:     false,
 			}, 0, nil
 		}
-		newID, err := blobs.NextBlobID()
+		ref, err := blobs.Append(ino, chunk)
 		if err != nil {
-			return writeBlockSpec{}, 0, err
-		}
-		if err := blobs.WriteForInode(ino, newID, chunk); err != nil {
 			return writeBlockSpec{}, 0, err
 		}
 		return writeBlockSpec{
 			blockIdx: blockIdx,
-			newRef:   BlobRef{ID: newID, Length: BlobSize},
+			newRef:   ref,
 			keep:     true,
-		}, newID, nil
+		}, ref.PackID, nil
 	}
 
 	oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
@@ -113,37 +108,20 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		newLen = int(oldRef.Length)
 	}
 
-	// 分支 2：旧块存在且为当前 Sync 窗口内新建的活跃块（WindowLocal(oldRef.ID) == true）-> 阶段 1 零磁盘 I/O 构造 PatchLog
-	if oldOK && blobs.WindowLocal(oldRef.ID) {
-		var patchOffset uint32
-		var patchData []byte
-		if inBlock <= int(oldRef.Length) {
-			patchOffset = uint32(inBlock)
-			patchData = append([]byte(nil), chunk...)
-		} else {
-			// 跨越旧块尾部空洞写入：从 oldRef.Length 补零至 inBlock，再拼接 chunk
-			holeLen := inBlock - int(oldRef.Length)
-			patchOffset = oldRef.Length
-			patchData = make([]byte, holeLen+len(chunk))
-			copy(patchData[holeLen:], chunk)
+	// 尝试活跃 .pack 尾部顺延扩展
+	if oldOK && inBlock >= int(oldRef.Length) {
+		if extRef, ok, extErr := blobs.ExtendTail(ino, oldRef, uint32(inBlock), chunk, uint32(newLen)); extErr != nil {
+			return writeBlockSpec{}, 0, extErr
+		} else if ok {
+			return writeBlockSpec{
+				blockIdx: blockIdx,
+				newRef:   extRef,
+				keep:     true,
+				sameRef:  extRef == oldRef,
+			}, 0, nil
 		}
-		patch := &PatchLog{
-			BlobID: oldRef.ID,
-			Ino:    ino,
-			Offset: patchOffset,
-			Data:   patchData,
-			NewLen: uint32(newLen),
-		}
-		return writeBlockSpec{
-			blockIdx: blockIdx,
-			newRef:   BlobRef{ID: oldRef.ID, Length: uint32(newLen)},
-			keep:     true,
-			sameRef:  uint32(newLen) == oldRef.Length,
-			patch:    patch,
-		}, 0, nil
 	}
 
-	// 分支 1：旧块不存在或已持久化（!WindowLocal）-> 读取旧块合并写出全新 <newBlobID>.blob
 	if !oldOK && isAllZero(chunk) {
 		return writeBlockSpec{
 			blockIdx: blockIdx,
@@ -153,7 +131,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 
 	merged := make([]byte, newLen)
 	if oldOK {
-		if err := blobs.ReadAt(oldRef.ID, 0, merged[:oldRef.Length]); err != nil {
+		if err := blobs.ReadAt(oldRef, 0, merged[:oldRef.Length]); err != nil {
 			return writeBlockSpec{}, 0, err
 		}
 	}
@@ -165,18 +143,15 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		}, 0, nil
 	}
 
-	newID, err := blobs.NextBlobID()
+	ref, err := blobs.Append(ino, merged)
 	if err != nil {
-		return writeBlockSpec{}, 0, err
-	}
-	if err := blobs.WriteForInode(ino, newID, merged); err != nil {
 		return writeBlockSpec{}, 0, err
 	}
 	return writeBlockSpec{
 		blockIdx: blockIdx,
-		newRef:   BlobRef{ID: newID, Length: uint32(newLen)},
+		newRef:   ref,
 		keep:     true,
-	}, newID, nil
+	}, ref.PackID, nil
 }
 
 // collectDataKeysAndBlobsFrom 扫描指定节点从 startBlockIdx 起（闭区间 [startBlockIdx, +∞)）的所有 DataKey 与对应 BlobRef.ID。
@@ -206,8 +181,8 @@ func (s *StoreActor) collectDataKeysAndBlobsFrom(reader pebbleReader, ino, start
 			return nil, nil, decErr
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
-		if ref.ID != 0 {
-			blobIDs = append(blobIDs, ref.ID)
+		if ref.PackID != 0 {
+			blobIDs = append(blobIDs, ref.PackID)
 		}
 	}
 	if iterErr := iter.Error(); iterErr != nil {
@@ -343,14 +318,14 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 					actor.mergedPatches = append(actor.mergedPatches, *tailSpec.patch)
 				}
 				if tailSpec.keep {
-					if tailSpec.oldOK && tailSpec.oldRef.ID != tailSpec.newRef.ID {
-						c.toDelete = append(c.toDelete, tailSpec.oldRef.ID)
+					if tailSpec.oldOK && tailSpec.oldRef != tailSpec.newRef {
+						c.toDelete = append(c.toDelete, tailSpec.oldRef.PackID)
 					}
 					if !tailSpec.sameRef {
 						batchSetDataDeferred(actor.batch, ino, tailSpec.blockIdx, tailSpec.newRef)
 					}
 				} else if tailSpec.oldOK {
-					c.toDelete = append(c.toDelete, tailSpec.oldRef.ID)
+					c.toDelete = append(c.toDelete, tailSpec.oldRef.PackID)
 					batchDeleteDataDeferred(actor.batch, ino, tailSpec.blockIdx)
 				}
 			}
@@ -368,25 +343,8 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 }
 
 func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32) (writeBlockSpec, uint64, error) {
-	if blobs.WindowLocal(oldRef.ID) {
-		patch := &PatchLog{
-			BlobID: oldRef.ID,
-			Ino:    ino,
-			Offset: 0,
-			Data:   nil,
-			NewLen: tailLen,
-		}
-		return writeBlockSpec{
-			blockIdx: blockIdx,
-			newRef:   BlobRef{ID: oldRef.ID, Length: tailLen},
-			keep:     true,
-			sameRef:  tailLen == oldRef.Length,
-			patch:    patch,
-		}, 0, nil
-	}
-
 	data := make([]byte, tailLen)
-	if err := blobs.ReadAt(oldRef.ID, 0, data); err != nil {
+	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
 		return writeBlockSpec{}, 0, err
 	}
 	if isAllZero(data) {
@@ -395,18 +353,16 @@ func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx ui
 			keep:     false,
 		}, 0, nil
 	}
-	newID, err := blobs.NextBlobID()
-	if err != nil {
-		return writeBlockSpec{}, 0, err
-	}
-	if err := blobs.WriteForInode(ino, newID, data); err != nil {
-		return writeBlockSpec{}, 0, err
-	}
 	return writeBlockSpec{
 		blockIdx: blockIdx,
-		newRef:   BlobRef{ID: newID, Length: tailLen},
-		keep:     true,
-	}, newID, nil
+		newRef: BlobRef{
+			PackID: oldRef.PackID,
+			Offset: oldRef.Offset,
+			Length: tailLen,
+		},
+		keep:    true,
+		sameRef: tailLen == oldRef.Length,
+	}, 0, nil
 }
 
 type fallocateDataOp struct {
@@ -494,8 +450,6 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 			}
 			spec, hasSpec, newID, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen)
 			if err != nil {
-				blobs.DetachMeta(preAllocated)
-				_ = blobs.RemoveFiles(preAllocated)
 				return err
 			}
 			if newID != 0 {
@@ -533,7 +487,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	clearEnd := min(inBlock+clearLen, int(oldRef.Length))
 
 	data := make([]byte, oldRef.Length)
-	if err := blobs.ReadAt(oldRef.ID, 0, data); err != nil {
+	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
 		return writeBlockSpec{}, false, 0, err
 	}
 	if isAllZero(data[inBlock:clearEnd]) {
@@ -541,7 +495,6 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	}
 	clear(data[inBlock:clearEnd])
 
-	// 若局部打洞清零后整块全部变为 0，直接删除该块 DataKey 并回收物理块（无论是否 WindowLocal）。
 	if isAllZero(data) {
 		return writeBlockSpec{
 			blockIdx: blockIdx,
@@ -549,35 +502,15 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 		}, true, 0, nil
 	}
 
-	if blobs.WindowLocal(oldRef.ID) {
-		patch := &PatchLog{
-			BlobID: oldRef.ID,
-			Ino:    ino,
-			Offset: uint32(inBlock),
-			Data:   make([]byte, clearEnd-inBlock),
-			NewLen: oldRef.Length,
-		}
-		return writeBlockSpec{
-			blockIdx: blockIdx,
-			newRef:   oldRef,
-			keep:     true,
-			sameRef:  true,
-			patch:    patch,
-		}, true, 0, nil
-	}
-
-	newID, err := blobs.NextBlobID()
+	ref, err := blobs.Append(ino, data)
 	if err != nil {
-		return writeBlockSpec{}, false, 0, err
-	}
-	if err := blobs.WriteForInode(ino, newID, data); err != nil {
 		return writeBlockSpec{}, false, 0, err
 	}
 	return writeBlockSpec{
 		blockIdx: blockIdx,
-		newRef:   BlobRef{ID: newID, Length: oldRef.Length},
+		newRef:   ref,
 		keep:     true,
-	}, true, newID, nil
+	}, true, ref.PackID, nil
 }
 
 // collectDataKeysAndBlobsInRange 扫描指定节点在闭区间 [startBlockIdx, endBlockIdx] 内的全部 DataKey 与 BlobRef.ID。
@@ -610,8 +543,8 @@ func (s *StoreActor) collectDataKeysAndBlobsInRange(reader pebbleReader, ino, st
 			return nil, nil, decErr
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
-		if ref.ID != 0 {
-			blobIDs = append(blobIDs, ref.ID)
+		if ref.PackID != 0 {
+			blobIDs = append(blobIDs, ref.PackID)
 		}
 	}
 	if iterErr := iter.Error(); iterErr != nil {
@@ -739,14 +672,14 @@ func (s *StoreActor) mutateFallocateCmd(cmd *writeCmd) {
 				s.mergedPatches = append(s.mergedPatches, *b.patch)
 			}
 			if b.keep {
-				if b.oldOK && b.oldRef.ID != b.newRef.ID {
-					cmd.toDelete = append(cmd.toDelete, b.oldRef.ID)
+				if b.oldOK && b.oldRef != b.newRef {
+					cmd.toDelete = append(cmd.toDelete, b.oldRef.PackID)
 				}
 				if !b.sameRef {
 					batchSetDataDeferred(s.batch, op.ino, b.blockIdx, b.newRef)
 				}
 			} else if b.oldOK {
-				cmd.toDelete = append(cmd.toDelete, b.oldRef.ID)
+				cmd.toDelete = append(cmd.toDelete, b.oldRef.PackID)
 				batchDeleteDataDeferred(s.batch, op.ino, b.blockIdx)
 			}
 		}

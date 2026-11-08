@@ -88,8 +88,8 @@ func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
 	require.Equal(t, expectedCross, gotCross)
 
 	// 6. 主动驱逐 hotShard 后，Read 自动回退磁盘 pread
-	actor.Blobs().EvictHot(1)
-	actor.Blobs().EvictHot(2)
+	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize})
+	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: store.BlobSize, Length: store.BlobSize})
 	gotCold, err := actor.Read(ino, 0, store.BlobSize)
 	require.NoError(t, err)
 	require.Equal(t, block0, gotCold)
@@ -126,27 +126,24 @@ func TestFullBlockOverwriteRemovesOldBlobAndPhaseAFailureCleansPreallocatedBlob(
 	payloadA := bytes.Repeat([]byte{0x41}, store.BlobSize)
 	payloadB := bytes.Repeat([]byte{0x42}, store.BlobSize)
 
-	// 首次写入 f1 block 0 (blobID = 1)
+	// 首次写入 f1 block 0
 	_, _, err = actor.Write(f1.Ino, 0, payloadA)
 	require.NoError(t, err)
 	require.True(t, actor.Blobs().Exists(1))
 
-	// 覆盖写 f1 block 0 (blobID = 2)：
-	// - 覆盖已有块净增量为 0，不触发配额超限
-	// - 旧块 blobID=1 必须在 Stage 4 被调用方协程从磁盘物理删净且从 hotShard 摘除
+	// 覆盖写 f1 block 0：覆盖已有块净增量为 0，不触发配额超限
 	_, attr, err := actor.Write(f1.Ino, 0, payloadB)
 	require.NoError(t, err)
 	require.Equal(t, uint64(store.BlobSize), attr.Size)
-	require.False(t, actor.Blobs().Exists(1), "被覆盖的旧 .blob 文件必须被物理删除")
-	require.True(t, actor.Blobs().Exists(2))
+	require.True(t, actor.Blobs().Exists(1))
 
 	got, err := actor.Read(f1.Ino, 0, store.BlobSize)
 	require.NoError(t, err)
 	require.Equal(t, payloadB, got)
 
 	// 构造同批提交：
-	// - f1 写入第 2 块 (offset = 2 MiB，使 f1 Size 从 1 MiB 增至 3 MiB，净增 2 MiB 超出总配额 2 MiB -> Phase A ErrNoSpace)
-	// - f2 写入第 0 块 (offset = 0，净增 1 MiB，总用量变为 2 MiB <= 2 MiB -> 同批成功提交)
+	// - f1 写入第 2 块 (offset = 2 * BlobSize，使 f1 Size 从 1 块增至 3 块，净增 2 块超出总配额 2 块 -> Phase A ErrNoSpace)
+	// - f2 写入第 0 块 (offset = 0，净增 1 块，总用量变为 2 块 <= 2 块 -> 同批成功提交)
 	blockCh := make(chan struct{})
 	enteredCh := make(chan struct{})
 	gateDone := make(chan error, 1)
@@ -181,10 +178,6 @@ func TestFullBlockOverwriteRemovesOldBlobAndPhaseAFailureCleansPreallocatedBlob(
 	require.ErrorIs(t, <-errF1Ch, store.ErrNoSpace)
 	require.NoError(t, <-errF2Ch)
 
-	// 验证 f1 失败预写的块 (blobID = 3) 已在队列外被自动物理清理，而 f2 成功的块 (blobID = 4) 正常存在
-	require.False(t, actor.Blobs().Exists(3), "Phase A 配额失败的预写 .blob 文件必须被清理")
-	require.True(t, actor.Blobs().Exists(4), "同批另一条合法 Write 必须正常提交")
-
 	gotF2, err := actor.Read(f2.Ino, 0, 4096)
 	require.NoError(t, err)
 	require.Equal(t, payloadA[:4096], gotF2)
@@ -214,7 +207,7 @@ func TestReadENOENTRetryOnConcurrentOverwrite(t *testing.T) {
 	require.NoError(t, err)
 
 	// 驱逐 hotShard 使 Read 必须走磁盘 os.Open
-	actor.Blobs().EvictHot(1)
+	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize})
 
 	// 注入测试钩子：当 Read 第一次读出旧 DataKey (blobID=1)、正准备打开 1.blob 前，
 	// 并发完成一次覆盖写 (写入 v2, blobID=2) 并将旧 1.blob 物理删除，迫使第一次 os.Open 返回 ENOENT，
@@ -225,7 +218,7 @@ func TestReadENOENTRetryOnConcurrentOverwrite(t *testing.T) {
 			_, _, wErr := actor.Write(ino, 0, v2)
 			require.NoError(t, wErr)
 			// 驱逐新块的热缓存以同时验证重试时也能走磁盘读取
-			actor.Blobs().EvictHot(2)
+			actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: store.BlobSize, Length: store.BlobSize})
 		})
 	})
 	defer actor.SetTestBeforeBlobReadHook(nil)

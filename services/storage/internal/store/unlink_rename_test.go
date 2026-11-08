@@ -185,8 +185,8 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	const blob1 uint64 = 101
 	const blob2 uint64 = 102
 	seedFileWithBlobsAndXattr(t, actor, f1Attr.Ino, 4096, "user.k1", map[uint64]store.BlobRef{
-		0: {ID: blob1, Length: 2048},
-		1: {ID: blob2, Length: 2048},
+		0: {PackID: blob1, Offset: 0, Length: 2048},
+		1: {PackID: blob2, Offset: 0, Length: 2048},
 	})
 
 	// 3. Unlink("f1")：Nlink 从 2 降为 1，仅更新 InodeKey(Ctime)，不写 OrphanKey，不扣减统计或删 DataKey
@@ -252,7 +252,7 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 
 	const blob3 uint64 = 103
 	seedFileWithBlobsAndXattr(t, actor, f2Attr.Ino, 1024, "user.k2", map[uint64]store.BlobRef{
-		0: {ID: blob3, Length: 1024},
+		0: {PackID: blob3, Offset: 0, Length: 1024},
 	})
 
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("f2"), false))
@@ -280,7 +280,7 @@ func TestUnlinkHardlinksOrphanLifecycleAndDataReclaim(t *testing.T) {
 	require.NoError(t, err)
 	const blob4 uint64 = 104
 	seedFileWithBlobsAndXattr(t, actor, o2Attr.Ino, 512, "", map[uint64]store.BlobRef{
-		0: {ID: blob4, Length: 512},
+		0: {PackID: blob4, Offset: 0, Length: 512},
 	})
 
 	require.NoError(t, actor.Unlink(store.RootIno, []byte("sym1"), true))
@@ -380,7 +380,7 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	// 2. 默认覆盖非目录且 TargetOpenHandle=false：立即删除被覆盖目标的 InodeKey、XattrKey、DataKey 并回收 BlobRef.ID
 	const blobF2 uint64 = 201
 	seedFileWithBlobsAndXattr(t, actor, f2.Ino, 2048, "user.f2", map[uint64]store.BlobRef{
-		0: {ID: blobF2, Length: 2048},
+		0: {PackID: blobF2, Offset: 0, Length: 2048},
 	})
 
 	require.NoError(t, actor.Rename(store.RenameReq{
@@ -408,7 +408,7 @@ func TestRenameOverwriteNoreplaceAndOrphanTarget(t *testing.T) {
 	require.NoError(t, err)
 	const blobF3 uint64 = 202
 	seedFileWithBlobsAndXattr(t, actor, f3.Ino, 1024, "user.f3", map[uint64]store.BlobRef{
-		0: {ID: blobF3, Length: 1024},
+		0: {PackID: blobF3, Offset: 0, Length: 1024},
 	})
 
 	require.NoError(t, actor.Rename(store.RenameReq{

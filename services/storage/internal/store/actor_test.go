@@ -23,6 +23,7 @@ func TestPebbleOptionsAndPrefixBloom(t *testing.T) {
 	require.Equal(t, 14, opts.Comparer.Split(store.InodeKey(1)))
 	require.Equal(t, 14, opts.Comparer.Split(store.DirtyKey(1)))
 	require.Equal(t, 15, opts.Comparer.Split(store.OrphanKey(1)))
+	require.Equal(t, 17, opts.Comparer.Split(store.PackStatKey(1)))
 	require.Equal(t, 8, opts.Comparer.Split(store.StatKey()))
 
 	require.Equal(t, uint64(16<<20), opts.MemTableSize)

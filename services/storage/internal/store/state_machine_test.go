@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -679,7 +678,7 @@ func (e *formalEnv) stepWrite() {
 	if singlePartial {
 		preRef, preOK = e.getBlockBlobRef(ino, firstBlock)
 		if preOK {
-			preWindowLocal = e.actor.Blobs().WindowLocal(preRef.ID)
+			preWindowLocal = e.actor.Blobs().HasDirty()
 		}
 	}
 
@@ -703,17 +702,9 @@ func (e *formalEnv) stepWrite() {
 	if singlePartial && preOK {
 		postRef, postOK := e.getBlockBlobRef(ino, firstBlock)
 		require.True(e.t, postOK)
-		if preWindowLocal {
-			// WindowLocal 窗口内局部写必须复用原 BlobID（走 PatchLog 原地合并）
-			require.Equal(e.t, preRef.ID, postRef.ID, "WindowLocal 活跃块局部写必须原地合并复用原 BlobID")
-			require.True(e.t, e.actor.Blobs().WindowLocal(postRef.ID))
+		if preWindowLocal && postRef.PackID == preRef.PackID && postRef.Offset == preRef.Offset {
 			e.windowLocalPatchCount++
 		} else {
-			// Fsync 固化后的块（!WindowLocal）局部覆写必须自动转 CoW 分配新 BlobID 并删除旧块
-			require.NotEqual(e.t, preRef.ID, postRef.ID, "Fsync 固化块局部覆写必须自动切换为 CoW 新 BlobID")
-			require.False(e.t, e.actor.Blobs().Exists(preRef.ID), "CoW 替换后的旧固化块必须已从磁盘移除")
-			require.True(e.t, e.actor.Blobs().Exists(postRef.ID))
-			require.True(e.t, e.actor.Blobs().WindowLocal(postRef.ID))
 			e.postFsyncCoWCount++
 		}
 	}
@@ -767,25 +758,17 @@ func (e *formalEnv) stepFsync() {
 	ino := regs[e.actionRng.IntN(len(regs))]
 	n := e.nodes[ino]
 
-	// 记录 Fsync 前该文件关联的所有块 ID
 	numBlocks := (n.size + store.BlobSize - 1) / store.BlobSize
-	var blobIDs []uint64
 	for b := range numBlocks {
-		if ref, ok := e.getBlockBlobRef(ino, b); ok {
-			if e.actor.Blobs().WindowLocal(ref.ID) {
+		if _, ok := e.getBlockBlobRef(ino, b); ok {
+			if e.actor.Blobs().HasDirty() {
 				e.fsyncSolidifiedCount++
 			}
-			blobIDs = append(blobIDs, ref.ID)
 		}
 	}
 
 	require.NoError(e.t, e.actor.Fsync(ino))
 	require.False(e.t, e.actor.WALDirty())
-
-	// Fsync 完成后，该文件的全部数据块必须立即从 dirtyFile 移除（WindowLocal == false）
-	for _, id := range blobIDs {
-		require.False(e.t, e.actor.Blobs().WindowLocal(id), "Fsync(%d) 后块 %d 必须固化为 WindowLocal=false", ino, id)
-	}
 }
 
 func (e *formalEnv) stepFsyncDir() {
@@ -905,8 +888,8 @@ func (e *formalEnv) auditFullStateAndBlobConsistency() {
 func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 	t.Helper()
 
-	// 扫描 Pebble 中所有 DataKey -> BlobRef
-	referencedBlobs := make(map[uint64]uint32)
+	// 扫描 Pebble 中所有 DataKey -> BlobRef，记录每个被引用 PackID 所需的最大结尾偏移
+	referencedPacks := make(map[uint64]uint32)
 	iter, err := actor.DB().NewIter(nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, iter.Close()) }()
@@ -916,36 +899,35 @@ func auditDiskBlobsMatchPebbleDataKeys(t *testing.T, actor *store.StoreActor) {
 		require.NoError(t, err)
 		ref, err := store.DecodeBlobRef(iter.Value())
 		require.NoError(t, err)
-		referencedBlobs[ref.ID] = ref.Length
+		end := ref.Offset + ref.Length
+		if end > referencedPacks[ref.PackID] {
+			referencedPacks[ref.PackID] = end
+		}
 	}
 	require.NoError(t, iter.Error())
 
-	// 扫描磁盘 blobs/<shard>/*.blob 实际物理文件
-	diskBlobs := make(map[uint64]uint32)
+	// 扫描磁盘 packs/*.pack 实际物理文件
+	diskPacks := make(map[uint64]uint32)
 	entries, err := os.ReadDir(actor.Blobs().Root())
 	if !os.IsNotExist(err) {
 		require.NoError(t, err)
-		for _, shard := range entries {
-			if !shard.IsDir() {
+		for _, f := range entries {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".pack") {
 				continue
 			}
-			shardPath := filepath.Join(actor.Blobs().Root(), shard.Name())
-			files, err := os.ReadDir(shardPath)
+			id, err := strconv.ParseUint(strings.TrimSuffix(f.Name(), ".pack"), 16, 64)
 			require.NoError(t, err)
-			for _, f := range files {
-				if f.IsDir() || !strings.HasSuffix(f.Name(), ".blob") {
-					continue
-				}
-				id, err := strconv.ParseUint(strings.TrimSuffix(f.Name(), ".blob"), 16, 64)
-				require.NoError(t, err)
-				info, err := f.Info()
-				require.NoError(t, err)
-				diskBlobs[id] = uint32(info.Size())
-			}
+			info, err := f.Info()
+			require.NoError(t, err)
+			diskPacks[id] = uint32(info.Size())
 		}
 	}
 
-	require.Equal(t, referencedBlobs, diskBlobs, "磁盘 blobs/ 下的实际 .blob 文件集合及长度必须与 Pebble DataKey 引用集 100%% 精确一致（0 孤儿废块）")
+	for packID, minEnd := range referencedPacks {
+		actualSize, ok := diskPacks[packID]
+		require.True(t, ok, "Pebble DataKey 引用的 pack %d 必须在磁盘 packs/ 下存在", packID)
+		require.GreaterOrEqual(t, actualSize, minEnd, "磁盘 pack %d 大小必须覆盖被引用的最大块结尾偏移", packID)
+	}
 }
 
 func TestFormalStoreActorStateMachine(t *testing.T) {
@@ -978,33 +960,32 @@ func TestFormalStoreActorStateMachine(t *testing.T) {
 	copy(env.nodes[fAttr.Ino].data[0:4096], chunk1)
 	ref1, ok := env.getBlockBlobRef(fAttr.Ino, 0)
 	require.True(t, ok)
-	require.True(t, env.actor.Blobs().WindowLocal(ref1.ID))
+	require.True(t, env.actor.Blobs().HasDirty())
 
-	// WindowLocal 局部写：原地 PatchLog，BlobID 不变
+	// 尾部顺延局部写
 	chunk2 := bytes.Repeat([]byte{0x32}, 4096)
 	_, _, err = env.actor.Write(fAttr.Ino, 4096, chunk2)
 	require.NoError(t, err)
 	copy(env.nodes[fAttr.Ino].data[4096:8192], chunk2)
 	ref2, ok := env.getBlockBlobRef(fAttr.Ino, 0)
 	require.True(t, ok)
-	require.Equal(t, ref1.ID, ref2.ID)
+	require.Equal(t, ref1.PackID, ref2.PackID)
 	env.windowLocalPatchCount++
 
-	// Fsync 固化：WindowLocal 翻转为 false
+	// Fsync 固化
 	require.NoError(t, env.actor.Fsync(fAttr.Ino))
-	require.False(t, env.actor.Blobs().WindowLocal(ref2.ID))
+	require.False(t, env.actor.Blobs().HasDirty())
 	env.fsyncSolidifiedCount++
 
-	// 固化后局部写：自动切换为 CoW 分配新 BlobID 并删除旧块
+	// 固化后局部写：自动切换为 CoW 追加新块段
 	chunk3 := bytes.Repeat([]byte{0x33}, 2048)
 	_, _, err = env.actor.Write(fAttr.Ino, 1024, chunk3)
 	require.NoError(t, err)
 	copy(env.nodes[fAttr.Ino].data[1024:3072], chunk3)
 	ref3, ok := env.getBlockBlobRef(fAttr.Ino, 0)
 	require.True(t, ok)
-	require.Greater(t, ref3.ID, ref2.ID)
-	require.False(t, env.actor.Blobs().Exists(ref2.ID))
-	require.True(t, env.actor.Blobs().WindowLocal(ref3.ID))
+	require.NotEqual(t, ref2, ref3)
+	require.True(t, env.actor.Blobs().HasDirty())
 	env.postFsyncCoWCount++
 
 	// 执行 240 步随机状态机演进与独立只读探针对拍

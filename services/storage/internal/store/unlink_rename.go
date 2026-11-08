@@ -131,8 +131,8 @@ func (s *StoreActor) collectDataKeysAndBlobs(reader pebbleReader, ino uint64) (k
 			return nil, nil, decErr
 		}
 		keys = append(keys, append([]byte(nil), iter.Key()...))
-		if ref.ID != 0 {
-			blobIDs = append(blobIDs, ref.ID)
+		if ref.PackID != 0 {
+			blobIDs = append(blobIDs, ref.PackID)
 		}
 	}
 	if iterErr := iter.Error(); iterErr != nil {
