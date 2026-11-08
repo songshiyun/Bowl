@@ -600,7 +600,7 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 			default:
 			}
 
-			// 关闭后所有新请求必须稳定返回 ErrClosed
+			// 关闭后所有新请求必须稳定返回 ErrClosed，且 BlobStore 常驻 .pack 句柄已关闭
 			_, err = actor.GetAttr(store.RootIno)
 			require.ErrorIs(t, err, store.ErrClosed)
 			_, err = actor.StatFS()
@@ -611,6 +611,8 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 				Validate: func(v store.ReadView) error { return nil },
 				Mutate:   func(m store.MutateView) {},
 			})
+			require.ErrorIs(t, err, store.ErrClosed)
+			_, err = actor.Blobs().Append(store.RootIno, []byte("after-close"))
 			require.ErrorIs(t, err, store.ErrClosed)
 		})
 	}

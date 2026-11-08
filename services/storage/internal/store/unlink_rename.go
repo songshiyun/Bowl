@@ -207,9 +207,6 @@ func (s *StoreActor) applyInodeReclaimPlan(cmd *writeCmd, plan inodeReclaimPlan)
 	for _, k := range plan.dataKeys {
 		batchDeleteDeferred(s.batch, k)
 	}
-	if len(plan.blobIDs) > 0 {
-		cmd.toDelete = append(cmd.toDelete, plan.blobIDs...)
-	}
 	batchSetDirtyDeferred(s.batch, plan.ino)
 	s.discardDirtyAtime(plan.ino)
 	if plan.hasInode {
@@ -925,8 +922,6 @@ func (s *StoreActor) mutateRenameCmd(cmd *writeCmd) {
 	}
 }
 
-// OnBlobDeleteForTest 挂载待删物理块回调（供测试观测 cmd.toDelete 回收链路）。
-func OnBlobDeleteForTest(s *StoreActor, detach func(ids []uint64), remove func(ids []uint64) error) {
-	s.detachMetaFn = detach
-	s.removeFilesFn = remove
+// OnBlobDeleteForTest 保留空实现兼容旧测试签名（将在 STARSRC-627 移除）。
+func OnBlobDeleteForTest(_ *StoreActor, _ func(ids []uint64), _ func(ids []uint64) error) {
 }

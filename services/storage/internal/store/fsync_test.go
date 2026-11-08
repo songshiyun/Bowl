@@ -211,8 +211,10 @@ func TestFsyncPerInodeIsolationDirectorySyncAndWindowSolidification(t *testing.T
 	require.NoError(t, err)
 
 	prevFileSyncs := blobs.SyncFileCount()
+	prevDirSyncs := blobs.SyncDirCount()
 	require.NoError(t, actor.Fsync(fileA.Ino))
 	require.GreaterOrEqual(t, blobs.SyncFileCount(), prevFileSyncs+1)
+	require.Equal(t, prevDirSyncs, blobs.SyncDirCount(), "已有活跃 .pack 后续追加落盘无需重复执行 packs/ 目录 fsync")
 }
 
 func TestGroupCommitFsyncAndFsyncDirDualLayerBarrier(t *testing.T) {

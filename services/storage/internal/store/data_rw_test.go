@@ -3,6 +3,7 @@ package store_test
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
 
-func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
+func TestFullBlockWriteMaxWrite1MiBAndLocklessReadRoundTrip(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-rw",
@@ -41,7 +42,7 @@ func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
 	block0 := bytes.Repeat([]byte{0x11}, store.BlobSize)
 	block2 := bytes.Repeat([]byte{0x33}, store.BlobSize)
 
-	// 1. 写入第 0 块 (offset = 0, 1 MiB)
+	// 1. 写入第 0 块 (offset = 0, 256 KiB)
 	written, attr, err := actor.Write(ino, 0, block0)
 	require.NoError(t, err)
 	require.Equal(t, uint32(store.BlobSize), written)
@@ -56,7 +57,7 @@ func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
 	}
 	require.Error(t, err, "Write 必须删除 security.capability")
 
-	// 2. 跳过第 1 块（稀疏空洞），直接写入第 2 块 (offset = 2 MiB, 1 MiB)
+	// 2. 跳过第 1 块（稀疏空洞），直接写入第 2 块 (offset = 2 * 256 KiB, 256 KiB)
 	written, attr, err = actor.Write(ino, 2*store.BlobSize, block2)
 	require.NoError(t, err)
 	require.Equal(t, uint32(store.BlobSize), written)
@@ -83,11 +84,11 @@ func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	expectedCross := make([]byte, crossSize)
 	copy(expectedCross[:2048], block0[store.BlobSize-2048:])
-	// 中间 1 MiB 保持 0
+	// 中间 256 KiB 保持 0
 	copy(expectedCross[2048+store.BlobSize:], block2[:2048])
 	require.Equal(t, expectedCross, gotCross)
 
-	// 6. 主动驱逐 hotShard 后，Read 自动回退磁盘 pread
+	// 6. 主动驱逐 hotShard 后，Read 直接走常驻 .pack 文件句柄 pread
 	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize})
 	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: store.BlobSize, Length: store.BlobSize})
 	gotCold, err := actor.Read(ino, 0, store.BlobSize)
@@ -98,14 +99,140 @@ func TestFullBlockWriteAndLocklessReadRoundTrip(t *testing.T) {
 	gotEOF, err := actor.Read(ino, 3*store.BlobSize, 4096)
 	require.NoError(t, err)
 	require.Empty(t, gotEOF)
+
+	// 8. 单次 MaxWriteBytes = 1 MiB（跨越 4 个连续 256 KiB 逻辑块）在单轮 Tick 内原子写入
+	f1M, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("one-mib.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	payload1M := make([]byte, store.MaxWriteBytes)
+	for b := range 4 {
+		fill := byte(0xa0 + b)
+		copy(payload1M[b*store.BlobSize:(b+1)*store.BlobSize], bytes.Repeat([]byte{fill}, store.BlobSize))
+	}
+
+	ticksBefore := actor.TickCount()
+	written1M, attr1M, err := actor.Write(f1M.Ino, 0, payload1M)
+	require.NoError(t, err)
+	require.Equal(t, uint32(store.MaxWriteBytes), written1M)
+	require.Equal(t, uint64(store.MaxWriteBytes), attr1M.Size)
+	require.Equal(t, ticksBefore+1, actor.TickCount(), "单次 1 MiB 跨 4 块写入必须在单个 IndexedBatch 批次中原子提交")
+
+	for b := range uint64(4) {
+		val, c, getErr := actor.DB().Get(store.DataKey(f1M.Ino, b))
+		require.NoError(t, getErr)
+		ref, decErr := store.DecodeBlobRef(val)
+		require.NoError(t, c.Close())
+		require.NoError(t, decErr)
+		require.Equal(t, uint64(1), ref.PackID)
+		require.Equal(t, uint32(store.BlobSize), ref.Length)
+	}
+
+	got1M, err := actor.Read(f1M.Ino, 0, store.MaxWriteBytes)
+	require.NoError(t, err)
+	require.Equal(t, payload1M, got1M)
 }
 
-func TestFullBlockOverwriteRemovesOldBlobAndPhaseAFailureCleansPreallocatedBlob(t *testing.T) {
+func TestCross256KiBBoundaryPartialWriteAndTailExtension(t *testing.T) {
+	actor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-partial-pack",
+		BranchID: "main",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	f, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("stream.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	// 1. 连续 8 次 4 KiB 尾部追加写：命中活跃 .pack 最末尾同块 ExtendTail，原地顺延写指针，0 写放大
+	const step = 4096
+	expected := make([]byte, 0, step*8)
+	for i := range 8 {
+		chunk := bytes.Repeat([]byte{byte(0x10 + i)}, step)
+		n, attr, wErr := actor.Write(f.Ino, uint64(len(expected)), chunk)
+		require.NoError(t, wErr)
+		require.Equal(t, uint32(step), n)
+		expected = append(expected, chunk...)
+		require.Equal(t, uint64(len(expected)), attr.Size)
+	}
+	// 8 次追加均在 Pack 1 Offset 0 原地顺延，ActiveOffset 恰好等于 32 KiB
+	require.Equal(t, uint64(1), actor.Blobs().ActivePackID())
+	require.Equal(t, uint32(len(expected)), actor.Blobs().ActiveOffset())
+
+	val0, c0, err := actor.DB().Get(store.DataKey(f.Ino, 0))
+	require.NoError(t, err)
+	ref0, err := store.DecodeBlobRef(val0)
+	require.NoError(t, c0.Close())
+	require.NoError(t, err)
+	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: uint32(len(expected))}, ref0)
+
+	// 2. 块内非尾部局部覆写：读取旧块合并后通过 Append 追加至活跃 .pack 新偏移，原偏移 [0, 32KiB) 不被原地篡改
+	patch := bytes.Repeat([]byte{0xee}, 2048)
+	_, _, err = actor.Write(f.Ino, 4096, patch)
+	require.NoError(t, err)
+	copy(expected[4096:4096+2048], patch)
+
+	val0After, c0After, err := actor.DB().Get(store.DataKey(f.Ino, 0))
+	require.NoError(t, err)
+	ref0After, err := store.DecodeBlobRef(val0After)
+	require.NoError(t, c0After.Close())
+	require.NoError(t, err)
+	require.Equal(t, store.BlobRef{
+		PackID: 1,
+		Offset: uint32(len(expected)),
+		Length: uint32(len(expected)),
+	}, ref0After)
+
+	// 3. 任意跨 256 KiB 边界的非对齐写入：从 128 KiB 处一次写入 600 KiB（跨越 block 0 尾部、block 1 满块、block 2 头部）
+	unalignedOffset := uint64(128 * 1024)
+	unalignedLen := 600 * 1024
+	unalignedData := make([]byte, unalignedLen)
+	for i := range unalignedData {
+		unalignedData[i] = byte((i*31 + 7) & 0xff)
+	}
+	written, attr, err := actor.Write(f.Ino, unalignedOffset, unalignedData)
+	require.NoError(t, err)
+	require.Equal(t, uint32(unalignedLen), written)
+	require.Equal(t, unalignedOffset+uint64(unalignedLen), attr.Size)
+
+	fullExpected := make([]byte, unalignedOffset+uint64(unalignedLen))
+	copy(fullExpected, expected)
+	copy(fullExpected[unalignedOffset:], unalignedData)
+
+	// 先验证命中热缓存读取
+	gotHot, err := actor.Read(f.Ino, 0, uint32(len(fullExpected)))
+	require.NoError(t, err)
+	require.Equal(t, fullExpected, gotHot)
+
+	// 驱逐全部 3 个块的热缓存后，验证从常驻 .pack 句柄跨块读取
+	for b := range uint64(3) {
+		v, closer, getErr := actor.DB().Get(store.DataKey(f.Ino, b))
+		require.NoError(t, getErr)
+		r, decErr := store.DecodeBlobRef(v)
+		require.NoError(t, closer.Close())
+		require.NoError(t, decErr)
+		actor.Blobs().EvictHot(r)
+	}
+	gotCold, err := actor.Read(f.Ino, 0, uint32(len(fullExpected)))
+	require.NoError(t, err)
+	require.Equal(t, fullExpected, gotCold)
+}
+
+func TestFullBlockOverwriteAndPhaseAFailureIsolation(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-overwrite",
 		BranchID: "main",
-		MaxBytes: 2 * store.BlobSize, // 配额上限 2 MiB
+		MaxBytes: 2 * store.BlobSize, // 配额上限 2 块 (512 KiB)
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, actor.Close()) }()
@@ -178,57 +305,16 @@ func TestFullBlockOverwriteRemovesOldBlobAndPhaseAFailureCleansPreallocatedBlob(
 	require.ErrorIs(t, <-errF1Ch, store.ErrNoSpace)
 	require.NoError(t, <-errF2Ch)
 
+	gotF1, err := actor.Read(f1.Ino, 0, store.BlobSize)
+	require.NoError(t, err)
+	require.Equal(t, payloadB, gotF1)
+
 	gotF2, err := actor.Read(f2.Ino, 0, 4096)
 	require.NoError(t, err)
 	require.Equal(t, payloadA[:4096], gotF2)
 }
 
-func TestReadENOENTRetryOnConcurrentOverwrite(t *testing.T) {
-	actor, err := store.Open(store.Options{
-		Dir:      t.TempDir(),
-		DiskID:   "disk-enoent",
-		BranchID: "main",
-		MaxBytes: 64 << 20,
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
-
-	f, err := actor.Create(store.CreateReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("race.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
-
-	v1 := bytes.Repeat([]byte{0x11}, store.BlobSize)
-	v2 := bytes.Repeat([]byte{0x22}, store.BlobSize)
-
-	_, _, err = actor.Write(f.Ino, 0, v1)
-	require.NoError(t, err)
-
-	// 驱逐 hotShard 使 Read 必须走磁盘 os.Open
-	actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize})
-
-	// 注入测试钩子：当 Read 第一次读出旧 DataKey (blobID=1)、正准备打开 1.blob 前，
-	// 并发完成一次覆盖写 (写入 v2, blobID=2) 并将旧 1.blob 物理删除，迫使第一次 os.Open 返回 ENOENT，
-	// 验证 Read 自动重读最新 DataKey (blobID=2) 并返回 v2 数据。
-	var once sync.Once
-	actor.SetTestBeforeBlobReadHook(func(ino, blockIdx, blobID uint64, attempt int) {
-		once.Do(func() {
-			_, _, wErr := actor.Write(ino, 0, v2)
-			require.NoError(t, wErr)
-			// 驱逐新块的热缓存以同时验证重试时也能走磁盘读取
-			actor.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: store.BlobSize, Length: store.BlobSize})
-		})
-	})
-	defer actor.SetTestBeforeBlobReadHook(nil)
-
-	got, err := actor.Read(f.Ino, 0, store.BlobSize)
-	require.NoError(t, err)
-	require.Equal(t, v2, got)
-}
-
-func TestConcurrentFullBlockWritesAndReads(t *testing.T) {
+func TestConcurrentWritesAndLocklessReadsOnPack(t *testing.T) {
 	actor, err := store.Open(store.Options{
 		Dir:      t.TempDir(),
 		DiskID:   "disk-conc",
@@ -252,7 +338,7 @@ func TestConcurrentFullBlockWritesAndReads(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	// 并发整块写与覆盖写
+	// 并发整块写、跨块局部写与覆盖写
 	for fIdx, ino := range inos {
 		for bIdx := range blocksPerFile {
 			wg.Add(1)
@@ -269,7 +355,7 @@ func TestConcurrentFullBlockWritesAndReads(t *testing.T) {
 		}
 	}
 
-	// 并发无锁读取
+	// 并发无锁读取（无需 ENOENT 重试，全程 0 错误）
 	stopRead := make(chan struct{})
 	var readWg sync.WaitGroup
 	for _, ino := range inos {
@@ -292,19 +378,16 @@ func TestConcurrentFullBlockWritesAndReads(t *testing.T) {
 	close(stopRead)
 	readWg.Wait()
 
-	// 验证最终每个块只有 1 个存活物理块文件，总共 fileCount * blocksPerFile = 16 个 .blob 文件
-	var liveBlobCount int
+	// 验证所有写入均收敛在扁平 packs/*.pack 封包文件中
 	entries, err := os.ReadDir(actor.Blobs().Root())
 	require.NoError(t, err)
-	for _, shard := range entries {
-		if !shard.IsDir() {
-			continue
+	var packCount int
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".pack" {
+			packCount++
 		}
-		files, err := os.ReadDir(actor.Blobs().Root() + "/" + shard.Name())
-		require.NoError(t, err)
-		liveBlobCount += len(files)
 	}
-	require.Equal(t, fileCount*blocksPerFile, liveBlobCount, "所有被覆盖的旧 .blob 物理文件必须已被调用方协程删净")
+	require.Equal(t, 1, packCount, "64 MiB 上限下 48 次 256 KiB 写入仅产生 1 个活跃 .pack 文件")
 }
 
 func TestWriteErrorPathsAndStage1FailureOrClosedCleanup(t *testing.T) {
@@ -333,7 +416,15 @@ func TestWriteErrorPathsAndStage1FailureOrClosedCleanup(t *testing.T) {
 
 	blockData := bytes.Repeat([]byte{0x55}, store.BlobSize)
 
-	// 1. 读写目录节点返回 ErrIsDir，读写 FIFO 返回 ErrInvalid，读写不存在节点返回 ErrNotFound
+	// 1. 阶段 1 磁盘写入失败时直接返回错误，绝不进入 Actor 队列触发 Tick
+	prevTicks := actor.TickCount()
+	require.NoError(t, os.WriteFile(actor.Blobs().Root(), []byte("not-a-dir"), 0o644))
+	_, _, err = actor.Write(regFile.Ino, 0, blockData)
+	require.Error(t, err)
+	require.Equal(t, prevTicks, actor.TickCount(), "阶段 1 磁盘写入失败不得进入 Actor 队列触发 Tick")
+	require.NoError(t, os.Remove(actor.Blobs().Root()))
+
+	// 2. 读写目录节点返回 ErrIsDir，读写 FIFO 返回 ErrInvalid，读写不存在节点返回 ErrNotFound
 	_, _, err = actor.Write(store.RootIno, 0, blockData)
 	require.ErrorIs(t, err, store.ErrIsDir)
 	_, err = actor.Read(store.RootIno, 0, 128)
@@ -349,22 +440,11 @@ func TestWriteErrorPathsAndStage1FailureOrClosedCleanup(t *testing.T) {
 	_, err = actor.Read(99999, 0, 128)
 	require.ErrorIs(t, err, store.ErrNotFound)
 
-	// 2. 0 字节写入校验存活并返回原属性，不分配物理块
+	// 3. 0 字节写入校验存活并返回原属性，不分配物理块
 	n, zeroAttr, err := actor.Write(regFile.Ino, 0, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), n)
 	require.Equal(t, uint64(0), zeroAttr.Size)
-
-	// 3. 阶段 1 磁盘写入失败时当场清理并返回错误，绝不进入 Actor 队列
-	prevTicks := actor.TickCount()
-	// 将下一个要分配的块 (id=2 -> shard "02") 的分片目录占为普通文件，触发阶段 1 OpenFile 失败
-	// 先确认当前下一个 ID：前序 ErrIsDir/ErrInvalid/ErrNotFound 在阶段 1 预写了 1..3 并已在 Phase A 失败清理，下一个 ID 是 4 (shard "04")
-	shard04 := actor.Blobs().Root() + "/04"
-	require.NoError(t, os.WriteFile(shard04, []byte("not-a-dir"), 0o644))
-	_, _, err = actor.Write(regFile.Ino, 0, blockData)
-	require.Error(t, err)
-	require.Equal(t, prevTicks, actor.TickCount(), "阶段 1 磁盘写入失败不得进入 Actor 队列触发 Tick")
-	require.NoError(t, os.Remove(shard04))
 
 	// 4. 关闭后 Write 返回 ErrClosed
 	require.NoError(t, actor.Close())

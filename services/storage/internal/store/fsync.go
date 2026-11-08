@@ -9,7 +9,7 @@ type fsyncOp struct {
 	ino uint64
 }
 
-// Fsync 将目标非目录节点的挂起脏访问时间、元数据 WAL 与该文件关联的脏数据块持久化落盘（ADR-0030 §3.5）。
+// Fsync 将目标非目录节点的挂起脏访问时间、元数据 WAL 与该文件关联的脏 .pack 封包持久化落盘（ADR-0030 §3.5 & ADR-0031 §3.3）。
 func (s *StoreActor) Fsync(ino uint64) error {
 	if s.readOnly {
 		return ErrReadOnly

@@ -137,23 +137,22 @@ func TestPartialWriteSyncedBlockCoWAndPhaseAPatchDiscard(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, initial, gotHotAfterFail)
 
-	// 验证磁盘 1.pack 文件大小与内容均未被修改
+	// 验证 1.pack 中原块区间 [0, 8192) 字节未被篡改
 	rawDisk, err := os.ReadFile(actor.Blobs().Path(1))
 	require.NoError(t, err)
-	require.Equal(t, initial, rawDisk)
+	require.Equal(t, initial, rawDisk[:len(initial)])
 	require.Equal(t, 1, countLiveBlobFiles(t, actor.Blobs()))
 
-	// 3. 调用 SyncInode 将块 1 持久化固化
+	// 3. 调用 SyncInode 将 1.pack 持久化落盘
 	require.NoError(t, actor.Blobs().SyncInode(f.Ino))
 	require.False(t, actor.Blobs().HasDirty())
 
-	// 4. 对已固化块 1 执行局部覆写（offset=4096, len=4096）
+	// 4. 对块 0 执行局部覆写（offset=4096, len=4096）：追加至 1.pack 尾部新偏移并切换 DataKey
 	cowPatch := bytes.Repeat([]byte{0x42}, 4096)
 	_, attr, err := actor.Write(f.Ino, 4096, cowPatch)
 	require.NoError(t, err)
 	require.Equal(t, uint64(8192), attr.Size)
-	require.False(t, actor.Blobs().Exists(1), "被 CoW 替换的旧固化块 1.blob 必须被物理删除")
-	require.True(t, actor.Blobs().Exists(2), "CoW 新块 2.blob 必须存在")
+	require.True(t, actor.Blobs().Exists(1))
 	require.True(t, actor.Blobs().HasDirty())
 	require.Equal(t, 1, countLiveBlobFiles(t, actor.Blobs()))
 
@@ -162,13 +161,14 @@ func TestPartialWriteSyncedBlockCoWAndPhaseAPatchDiscard(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expectedCoW, gotCoW)
 
-	// 5. 再对已固化块测试 Phase A 失败时预写 CoW 新块的自动清理
+	// 5. 再次测试 Phase A 配额超限失败时，已提交块数据完好无损
 	require.NoError(t, actor.Blobs().SyncInode(f.Ino))
 	require.False(t, actor.Blobs().HasDirty())
 	_, _, err = actor.Write(f.Ino, 12*1024, badPatch)
 	require.ErrorIs(t, err, store.ErrNoSpace)
-	require.False(t, actor.Blobs().Exists(3), "Phase A 失败的 CoW 预写块 3.blob 必须被清理")
-	require.True(t, actor.Blobs().Exists(2), "原固化块 2.blob 必须完好保留")
+	gotAfterFail2, err := actor.Read(f.Ino, 0, 8192)
+	require.NoError(t, err)
+	require.Equal(t, expectedCoW, gotAfterFail2)
 }
 
 func TestSetAttrSizeTruncateAndExpandAcrossBlocks(t *testing.T) {
@@ -454,7 +454,7 @@ func TestCrossBlockPartialWriteAndHotShardBudgetEvictionOnPatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(len(crossPayload)), n)
 	require.Equal(t, startOffset+uint64(len(crossPayload)), attr.Size)
-	require.Equal(t, 3, countLiveBlobFiles(t, actor.Blobs()))
+	require.Equal(t, 1, countLiveBlobFiles(t, actor.Blobs()))
 
 	// 再次在跨块边界覆写（此时 block 0 与 block 2 均为 WindowLocal=true，走 PatchLog）
 	crossPatch := bytes.Repeat([]byte{0xab}, 8192)

@@ -74,27 +74,16 @@ func registerOp(op opKind, validate func(*StoreActor, *writeCmd) error, mutate f
 	opHandlers[op] = opHandler{validate: validate, mutate: mutate}
 }
 
-// PatchLog 描述窗口内活跃块（WindowLocal）的内存局部修改增量日志（ADR-0030 §3.4）。
-type PatchLog struct {
-	BlobID uint64
-	Ino    uint64
-	Offset uint32
-	Data   []byte
-	NewLen uint32
-}
-
 // writeCmd 是投递至 StoreActor 双缓冲 MPSC 队列的命令载体（由 sync.Pool 复用）。
 type writeCmd struct {
-	op       opKind
-	req      any
-	resp     any
-	err      error
-	toDelete []uint64      // 本条命令产生的待删物理块，唤醒后由调用方 RPC 协程自行删除
-	done     chan struct{} // 容量为 1 的完成信号
+	op   opKind
+	req  any
+	resp any
+	err  error
+	done chan struct{} // 容量为 1 的完成信号
 
 	validate    func(s *StoreActor, cmd *writeCmd) error
 	mutate      func(s *StoreActor, cmd *writeCmd)
-	patch       *PatchLog
 	syncBarrier bool
 	syncIno     uint64
 }
@@ -178,7 +167,6 @@ type StoreActor struct {
 	reservedIno   uint64
 	reserveInode  InodeReserveFunc
 	walDirty      atomic.Bool
-	mergedPatches []PatchLog
 	tickCount     atomic.Uint64
 	batchResetCnt atomic.Uint64
 
@@ -198,13 +186,10 @@ type StoreActor struct {
 	closeOnce      sync.Once
 	closeErr       error
 
-	// 6. Data Layer 协同锁与钩子（供 STARSRC-621..623 挂载）
-	inodeLocks     [4096]sync.Mutex
-	blobs          any
-	applyPatchesFn func(patches []PatchLog) error
-	syncInodeFn    func(ino uint64) error
-	detachMetaFn   func(ids []uint64)
-	removeFilesFn  func(ids []uint64) error
+	// 6. Data Layer 协同锁与钩子
+	inodeLocks  [4096]sync.Mutex
+	blobs       any
+	syncInodeFn func(ino uint64) error
 }
 
 // Open 打开或初始化一个 StoreActor 实例。
@@ -275,6 +260,9 @@ func Open(opts Options) (*StoreActor, error) {
 
 	for _, hook := range openInitHooks {
 		if err := hook(s); err != nil {
+			if bs := s.Blobs(); bs != nil {
+				_ = bs.Close()
+			}
 			_ = db.Close()
 			if ownedCache != nil {
 				ownedCache.Unref()
@@ -667,23 +655,12 @@ func (m MutateView) AddLogicalBytes(delta int64) {
 	}
 }
 
-// MarkToDelete 登记本命令待删除的物理块编号（在 Step 4 摘除内存并在唤醒后由调用方协程物理删除）。
-func (m MutateView) MarkToDelete(blobIDs ...uint64) {
-	m.cmd.toDelete = append(m.cmd.toDelete, blobIDs...)
-}
-
-// AppendPatch 登记窗口内活跃块的内存增量日志，在 Step 3 按 blobID 批量原地合并。
-func (m MutateView) AppendPatch(patch PatchLog) {
-	m.s.mergedPatches = append(m.s.mergedPatches, patch)
-}
-
 // WriteOp 定义投递至 StoreActor 双阶段 Group Commit 循环的写操作契约。
 type WriteOp struct {
-	Validate        func(v ReadView) error
-	Mutate          func(m MutateView)
-	PreAllocatedIDs []uint64 // 阶段 1 预写的新块 ID：若入队被拒或 Phase A 校验失败则自动清理
-	SyncBarrier     bool     // 是否作为 Fsync / FsyncDir 持久化屏障批次提交
-	SyncIno         uint64   // Fsync 目标文件 Inode（0 表示仅刷 WAL）
+	Validate    func(v ReadView) error
+	Mutate      func(m MutateView)
+	SyncBarrier bool   // 是否作为 Fsync / FsyncDir 持久化屏障批次提交
+	SyncIno     uint64 // Fsync 目标文件 Inode（0 表示仅刷 WAL）
 }
 
 // Execute 将一条写操作投递至双缓冲 MPSC 队列并等待所属 Group Commit 批次完成。
@@ -702,14 +679,8 @@ func (s *StoreActor) Execute(op WriteOp) error {
 	cmd.syncBarrier = op.SyncBarrier
 	cmd.syncIno = op.SyncIno
 	if op.Validate != nil {
-		cmd.validate = func(actor *StoreActor, c *writeCmd) error {
-			if err := op.Validate(ReadView{s: actor}); err != nil {
-				if len(op.PreAllocatedIDs) > 0 {
-					c.toDelete = append(c.toDelete, op.PreAllocatedIDs...)
-				}
-				return err
-			}
-			return nil
+		cmd.validate = func(actor *StoreActor, _ *writeCmd) error {
+			return op.Validate(ReadView{s: actor})
 		}
 	}
 	if op.Mutate != nil {
@@ -717,7 +688,7 @@ func (s *StoreActor) Execute(op WriteOp) error {
 			op.Mutate(MutateView{s: actor, cmd: c})
 		}
 	}
-	return s.enqueueAndWait(cmd, op.PreAllocatedIDs)
+	return s.enqueueAndWait(cmd)
 }
 
 func (s *StoreActor) acquireCmd() *writeCmd {
@@ -729,16 +700,14 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.req = nil
 	cmd.resp = nil
 	cmd.err = nil
-	cmd.toDelete = cmd.toDelete[:0]
 	cmd.validate = nil
 	cmd.mutate = nil
-	cmd.patch = nil
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
 	s.cmdPool.Put(cmd)
 }
 
-func (s *StoreActor) submit(cmd *writeCmd, preAllocatedIDs ...uint64) error {
+func (s *StoreActor) submit(cmd *writeCmd) error {
 	if s.readOnly {
 		s.releaseCmd(cmd)
 		return ErrReadOnly
@@ -749,21 +718,13 @@ func (s *StoreActor) submit(cmd *writeCmd, preAllocatedIDs ...uint64) error {
 		return err
 	}
 	defer unlock()
-	return s.enqueueAndWait(cmd, preAllocatedIDs)
+	return s.enqueueAndWait(cmd)
 }
 
-func (s *StoreActor) enqueueAndWait(cmd *writeCmd, preAllocatedIDs []uint64) error {
+func (s *StoreActor) enqueueAndWait(cmd *writeCmd) error {
 	s.mb.mu.Lock()
 	if s.mb.closed {
 		s.mb.mu.Unlock()
-		if len(preAllocatedIDs) > 0 {
-			if s.detachMetaFn != nil {
-				s.detachMetaFn(preAllocatedIDs)
-			}
-			if s.removeFilesFn != nil {
-				_ = s.removeFilesFn(preAllocatedIDs)
-			}
-		}
 		s.releaseCmd(cmd)
 		return ErrClosed
 	}
@@ -776,13 +737,6 @@ func (s *StoreActor) enqueueAndWait(cmd *writeCmd, preAllocatedIDs []uint64) err
 
 	<-cmd.done
 	cmdErr := cmd.err
-
-	// Step 4 调用方协程自清理：在队列外删除废弃或校验失败的物理 .blob 文件（0 Actor 阻塞）。
-	if len(cmd.toDelete) > 0 && s.removeFilesFn != nil {
-		if rmErr := s.removeFilesFn(cmd.toDelete); rmErr != nil && cmdErr == nil {
-			cmdErr = rmErr
-		}
-	}
 	s.releaseCmd(cmd)
 	return cmdErr
 }
@@ -864,10 +818,9 @@ func (s *StoreActor) runLoop() {
 	}
 }
 
-// processTick 严格执行 ADR-0030 §2.5 的 Step 2 ~ Step 4。
+// processTick 严格执行 ADR-0030 §2.5 与 ADR-0031 §3 的 Step 2 ~ Step 4。
 func (s *StoreActor) processTick() {
 	cmds := s.mb.draining
-	s.mergedPatches = s.mergedPatches[:0]
 
 	var (
 		hasSyncBarrier  bool
@@ -887,10 +840,7 @@ func (s *StoreActor) processTick() {
 		prevCount := s.batch.Count()
 		prevStat := s.stat
 		s.mutateCmd(cmd)
-		if cmd.patch != nil {
-			s.mergedPatches = append(s.mergedPatches, *cmd.patch)
-		}
-		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.mergedPatches) > 0 {
+		if s.batch.Count() > prevCount || s.stat != prevStat {
 			mutated = true
 		}
 		if cmd.syncBarrier || cmd.op == opFsync || cmd.op == opFsyncDir {
@@ -903,48 +853,34 @@ func (s *StoreActor) processTick() {
 
 	// Step 3：批次收敛与合并提交（Seal & Commit）
 	var commitErr error
-	if len(s.mergedPatches) > 0 && s.applyPatchesFn != nil {
-		commitErr = s.applyPatchesFn(s.mergedPatches)
+	if mutated || s.batch.Count() > 0 || hasSyncBarrier {
+		// 顺带将内存 dirtyAtime 合入当前批次
+		s.flushDirtyAtimeToBatch(s.batch)
 	}
-
-	if commitErr == nil {
-		if mutated || s.batch.Count() > 0 || hasSyncBarrier {
-			// 顺带将内存 dirtyAtime 合入当前批次
-			s.flushDirtyAtimeToBatch(s.batch)
-		}
-		if mutated {
-			// 批次末尾仅写 1 次 "sys:stat"
-			batchSetStatDeferred(s.batch, s.stat)
-		}
-		if s.batch.Count() > 0 {
-			if hasSyncBarrier {
-				commitErr = s.commitWithSyncBarrier(fsyncFileInodes)
-			} else {
-				commitErr = s.db.Apply(s.batch, pebble.NoSync)
-				if commitErr == nil {
-					s.walDirty.Store(true)
-				}
-			}
+	if mutated {
+		// 批次末尾仅写 1 次 "sys:stat"
+		batchSetStatDeferred(s.batch, s.stat)
+	}
+	if s.batch.Count() > 0 {
+		if hasSyncBarrier {
+			commitErr = s.commitWithSyncBarrier(fsyncFileInodes)
+		} else {
+			commitErr = s.db.Apply(s.batch, pebble.NoSync)
 			if commitErr == nil {
-				s.atomicLogicalBytes.Store(s.stat.LogicalBytes)
-				s.atomicInodes.Store(s.stat.Inodes)
+				s.walDirty.Store(true)
 			}
-		} else if hasSyncBarrier {
-			commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
 		}
+		if commitErr == nil {
+			s.atomicLogicalBytes.Store(s.stat.LogicalBytes)
+			s.atomicInodes.Store(s.stat.Inodes)
+		}
+	} else if hasSyncBarrier {
+		commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
 	}
 
 	s.tickCount.Add(1)
 
-	// Step 4：内存状态摘除、防膨胀重置与唤醒调用方（Reset, Wake & Caller Remove）
-	if s.detachMetaFn != nil {
-		for _, cmd := range cmds {
-			if len(cmd.toDelete) > 0 {
-				s.detachMetaFn(cmd.toDelete)
-			}
-		}
-	}
-
+	// Step 4：防膨胀重置与唤醒调用方（Reset & Wake）
 	if len(s.batch.Repr()) > BatchResetMaxReprBytes || s.batch.Count() > BatchResetMaxCount {
 		s.batch = s.db.NewIndexedBatch()
 		s.batchResetCnt.Add(1)
@@ -1097,7 +1033,7 @@ func (s *StoreActor) closeInternal(discard bool) error {
 		// Step 2 — 排空已入队写批次并等待 Actor 协程退出
 		<-s.loopDone
 
-		// Step 3 — 排空在途直读并安全关闭 Pebble
+		// Step 3 — 排空在途直读并安全关闭 Pebble 与常驻 .pack 文件句柄
 		s.lifecycleMu.Lock()
 		if s.batch != nil {
 			_ = s.batch.Close()
@@ -1108,9 +1044,13 @@ func (s *StoreActor) closeInternal(discard bool) error {
 			s.ownedCache.Unref()
 			s.ownedCache = nil
 		}
+		var blobErr error
+		if bs := s.Blobs(); bs != nil {
+			blobErr = bs.Close()
+		}
 		s.lifecycleMu.Unlock()
 
-		s.closeErr = errors.Join(s.closeErr, dbErr)
+		s.closeErr = errors.Join(s.closeErr, dbErr, blobErr)
 	})
 	return s.closeErr
 }
