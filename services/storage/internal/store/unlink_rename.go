@@ -16,6 +16,7 @@ type RenameReq struct {
 	NewName          []byte
 	Flags            uint32
 	TargetOpenHandle bool
+	Epoch            uint64
 }
 
 type rmdirNodeOp struct {
@@ -173,9 +174,13 @@ func (s *StoreActor) applyInodeReclaimPlan(plan *inodeReclaimPlan) {
 }
 
 // Rmdir 在 Actor 双阶段循环内移除空目录并递减父目录 Nlink 与分支节点计数。
-func (s *StoreActor) Rmdir(parentIno uint64, name []byte) error {
+func (s *StoreActor) Rmdir(parentIno uint64, name []byte, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opRmdir, ep)
 	}
 	if err := validateNodeIno(parentIno); err != nil {
 		return err
@@ -190,6 +195,7 @@ func (s *StoreActor) Rmdir(parentIno uint64, name []byte) error {
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opRmdir
+	cmd.epoch = ep
 	cmd.req = op
 	return s.submit(cmd)
 }
@@ -294,9 +300,13 @@ type cleanOrphansOp struct {
 
 // Unlink 在 Actor 双阶段循环内移除非目录目录项并递减目标节点 Nlink；
 // 当 Nlink 归零时按 openHandle 转为孤儿节点或直接物理回收。
-func (s *StoreActor) Unlink(parentIno uint64, name []byte, openHandle bool) error {
+func (s *StoreActor) Unlink(parentIno uint64, name []byte, openHandle bool, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opUnlink, ep)
 	}
 	if err := validateNodeIno(parentIno); err != nil {
 		return err
@@ -312,6 +322,7 @@ func (s *StoreActor) Unlink(parentIno uint64, name []byte, openHandle bool) erro
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opUnlink
+	cmd.epoch = ep
 	cmd.req = op
 	return s.submit(cmd)
 }
@@ -395,9 +406,13 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 }
 
 // PurgeOrphanInode 在 Actor 双阶段循环内物理清理指定孤儿节点及其关联 XattrKey、DataKey 与配额统计。
-func (s *StoreActor) PurgeOrphanInode(ino uint64) error {
+func (s *StoreActor) PurgeOrphanInode(ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opPurgeOrphan, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -406,6 +421,7 @@ func (s *StoreActor) PurgeOrphanInode(ino uint64) error {
 	op := &purgeOrphanOp{ino: ino}
 	cmd := s.acquireCmd()
 	cmd.op = opPurgeOrphan
+	cmd.epoch = ep
 	cmd.req = op
 	return s.submit(cmd)
 }
@@ -480,15 +496,13 @@ func (s *StoreActor) collectOrphanInodes(reader pebbleReader) (inos []uint64, er
 	return inos, nil
 }
 
-func (s *StoreActor) validateCleanOrphansCmd(cmd *writeCmd) error {
-	op, _ := cmd.req.(*cleanOrphansOp)
-	orphanInos, err := s.collectOrphanInodes(s.batch)
+func (s *StoreActor) planCleanOrphans(reader pebbleReader) ([]inodeReclaimPlan, error) {
+	orphanInos, err := s.collectOrphanInodes(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(orphanInos) == 0 {
-		op.plans = nil
-		return nil
+		return nil, nil
 	}
 
 	plans := make([]inodeReclaimPlan, 0, len(orphanInos))
@@ -503,9 +517,9 @@ func (s *StoreActor) validateCleanOrphansCmd(cmd *writeCmd) error {
 			hasMutation = true
 			continue
 		}
-		inode, err := s.readInode(s.batch, ino)
+		inode, err := s.readInode(reader, ino)
 		if err != nil && !errors.Is(err, ErrNotFound) {
-			return err
+			return nil, err
 		}
 		hasInode := err == nil
 		if hasInode && inode.Nlink > 0 {
@@ -517,9 +531,9 @@ func (s *StoreActor) validateCleanOrphansCmd(cmd *writeCmd) error {
 			hasMutation = true
 			continue
 		}
-		plan, err := s.buildInodeReclaimPlan(s.batch, ino, &inode, hasInode)
+		plan, err := s.buildInodeReclaimPlan(reader, ino, &inode, hasInode)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		plan.hasOrphan = true
 		plans = append(plans, plan)
@@ -528,7 +542,16 @@ func (s *StoreActor) validateCleanOrphansCmd(cmd *writeCmd) error {
 		}
 	}
 	if hasMutation && s.stat.NextWriteSeq == math.MaxUint64 {
-		return ErrNoSpace
+		return nil, ErrNoSpace
+	}
+	return plans, nil
+}
+
+func (s *StoreActor) validateCleanOrphansCmd(cmd *writeCmd) error {
+	op, _ := cmd.req.(*cleanOrphansOp)
+	plans, err := s.planCleanOrphans(s.batch)
+	if err != nil {
+		return err
 	}
 	op.plans = plans
 	return nil
@@ -588,9 +611,14 @@ func (s *StoreActor) isSubdirectory(reader pebbleReader, childIno, ancestorIno u
 }
 
 // Rename 在 Actor 双阶段循环内执行目录项重命名（支持默认覆盖、RenameNoreplace 与 RenameExchange）。
+//
+//nolint:gocritic // hugeParam: Rename 公开契约按值接收 RenameReq。
 func (s *StoreActor) Rename(req RenameReq) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return s.submitStaleEpoch(opRename, req.Epoch)
 	}
 	if req.Flags&RenameWhiteout != 0 {
 		return ErrNotSupported
@@ -617,6 +645,7 @@ func (s *StoreActor) Rename(req RenameReq) error {
 	op := &renameNodeOp{req: req}
 	cmd := s.acquireCmd()
 	cmd.op = opRename
+	cmd.epoch = req.Epoch
 	cmd.req = op
 	return s.submit(cmd)
 }

@@ -26,6 +26,7 @@ type SetAttrReq struct {
 	MtimeNow bool
 	CtimeNow bool
 	Flags    *uint32
+	Epoch    uint64
 }
 
 type setXattrOp struct {
@@ -113,9 +114,13 @@ func checkXattrListQuota(reader pebbleReader, ino uint64, newName []byte) (err e
 }
 
 // SetXattr 在 Actor 双阶段循环内设置或覆盖节点扩展属性。
-func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32) error {
+func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opSetXattr, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -132,6 +137,7 @@ func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32) erro
 
 	cmd := s.acquireCmd()
 	cmd.op = opSetXattr
+	cmd.epoch = ep
 	cmd.req = &setXattrOp{
 		ino:   ino,
 		name:  name,
@@ -274,9 +280,13 @@ func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
 }
 
 // RemoveXattr 在 Actor 双阶段循环内删除节点指定扩展属性。
-func (s *StoreActor) RemoveXattr(ino uint64, name []byte) error {
+func (s *StoreActor) RemoveXattr(ino uint64, name []byte, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opRemoveXattr, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -287,6 +297,7 @@ func (s *StoreActor) RemoveXattr(ino uint64, name []byte) error {
 
 	cmd := s.acquireCmd()
 	cmd.op = opRemoveXattr
+	cmd.epoch = ep
 	cmd.req = &removeXattrOp{
 		ino:  ino,
 		name: name,
@@ -452,9 +463,15 @@ func (s *StoreActor) applySetAttrFields(inode *Inode, req SetAttrReq, nowNano in
 }
 
 // SetAttr 在 Actor 双阶段循环内修改节点属性。
-func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq) (Attribute, error) {
+func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq, epoch ...uint64) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
+	}
+	if len(epoch) > 0 {
+		req.Epoch = epoch[0]
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opSetAttr, req.Epoch)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return Attribute{}, err
@@ -472,6 +489,7 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq) (Attribute, error) {
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opSetAttr
+	cmd.epoch = req.Epoch
 	cmd.req = op
 	if err := s.submit(cmd); err != nil {
 		return Attribute{}, err

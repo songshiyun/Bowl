@@ -56,6 +56,8 @@ const (
 	opFsyncDir
 	opPurgeOrphan
 	opCleanOrphans
+	opAdvanceEpoch
+	opUpdateMaxBytes
 	opCompactSelect
 	opCompactRelocate
 	opCompactReap
@@ -68,6 +70,7 @@ type writeCmd struct {
 	err  error
 	done chan struct{} // 容量为 1 的完成信号
 
+	epoch       uint64
 	syncBarrier bool
 	syncIno     uint64
 	stagedBlobs []BlobRef
@@ -154,8 +157,10 @@ type StoreActor struct {
 	batchResetCnt    atomic.Uint64
 
 	// 3. 并发读路径无锁镜像（每次 Batch 提交后刷新）
-	atomicLogicalBytes atomic.Uint64
-	atomicInodes       atomic.Uint64
+	atomicLogicalBytes   atomic.Uint64
+	atomicInodes         atomic.Uint64
+	atomicWriterEpoch    atomic.Uint64
+	pendingEpochAdvances atomic.Int32
 
 	// 4. 延迟 Atime 内存脏表（读路径登记/叠加，写循环或关闭时合并刷盘）
 	atimeMu    sync.Mutex
@@ -310,6 +315,7 @@ func (s *StoreActor) initOrLoadState() error {
 		s.stat = stat
 		s.atomicLogicalBytes.Store(stat.LogicalBytes)
 		s.atomicInodes.Store(stat.Inodes)
+		s.atomicWriterEpoch.Store(stat.WriterEpoch)
 		s.reservedIno = RootIno
 		return nil
 	}
@@ -328,6 +334,7 @@ func (s *StoreActor) initOrLoadState() error {
 	s.stat = stat
 	s.atomicLogicalBytes.Store(stat.LogicalBytes)
 	s.atomicInodes.Store(stat.Inodes)
+	s.atomicWriterEpoch.Store(stat.WriterEpoch)
 
 	if !s.readOnly {
 		maxIno, err := s.scanMaxInode()
@@ -384,6 +391,104 @@ func (s *StoreActor) SetMaxBytes(maxBytes uint64) { s.maxBytes.Store(maxBytes) }
 
 // MaxBytes 返回当前逻辑容量配额上限。
 func (s *StoreActor) MaxBytes() uint64 { return s.maxBytes.Load() }
+
+// WriterEpoch 返回当前已持久化生效的写世代号。
+func (s *StoreActor) WriterEpoch() uint64 { return s.atomicWriterEpoch.Load() }
+
+type advanceEpochOp struct {
+	plans    []inodeReclaimPlan
+	root     Inode
+	epoch    uint64
+	rootAttr Attribute
+}
+
+// AdvanceEpoch 通过 Actor 队列原子递增 WriterEpoch 并以 pebble.Sync 持久化至 "sys:stat"，
+// 同时清扫所有残留 Orphan Inode 并返回新 WriterEpoch 与根目录 Inode(1) 的最新 Attribute（ADR-0032）。
+func (s *StoreActor) AdvanceEpoch() (uint64, Attribute, error) {
+	if s.readOnly {
+		return 0, Attribute{}, ErrReadOnly
+	}
+	s.pendingEpochAdvances.Add(1)
+	defer s.pendingEpochAdvances.Add(-1)
+
+	op := &advanceEpochOp{}
+	cmd := s.acquireCmd()
+	cmd.op = opAdvanceEpoch
+	cmd.req = op
+	if err := s.submit(cmd); err != nil {
+		return 0, Attribute{}, err
+	}
+	return op.epoch, op.rootAttr, nil
+}
+
+func (s *StoreActor) validateAdvanceEpochCmd(cmd *writeCmd) error {
+	op, _ := cmd.req.(*advanceEpochOp)
+	if s.stat.WriterEpoch == math.MaxUint64 {
+		return ErrNoSpace
+	}
+	root, err := s.readInode(s.batch, RootIno)
+	if err != nil {
+		return err
+	}
+	plans, err := s.planCleanOrphans(s.batch)
+	if err != nil {
+		return err
+	}
+	op.root = root
+	op.plans = plans
+	return nil
+}
+
+func (s *StoreActor) mutateAdvanceEpochCmd(cmd *writeCmd) {
+	op, _ := cmd.req.(*advanceEpochOp)
+	s.stat.WriterEpoch++
+	if len(op.plans) > 0 {
+		s.stat.NextWriteSeq++
+		for i := range op.plans {
+			s.applyInodeReclaimPlan(&op.plans[i])
+		}
+	}
+	s.overlayAtime(&op.root)
+	op.epoch = s.stat.WriterEpoch
+	op.rootAttr = op.root.ToAttribute()
+	cmd.syncBarrier = true
+}
+
+type updateMaxBytesOp struct {
+	maxBytes uint64
+}
+
+// UpdateMaxBytes 通过 Actor 队列在线扩容或安全缩容单盘逻辑容量配额上限，并以 pebble.Sync 持久化至 "sys:stat"（ADR-0032）。
+func (s *StoreActor) UpdateMaxBytes(maxBytes uint64) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	if maxBytes == 0 {
+		return ErrInvalid
+	}
+	cmd := s.acquireCmd()
+	cmd.op = opUpdateMaxBytes
+	cmd.req = &updateMaxBytesOp{maxBytes: maxBytes}
+	return s.submit(cmd)
+}
+
+func (s *StoreActor) validateUpdateMaxBytesCmd(cmd *writeCmd) error {
+	op, _ := cmd.req.(*updateMaxBytesOp)
+	if op.maxBytes == 0 {
+		return ErrInvalid
+	}
+	if op.maxBytes < s.stat.LogicalBytes {
+		return ErrQuotaShrinkBelowUsed
+	}
+	return nil
+}
+
+func (s *StoreActor) mutateUpdateMaxBytesCmd(cmd *writeCmd) {
+	op, _ := cmd.req.(*updateMaxBytesOp)
+	s.stat.MaxBytes = op.maxBytes
+	s.maxBytes.Store(op.maxBytes)
+	cmd.syncBarrier = true
+}
 
 // SetMaxInodes 动态更新节点数量配额上限。
 func (s *StoreActor) SetMaxInodes(maxInodes uint64) { s.maxInodes.Store(maxInodes) }
@@ -557,10 +662,36 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.op = 0
 	cmd.req = nil
 	cmd.err = nil
+	cmd.epoch = 0
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
 	cmd.stagedBlobs = cmd.stagedBlobs[:0]
 	s.cmdPool.Put(cmd)
+}
+
+func resolveEpoch(epoch []uint64) uint64 {
+	if len(epoch) > 0 {
+		return epoch[0]
+	}
+	return 0
+}
+
+func (s *StoreActor) isDefinitelyStaleEpoch(epoch uint64) bool {
+	cur := s.atomicWriterEpoch.Load()
+	if epoch < cur {
+		return true
+	}
+	if epoch > cur && s.pendingEpochAdvances.Load() == 0 {
+		return true
+	}
+	return false
+}
+
+func (s *StoreActor) submitStaleEpoch(op opKind, epoch uint64) error {
+	cmd := s.acquireCmd()
+	cmd.op = op
+	cmd.epoch = epoch
+	return s.submit(cmd)
 }
 
 func (s *StoreActor) submit(cmd *writeCmd) error {
@@ -715,7 +846,7 @@ func (s *StoreActor) processTick() {
 		}
 		s.unpinStagedBlobs(cmd.stagedBlobs)
 		cmd.stagedBlobs = cmd.stagedBlobs[:0]
-		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.dirtyPackStats) > 0 {
+		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.dirtyPackStats) > 0 || cmd.op == opUpdateMaxBytes {
 			mutated = true
 		}
 		if cmd.syncBarrier || cmd.op == opFsync || cmd.op == opFsyncDir {
@@ -757,6 +888,7 @@ func (s *StoreActor) processTick() {
 		if commitErr == nil {
 			s.atomicLogicalBytes.Store(s.stat.LogicalBytes)
 			s.atomicInodes.Store(s.stat.Inodes)
+			s.atomicWriterEpoch.Store(s.stat.WriterEpoch)
 		}
 	} else if hasSyncBarrier {
 		commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
@@ -781,7 +913,24 @@ func (s *StoreActor) processTick() {
 	}
 }
 
+func isExternalWriteOp(op opKind) bool {
+	switch op {
+	case opMknod, opMkdir, opCreate, opSymlink, opLink,
+		opUnlink, opRmdir, opRename,
+		opSetAttr, opSetXattr, opRemoveXattr,
+		opWrite, opFallocate,
+		opFsync, opFsyncDir,
+		opPurgeOrphan:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *StoreActor) validateCmd(cmd *writeCmd) error {
+	if isExternalWriteOp(cmd.op) && cmd.epoch != s.stat.WriterEpoch {
+		return ErrStaleEpoch
+	}
 	switch cmd.op {
 	case opMknod, opMkdir, opCreate, opSymlink:
 		return s.validateCreateNodeCmd(cmd)
@@ -811,6 +960,10 @@ func (s *StoreActor) validateCmd(cmd *writeCmd) error {
 		return s.validatePurgeOrphanCmd(cmd)
 	case opCleanOrphans:
 		return s.validateCleanOrphansCmd(cmd)
+	case opAdvanceEpoch:
+		return s.validateAdvanceEpochCmd(cmd)
+	case opUpdateMaxBytes:
+		return s.validateUpdateMaxBytesCmd(cmd)
 	case opCompactSelect:
 		return s.validateCompactSelectCmd(cmd)
 	case opCompactRelocate:
@@ -850,6 +1003,10 @@ func (s *StoreActor) mutateCmd(cmd *writeCmd) {
 		s.mutatePurgeOrphanCmd(cmd)
 	case opCleanOrphans:
 		s.mutateCleanOrphansCmd(cmd)
+	case opAdvanceEpoch:
+		s.mutateAdvanceEpochCmd(cmd)
+	case opUpdateMaxBytes:
+		s.mutateUpdateMaxBytesCmd(cmd)
 	case opCompactRelocate:
 		s.mutateCompactRelocateCmd(cmd)
 	case opCompactReap:

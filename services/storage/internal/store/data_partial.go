@@ -56,6 +56,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opSetAttr
+	cmd.epoch = req.Epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
@@ -105,9 +106,13 @@ type fallocateDataOp struct {
 //   - 支持 mode: 0（默认预留扩展）、FallocKeepSize、FallocPunchHole|FallocKeepSize、FallocZeroRange、FallocZeroRange|FallocKeepSize；
 //   - 完全落入打洞/置零区间的 256 KiB 整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
 //   - 首尾边界残块在 inodeLocks[ino&0xfff] 保护下读取并清零目标子区间，若打洞后全为零则直接删除该 DataKey，否则追加写入活跃 .pack 并更新 DataKey -> newRef。
-func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
+func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opFallocate, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -188,6 +193,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32) error {
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opFallocate
+	cmd.epoch = ep
 	cmd.req = op
 	cmd.stagedBlobs = staged
 	return s.enqueueAndWait(cmd)

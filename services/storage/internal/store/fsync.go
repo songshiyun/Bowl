@@ -5,9 +5,13 @@ type fsyncOp struct {
 }
 
 // Fsync 将目标非目录节点的挂起脏访问时间、元数据 WAL 与该文件关联的脏 .pack 封包持久化落盘（ADR-0030 §3.5 & ADR-0031 §3.3）。
-func (s *StoreActor) Fsync(ino uint64) error {
+func (s *StoreActor) Fsync(ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opFsync, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -15,14 +19,19 @@ func (s *StoreActor) Fsync(ino uint64) error {
 
 	cmd := s.acquireCmd()
 	cmd.op = opFsync
+	cmd.epoch = ep
 	cmd.req = &fsyncOp{ino: ino}
 	return s.submit(cmd)
 }
 
 // FsyncDir 将目标目录节点的挂起脏访问时间与已提交目录项/属性元数据 WAL 持久化落盘（ADR-0030 §3.5）。
-func (s *StoreActor) FsyncDir(ino uint64) error {
+func (s *StoreActor) FsyncDir(ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return s.submitStaleEpoch(opFsyncDir, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -30,6 +39,7 @@ func (s *StoreActor) FsyncDir(ino uint64) error {
 
 	cmd := s.acquireCmd()
 	cmd.op = opFsyncDir
+	cmd.epoch = ep
 	cmd.req = &fsyncOp{ino: ino}
 	return s.submit(cmd)
 }

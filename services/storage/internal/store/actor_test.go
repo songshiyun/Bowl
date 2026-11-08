@@ -480,3 +480,312 @@ func TestConcurrentReadsWritesAndThreeStepShutdown(t *testing.T) {
 		})
 	}
 }
+
+func TestAdvanceEpochPersistsAndCleansOrphans(t *testing.T) {
+	dir := t.TempDir()
+	actor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-epoch",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), actor.WriterEpoch())
+
+	// 制造一个带扩展属性与数据块的孤儿节点（Unlink openHandle=true）
+	orphanAttr, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("orphan.bin"),
+		Mode:      0o644,
+	})
+	require.NoError(t, err)
+	require.NoError(t, actor.SetXattr(orphanAttr.Ino, []byte("user.tag"), []byte("stale-writer"), 0))
+	payload := bytes.Repeat([]byte{0x5a}, 8192)
+	_, _, err = actor.Write(orphanAttr.Ino, 0, payload)
+	require.NoError(t, err)
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("orphan.bin"), true))
+
+	stBefore, err := actor.StatFS()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), stBefore.Files)
+	require.Equal(t, uint64(len(payload)), stBefore.UsedBytes)
+
+	// 推进世代号至 1：原子递增并持久化 WriterEpoch，同时清扫残留孤儿节点及其数据块
+	epoch1, rootAttr1, err := actor.AdvanceEpoch()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), epoch1)
+	require.Equal(t, uint64(1), actor.WriterEpoch())
+	require.Equal(t, store.RootIno, rootAttr1.Ino)
+	require.Equal(t, store.S_IFDIR|uint32(0o755), rootAttr1.Mode)
+	require.False(t, actor.WALDirty(), "AdvanceEpoch 必须通过 pebble.Sync 同步持久化")
+
+	// 验证孤儿节点、OrphanKey、XattrKey、DataKey 与配额已全部清扫释放
+	_, err = actor.GetAttr(orphanAttr.Ino)
+	require.ErrorIs(t, err, store.ErrNotFound)
+	_, closer, err := actor.DB().Get(store.OrphanKey(orphanAttr.Ino))
+	if err == nil {
+		_ = closer.Close()
+	}
+	require.ErrorIs(t, err, pebble.ErrNotFound)
+	_, closer, err = actor.DB().Get(store.DataKey(orphanAttr.Ino, 0))
+	if err == nil {
+		_ = closer.Close()
+	}
+	require.ErrorIs(t, err, pebble.ErrNotFound)
+
+	stAfter, err := actor.StatFS()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), stAfter.Files)
+	require.Equal(t, uint64(0), stAfter.UsedBytes)
+
+	// 再次推进世代号至 2
+	epoch2, _, err := actor.AdvanceEpoch()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), epoch2)
+	require.Equal(t, uint64(2), actor.WriterEpoch())
+
+	// CloseDiscard（模拟崩溃退出跳过尾部刷盘）后重开，验证 WriterEpoch 已通过 pebble.Sync 落盘且不回退
+	require.NoError(t, actor.CloseDiscard())
+
+	roActor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-epoch",
+		ReadOnly: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), roActor.WriterEpoch())
+	_, _, err = roActor.AdvanceEpoch()
+	require.ErrorIs(t, err, store.ErrReadOnly)
+	require.NoError(t, roActor.Close())
+
+	reopened, err := store.Open(store.Options{
+		Dir:    dir,
+		DiskID: "disk-epoch",
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+	require.Equal(t, uint64(2), reopened.WriterEpoch())
+
+	epoch3, _, err := reopened.AdvanceEpoch()
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), epoch3)
+}
+
+func TestUpdateMaxBytesExpandShrinkAndGuard(t *testing.T) {
+	dir := t.TempDir()
+	actor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-quota",
+		MaxBytes: 16384,
+	})
+	require.NoError(t, err)
+
+	// 1. maxBytes == 0 返回 ErrInvalid
+	require.ErrorIs(t, actor.UpdateMaxBytes(0), store.ErrInvalid)
+
+	// 2. 写入 8192 字节使 LogicalBytes = 8192
+	f, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("data.bin"),
+		Mode:      0o644,
+	})
+	require.NoError(t, err)
+	require.NoError(t, actor.Fallocate(f.Ino, 0, 8192, 0))
+
+	// 3. 缩容至低于已用逻辑容量 (4096 < 8192) 返回 ErrQuotaShrinkBelowUsed，且原配额保持不变
+	require.ErrorIs(t, actor.UpdateMaxBytes(4096), store.ErrQuotaShrinkBelowUsed)
+	require.Equal(t, uint64(16384), actor.MaxBytes())
+
+	// 4. 安全缩容至恰好等于已用逻辑容量 (8192 == 8192) 成功并持久化，后续扩容写入触发 ErrNoSpace
+	require.NoError(t, actor.UpdateMaxBytes(8192))
+	require.False(t, actor.WALDirty(), "UpdateMaxBytes 必须通过 pebble.Sync 同步持久化")
+	require.Equal(t, uint64(8192), actor.MaxBytes())
+	stShrink, err := actor.StatFS()
+	require.NoError(t, err)
+	require.Equal(t, uint64(8192), stShrink.TotalBytes)
+	require.Equal(t, uint64(0), stShrink.AvailBytes)
+	require.ErrorIs(t, actor.Fallocate(f.Ino, 8192, 4096, 0), store.ErrNoSpace)
+
+	// 5. 在线扩容至 32768 成功，后续扩容写入恢复可用
+	require.NoError(t, actor.UpdateMaxBytes(32768))
+	require.False(t, actor.WALDirty())
+	require.Equal(t, uint64(32768), actor.MaxBytes())
+	require.NoError(t, actor.Fallocate(f.Ino, 8192, 4096, 0))
+
+	// 6. CloseDiscard 后重开，验证 MaxBytes=32768 已通过 pebble.Sync 持久化且只读实例拒绝修改
+	require.NoError(t, actor.CloseDiscard())
+
+	roActor, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-quota",
+		ReadOnly: true,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, roActor.Close()) }()
+	require.Equal(t, uint64(32768), roActor.MaxBytes())
+	require.ErrorIs(t, roActor.UpdateMaxBytes(65536), store.ErrReadOnly)
+}
+
+func snapshotAllKV(t *testing.T, db *pebble.DB) map[string][]byte {
+	t.Helper()
+	iter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, iter.Close()) }()
+
+	out := make(map[string][]byte)
+	for valid := iter.First(); valid; valid = iter.Next() {
+		out[string(iter.Key())] = append([]byte(nil), iter.Value()...)
+	}
+	require.NoError(t, iter.Error())
+	return out
+}
+
+func TestAll16WriteOpsFencedByWriterEpochAndPhaseAStagedRollback(t *testing.T) {
+	actor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-fencing",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	// 1. 初始 WriterEpoch == 0 时，传入非零 Epoch (如 1) 同样因 epoch != WriterEpoch 被 ErrStaleEpoch 拦截
+	_, err = actor.Mkdir(store.MkdirReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("future-dir"),
+		Mode:      0o755,
+		Epoch:     1,
+	})
+	require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+	// 2. 推进世代号至 1，并在 Epoch=1 下准备测试夹具
+	ep1, _, err := actor.AdvanceEpoch()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), ep1)
+
+	dirAttr, err := actor.Mkdir(store.MkdirReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("sub"),
+		Mode:      0o755,
+		Epoch:     ep1,
+	})
+	require.NoError(t, err)
+
+	fileAttr, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("file.bin"),
+		Mode:      0o644,
+		Epoch:     ep1,
+	})
+	require.NoError(t, err)
+
+	origPayload := bytes.Repeat([]byte{0x3c}, store.BlobSize)
+	_, _, err = actor.Write(fileAttr.Ino, 0, origPayload, ep1)
+	require.NoError(t, err)
+	require.NoError(t, actor.SetXattr(fileAttr.Ino, []byte("user.k"), []byte("v1"), 0, ep1))
+
+	// 创建一个孤儿节点供 PurgeOrphanInode 测试
+	orphanFile, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("tmp-orphan"),
+		Mode:      0o644,
+		Epoch:     ep1,
+	})
+	require.NoError(t, err)
+	require.NoError(t, actor.Unlink(store.RootIno, []byte("tmp-orphan"), true, ep1))
+
+	kvBefore := snapshotAllKV(t, actor.DB())
+	offsetBefore := actor.Blobs().ActiveOffset()
+
+	// 3. 对全部 16 类外部写操作分别携带过期 Epoch=0 与超前 Epoch=2 发起调用，验证全部在 Phase A 被 ErrStaleEpoch 拦截
+	for _, badEpoch := range []uint64{0, 2} {
+		mode := uint32(0o600)
+		truncSize := uint64(4096)
+		_, err = actor.SetAttr(fileAttr.Ino, store.SetAttrReq{Mode: &mode, Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+		_, err = actor.SetAttr(fileAttr.Ino, store.SetAttrReq{Size: &truncSize, Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, err = actor.Mknod(store.MknodReq{ParentIno: store.RootIno, Name: []byte("m"), Mode: store.S_IFREG | 0o644, Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, err = actor.Mkdir(store.MkdirReq{ParentIno: store.RootIno, Name: []byte("d"), Mode: 0o755, Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, err = actor.Symlink(store.SymlinkReq{ParentIno: store.RootIno, Name: []byte("s"), Target: []byte("file.bin"), Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, err = actor.Link(store.LinkReq{Ino: fileAttr.Ino, NewParentIno: store.RootIno, NewName: []byte("l"), Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.Unlink(store.RootIno, []byte("file.bin"), false, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.Rmdir(store.RootIno, []byte("sub"), badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.Rename(store.RenameReq{OldParentIno: store.RootIno, OldName: []byte("file.bin"), NewParentIno: store.RootIno, NewName: []byte("renamed"), Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, err = actor.Create(store.CreateReq{ParentIno: store.RootIno, Name: []byte("c"), Mode: 0o644, Epoch: badEpoch})
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		_, _, err = actor.Write(fileAttr.Ino, 0, []byte("overwrite"), badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+		_, _, err = actor.Write(fileAttr.Ino, 0, bytes.Repeat([]byte{0xff}, store.BlobSize), badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.Fsync(fileAttr.Ino, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.FsyncDir(dirAttr.Ino, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.Fallocate(fileAttr.Ino, 0, 4096, store.FallocPunchHole|store.FallocKeepSize, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.SetXattr(fileAttr.Ino, []byte("user.k"), []byte("v2"), 0, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.RemoveXattr(fileAttr.Ino, []byte("user.k"), badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+
+		err = actor.PurgeOrphanInode(orphanFile.Ino, badEpoch)
+		require.ErrorIs(t, err, store.ErrStaleEpoch)
+	}
+
+	// 验证底层 Pebble 键值与 .pack 偏移量完全未变
+	require.Equal(t, kvBefore, snapshotAllKV(t, actor.DB()))
+	require.Equal(t, offsetBefore, actor.Blobs().ActiveOffset())
+
+	// 4. 验证在途预写块（Stage 1 已写入 .pack）与 AdvanceEpoch 同批进入 Phase A 时，
+	// 旧 Epoch 写请求被 ErrStaleEpoch 拒绝且安全回滚/释放 stagedBlobs 租约，绝不污染 Batch
+	release := store.HoldTickForTest(actor)
+	type advResult struct {
+		epoch uint64
+		err   error
+	}
+	advCh := make(chan advResult, 1)
+	writeErrCh := make(chan error, 1)
+
+	go func() {
+		newEp, _, advErr := actor.AdvanceEpoch()
+		advCh <- advResult{epoch: newEp, err: advErr}
+	}()
+	time.Sleep(5 * time.Millisecond)
+
+	go func() {
+		_, _, wErr := actor.Write(fileAttr.Ino, 0, bytes.Repeat([]byte{0x99}, store.BlobSize), ep1)
+		writeErrCh <- wErr
+	}()
+	time.Sleep(10 * time.Millisecond)
+	release()
+
+	advRes := <-advCh
+	require.NoError(t, advRes.err)
+	require.Equal(t, uint64(2), advRes.epoch)
+	require.ErrorIs(t, <-writeErrCh, store.ErrStaleEpoch)
+
+	gotData, err := actor.Read(fileAttr.Ino, 0, store.BlobSize)
+	require.NoError(t, err)
+	require.Equal(t, origPayload, gotData)
+}

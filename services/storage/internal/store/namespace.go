@@ -19,6 +19,7 @@ type MknodReq struct {
 	GID       uint32
 	Rdev      uint32
 	Umask     uint32
+	Epoch     uint64
 }
 
 // MkdirReq 定义 Mkdir 目录创建参数。
@@ -29,6 +30,7 @@ type MkdirReq struct {
 	UID       uint32
 	GID       uint32
 	Umask     uint32
+	Epoch     uint64
 }
 
 // CreateReq 定义 Create 常规文件创建参数。
@@ -40,6 +42,7 @@ type CreateReq struct {
 	GID       uint32
 	Umask     uint32
 	Flags     uint32
+	Epoch     uint64
 }
 
 // SymlinkReq 定义 Symlink 符号链接创建参数。
@@ -49,6 +52,7 @@ type SymlinkReq struct {
 	Target    []byte
 	UID       uint32
 	GID       uint32
+	Epoch     uint64
 }
 
 // LinkReq 定义 Link 硬链接创建参数。
@@ -56,6 +60,7 @@ type LinkReq struct {
 	Ino          uint64
 	NewParentIno uint64
 	NewName      []byte
+	Epoch        uint64
 }
 
 // DirEntry 表示 ReadDir 返回的单条目录项。
@@ -126,6 +131,9 @@ func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opMknod, req.Epoch)
+	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
 	}
@@ -143,7 +151,7 @@ func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
 	}
 
 	effMode := modeType | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opMknod, &createNodeOp{
+	return s.submitCreateNode(opMknod, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -157,6 +165,9 @@ func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
 func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opMkdir, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -173,7 +184,7 @@ func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
 	}
 
 	effMode := S_IFDIR | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opMkdir, &createNodeOp{
+	return s.submitCreateNode(opMkdir, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -186,6 +197,9 @@ func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
 func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opCreate, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -205,7 +219,7 @@ func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
 	}
 
 	effMode := S_IFREG | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opCreate, &createNodeOp{
+	return s.submitCreateNode(opCreate, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -218,6 +232,9 @@ func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
 func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opSymlink, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -232,7 +249,7 @@ func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
 		return Attribute{}, ErrNameTooLong
 	}
 
-	return s.submitCreateNode(opSymlink, &createNodeOp{
+	return s.submitCreateNode(opSymlink, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      S_IFLNK | 0o777,
@@ -246,6 +263,9 @@ func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
 func (s *StoreActor) Link(req LinkReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
+	}
+	if s.isDefinitelyStaleEpoch(req.Epoch) {
+		return Attribute{}, s.submitStaleEpoch(opLink, req.Epoch)
 	}
 	if err := validateNodeIno(req.Ino); err != nil {
 		return Attribute{}, err
@@ -264,6 +284,7 @@ func (s *StoreActor) Link(req LinkReq) (Attribute, error) {
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opLink
+	cmd.epoch = req.Epoch
 	cmd.req = op
 	if err := s.submit(cmd); err != nil {
 		return Attribute{}, err
@@ -271,9 +292,10 @@ func (s *StoreActor) Link(req LinkReq) (Attribute, error) {
 	return op.attr, nil
 }
 
-func (s *StoreActor) submitCreateNode(kind opKind, op *createNodeOp) (Attribute, error) {
+func (s *StoreActor) submitCreateNode(kind opKind, epoch uint64, op *createNodeOp) (Attribute, error) {
 	cmd := s.acquireCmd()
 	cmd.op = kind
+	cmd.epoch = epoch
 	cmd.req = op
 	if err := s.submit(cmd); err != nil {
 		return Attribute{}, err

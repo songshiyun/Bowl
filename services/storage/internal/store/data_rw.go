@@ -38,9 +38,13 @@ func isAllZero(data []byte) bool {
 //   - 满 256 KiB 对齐整块写：阶段 1 在不持 inodeLocks 的状态下向活跃 .pack 追加写入满块数据，随后获取 s.inodeLocks[ino&0xfff] 投递进 Actor 双阶段队列；
 //   - 局部或非对齐跨块写：全程持 s.inodeLocks[ino&0xfff]，若命中活跃 .pack 最末尾同块则走 ExtendTail 原地顺延写指针，否则读取旧块合并后通过 Append 追加至活跃 .pack；
 //   - 在 Actor Phase B 的同一个 IndexedBatch 中原子更新 InodeKey 与涉及的全部 DataKey -> 16B BlobRef{PackID, Offset, Length}。
-func (s *StoreActor) Write(ino, offset uint64, data []byte) (uint32, Attribute, error) {
+func (s *StoreActor) Write(ino, offset uint64, data []byte, epoch ...uint64) (uint32, Attribute, error) {
 	if s.readOnly {
 		return 0, Attribute{}, ErrReadOnly
+	}
+	ep := resolveEpoch(epoch)
+	if s.isDefinitelyStaleEpoch(ep) {
+		return 0, Attribute{}, s.submitStaleEpoch(opWrite, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return 0, Attribute{}, err
@@ -53,17 +57,17 @@ func (s *StoreActor) Write(ino, offset uint64, data []byte) (uint32, Attribute, 
 	}
 
 	if len(data) == 0 {
-		return s.writeZeroBytes(ino, offset)
+		return s.writeZeroBytes(ino, offset, ep)
 	}
 
 	if isFullBlockAlignedWrite(offset, data) {
-		return s.writeFullBlocks(ino, offset, data)
+		return s.writeFullBlocks(ino, offset, data, ep)
 	}
 
-	return s.writePartialData(ino, offset, data)
+	return s.writePartialData(ino, offset, data, ep)
 }
 
-func (s *StoreActor) writeZeroBytes(ino, offset uint64) (uint32, Attribute, error) {
+func (s *StoreActor) writeZeroBytes(ino, offset, epoch uint64) (uint32, Attribute, error) {
 	op := &writeDataOp{
 		ino:     ino,
 		offset:  offset,
@@ -71,6 +75,7 @@ func (s *StoreActor) writeZeroBytes(ino, offset uint64) (uint32, Attribute, erro
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
+	cmd.epoch = epoch
 	cmd.req = op
 	if err := s.submit(cmd); err != nil {
 		return 0, Attribute{}, err
@@ -78,7 +83,7 @@ func (s *StoreActor) writeZeroBytes(ino, offset uint64) (uint32, Attribute, erro
 	return 0, op.attr, nil
 }
 
-func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, Attribute, error) {
+func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
 	unlock, err := s.enter()
 	if err != nil {
 		return 0, Attribute{}, err
@@ -123,6 +128,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
+	cmd.epoch = epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
@@ -131,7 +137,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte) (uint32, A
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, Attribute, error) {
+func (s *StoreActor) writePartialData(ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
 	unlock, err := s.enter()
 	if err != nil {
 		return 0, Attribute{}, err
@@ -177,6 +183,7 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte) (uint32, 
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opWrite
+	cmd.epoch = epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
 	if err := s.enqueueAndWait(cmd); err != nil {
