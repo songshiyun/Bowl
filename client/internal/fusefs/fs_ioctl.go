@@ -61,7 +61,8 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino, SessionId: fs.currentSession(),
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -97,7 +98,8 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino, SessionId: fs.currentSession(),
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -154,9 +156,10 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:       ino,
-			Flags:     &protoFlags,
-			SessionId: fs.currentSession(),
+			Ino:    ino,
+			Flags:  &protoFlags,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -195,9 +198,10 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:       ino,
-			Flags:     &protoFlags,
-			SessionId: fs.currentSession(),
+			Ino:    ino,
+			Flags:  &protoFlags,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)

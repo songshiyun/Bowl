@@ -57,16 +57,18 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	epoch := fs.cache.version()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-	var sid uint64
-	if fs.sessions != nil {
-		sid = fs.sessions.CurrentSessionID()
-	}
 	resp, err := fs.client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-		ParentIno: parentIno, Name: []byte(name), Mode: input.Mode & 0xffff,
-		Uid: input.Uid, Gid: input.Gid, Flags: ToProtoOpenFlags(input.Flags), SessionId: optionalSession(sid),
+		ParentIno: parentIno,
+		Name:      []byte(name),
+		Mode:      input.Mode & 0xffff,
+		Uid:       input.Uid,
+		Gid:       input.Gid,
+		Flags:     ToProtoOpenFlags(input.Flags),
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	inode := resp.Msg.GetInode()
 	if inode == nil || inode.GetAttr() == nil {
@@ -138,7 +140,12 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 			}
 			ctx, done := fs.RPCContext(cancel)
 			zero := uint64(0)
-			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{Ino: ino, Size: &zero, SessionId: fs.currentSession()}))
+			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
+				Ino:    ino,
+				Size:   &zero,
+				DiskId: fs.cfg.DiskID,
+				Epoch:  fs.cfg.Epoch,
+			}))
 			done()
 			fs.readAhead.InvalidateInode(ino)
 			if err != nil {
@@ -171,7 +178,7 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status 
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
 	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
@@ -186,11 +193,10 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
-	if status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
-	if status = fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
 		return status
 	}
 	ino, status := fs.ToServerIno(input.NodeId)
@@ -200,12 +206,16 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 	_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
-		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
+		Ino:      ino,
+		Fh:       0,
+		Datasync: input.FsyncFlags&1 != 0,
+		DiskId:   fs.cfg.DiskID,
+		Epoch:    fs.cfg.Epoch,
 	}))
 	if err == nil {
 		fs.clearDirty(ino)
 	}
-	return fs.ToStatusWithSession(err, cancel)
+	return fs.ToStatus(err, cancel)
 }
 
 // Release 在本地释放句柄与 flock；最后一个孤儿句柄触发回收。
@@ -227,9 +237,6 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	fs.readAhead.RemoveHandle(input.Fh)
 	orphan := fs.handles.IsOrphan(input.NodeId)
 	fs.handles.Release(input.Fh)
-	if fs.sessions != nil {
-		fs.sessions.UnbindHandle(input.Fh)
-	}
 	if fs.tmpMgr.OnHandleReleased(input.NodeId, orphan, fs.handles.IsOpen) {
 		fs.cache.invalidateInode(input.NodeId)
 	}

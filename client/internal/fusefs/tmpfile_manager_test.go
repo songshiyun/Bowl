@@ -7,7 +7,6 @@ import (
 	"sync"
 	"syscall"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -16,7 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -877,35 +875,25 @@ func (f *fakeStorageClientForTmpFS) Fsync(_ context.Context, req *connect.Reques
 func (f *fakeStorageClientForTmpFS) ReclaimOrphan(_ context.Context, req *connect.Request[storagev1.ReclaimOrphanRequest]) (*connect.Response[storagev1.ReclaimOrphanResponse], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if req.Msg.GetDiskId() == "" || req.Msg.GetEpoch() == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, syscall.EINVAL)
+	}
 	f.reclaimedInos = append(f.reclaimedInos, req.Msg.GetIno())
 	return connect.NewResponse(&storagev1.ReclaimOrphanResponse{}), nil
 }
 
-func (f *fakeStorageClientForTmpFS) RenewSession(_ context.Context, _ *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
-	return connect.NewResponse(&storagev1.RenewSessionResponse{
-		ExpiresAt: timestamppb.New(time.Now().Add(30 * time.Second)),
-	}), nil
-}
-
-func (f *fakeStorageClientForTmpFS) CloseSession(_ context.Context, _ *connect.Request[storagev1.CloseSessionRequest]) (*connect.Response[storagev1.CloseSessionResponse], error) {
-	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
-}
-
 func TestRawFS_TmpFileManager7FUSEEntrypointsIntegration(t *testing.T) {
-	// 1. 结构体反射守卫：RawFS 根结构体不得再保留 tmpMu, tmpFiles, serverToLocal, nextTmp
+	// 1. 结构体反射守卫：RawFS 根结构体不得再保留 tmpMu, tmpFiles, serverToLocal, nextTmp, sessions, orphanSessions
 	rawFSType := reflect.TypeFor[fusefs.RawFS]()
-	for _, forbidden := range []string{"tmpMu", "tmpFiles", "serverToLocal", "nextTmp"} {
+	for _, forbidden := range []string{"tmpMu", "tmpFiles", "serverToLocal", "nextTmp", "sessions", "orphanSessions"} {
 		_, exists := rawFSType.FieldByName(forbidden)
 		require.False(t, exists, "RawFS 不得保留旧字段 %s", forbidden)
 	}
 
 	const rootIno = uint64(100)
 	client := newFakeStorageClientForTmpFS(rootIno)
-	sessMgr, err := session.New(context.Background(), client, session.Config{DiskID: "disk-tmp"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sessMgr.Close() })
 
-	fs := fusefs.NewRawFS(client, sessMgr, fusefs.Config{DiskID: "disk-tmp", RootIno: rootIno})
+	fs := fusefs.NewRawFS(client, fusefs.Config{DiskID: "disk-tmp", Epoch: 7, RootIno: rootIno})
 	t.Cleanup(fs.OnUnmount)
 
 	// 2. Tmpfile -> 本地 Write / SetAttr / Fallocate / GetAttr / Read（全部在 4 KiB 稀疏页纯内存完成，零服务端写 RPC）

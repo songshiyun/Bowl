@@ -27,15 +27,16 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 	defer cancelFunc()
 
 	_, err := fs.client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		Value:     data,
-		Flags:     input.Flags,
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		Value:  data,
+		Flags:  input.Flags,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}))
 	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	if attr == securityCapabilityXattr {
 		fs.caps.markPresent(input.NodeId)
@@ -60,12 +61,12 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 	defer cancelFunc()
 
 	resp, err := fs.client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
-		status := fs.ToStatusWithSession(err, cancel)
+		status := fs.ToStatus(err, cancel)
 		if attr == securityCapabilityXattr && status == fuse.Status(syscall.ENODATA) {
 			fs.caps.markAbsent(header.NodeId)
 		}
@@ -102,11 +103,11 @@ func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest [
 	defer cancelFunc()
 
 	resp, err := fs.client.ListXattr(ctx, connect.NewRequest(&storagev1.ListXattrRequest{
-		Ino:       ino,
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
-		return 0, fs.ToStatusWithSession(err, cancel)
+		return 0, fs.ToStatus(err, cancel)
 	}
 
 	names := resp.Msg.GetNames()
@@ -152,13 +153,14 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 	defer cancelFunc()
 
 	_, err := fs.client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}))
 	fs.cache.invalidateInode(header.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	if attr == securityCapabilityXattr {
 		fs.caps.markAbsent(header.NodeId)

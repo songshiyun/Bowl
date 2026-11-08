@@ -26,7 +26,7 @@ func requireCodeMapping(t *testing.T, code connect.Code, expected syscall.Errno)
 	require.Equal(t, expected, MapError(connect.NewError(code, nil)), "code %s must map to %v", code, expected)
 }
 
-func TestMapError_All24ErrorInfos(t *testing.T) {
+func TestMapError_All25ErrorInfos(t *testing.T) {
 	requireReasonMapping(t, "EINVAL", syscall.EINVAL)
 	requireReasonMapping(t, "ENAMETOOLONG", syscall.ENAMETOOLONG)
 	requireReasonMapping(t, "ERANGE", syscall.ERANGE)
@@ -51,6 +51,7 @@ func TestMapError_All24ErrorInfos(t *testing.T) {
 	requireReasonMapping(t, "EXDEV", syscall.EXDEV)
 	requireReasonMapping(t, "EIO", syscall.EIO)
 	requireReasonMapping(t, "EROFS", syscall.EROFS)
+	requireReasonMapping(t, "EBUSY", syscall.EBUSY)
 }
 
 func TestMapError_ErrorInfoDomainAndReason(t *testing.T) {
@@ -84,7 +85,7 @@ func TestMapError_ConnectCodeFallback(t *testing.T) {
 	requireCodeMapping(t, connect.CodeDeadlineExceeded, syscall.EIO)
 	requireCodeMapping(t, connect.CodeUnknown, syscall.EIO)
 	requireCodeMapping(t, connect.CodeAborted, syscall.EIO)
-	requireCodeMapping(t, connect.CodeFailedPrecondition, syscall.EIO)
+	requireCodeMapping(t, connect.CodeFailedPrecondition, syscall.EBUSY)
 	requireCodeMapping(t, connect.CodeOutOfRange, syscall.EIO)
 	requireCodeMapping(t, connect.CodeDataLoss, syscall.EIO)
 	requireCodeMapping(t, connect.CodeUnauthenticated, syscall.EIO)

@@ -36,7 +36,6 @@ type windowFetch struct {
 type handleReadAhead struct {
 	mu          sync.Mutex
 	ino         uint64
-	sessionID   uint64
 	gen         uint64
 	lastReadEnd uint64
 	hasLastRead bool
@@ -123,7 +122,7 @@ func NewReadAheadCoordinator() *ReadAheadCoordinator {
 	}
 }
 
-func (c *ReadAheadCoordinator) getOrCreateHandle(fh, ino, sessionID uint64) *handleReadAhead {
+func (c *ReadAheadCoordinator) getOrCreateHandle(fh, ino uint64) *handleReadAhead {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.handles == nil {
@@ -132,17 +131,15 @@ func (c *ReadAheadCoordinator) getOrCreateHandle(fh, ino, sessionID uint64) *han
 	hra, ok := c.handles[fh]
 	if !ok {
 		hra = &handleReadAhead{
-			ino:       ino,
-			sessionID: sessionID,
+			ino: ino,
 		}
 		c.handles[fh] = hra
 		return hra
 	}
 	hra.mu.Lock()
-	if hra.ino != ino || hra.sessionID != sessionID {
+	if hra.ino != ino {
 		hra.resetLocked()
 		hra.ino = ino
-		hra.sessionID = sessionID
 	}
 	hra.mu.Unlock()
 	return hra
@@ -252,13 +249,13 @@ func (c *ReadAheadCoordinator) fetchReadWindow(ctx context.Context, hra *handleR
 }
 
 // Read 在指定文件句柄上执行带预读缓存与单飞窗口协调的读取，将结果写入 dest 并返回实际读取字节数。
-func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, sessionID, offset uint64, dest []byte, fetch ChunkFetcher) (int, error) {
+func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64, dest []byte, fetch ChunkFetcher) (int, error) {
 	want := len(dest)
 	if want == 0 {
 		return 0, nil
 	}
 
-	hra := c.getOrCreateHandle(fh, ino, sessionID)
+	hra := c.getOrCreateHandle(fh, ino)
 
 	if want <= MaxRPCChunkSize {
 		hra.mu.Lock()
@@ -513,25 +510,6 @@ func (c *ReadAheadCoordinator) RemoveHandle(fh uint64) {
 	c.mu.Unlock()
 
 	if ok && hra != nil {
-		hra.mu.Lock()
-		hra.resetLocked()
-		hra.mu.Unlock()
-	}
-}
-
-// InvalidateSession 清理属于已过期会话的句柄预读状态并取消其在途预取；当 sessionID 为 0 时清理全部句柄。
-func (c *ReadAheadCoordinator) InvalidateSession(sessionID uint64) {
-	c.mu.Lock()
-	var targets []*handleReadAhead
-	for fh, hra := range c.handles {
-		if sessionID == 0 || hra.sessionID == sessionID {
-			targets = append(targets, hra)
-			delete(c.handles, fh)
-		}
-	}
-	c.mu.Unlock()
-
-	for _, hra := range targets {
 		hra.mu.Lock()
 		hra.resetLocked()
 		hra.mu.Unlock()

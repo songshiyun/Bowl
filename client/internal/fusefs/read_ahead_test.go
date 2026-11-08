@@ -15,10 +15,8 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -37,7 +35,6 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 		totalSize = 3 * chunkSize
 		fh        = uint64(10)
 		ino       = uint64(100)
-		sid       = uint64(1)
 	)
 	fileData := makeDeterministicFile(totalSize)
 	coord := fusefs.NewReadAheadCoordinator()
@@ -77,7 +74,7 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 
 	// 1. 首个读请求（[0, 64 KiB)）直通，不放大为 4 MiB
 	buf1 := make([]byte, 64*1024)
-	n, err := coord.Read(ctx, fh, ino, sid, 0, buf1, fetcher)
+	n, err := coord.Read(ctx, fh, ino, 0, buf1, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf1), n)
 	require.True(t, bytes.Equal(fileData[:len(buf1)], buf1))
@@ -88,7 +85,7 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 
 	// 2. 紧接上一次末尾的顺序读（[64 KiB, 128 KiB)）：触发窗口 0 ([0, 4 MiB)) 对齐拉取，并启动窗口 1 ([4 MiB, 8 MiB)) 异步预取
 	buf2 := make([]byte, 64*1024)
-	n, err = coord.Read(ctx, fh, ino, sid, 64*1024, buf2, fetcher)
+	n, err = coord.Read(ctx, fh, ino, 64*1024, buf2, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf2), n)
 	require.True(t, bytes.Equal(fileData[64*1024:128*1024], buf2))
@@ -102,7 +99,7 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 
 	// 3. 同一 4 MiB 窗口内的后续读取（[128 KiB, 4 MiB)）直接命中内存活跃窗口，不再调用 fetcher
 	buf3 := make([]byte, chunkSize-128*1024)
-	n, err = coord.Read(ctx, fh, ino, sid, 128*1024, buf3, fetcher)
+	n, err = coord.Read(ctx, fh, ino, 128*1024, buf3, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf3), n)
 	require.True(t, bytes.Equal(fileData[128*1024:chunkSize], buf3))
@@ -110,7 +107,7 @@ func TestReadAheadCoordinator顺序读对齐窗口命中与异步预取提升(t 
 
 	// 4. 读取进入窗口 1（[4 MiB, 4 MiB + 128 KiB)）：直接将已预取的窗口 1 提升（Promote）为活跃窗口，并异步预取窗口 2 ([8 MiB, 12 MiB))
 	buf4 := make([]byte, 128*1024)
-	n, err = coord.Read(ctx, fh, ino, sid, chunkSize, buf4, fetcher)
+	n, err = coord.Read(ctx, fh, ino, chunkSize, buf4, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf4), n)
 	require.True(t, bytes.Equal(fileData[chunkSize:chunkSize+128*1024], buf4))
@@ -130,7 +127,6 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 		totalSize = 2*chunkSize + tailBytes
 		fh        = uint64(20)
 		ino       = uint64(200)
-		sid       = uint64(2)
 	)
 	fileData := makeDeterministicFile(totalSize)
 	coord := fusefs.NewReadAheadCoordinator()
@@ -147,14 +143,14 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 
 	// 1. 首次读取 [0, 64 KiB) 直通
 	buf1 := make([]byte, 64*1024)
-	n, err := coord.Read(ctx, fh, ino, sid, 0, buf1, fetcher)
+	n, err := coord.Read(ctx, fh, ino, 0, buf1, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf1), n)
 	require.True(t, bytes.Equal(fileData[:len(buf1)], buf1))
 
 	// 2. 第二次顺序读取 [64 KiB, 128 KiB) 建立活跃窗口 0 ([0, 4 MiB))
 	buf2 := make([]byte, 64*1024)
-	n, err = coord.Read(ctx, fh, ino, sid, 64*1024, buf2, fetcher)
+	n, err = coord.Read(ctx, fh, ino, 64*1024, buf2, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf2), n)
 	require.True(t, bytes.Equal(fileData[64*1024:128*1024], buf2))
@@ -163,7 +159,7 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 	crossStart1 := uint64(chunkSize - 128*1024)
 	crossWant1 := 320 * 1024
 	bufCross1 := make([]byte, crossWant1)
-	n, err = coord.Read(ctx, fh, ino, sid, crossStart1, bufCross1, fetcher)
+	n, err = coord.Read(ctx, fh, ino, crossStart1, bufCross1, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, crossWant1, n)
 	require.True(t, bytes.Equal(fileData[crossStart1:int(crossStart1)+crossWant1], bufCross1))
@@ -174,7 +170,7 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 	crossWant2 := 64*1024 + 256*1024
 	expectedRead2 := 64*1024 + tailBytes
 	bufCross2 := make([]byte, crossWant2)
-	n, err = coord.Read(ctx, fh, ino, sid, crossStart2, bufCross2, fetcher)
+	n, err = coord.Read(ctx, fh, ino, crossStart2, bufCross2, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, expectedRead2, n)
 	require.True(t, bytes.Equal(fileData[crossStart2:int(crossStart2)+expectedRead2], bufCross2[:n]))
@@ -183,13 +179,13 @@ func TestReadAheadCoordinator跨窗口边界拼接与后半窗口短读EOF(t *te
 	//    先在 [4 MiB - 128 KiB, 4 MiB - 64 KiB) 首读直通，再顺序读 [4 MiB - 64 KiB, 4 MiB + 64 KiB)
 	const fh2 = uint64(21)
 	initBuf := make([]byte, 64*1024)
-	n, err = coord.Read(ctx, fh2, ino, sid, uint64(chunkSize-128*1024), initBuf, fetcher)
+	n, err = coord.Read(ctx, fh2, ino, uint64(chunkSize-128*1024), initBuf, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(initBuf), n)
 
 	straddleStart := uint64(chunkSize - 64*1024)
 	straddleBuf := make([]byte, 128*1024)
-	n, err = coord.Read(ctx, fh2, ino, sid, straddleStart, straddleBuf, fetcher)
+	n, err = coord.Read(ctx, fh2, ino, straddleStart, straddleBuf, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(straddleBuf), n)
 	require.True(t, bytes.Equal(fileData[straddleStart:int(straddleStart)+len(straddleBuf)], straddleBuf))
@@ -200,7 +196,6 @@ func TestReadAheadCoordinator并发读取同一窗口Singleflight单飞合并(t 
 		chunkSize = fusefs.MaxRPCChunkSize
 		fh        = uint64(30)
 		ino       = uint64(300)
-		sid       = uint64(3)
 		readers   = 8
 		readSize  = 256 * 1024 // >= 128 KiB (readAheadMinWant)
 	)
@@ -231,7 +226,7 @@ func TestReadAheadCoordinator并发读取同一窗口Singleflight单飞合并(t 
 
 	// 1. 首次读取 [0, 128 KiB) 直通，推进 streamEnd 至 128 KiB
 	firstBuf := make([]byte, 128*1024)
-	n, err := coord.Read(ctx, fh, ino, sid, 0, firstBuf, fetcher)
+	n, err := coord.Read(ctx, fh, ino, 0, firstBuf, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(firstBuf), n)
 	require.True(t, bytes.Equal(fileData[:len(firstBuf)], firstBuf))
@@ -246,7 +241,7 @@ func TestReadAheadCoordinator并发读取同一窗口Singleflight单飞合并(t 
 		defer wg.Done()
 		buf := make([]byte, readSize)
 		off := uint64(128 * 1024)
-		got, readErr := coord.Read(ctx, fh, ino, sid, off, buf, fetcher)
+		got, readErr := coord.Read(ctx, fh, ino, off, buf, fetcher)
 		if readErr == nil {
 			results[0] = buf[:got]
 		}
@@ -268,7 +263,7 @@ func TestReadAheadCoordinator并发读取同一窗口Singleflight单飞合并(t 
 			<-ready
 			buf := make([]byte, readSize)
 			off := uint64(idx * readSize)
-			got, readErr := coord.Read(ctx, fh, ino, sid, off, buf, fetcher)
+			got, readErr := coord.Read(ctx, fh, ino, off, buf, fetcher)
 			if readErr == nil {
 				results[idx] = buf[:got]
 			}
@@ -300,7 +295,6 @@ func TestReadAheadCoordinator在途拉取并发InvalidateInode递增Gen拒绝旧
 		chunkSize = fusefs.MaxRPCChunkSize
 		fh        = uint64(40)
 		ino       = uint64(400)
-		sid       = uint64(4)
 	)
 	oldData := bytes.Repeat([]byte{0xAA}, chunkSize)
 	newData := bytes.Repeat([]byte{0xBB}, chunkSize)
@@ -337,7 +331,7 @@ func TestReadAheadCoordinator在途拉取并发InvalidateInode递增Gen拒绝旧
 
 	// 1. 首次读取 [0, 64 KiB) 直通
 	buf1 := make([]byte, 64*1024)
-	n, err := coord.Read(ctx, fh, ino, sid, 0, buf1, fetcher)
+	n, err := coord.Read(ctx, fh, ino, 0, buf1, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf1), n)
 	require.True(t, bytes.Equal(oldData[:len(buf1)], buf1))
@@ -346,7 +340,7 @@ func TestReadAheadCoordinator在途拉取并发InvalidateInode递增Gen拒绝旧
 	readDone := make(chan error, 1)
 	buf2 := make([]byte, 64*1024)
 	go func() {
-		got, readErr := coord.Read(ctx, fh, ino, sid, 64*1024, buf2, fetcher)
+		got, readErr := coord.Read(ctx, fh, ino, 64*1024, buf2, fetcher)
 		if readErr == nil && got != len(buf2) {
 			readErr = context.Canceled
 		}
@@ -370,7 +364,7 @@ func TestReadAheadCoordinator在途拉取并发InvalidateInode递增Gen拒绝旧
 
 	// 5. 断言在途返回的旧窗口绝未发布为活跃缓存：紧接着读取 [128 KiB, 192 KiB) 必须穿透底层 fetcher 拿到新数据 0xBB
 	buf3 := make([]byte, 64*1024)
-	n, err = coord.Read(ctx, fh, ino, sid, 128*1024, buf3, fetcher)
+	n, err = coord.Read(ctx, fh, ino, 128*1024, buf3, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, len(buf3), n)
 	require.True(t, bytes.Equal(newData[128*1024:192*1024], buf3), "并发 InvalidateInode 后的在途旧窗口不得污染缓存")
@@ -383,7 +377,6 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 		totalSize = 2*chunkSize + 512*1024
 		fh        = uint64(50)
 		ino       = uint64(500)
-		sid       = uint64(5)
 	)
 	fileData := makeDeterministicFile(totalSize)
 	coord := fusefs.NewReadAheadCoordinator()
@@ -409,7 +402,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	randomOffsets := []uint64{0, 512 * 1024, 128 * 1024, 3*1024*1024 + 4096}
 	for i, off := range randomOffsets {
 		smallBuf := make([]byte, 16*1024)
-		n, err := coord.Read(ctx, fh, ino, sid, off, smallBuf, fetcher)
+		n, err := coord.Read(ctx, fh, ino, off, smallBuf, fetcher)
 		require.NoError(t, err)
 		require.Equal(t, len(smallBuf), n)
 		require.True(t, bytes.Equal(fileData[off:off+uint64(len(smallBuf))], smallBuf))
@@ -419,7 +412,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	// 2. > 4 MiB 大读（请求 10 MiB，文件实际剩余 8.5 MiB）：按 4 MiB 顺序分片循环并在第 3 片短读 EOF 处停止
 	calls = nil
 	largeBuf := make([]byte, 10*1024*1024)
-	n, err := coord.Read(ctx, fh, ino, sid, 0, largeBuf, fetcher)
+	n, err := coord.Read(ctx, fh, ino, 0, largeBuf, fetcher)
 	require.NoError(t, err)
 	require.Equal(t, totalSize, n)
 	require.True(t, bytes.Equal(fileData, largeBuf[:n]))
@@ -433,7 +426,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	sentinelErr := errors.New("simulated network failure on second chunk")
 	partialBuf := make([]byte, 2*chunkSize)
 	var chunkIdx int
-	n, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
+	n, err = coord.Read(ctx, fh, ino, 0, partialBuf, func(_ context.Context, offset uint64, length uint32) ([]byte, error) {
 		chunkIdx++
 		if chunkIdx == 2 {
 			return nil, sentinelErr
@@ -444,7 +437,7 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 	require.Equal(t, chunkSize, n)
 	require.True(t, bytes.Equal(fileData[:chunkSize], partialBuf[:n]))
 
-	_, err = coord.Read(ctx, fh, ino, sid, 0, partialBuf, func(_ context.Context, _ uint64, _ uint32) ([]byte, error) {
+	_, err = coord.Read(ctx, fh, ino, 0, partialBuf, func(_ context.Context, _ uint64, _ uint32) ([]byte, error) {
 		return nil, sentinelErr
 	})
 	require.ErrorIs(t, err, sentinelErr)
@@ -453,7 +446,12 @@ func TestReadAheadCoordinator大读分片循环与随机小读直通(t *testing.
 func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testing.T) {
 	const chunkSize = fusefs.MaxRPCChunkSize
 
-	triggerPrefetchOnHandle := func(t *testing.T, coord *fusefs.ReadAheadCoordinator, fh, ino, sid uint64) <-chan error {
+	// 反射守卫：ReadAheadCoordinator 不得再保留 InvalidateSession 方法
+	coordType := reflect.TypeFor[*fusefs.ReadAheadCoordinator]()
+	_, hasInvalidateSession := coordType.MethodByName("InvalidateSession")
+	require.False(t, hasInvalidateSession, "ReadAheadCoordinator 不得保留 InvalidateSession 方法")
+
+	triggerPrefetchOnHandle := func(t *testing.T, coord *fusefs.ReadAheadCoordinator, fh, ino uint64) <-chan error {
 		t.Helper()
 		prefetchStarted := make(chan struct{})
 		prefetchCanceled := make(chan error, 1)
@@ -473,9 +471,9 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 
 		// 首次读直通 + 第二次顺序读触发窗口 0 拉取并启动窗口 1 ([4 MiB, 8 MiB)) 异步预取
 		buf := make([]byte, 64*1024)
-		_, err := coord.Read(ctx, fh, ino, sid, 0, buf, fetcher)
+		_, err := coord.Read(ctx, fh, ino, 0, buf, fetcher)
 		require.NoError(t, err)
-		_, err = coord.Read(ctx, fh, ino, sid, 64*1024, buf, fetcher)
+		_, err = coord.Read(ctx, fh, ino, 64*1024, buf, fetcher)
 		require.NoError(t, err)
 
 		select {
@@ -488,7 +486,7 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 
 	t.Run("RemoveHandle取消对应句柄在途预取并清理状态", func(t *testing.T) {
 		coord := fusefs.NewReadAheadCoordinator()
-		canceledCh := triggerPrefetchOnHandle(t, coord, 61, 601, 6)
+		canceledCh := triggerPrefetchOnHandle(t, coord, 61, 601)
 
 		coord.RemoveHandle(61)
 
@@ -502,7 +500,7 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 		// 移除句柄后再次以同一 fh 读取，必须作为全新句柄首读直通（不命中旧窗口 0）
 		var gotLengths []uint32
 		buf := make([]byte, 32*1024)
-		n, err := coord.Read(context.Background(), 61, 601, 6, 128*1024, buf, func(_ context.Context, _ uint64, length uint32) ([]byte, error) {
+		n, err := coord.Read(context.Background(), 61, 601, 128*1024, buf, func(_ context.Context, _ uint64, length uint32) ([]byte, error) {
 			gotLengths = append(gotLengths, length)
 			return bytes.Repeat([]byte{0x5A}, int(length)), nil
 		})
@@ -511,50 +509,10 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 		require.Equal(t, []uint32{32 * 1024}, gotLengths)
 	})
 
-	t.Run("InvalidateSession仅取消目标会话句柄预取且保留其他会话", func(t *testing.T) {
-		coord := fusefs.NewReadAheadCoordinator()
-		canceledSID10 := triggerPrefetchOnHandle(t, coord, 71, 701, 10)
-		canceledSID20 := triggerPrefetchOnHandle(t, coord, 72, 702, 20)
-
-		coord.InvalidateSession(10)
-
-		select {
-		case err := <-canceledSID10:
-			require.ErrorIs(t, err, context.Canceled)
-		case <-time.After(2 * time.Second):
-			t.Fatal("InvalidateSession(10) 未及时取消会话 10 的在途预取")
-		}
-
-		// 会话 20 的预取未被取消，且其活跃窗口 0 依然直接命中缓存（不触发 fetcher）
-		select {
-		case err := <-canceledSID20:
-			t.Fatalf("InvalidateSession(10) 误取消了会话 20 的预取: %v", err)
-		default:
-		}
-		var sid20Fetched bool
-		buf := make([]byte, 64*1024)
-		n, err := coord.Read(context.Background(), 72, 702, 20, 128*1024, buf, func(_ context.Context, _ uint64, _ uint32) ([]byte, error) {
-			sid20Fetched = true
-			return nil, nil
-		})
-		require.NoError(t, err)
-		require.Equal(t, len(buf), n)
-		require.False(t, sid20Fetched, "未失效会话 20 的活跃窗口应当继续命中缓存")
-
-		// InvalidateSession(0) 清理全部剩余会话
-		coord.InvalidateSession(0)
-		select {
-		case err := <-canceledSID20:
-			require.ErrorIs(t, err, context.Canceled)
-		case <-time.After(2 * time.Second):
-			t.Fatal("InvalidateSession(0) 未及时取消剩余会话的在途预取")
-		}
-	})
-
 	t.Run("Clear取消所有句柄在途预取并清空全部状态", func(t *testing.T) {
 		coord := fusefs.NewReadAheadCoordinator()
-		canceled1 := triggerPrefetchOnHandle(t, coord, 81, 801, 1)
-		canceled2 := triggerPrefetchOnHandle(t, coord, 82, 802, 2)
+		canceled1 := triggerPrefetchOnHandle(t, coord, 81, 801)
+		canceled2 := triggerPrefetchOnHandle(t, coord, 82, 802)
 
 		coord.Clear()
 
@@ -571,14 +529,12 @@ func TestReadAheadCoordinator生命周期清理即时取消在途预取(t *testi
 
 type fakeStorageClientForReadAhead struct {
 	storagev1connect.UnimplementedStorageServiceHandler
-	mu            sync.Mutex
-	fileData      []byte
-	readCalls     int
-	readOffsets   []uint64
-	readSizes     []uint32
-	onRead4MiB    func(ctx context.Context, offset uint64)
-	renewRespErr  error
-	sessionExpire bool
+	mu          sync.Mutex
+	fileData    []byte
+	readCalls   int
+	readOffsets []uint64
+	readSizes   []uint32
+	onRead4MiB  func(ctx context.Context, offset uint64)
 }
 
 func (f *fakeStorageClientForReadAhead) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
@@ -664,25 +620,6 @@ func (f *fakeStorageClientForReadAhead) Fsync(_ context.Context, _ *connect.Requ
 	return connect.NewResponse(&storagev1.FsyncResponse{}), nil
 }
 
-func (f *fakeStorageClientForReadAhead) RenewSession(_ context.Context, _ *connect.Request[storagev1.RenewSessionRequest]) (*connect.Response[storagev1.RenewSessionResponse], error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.renewRespErr != nil {
-		return nil, f.renewRespErr
-	}
-	exp := time.Now().Add(30 * time.Second)
-	if f.sessionExpire {
-		exp = time.Now().Add(-time.Second)
-	}
-	return connect.NewResponse(&storagev1.RenewSessionResponse{
-		ExpiresAt: timestamppb.New(exp),
-	}), nil
-}
-
-func (f *fakeStorageClientForReadAhead) CloseSession(_ context.Context, _ *connect.Request[storagev1.CloseSessionRequest]) (*connect.Response[storagev1.CloseSessionResponse], error) {
-	return connect.NewResponse(&storagev1.CloseSessionResponse{}), nil
-}
-
 func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) {
 	const (
 		chunkSize = fusefs.MaxRPCChunkSize
@@ -690,21 +627,21 @@ func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) 
 		fh        = uint64(11)
 	)
 
-	// 结构体反射守卫：RawFS 不得再暴露旧版 readAheadMu 或 readAheadHandles 字段
+	// 结构体反射守卫：RawFS 不得再暴露旧版 readAheadMu、readAheadHandles、sessions 或 orphanSessions 字段
 	rawFSType := reflect.TypeFor[fusefs.RawFS]()
-	_, hasOldMu := rawFSType.FieldByName("readAheadMu")
-	require.False(t, hasOldMu, "RawFS 不得保留旧字段 readAheadMu")
-	_, hasOldMap := rawFSType.FieldByName("readAheadHandles")
-	require.False(t, hasOldMap, "RawFS 不得保留旧字段 readAheadHandles")
+	for _, forbidden := range []string{"readAheadMu", "readAheadHandles", "sessions", "orphanSessions"} {
+		_, hasOld := rawFSType.FieldByName(forbidden)
+		require.False(t, hasOld, "RawFS 不得保留旧字段 %s", forbidden)
+	}
+	orphanField, hasOrphanInodes := rawFSType.FieldByName("orphanInodes")
+	require.True(t, hasOrphanInodes, "RawFS 应持有无会话 orphanInodes 集合")
+	require.Equal(t, reflect.TypeFor[map[uint64]struct{}](), orphanField.Type)
 
 	client := &fakeStorageClientForReadAhead{
 		fileData: bytes.Repeat([]byte{0x11}, 2*chunkSize),
 	}
-	sessMgr, err := session.New(context.Background(), client, session.Config{DiskID: "disk-1"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sessMgr.Close() })
 
-	fs := fusefs.NewRawFS(client, sessMgr, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(client, fusefs.Config{DiskID: "disk-1", Epoch: 1, RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, nodeID, fh, syscall.O_RDWR)
 
@@ -832,57 +769,7 @@ func TestRawFS预读协调器与读写截断及生命周期联动(t *testing.T) 
 		t.Fatal("RawFS.Release 未及时取消句柄的在途预取")
 	}
 
-	// 4. 验证会话过期回调（onSessionExpired -> ReadAheadCoordinator.InvalidateSession）立即取消在途预取
-	const fh2 = uint64(12)
-	fs.PrepareTestFileHandle(t, nodeID, fh2, syscall.O_RDONLY)
-
-	prefetchStarted2 := make(chan struct{})
-	prefetchCanceled2 := make(chan error, 1)
-	var once2 sync.Once
-	client.mu.Lock()
-	client.onRead4MiB = func(ctx context.Context, offset uint64) {
-		if offset == chunkSize {
-			once2.Do(func() {
-				close(prefetchStarted2)
-				<-ctx.Done()
-				prefetchCanceled2 <- ctx.Err()
-			})
-		}
-	}
-	client.mu.Unlock()
-
-	_, st = readAtFh(fh2, 0, 64*1024)
-	require.Equal(t, fuse.OK, st)
-	_, st = readAtFh(fh2, 64*1024, 64*1024)
-	require.Equal(t, fuse.OK, st)
-
-	select {
-	case <-prefetchStarted2:
-	case <-time.After(2 * time.Second):
-		t.Fatal("等待 fh2 触发异步预取超时")
-	}
-
-	// 启动后台 renewLoop 并令下一次续约返回已过期时间，触发 onSessionExpired -> InvalidateSession
-	client.mu.Lock()
-	client.sessionExpire = true
-	client.mu.Unlock()
-	require.NoError(t, sessMgr.Start(context.Background()))
-	sessMgr.TriggerRenew()
-
-	select {
-	case cancelErr := <-prefetchCanceled2:
-		require.ErrorIs(t, cancelErr, context.Canceled)
-	case <-time.After(2 * time.Second):
-		t.Fatal("会话过期未及时通过 InvalidateSession 取消在途预取")
-	}
-
-	// 恢复新会话续约并验证 OnUnmount -> ReadAheadCoordinator.Clear 取消在途预取
-	client.mu.Lock()
-	client.sessionExpire = false
-	client.mu.Unlock()
-	_, err = sessMgr.AcquireSessionID(context.Background())
-	require.NoError(t, err)
-
+	// 4. 验证 OnUnmount -> ReadAheadCoordinator.Clear 取消在途预取
 	const fh3 = uint64(13)
 	fs.PrepareTestFileHandle(t, nodeID, fh3, syscall.O_RDONLY)
 

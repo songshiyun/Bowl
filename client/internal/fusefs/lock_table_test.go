@@ -30,7 +30,7 @@ func waitForQueuedWriter(t *testing.T, tryRead, unlock func() fuse.Status) {
 }
 
 func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1001})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1001})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2001, 11, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2001, 12, syscall.O_RDWR)
@@ -53,7 +53,7 @@ func TestLocalPOSIXLockConflictsWithoutRPC(t *testing.T) {
 }
 
 func TestLocalPOSIXLockRangesAndConversions(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)
@@ -83,7 +83,7 @@ func TestLocalPOSIXLockRangesAndConversions(t *testing.T) {
 }
 
 func TestLocalSetLkwWaitsAndWakes(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)
@@ -111,7 +111,7 @@ func TestLocalSetLkwWaitsAndWakes(t *testing.T) {
 }
 
 func TestWaitingWriterPreventsNewReadersFromOvertaking(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)
@@ -132,7 +132,7 @@ func TestWaitingWriterPreventsNewReadersFromOvertaking(t *testing.T) {
 }
 
 func TestLocalPOSIXDeadlockCycle(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)
@@ -161,7 +161,7 @@ func TestLocalPOSIXDeadlockCycle(t *testing.T) {
 }
 
 func TestLocalFlockNamespaceAndConversion(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 11, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 12, syscall.O_RDWR)
@@ -270,7 +270,7 @@ func startDeadlockWait(t *testing.T, fs *fusefs.RawFS, req func(owner, start uin
 }
 
 func TestLocalPOSIXThreeOwnerDeadlockCycle(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)
@@ -294,7 +294,7 @@ func TestLocalPOSIXThreeOwnerDeadlockCycle(t *testing.T) {
 }
 
 func TestReleaseWakesFlockWaiterAndFallbackOwner(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 11, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 12, syscall.O_RDWR)
@@ -322,7 +322,7 @@ func TestReleaseWakesFlockWaiterAndFallbackOwner(t *testing.T) {
 }
 
 func TestDeadlockGraphsDoNotMixLockNamespaces(t *testing.T) {
-	fs := fusefs.NewRawFS(nil, nil, fusefs.Config{RootIno: 1})
+	fs := fusefs.NewRawFS(nil, fusefs.Config{RootIno: 1})
 	t.Cleanup(fs.OnUnmount)
 	fs.PrepareTestFileHandle(t, 2, 1, syscall.O_RDWR)
 	fs.PrepareTestFileHandle(t, 2, 2, syscall.O_RDWR)

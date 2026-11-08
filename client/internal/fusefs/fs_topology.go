@@ -27,11 +27,12 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 
 	resp, err := fs.client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
 		Gid:       input.Gid,
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -71,12 +72,13 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 
 	resp, err := fs.client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
 		Gid:       input.Gid,
 		Rdev:      input.Rdev,
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -124,8 +126,9 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 	epoch := fs.cache.version()
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -176,13 +179,13 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		defer unlock()
 	}
 	open := child != 0 && fs.handles.IsOpen(child)
-	sid := fs.currentSession()
 	epoch := fs.cache.version()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
 		ParentIno:    parentIno,
 		Name:         []byte(name),
 		OpenInClient: &open,
-		SessionId:    sid,
+		DiskId:       fs.cfg.DiskID,
+		Epoch:        fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -199,7 +202,7 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		fs.cache.invalidateInode(child)
 	}
 	if open && inode != nil && inode.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(child, sid)
+		fs.markOrphan(child)
 	}
 	return fuse.OK
 }

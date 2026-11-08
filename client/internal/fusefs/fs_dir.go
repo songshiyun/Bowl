@@ -32,8 +32,7 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 
 // readDirEntries 获取完整目录流；超出容量的目录按页读取且不进入缓存。
 func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*storagev1.DirEntryPlus, fuse.Status) {
-	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, true)
-	if status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, true); status != fuse.OK {
 		return nil, status
 	}
 	if entries, ok := fs.cache.dir(input.NodeId); ok {
@@ -50,13 +49,16 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 	var entries []*storagev1.DirEntryPlus
 	for {
 		resp, err := fs.client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
-			Ino: ino, Offset: offset, Limit: 512, SessionId: optionalSession(sid),
+			Ino:    ino,
+			Offset: offset,
+			Limit:  512,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if fs.cache.version() != epoch {
 			return nil, fuse.Status(syscall.ESTALE)
 		}
 		if err != nil {
-			return nil, fs.ToStatusWithSession(err, cancel)
+			return nil, fs.ToStatus(err, cancel)
 		}
 		page := resp.Msg.GetEntries()
 		for _, e := range page {
@@ -136,8 +138,7 @@ func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fu
 func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, true)
-	if status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, true); status != fuse.OK {
 		return status
 	}
 	if _, removed := fs.handles.RemovedDir(input.NodeId); removed {
@@ -151,9 +152,13 @@ func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Stat
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 	_, err := fs.client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{
-		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
+		Ino:      ino,
+		Fh:       0,
+		Datasync: input.FsyncFlags&1 != 0,
+		DiskId:   fs.cfg.DiskID,
+		Epoch:    fs.cfg.Epoch,
 	}))
-	return fs.ToStatusWithSession(err, cancel)
+	return fs.ToStatus(err, cancel)
 }
 
 // ReleaseDir 只释放本地目录句柄。
@@ -166,7 +171,4 @@ func (fs *RawFS) ReleaseDir(input *fuse.ReleaseIn) {
 	}
 	fs.locks.ForgetHandle(input.Fh)
 	fs.handles.Release(input.Fh)
-	if fs.sessions != nil {
-		fs.sessions.UnbindHandle(input.Fh)
-	}
 }

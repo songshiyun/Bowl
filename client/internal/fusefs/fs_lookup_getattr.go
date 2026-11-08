@@ -26,7 +26,11 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: parentIno, Name: []byte(name), SessionId: fs.currentSession()}))
+	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		ParentIno: parentIno,
+		Name:      []byte(name),
+		DiskId:    fs.cfg.DiskID,
+	}))
 	if fs.cache.version() != epoch {
 		return cachedInode{}, fuse.Status(syscall.ESTALE)
 	}
@@ -62,7 +66,10 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
-	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: serverIno, SessionId: fs.currentSession()}))
+	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+		Ino:    serverIno,
+		DiskId: fs.cfg.DiskID,
+	}))
 	if fs.cache.version() != epoch {
 		return cachedInode{}, fuse.Status(syscall.ESTALE)
 	}
@@ -129,7 +136,8 @@ func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.Sta
 	defer cancelFunc()
 
 	resp, err := fs.client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{
-		Ino: ino, SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
