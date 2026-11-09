@@ -1,20 +1,20 @@
 # Bowl vs Drive9 (`mem9-ai/drive9`) 性能基准测试套件
 
-> 最新复跑：2026-11-06，Bowl `a253128`，Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹完全一致。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-09，Bowl `c6e884e`（`ecs.i5.xlarge` 本地 NVMe SSD `local_ssd_pro` 894 GiB），Drive9 参考版本 `b529a36f`。冷缓存与热缓存各 45 项微观/宏观负载完成，三组 SHA-256 与 SQLite 完整性指纹完全一致。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮相对 Drive9 默认模式（`interactive`）：冷缓存 `mkdir` 15.30x（`3,772.70` vs `246.57 ops/s`）、`rename` 32.18x（`3,080.29` vs `95.71 ops/s`）、`unlink` 29.77x（`2,920.27` vs `98.08 ops/s`）、顺序读 5.45x（`972.40` vs `178.27 MiB/s`）、`git clone` 加速 2.47x（`0.774s` vs `1.910s`）；热缓存 `readdir_large` 22.45x（`1,323,171.38` vs `58,925.85 ops/s`）、`go build` 加速 3.03x（`0.037s` vs `0.113s`）；`juicefs bench` 大文件写 `289.14 MiB/s`（1.42x）、大文件读 `1,440.70 MiB/s`（7.19x）、Stat `128,315.00 files/s`（6.65x）。
+本轮在双端 `drop_caches` 与服务端进程级隔离下，相对 Drive9 远端同步模式（`close-sync`）：`juicefs bench` 大文件写 `1.23x`（`805.15` vs `656.10 MiB/s`）、小文件写 `9.55x`（`791.80` vs `82.90 files/s`）、小文件读 `3.66x`（`1,049.30` vs `286.40 files/s`）、Stat `208.77x`（`93,674.30` vs `448.70 files/s`）；冷缓存 `sequential_read` `9.15x`（`487.53` vs `53.28 MiB/s`）、`mkdir` `2.92x`（`607.89` vs `208.11 ops/s`）、`rename` `7.64x`（`390.35` vs `51.10 ops/s`）、`unlink` `10.44x`（`349.17` vs `33.43 ops/s`）、`git clone` 加速 `1.28x`（`5.587s` vs `7.152s`）、`git diff` 加速 `10.86x`（`0.066s` vs `0.715s`）。相对 Drive9 默认模式（`interactive` 本地 Write-Back + Local Overlay）：冷缓存 `sequential_read` `7.89x`（`487.53` vs `61.75 MiB/s`）、`mkdir` `2.82x`、`rename` `4.58x`、`unlink` `3.89x`、`git status` 加速 `12.68x`、`git diff` 加速 `13.06x`；热缓存 `sequential_read` `14.62x`（`6,503.59` vs `444.84 MiB/s`）、`readdir_large` `14.42x`（`1,155,025.17` vs `80,105.10 ops/s`）、`go build` 加速 `1.47x`（`0.086s` vs `0.126s`）。
 
-本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机 VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
+本目录包含 **Bowl** 与 **[mem9-ai/drive9](https://github.com/mem9-ai/drive9)** 在阿里云硅谷地域（`us-west-1a`）双机本地 NVMe SSD VPC 私网环境下的一键自动化对比基准测试脚本、内置评测负载与实测报告。
 
 ## 1. 评测矩阵与测试套件
 
-在相同的 2 台 `ecs.c9i.xlarge`（4 vCPU / 8 GiB / 120 GiB `cloud_essd`）节点上，同时对比三组挂载模式：
+在相同的 2 台 `ecs.i5.xlarge`（4 vCPU / 32 GiB / 894 GiB 本地 NVMe SSD `local_ssd_pro` + 40 GiB `cloud_essd` 系统盘）节点上，按目标隔离服务端守护进程，对比三组挂载模式：
 
-1. **`bowl`**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，删除即时 `os.Remove` 回收，Checkpoint 与 Fork 以硬链接共享块；服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
-2. **`drive9_default`**：Drive9 默认模式（TiDB v8.5.5 + Drive9 Server Local S3，`--profile=coding-agent --durability=interactive --write-cache-size-mb=0`，启用本地 Write-Back 暂存、本地磁盘读缓存与 `.git`/构建目录 Local Overlay）。
+1. **`bowl`**：PostgreSQL 16 仅保存 `disks` 与 `commits` 控制面表（ADR-0032）；每个 `Disk` 由独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache，ADR-0030/0031）承载，保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef` 索引；文件数据落在本地 NVMe SSD 的 `packs/pack-<id>.pack` `64 MiB` Append-Only 封包文件中（`256 KiB` 逻辑块网格、常驻句柄池与 `64 MiB` 分片热块缓存，支持 `ExtendTail` 与无锁并发 `Read`）；常规写批次采用双缓冲 MPSC Group Commit 以 `pebble.NoSync` 异步提交 WAL，显式 `Fsync`/`FsyncDir` 执行双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData`）。
+2. **`drive9_default`**：Drive9 默认模式（TiDB v8.5.5 + Drive9 Server Local S3 均挂载于 Server 本地 NVMe SSD，`--profile=coding-agent --durability=interactive --write-cache-size-mb=0`，启用 Client 本地 NVMe SSD Write-Back 暂存、本地磁盘读缓存与 `.git`/构建目录 Local Overlay）。
 3. **`drive9_sync`**：Drive9 远端同步模式（`--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`，禁用 Local Overlay，对齐 `1.0s` 内核缓存与同步 `close`/`fsync` 落盘语义）。
 
-Bowl 客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
+Bowl 客户端采用无会话 `RawFS` 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。冷缓存每轮测量前同时清理 Client 与 Server 双端 OS 页缓存（`sync && echo 3 > /proc/sys/vm/drop_caches`）。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
 
 每组目标依次运行三大基准测试套件：
 

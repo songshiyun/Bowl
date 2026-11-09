@@ -1,14 +1,14 @@
 # Bowl `pjdfstest` 阿里云硅谷双机内网基准测试套件
 
-> 最新复跑：2026-11-06，Bowl `a253128`。完整结果见 [REPORT.md](REPORT.md)。
+> 最新复跑：2026-11-09，Bowl `c6e884e`（`ecs.i5.xlarge` 本地 NVMe SSD `local_ssd_pro` 894 GiB）。完整结果见 [REPORT.md](REPORT.md)。
 
-本轮在 17 个系统调用目录、238 个 `.t` 脚本、8,798 项 POSIX 断言中通过 `8,789 / 8,798`（通过率 `99.90%`，28 项 TODO 中 9 项预期失败）；全量执行耗时 `169.14s`，内网综合吞吐 `52.01 tests/s`。未通过的 9 项子测试（分布于 `chmod/02.t`、`chown/02.t`、`ftruncate/02.t`、`link/02.t`、`rename/01.t`、`rmdir/02.t`、`truncate/02.t`、`unlink/02.t`）均为 256 字节超长文件名边界断言（预期 `ENAMETOOLONG`，因 `29c2bc3` 引入 `completeDirs` 权威完整目录本地未命中短路提前返回 `ENOENT`）。
+本轮在 17 个系统调用目录、238 个 `.t` 脚本、8,798 项 POSIX 断言中通过 `8,789 / 8,798`（通过率 `99.90%`，28 项 TODO 中 9 项预期失败）；全量执行耗时 `171.50s`，内网综合吞吐 `51.30 tests/s`。未通过的 9 项子测试（分布于 `chmod/02.t`、`chown/02.t`、`ftruncate/02.t`、`link/02.t`、`rename/01.t`、`rmdir/02.t`、`truncate/02.t`、`unlink/02.t`）均为 256 字节超长文件名边界断言（预期 `ENAMETOOLONG`，因 `completeDirs` 权威完整目录本地未命中短路提前返回 `ENOENT`）。
 
-本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费云服务器（1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
+本目录包含基于阿里云 CLI（`aliyun`）在硅谷地域（`us-west-1`）自动拉起 2 台按量计费本地 NVMe SSD 云服务器（`ecs.i5.xlarge` × 2，1 台 `storage-service` 服务端节点 + 1 台 FUSE 客户端节点），在同可用区 VPC 私网下运行完整 [`pjdfstest`](https://github.com/pjd/pjdfstest) POSIX 兼容性与性能基准测试集的自动化脚本、实测原始数据及完整测试报告。
 
-被测版本采用 ADR-0029：PostgreSQL 16 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表。每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引；文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。服务端分支锁降为拓扑生命周期 `RLock`，常规读写按 inode 细粒度加锁，完整 1 MiB 块在 Inode 锁外并行落盘；`GetAttr`/`GetXattr`/`Readlink` 单键点查免 Snapshot；读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。FileHandle、FileLock、O_TMPFILE 和 O(1) 索引的 NamespaceCache 由客户端在内存中维护。
+被测版本采用 ADR-0030 / ADR-0031 / ADR-0032 单盘独立 Actor 存储引擎与 `64 MiB` Append-Only Pack 数据层：PostgreSQL 16 仅保存 `disks` 与 `commits` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + BlockIdx + Length + Flags`）；文件数据落在 `packs/pack-<id>.pack` 的 `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、常驻句柄池与 `64 MiB` 分片热块缓存，支持活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及已封口包自动回收。
 
-客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，避免 4 KiB 脏页回写与写前尺寸核对；保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。本套件为覆盖真实元数据路径，保持 `strictatime` 与 0 秒属性/目录项超时。
+客户端采用无会话 `RawFS` 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。本套件为覆盖真实元数据路径，保持 `strictatime` 与 0 秒属性/目录项超时，双端数据与构建工作目录全量挂载于 894 GiB 本地 NVMe SSD（`/mnt/nvme`）。
 
 ## 目录结构
 
@@ -39,7 +39,7 @@ bash benchmark/pjdfstest/run_benchmark.sh
 支持通过环境变量覆盖默认云资源参数：
 - `REGION_ID`（默认 `us-west-1`）
 - `ZONE_ID`（默认 `us-west-1a`）
-- `INSTANCE_TYPE`（默认 `ecs.c9i.xlarge`）
+- `INSTANCE_TYPE`（默认 `ecs.i5.xlarge`，配备 894 GiB 本地 NVMe SSD `local_ssd_pro`）
 - `KEEP_INSTANCES`（默认 `0` 测试完成后立即销毁实例；设为 `1` 可保留实例用于现场排查）
 
 ### 3. 基于已有日志重新生成报告

@@ -6,32 +6,40 @@
     "vpc_id": "vpc-rj9gjwyzzh4v0cn576fhu",
     "vswitch_id": "vsw-rj9rsvsgpihtsgxej6me5",
     "security_group_id": "sg-rj97ly79h6cp3mnfpo2q",
-    "instance_type": "ecs.c9i.xlarge",
+    "instance_type": "ecs.i5.xlarge",
     "image_id": "ubuntu_24_04_x64_20G_alibase_20261016.vhd",
     "system_disk_category": "cloud_essd",
-    "system_disk_size_gib": 120
+    "system_disk_size_gib": 40,
+    "data_disk_category": "local_ssd_pro (NVMe)",
+    "data_disk_size_gib": 894
   },
   "server_node": {
-    "instance_id": "i-rj93j7f2ntjd6mgs48eq",
+    "instance_id": "i-rj90x3rcwcyduv529x01",
     "public_ip": "47.77.203.99",
-    "private_ip": "172.16.1.251",
+    "private_ip": "172.16.1.199",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
-    "memory_gib": "7.4Gi",
+    "memory_gib": "30Gi",
     "kernel": "6.8.0-147-generic",
     "os_release": "Ubuntu 24.04.5 LTS",
     "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
     "tidb_version": "v8.5.5",
-    "disk_seq_write_mib_s": 162.54,
-    "disk_seq_read_mib_s": 177.47
+    "data_disk_device": "/dev/nvme1n1",
+    "data_disk_size_gib": 894,
+    "disk_seq_write_mib_s": 1998.05,
+    "disk_seq_read_mib_s": 3494.88,
+    "local_randwrite_4k_iops": 69933,
+    "local_randread_4k_iops": 699362,
+    "local_fsync_4k_iops": 50869,
+    "local_fsync_4k_p99_us": 63.6
   },
   "client_node": {
-    "instance_id": "i-rj93j7f2ntjd6mgs48er",
-    "public_ip": "47.251.52.212",
-    "private_ip": "172.16.1.250",
+    "instance_id": "i-rj90x3rcwcyduv529x02",
+    "public_ip": "43.110.149.71",
+    "private_ip": "172.16.1.198",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
-    "memory_gib": "7.4Gi",
+    "memory_gib": "30Gi",
     "kernel": "6.8.0-147-generic",
     "os_release": "Ubuntu 24.04.5 LTS",
     "fusermount_version": "fusermount3 version: 3.14.0",
@@ -40,31 +48,33 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.063/0.088/0.178/0.027 ms",
-    "iperf3_gbps": 15.71
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.038/0.080/0.276/0.060 ms",
+    "iperf3_gbps": 21.22
   },
   "server_disk_baseline": {
-    "local_seq_write_mib_s": 162.54,
-    "local_seq_read_mib_s": 177.47
+    "local_seq_write_mib_s": 1998.05,
+    "local_seq_read_mib_s": 3494.88,
+    "local_randwrite_4k_iops": 69933,
+    "local_randread_4k_iops": 699362,
+    "local_fsync_4k_iops": 50869,
+    "local_fsync_4k_p99_us": 63.6
   },
   "bowl_config": {
-    "git_commit": "a253128",
-    "storage_engine": "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
-    "blob_layout": "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
-    "blob_size_bytes": 1048576,
-    "blob_ref_bytes": 12,
+    "git_commit": "c6e884e",
+    "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef)",
+    "blob_layout": "packs/pack-<id>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 64 MiB 分片热块缓存 + ExtendTail)",
+    "blob_size_bytes": 262144,
+    "pack_max_bytes": 67108864,
+    "blob_ref_bytes": 16,
     "kernel_writeback_cache": false,
     "open_keep_cache": true,
     "handle_killpriv": true,
     "max_background": 64,
     "congestion_threshold": 48,
     "flush_issues_fsync_rpc": false,
-    "wal_sync_mode": "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
-    "branch_lock": "拓扑生命周期 RLock + 按 inode 细粒度锁",
-    "parallel_blob_write": "1 MiB 块在 Inode 锁外并行落盘",
-    "point_lookup_snapshot_free": true,
+    "wal_sync_mode": "pebble.NoSync Group Commit + Fsync/FsyncDir 双层并行落盘屏障 (fdatasync + LogData)",
+    "concurrency_model": "单盘独立 StoreActor 串行 Phase A 内存校验 + WriterEpoch 世代号栅栏 + 无锁并发 Read",
     "atime_mode": "noatime",
-    "atime_writeback": "内存延迟登记 + 1s 周期合并",
     "fuse_cache_timeout": "1.0s (entry=1s, attr=1s, direntry=1s)"
   },
   "drive9_config": {
@@ -73,11 +83,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9bench-kp-20261106-135325",
-    "server_instance_ids": "i-rj93j7f2ntjd6mgs48eq",
-    "client_instance_ids": "i-rj93j7f2ntjd6mgs48er",
-    "instances_created_at": "2026-11-06T13:53:52Z",
-    "instances_deleted_at": "2026-11-06T14:17:39Z",
+    "key_pair_name": "bowl-d9bench-kp-20261109-052701",
+    "server_instance_ids": "i-rj90x3rcwcyduv529x01",
+    "client_instance_ids": "i-rj90x3rcwcyduv529x02",
+    "instances_created_at": "2026-11-09T05:27:18Z",
+    "instances_deleted_at": "2026-11-09T05:55:16Z",
     "remaining_benchmark_instances": 0
   }
 }
