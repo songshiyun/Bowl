@@ -242,6 +242,7 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
 
     cloud = env_meta.get("cloud", {})
     server = env_meta.get("server_node", {})
+    disk_base = env_meta.get("server_disk_baseline", {})
     client = env_meta.get("client_node", {})
     net = env_meta.get("network_baseline", {})
     bowl_cfg = env_meta.get("bowl_config", {})
@@ -254,26 +255,27 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
     lines.append("")
     lines.append(
-        "被测版本采用 ADR-0029：PostgreSQL 仅保存 `disks`、`commits` 和 `client_sessions` 控制面表；"
-        "每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，"
-        "文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，"
-        "截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。"
-        "服务端把分支锁降为拓扑生命周期 `RLock`，常规读写按 inode 细粒度加锁，完整 1 MiB 块在 Inode 锁外并行落盘；"
-        "`GetAttr`/`GetXattr`/`Readlink` 单键点查免 Snapshot；读路径 atime 先登记内存并按 1 秒周期合并；"
-        "常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。"
+        "被测版本采用 ADR-0030 / ADR-0031 / ADR-0032 单盘独立 Actor 存储引擎与 `64 MiB` Append-Only Pack 数据层："
+        "PostgreSQL 16 仅保存单张 `disks` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
+        "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
+        "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），"
+        "DataKey 保存 16 字节 `BlobRef`（`PackID + BlockIdx + Length + Flags`）；"
+        "文件数据落在 `packs/pack-<id>.pack` 的 `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、"
+        "常驻句柄池与 `64 MiB` 分片热块缓存，支持活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、"
+        "`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及已封口包自动回收。"
     )
     lines.append("")
     lines.append(
-        "客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，避免 4 KiB 脏页回写与写前尺寸核对；"
-        "保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，"
+        "客户端采用无会话 `RawFS` 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，"
+        "保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，"
         "并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
-        "测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，以覆盖真实元数据路径。"
+        "测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，数据目录全程挂载于本地 NVMe SSD（`local_ssd_pro` 894 GiB）。"
     )
     lines.append("")
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
     lines.append(
-        "本报告记录了 **Bowl** 在阿里云硅谷地域（`us-west-1`）真实开启 2 台按量计费云服务器（1 台 `storage-service` + PostgreSQL 服务端节点，1 台 Linux FUSE 客户端节点），"
+        "本报告记录了 **Bowl** 在阿里云硅谷地域（`us-west-1`）真实开启 2 台按量计费本地 NVMe SSD 云服务器（`ecs.i5.xlarge` × 2，1 台 `storage-service` + PostgreSQL 服务端节点，1 台 Linux FUSE 客户端节点），"
         "在同可用区 VPC 私网下运行权威 POSIX 文件系统兼容性与基准测试集 **[pjdfstest](https://github.com/pjd/pjdfstest)** 的完整实测结果。"
     )
     lines.append("")
@@ -298,29 +300,35 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("")
     lines.append("### 2.1 双机云服务器配置（按量计费实测节点）")
     lines.append("")
-    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 系统盘 | 操作系统与内核 | VPC 私网 IP |")
-    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 数据盘 (本地 NVMe SSD) | 系统盘 | 操作系统与内核 | VPC 私网 IP |")
+    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
     lines.append(
         f"| **Server 服务端** (`bowl-bench-server`) | `{server.get('instance_id', '-')}` | `{cloud.get('instance_type', '-')}` | "
         f"{server.get('cpu_model', '-')} | {server.get('vcpu', '-')} vCPU / {server.get('memory_gib', '-')} | "
+        f"`{cloud.get('data_disk_category', 'local_ssd_pro')}` ({cloud.get('data_disk_size_gib', 894)} GiB `{server.get('data_disk_device', '/dev/nvme1n1')}`) | "
         f"`{cloud.get('system_disk_category', 'cloud_essd')}` ({cloud.get('system_disk_size_gib', 40)} GiB) | "
         f"{server.get('os_release', '-')} (`{server.get('kernel', '-')}`) | `{server.get('private_ip', '-')}:9000` |"
     )
     lines.append(
         f"| **Client 客户端** (`bowl-bench-client`) | `{client.get('instance_id', '-')}` | `{cloud.get('instance_type', '-')}` | "
         f"{client.get('cpu_model', '-')} | {client.get('vcpu', '-')} vCPU / {client.get('memory_gib', '-')} | "
+        f"`{cloud.get('data_disk_category', 'local_ssd_pro')}` ({cloud.get('data_disk_size_gib', 894)} GiB) | "
         f"`{cloud.get('system_disk_category', 'cloud_essd')}` ({cloud.get('system_disk_size_gib', 40)} GiB) | "
         f"{client.get('os_release', '-')} (`{client.get('kernel', '-')}`) | `{client.get('private_ip', '-')}` |"
     )
     lines.append("")
 
-    lines.append("### 2.2 同可用区 VPC 内网性能基线（Client <-> Server）")
+    lines.append("### 2.2 同可用区 VPC 内网与本地 NVMe SSD 性能基线")
     lines.append("")
-    lines.append("| 网络指标 | 实测数值 | 采集方式 |")
+    lines.append("| 指标 | 实测数值 | 采集方式 |")
     lines.append("| :--- | :--- | :--- |")
     lines.append(f"| **VPC ID / 交换机 ID** | `{cloud.get('vpc_id', '-')}` / `{cloud.get('vswitch_id', '-')}` | 阿里云 `{cloud.get('zone_id', 'us-west-1a')}` 私网网段 `{cloud.get('cidr_block', '172.16.1.0/24')}` |")
     lines.append(f"| **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `{net.get('ping_rtt_ms', '-')}` ms | `ping -c 20 -i 0.05 {server.get('private_ip', '')}` |")
     lines.append(f"| **内网单流 TCP 吞吐带宽** | `{net.get('iperf3_gbps', '-')}` Gbps | `iperf3 -c {server.get('private_ip', '')} -t 5` |")
+    if disk_base:
+        lines.append(f"| **Server 本地 NVMe SSD 4 MiB 顺序写 / 读基线** | `{disk_base.get('local_seq_write_mib_s', '-')}` / `{disk_base.get('local_seq_read_mib_s', '-')}` MiB/s | `fio --bs=4M --size=2G --direct=1` |")
+        lines.append(f"| **Server 本地 NVMe SSD 4 KiB 随机写 / 读 IOPS** | `{disk_base.get('local_randwrite_4k_iops', '-')}` / `{disk_base.get('local_randread_4k_iops', '-')}` IOPS | `fio --bs=4k --numjobs=4 --iodepth=32 --direct=1` |")
+        lines.append(f"| **Server 本地 NVMe SSD 4 KiB 单流 `fsync` 写** | `{disk_base.get('local_fsync_4k_iops', '-')}` IOPS (P99 `{disk_base.get('local_fsync_4k_p99_us', '-')}` µs) | `fio --bs=4k --numjobs=1 --direct=1 --fsync=1` |")
     lines.append("")
 
     lines.append("### 2.3 软件版本与挂载运行参数")
@@ -329,13 +337,13 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("| :--- | :--- | :--- |")
     lines.append(f"| **Bowl Git Commit** | `{bowl_cfg.get('bowl_git_commit', '-')}` | 仓库当前评测版本 |")
     lines.append(f"| **pjdfstest Git Commit** | `{bowl_cfg.get('pjdfstest_git_commit', '-')}` | 上游 `https://github.com/pjd/pjdfstest` |")
-    lines.append(f"| **PostgreSQL 版本** | `{server.get('pg_version', '-')}` | Server 节点控制面数据库 |")
+    lines.append(f"| **PostgreSQL 版本** | `{server.get('pg_version', '-')}` | Server 节点控制面数据库（单张 `disks` 表） |")
     lines.append(f"| **FUSE 用户态版本** | `{client.get('fusermount_version', '-')}` | Linux 内核 FUSE 协议 + `github.com/hanwen/go-fuse/v2` |")
     lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '-')}` |")
     lines.append(f"| **服务端 `STORAGE_ATIME_MODE`** | `{bowl_cfg.get('atime_mode', 'strictatime')}` | 开启严格访问时间更新，验证 `atime` 刷新语义 |")
     lines.append(f"| **FUSE 缓存超时配置** | `entry={bowl_cfg.get('entry_timeout', '0')}s, attr={bowl_cfg.get('attr_timeout', '0')}s, direntry={bowl_cfg.get('dir_entry_timeout', '0')}s` | 内核属性与目录项缓存超时；客户端 NamespaceCache 仍可命中 |")
-    lines.append(f"| **内核回写缓存与数据分片** | `writeback_cache={bowl_cfg.get('kernel_writeback_cache')}`, `keep_cache={bowl_cfg.get('open_keep_cache')}`, `max_background={bowl_cfg.get('max_background')}`, `blob={bowl_cfg.get('blob_size_bytes')}` 字节 | 1 MiB 直通写（无内核 writeback 聚合）；Flush 不触发 Fsync RPC，服务端写 1 MiB 不可变块文件 |")
-    lines.append(f"| **服务端 WAL 同步策略** | `{bowl_cfg.get('wal_sync_mode', '-')}` | 常规写批次异步提交，显式 Fsync/Sync 才写入持久化屏障 |")
+    lines.append(f"| **内核回写缓存与数据分片** | `writeback_cache={bowl_cfg.get('kernel_writeback_cache')}`, `keep_cache={bowl_cfg.get('open_keep_cache')}`, `max_background={bowl_cfg.get('max_background')}`, `block_grid={bowl_cfg.get('blob_size_bytes')}` 字节, `pack={bowl_cfg.get('pack_max_bytes', 67108864)}` 字节 | 1 MiB 直通写（无内核 writeback 聚合）；服务端写 64 MiB `.pack` 封包文件 |")
+    lines.append(f"| **服务端 WAL 与落盘策略** | `{bowl_cfg.get('wal_sync_mode', '-')}` | 常规写批次 Group Commit 异步提交，显式 Fsync/Sync 执行双层并行落盘屏障 |")
     lines.append(f"| **客户端挂载命令** | `bowl mount <disk_id> /mnt/bowl --endpoint http://{server.get('private_ip', '<server_ip>')}:9000 --allow-other` | 启用 `default_permissions` 与 `--allow-other` 支持多 UID/GID 权限切换测试 |")
     lines.append("")
 

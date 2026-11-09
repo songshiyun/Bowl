@@ -175,16 +175,16 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("三组目标的客户端缓存和写入确认条件不同；本次在同台机器上依次测试默认与同步模式：")
     lines.append("")
     lines.append(
-        "1. **Bowl (`bowl`)**：PostgreSQL 16 仅保存 `disks`、`commits`、`client_sessions` 控制面表；"
-        "每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，"
-        "文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，"
-        "删除即时 `os.Remove` 回收，Checkpoint 与 Fork 以硬链接共享块；服务端分支锁降为拓扑生命周期 `RLock`，"
-        "完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，读路径 atime 先登记内存再按 1 秒周期合并；"
-        "常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。"
-        "客户端采用 1 MiB Write-Through 直通写（禁用 `CAP_WRITEBACK_CACHE`）+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 "
-        "+ 写后 `AttrTimeout=1.0s` + `MaxBackground=64`；Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
+        "1. **Bowl (`bowl`)**：PostgreSQL 16 仅保存 `disks` 与 `commits` 控制面表（ADR-0032）；"
+        "每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎，ADR-0030/0031）承载，"
+        "保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；"
+        "文件数据追加写入 `blobs/<pack_id>.pack` 的 64 MiB 不可变 Pack 文件中（`1 MiB` 分块直写、局部写 CoW、Writev/Readv 聚散 I/O），"
+        "常规写批次以 `pebble.NoSync` 提交异步 WAL，后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`），"
+        "显式 `Fsync`/`Sync` 触发 Pack `fdatasync` + Pebble WAL `LogData(Sync)` 持久化屏障。"
+        "客户端挂载时执行单次 `MountDisk` 握手获取 `WriterEpoch`（无后台心跳），采用 1 MiB Write-Through 直通写（禁用 `CAP_WRITEBACK_CACHE`）"
+        "+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 + 写后 `AttrTimeout=1.0s` + `MaxBackground=64`。"
     )
-    lines.append("2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3，客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。")
+    lines.append("2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3（全部落于 Server 本地 NVMe SSD `/mnt/nvme`），客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 NVMe SSD Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地 NVMe 磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。")
     lines.append("3. **Drive9 远端同步模式 (`drive9_sync`)**：与 `drive9_default` 连接同台 Drive9 Server，但客户端挂载参数设为 `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`（禁用本地 Overlay，对齐 `1.0s` 内核缓存，并在每次 `close`/`fsync` 时同步提交至远端服务器）。")
     lines.append("")
 
@@ -333,23 +333,23 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("### 2.1 双机云服务器配置（按量计费实测节点）")
     lines.append("")
-    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 系统盘 | 操作系统与内核 | VPC 私网 IP |")
+    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 系统盘 + 本地数据盘 | 操作系统与内核 | VPC 私网 IP |")
     lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
     lines.append(
         f"| **Server 服务端** (`bowl-d9-server`) | `{srv.get('instance_id', '')}` | `{cloud.get('instance_type', '')}` | "
         f"{srv.get('cpu_model', '')} | {srv.get('vcpu', '')} vCPU / {srv.get('memory_gib', '')} | "
-        f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) | "
+        f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) + `{cloud.get('data_disk_category', 'local_ssd_pro')}` ({srv.get('data_disk_size_gib', cloud.get('data_disk_size_gib', 894))} GiB NVMe) | "
         f"{srv.get('os_release', '')} (`{srv.get('kernel', '')}`) | `{srv.get('private_ip', '')}` |"
     )
     lines.append(
         f"| **Client 客户端** (`bowl-d9-client`) | `{cli.get('instance_id', '')}` | `{cloud.get('instance_type', '')}` | "
         f"{cli.get('cpu_model', '')} | {cli.get('vcpu', '')} vCPU / {cli.get('memory_gib', '')} | "
-        f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) | "
+        f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) + `{cloud.get('data_disk_category', 'local_ssd_pro')}` ({cloud.get('data_disk_size_gib', 894)} GiB NVMe) | "
         f"{cli.get('os_release', '')} (`{cli.get('kernel', '')}`) | `{cli.get('private_ip', '')}` |"
     )
     lines.append("")
 
-    lines.append("### 2.2 同可用区 VPC 内网与 Server 节点云盘物理基线")
+    lines.append("### 2.2 同可用区 VPC 内网与 Server 节点本地 NVMe SSD 物理基线")
     lines.append("")
     lines.append("| 基线指标 | 实测数值 | 采集方式与说明 |")
     lines.append("| :--- | :--- | :--- |")
@@ -363,10 +363,16 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **内网单流 TCP 吞吐带宽** | `{net.get('iperf3_gbps', '')}` Gbps | `iperf3 -c {srv.get('private_ip', '')} -t 5` |"
     )
     lines.append(
-        f"| **Server 节点 `cloud_essd` (120 GiB) 本地顺序写基线** | `{disk_base.get('local_seq_write_mib_s', '')}` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |"
+        f"| **Server 节点本地 NVMe SSD (`{srv.get('data_disk_device', '/dev/nvme1n1')}`) 顺序写基线** | `{disk_base.get('local_seq_write_mib_s', '')}` MiB/s | `/mnt/nvme` `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |"
     )
     lines.append(
-        f"| **Server 节点 `cloud_essd` (120 GiB) 本地顺序读基线** | `{disk_base.get('local_seq_read_mib_s', '')}` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |"
+        f"| **Server 节点本地 NVMe SSD (`{srv.get('data_disk_device', '/dev/nvme1n1')}`) 顺序读基线** | `{disk_base.get('local_seq_read_mib_s', '')}` MiB/s | `/mnt/nvme` `fio --rw=read --bs=4M --size=2G --direct=1` |"
+    )
+    lines.append(
+        f"| **Server 节点本地 NVMe SSD 4K 随机写 / 随机读 IOPS** | `{disk_base.get('local_randwrite_4k_iops', '')}` / `{disk_base.get('local_randread_4k_iops', '')}` IOPS | `/mnt/nvme` `fio --rw=randwrite/randread --bs=4k --numjobs=4 --iodepth=32 --direct=1` |"
+    )
+    lines.append(
+        f"| **Server 节点本地 NVMe SSD 4K 同步写 (`fsync=1`)** | `{disk_base.get('local_fsync_4k_iops', '')}` IOPS (P99 `{disk_base.get('local_fsync_4k_p99_us', '')}` µs) | `/mnt/nvme` `fio --rw=write --bs=4k --iodepth=1 --direct=1 --fsync=1` |"
     )
     lines.append("")
 
@@ -378,19 +384,19 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **代码版本 (Git SHA)** | Bowl `{bowl_cfg.get('git_commit', '')}` | Drive9 `{d9_cfg.get('git_commit', '')}` | Drive9 `{d9_cfg.get('git_commit', '')}` |"
     )
     lines.append(
-        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / Pebble 分支存储 | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) |"
+        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / 每盘单写者 `StoreActor` (Pebble) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) |"
     )
     lines.append(
-        "| **服务端数据块引擎** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3`) |"
+        "| **服务端数据块引擎** | 每盘 `StoreActor` Pebble + `blobs/<pack_id>.pack` 64 MiB Pack 文件 (`/var/lib/bowl/data` -> `/mnt/nvme`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3` -> `/mnt/nvme`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3` -> `/mnt/nvme`) |"
     )
     lines.append(
-        "| **客户端挂载参数** | `bowl mount` (生产默认 `noatime`) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |"
+        "| **客户端挂载参数** | `bowl mount` (生产默认 `noatime`，单次 `MountDisk` 握手) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |"
     )
     lines.append(
-        "| **写入持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `CAP_HANDLE_KILLPRIV` 负缓存；`pebble.NoSync` 异步 WAL（后台 1 秒刷盘）；仅 Fsync/Sync 写入持久化屏障 | 客户端本地 SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
+        "| **写入持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `CAP_HANDLE_KILLPRIV` 负缓存；`pebble.NoSync` 异步 WAL（后台 1 秒刷盘）；显式 Fsync/Sync 触发 Pack `fdatasync` + WAL `LogData(Sync)` | 客户端本地 NVMe SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
     )
     lines.append(
-        "| **客户端读缓存与预读** | 无本地磁盘缓存；文件级顺序预读窗口（Sequential Read-Ahead） | 128 MiB 内存读缓存 + 1024 MiB 本地 SSD 读缓存 + 小文件整文件预取 | 128 MiB 内存读缓存 + 1024 MiB 本地 SSD 读缓存 + 小文件整文件预取 |"
+        "| **客户端读缓存与预读** | 无本地磁盘缓存；文件级顺序预读窗口（Sequential Read-Ahead） | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 |"
     )
     lines.append(
         "| **FUSE 内核属性/目录缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` | `attr=30s, entry=10s, dir=10s` + `.git`/构建目录 Local Overlay | `attr=1.0s, entry=1.0s, dir=1.0s`（禁用 Local Overlay） |"
@@ -683,12 +689,12 @@ def render_report(summary: dict[str, Any]) -> str:
             + verdict
         )
         lines.append("")
-    lines.append("冷缓存准备命令仅清理客户端内核页缓存；未重启 FUSE 进程、清理 Drive9 用户态或磁盘读缓存，也未清理服务端页缓存。因此本报告的 cold 表示该命令下的缓存状态，不能解释为完整远端冷读。")
+    lines.append("冷缓存准备命令同时清理 Client 与 Server 双端内核页缓存（`sync && echo 3 > /proc/sys/vm/drop_caches`），且各目标栈在 Server 端按进程隔离启停；但未在每轮内部重启 FUSE 进程或清空 Drive9 用户态内存缓存。因此本报告的 cold 表示双端 OS 页缓存清空下的冷状态。")
     lines.append("")
     lines.append("微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。")
     lines.append("")
 
-    lines.append('ADR-0029 同时改变服务端存储和客户端状态管理；单轮数据不能将变化归因于其中某一项。本套件未测试整机断电恢复。')
+    lines.append("ADR-0030/0031/0032 同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。")
     lines.append("")
 
     # Section 7: Cloud Resource Audit

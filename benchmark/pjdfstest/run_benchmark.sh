@@ -2,21 +2,17 @@
 # ==============================================================================
 # Bowl - Aliyun Silicon Valley (us-west-1) Dual-ECS Internal Network pjdfstest
 # ==============================================================================
-# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
-# 存储引擎：每个 (disk_id, branch_name) 独立 Pebble（常驻句柄池复用句柄与缓存），
-# DataKey 仅保存 12 字节 BlobRef 索引；文件数据落在 blobs/<shard>/<blob_id>.blob
-# 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后
-# os.Remove 即时回收旧块，Checkpoint/Fork 以硬链接共享块。
-# 服务端并发与持久化：分支锁收敛为拓扑生命周期 RLock，按 (disk,branch,ino) 的
-# 细粒度 inodeMu 串行元数据；完整 1 MiB 块在锁外并行落盘；GetAttr/GetXattr/
-# Readlink 单键点查免 Snapshot；读路径 atime 先登记内存、按 1 秒周期与持久化
-# 屏障合并；常规批次 pebble.NoSync 异步 WAL，后台 1 秒刷盘与 WALBytesPerSync
-# 4 MiB 兜底（MemTableSize 16 MiB）。
-# 客户端写入与缓存：1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
-# 避免 4 KiB 脏页回写与写前尺寸核对）+ FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV
-# 负缓存（写批次内清除 security.capability）+ 写后 AttrTimeout=1.0s +
-# MaxBackground=64 / CongestionThreshold=48。Flush 不触发跨机 Fsync RPC，
-# 仅显式 Fsync/Sync 请求服务端持久化屏障。
+# ADR-0030 / ADR-0031 / ADR-0032：
+# - 控制面：PostgreSQL 16 仅维护单张 disks 表；MountDisk 握手原子递增 WriterEpoch。
+# - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
+#   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
+#   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + BlockIdx + Length + Flags）。
+# - 数据层：BlobStore 采用扁平 64 MiB Append-Only .pack 封包文件、256 KiB 逻辑块网格、
+#   常驻句柄池与 64 MiB 分片热块缓存，支持活跃包末尾同块 ExtendTail 顺延扩展、无锁并发 Read、
+#   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及已封口包自动回收。
+# - 客户端：无会话 RawFS FUSE 客户端，1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
+#   保留 FOPEN_KEEP_CACHE，声明 CAP_HANDLE_KILLPRIV）+ NamespaceCache（含 completeDirs）+
+#   ReadAheadCoordinator 顺序预读 + TmpFileManager；Flush 不触发跨机 Fsync RPC。
 set -euo pipefail
 export GOWORK=off
 
@@ -25,13 +21,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 
-# Aliyun Configuration (Silicon Valley us-west-1a)
+# Aliyun Configuration (Silicon Valley us-west-1a, Local NVMe SSD ecs.i5.xlarge)
 REGION_ID="${REGION_ID:-us-west-1}"
 ZONE_ID="${ZONE_ID:-us-west-1a}"
 VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
 VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
 SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
-INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.c9i.xlarge}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.i5.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
 SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
 SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-40}"
@@ -256,25 +252,45 @@ elif [[ "${SERVER_OK}" == "0" && "${CLIENT_OK}" == "0" ]]; then
 fi
 
 # ==============================================================================
-# Step 3: Deploy Storage Service + PostgreSQL on Server Node
+# Step 3: Deploy Storage Service + PostgreSQL on Server Node (Local NVMe SSD)
 # ==============================================================================
-log "Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (${SERVER_PRIV_IP})..."
-ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data"
+log "Step 3/6: Mounting local NVMe SSD and deploying PostgreSQL, Goose migrations, and storage-service on Server (${SERVER_PRIV_IP})..."
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations"
 scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/storage-service" "${WORK_DIR}/goose" "root@${SERVER_SSH_HOST}:/usr/local/bin/"
 scp "${SERVER_SSH_OPTS[@]}" "${REPO_ROOT}"/services/storage/db/migrations/*.sql "root@${SERVER_SSH_HOST}:/opt/bowl/migrations/"
 
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
+
+# 1. Detect, format, and mount the 894 GiB local NVMe SSD (local_ssd_pro)
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Server!" >&2
+  lsblk >&2
+  exit 1
+fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
+mkdir -p /mnt/nvme/postgresql /mnt/nvme/bowl/data /var/lib/postgresql /var/lib/bowl
+mount --bind /mnt/nvme/postgresql /var/lib/postgresql
+mount --bind /mnt/nvme/bowl /var/lib/bowl
+
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq postgresql iperf3 jq
+apt-get install -y -qq postgresql iperf3 fio jq
 
 systemctl enable --now postgresql
 sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'bowl'" | grep -q 1 || \
   sudo -u postgres psql -c "CREATE DATABASE bowl;"
 sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '200';"
+sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '2GB';"
 systemctl restart postgresql
 
 /usr/local/bin/goose -dir /opt/bowl/migrations postgres "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable" up
@@ -301,7 +317,7 @@ Environment="LOG_LEVEL=warn"
 Environment="OTEL_ENABLED=false"
 ExecStart=/usr/local/bin/storage-service
 Restart=always
-LimitNOFILE=65536
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
@@ -322,16 +338,31 @@ ss -tln | grep -q ':9000 '
 pkill -f "iperf3 -s" || true
 iperf3 -s -D
 EOF
-log "Server node (${SERVER_PRIV_IP}:9000) is up and healthy."
+log "Server node (${SERVER_PRIV_IP}:9000) is up and healthy on local NVMe SSD."
 
 # ==============================================================================
 # Step 4: Deploy Bowl FUSE Client & Build pjdfstest on Client Node
 # ==============================================================================
-log "Step 4/6: Preparing Client (${CLIENT_PRIV_IP}), building pjdfstest, and mounting Bowl over VPC internal network..."
+log "Step 4/6: Preparing Client (${CLIENT_PRIV_IP}), mounting local NVMe SSD, building pjdfstest, and mounting Bowl over VPC internal network..."
 scp "${CLIENT_SSH_OPTS[@]}" "${WORK_DIR}/bowl" "root@${CLIENT_SSH_HOST}:/usr/local/bin/bowl"
 
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
+
+# Mount local NVMe SSD on Client
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Client!" >&2
+  lsblk >&2
+  exit 1
+fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
@@ -340,7 +371,9 @@ apt-get install -y -qq fuse3 libfuse3-dev iperf3 git build-essential autoconf au
 grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
 
 if [[ ! -x /opt/pjdfstest/pjdfstest ]]; then
-  rm -rf /opt/pjdfstest
+  rm -rf /opt/pjdfstest /mnt/nvme/pjdfstest
+  mkdir -p /mnt/nvme/pjdfstest /opt/pjdfstest
+  mount --bind /mnt/nvme/pjdfstest /opt/pjdfstest
   git clone --depth 1 https://github.com/pjd/pjdfstest.git /opt/pjdfstest
   cd /opt/pjdfstest
   autoreconf -ifs
@@ -350,9 +383,29 @@ if [[ ! -x /opt/pjdfstest/pjdfstest ]]; then
 fi
 EOF
 
-# Collect server & client metadata + internal VPC network baseline
-log "Measuring internal VPC RTT and throughput (${CLIENT_PRIV_IP} -> ${SERVER_PRIV_IP})..."
+# Collect server & client metadata + internal VPC network & NVMe baseline
+log "Measuring Server local NVMe SSD baseline and internal VPC RTT/throughput (${CLIENT_PRIV_IP} -> ${SERVER_PRIV_IP})..."
 SERVER_INFO_JSON="$(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
+set -euo pipefail
+mkdir -p /mnt/nvme/disk_bench
+WRITE_BW_BPS="$(fio --name=nvme-seq-w --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
+READ_BW_BPS="$(fio --name=nvme-seq-r --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --direct=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
+RANDW_IOPS="$(fio --name=nvme-rand-w --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.iops // 0')"
+RANDR_IOPS="$(fio --name=nvme-rand-r --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.iops // 0')"
+FSYNC_JSON="$(fio --name=nvme-fsync-w --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --output-format=json | sed -n '/^{/,$p')"
+FSYNC_IOPS="$(echo "${FSYNC_JSON}" | jq -r '.jobs[0].write.iops // 0')"
+FSYNC_P99_US="$(echo "${FSYNC_JSON}" | jq -r '((.jobs[0].sync.lat_ns.percentile["99.000000"] // 0) + (.jobs[0].write.clat_ns.percentile["99.000000"] // 0)) / 1000.0')"
+rm -rf /mnt/nvme/disk_bench
+
+WRITE_MIB="$(awk -v b="${WRITE_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+READ_MIB="$(awk -v b="${READ_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+RANDW_IOPS_FMT="$(awk -v v="${RANDW_IOPS}" 'BEGIN {printf "%.0f", v}')"
+RANDR_IOPS_FMT="$(awk -v v="${RANDR_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_IOPS_FMT="$(awk -v v="${FSYNC_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_P99_FMT="$(awk -v v="${FSYNC_P99_US}" 'BEGIN {printf "%.1f", v}')"
+
+NVME_DEV="$(cat /etc/bowl_nvme_dev)"
+NVME_SIZE_GIB="$(lsblk -dbno SIZE "${NVME_DEV}" | awk '{printf "%.0f", $1 / (1024*1024*1024)}')"
 CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
 VCPU="$(nproc)"
 MEM_GIB="$(awk '/MemTotal/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo)"
@@ -366,7 +419,25 @@ jq -n \
   --arg os "${OS_REL}" \
   --arg kernel "${KERNEL}" \
   --arg pg "${PG_VER}" \
-  '{cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg}'
+  --arg nvme_dev "${NVME_DEV}" \
+  --argjson nvme_gib "${NVME_SIZE_GIB}" \
+  --arg disk_w "${WRITE_MIB}" \
+  --arg disk_r "${READ_MIB}" \
+  --arg randw_iops "${RANDW_IOPS_FMT}" \
+  --arg randr_iops "${RANDR_IOPS_FMT}" \
+  --arg fsync_iops "${FSYNC_IOPS_FMT}" \
+  --arg fsync_p99_us "${FSYNC_P99_FMT}" \
+  '{
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, data_disk_device: $nvme_dev, data_disk_size_gib: $nvme_gib},
+    disk_baseline: {
+      local_seq_write_mib_s: ($disk_w|tonumber),
+      local_seq_read_mib_s: ($disk_r|tonumber),
+      local_randwrite_4k_iops: ($randw_iops|tonumber),
+      local_randread_4k_iops: ($randr_iops|tonumber),
+      local_fsync_4k_iops: ($fsync_iops|tonumber),
+      local_fsync_4k_p99_us: ($fsync_p99_us|tonumber)
+    }
+  }'
 EOF
 )"
 
@@ -567,30 +638,31 @@ jq -n \
       instance_charge_type: "PostPaid (按量计费)",
       image_id: $image_id,
       system_disk_category: $disk_cat,
-      system_disk_size_gib: $disk_size
+      system_disk_size_gib: $disk_size,
+      data_disk_category: "local_ssd_pro (NVMe)",
+      data_disk_size_gib: $srv.server.data_disk_size_gib
     },
-    server_node: ($srv + {instance_id: $server_id, private_ip: $server_priv_ip}),
+    server_node: ($srv.server + {instance_id: $server_id, private_ip: $server_priv_ip}),
+    server_disk_baseline: $srv.disk_baseline,
     client_node: ($cli.client + {instance_id: $client_id, private_ip: $client_priv_ip}),
     network_baseline: $cli.network,
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
-      storage_engine: "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
-      blob_layout: "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
-      blob_size_bytes: 1048576,
-      blob_ref_bytes: 12,
+      storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef)",
+      blob_layout: "packs/pack-<id>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 64 MiB 分片热块缓存 + ExtendTail)",
+      blob_size_bytes: 262144,
+      pack_max_bytes: 67108864,
+      blob_ref_bytes: 16,
       kernel_writeback_cache: false,
       open_keep_cache: true,
       handle_killpriv: true,
       max_background: 64,
       congestion_threshold: 48,
       flush_issues_fsync_rpc: false,
-      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
-      branch_lock: "拓扑生命周期 RLock + 按 inode 细粒度锁",
-      parallel_blob_write: "1 MiB 块在 Inode 锁外并行落盘",
-      point_lookup_snapshot_free: true,
+      wal_sync_mode: "pebble.NoSync Group Commit + Fsync/FsyncDir 双层并行落盘屏障 (fdatasync + LogData)",
+      concurrency_model: "单盘独立 StoreActor 串行 Phase A 内存校验 + WriterEpoch 世代号栅栏 + 无锁并发 Read",
       disk_size: "2PiB",
       atime_mode: "strictatime",
-      atime_writeback: "内存延迟登记 + 1s 周期合并",
       entry_timeout: "0",
       attr_timeout: "0",
       dir_entry_timeout: "0"
