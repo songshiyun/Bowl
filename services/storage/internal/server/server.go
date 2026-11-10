@@ -19,6 +19,17 @@ import (
 
 var _ storagev1connect.StorageServiceHandler = (*Server)(nil)
 
+const (
+	// HTTP2MaxReadFrameSize 为服务端 HTTP/2 接收帧大小上限 (1 MiB)。
+	HTTP2MaxReadFrameSize = 1 << 20
+
+	// HTTP2MaxReceiveBufferPerStream 为服务端单流 HTTP/2 接收流控窗口上限 (< 4 MiB)。
+	HTTP2MaxReceiveBufferPerStream = (4 << 20) - 1
+
+	// HTTP2MaxReceiveBufferPerConnection 为服务端单连接 HTTP/2 接收流控窗口上限 (< 4 MiB)。
+	HTTP2MaxReceiveBufferPerConnection = (4 << 20) - 1
+)
+
 // Server 封装并管理底层 HTTP 服务与 ConnectRPC 路由处理器。
 type Server struct {
 	storagev1connect.UnimplementedStorageServiceHandler
@@ -34,6 +45,11 @@ func (s *Server) Handler() http.Handler {
 		return s.httpServer.Handler
 	}
 	return nil
+}
+
+// HTTPServer 返回底层 HTTP 服务器实例。
+func (s *Server) HTTPServer() *http.Server {
+	return s.httpServer
 }
 
 // Control 返回持有的单盘控制面与 StoreActor 实例池管理器。
@@ -118,6 +134,11 @@ func New(p Params) (*Server, error) {
 	mux.Handle(path, handler)
 
 	httpServer := serverx.NewHTTPServer(p.Config.Addr(), mux, p.Config)
+	httpServer.HTTP2 = &http.HTTP2Config{
+		MaxReadFrameSize:              HTTP2MaxReadFrameSize,
+		MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,
+		MaxReceiveBufferPerConnection: HTTP2MaxReceiveBufferPerConnection,
+	}
 	srv.httpServer = httpServer
 
 	if p.Lifecycle != nil && p.Shutdowner != nil {

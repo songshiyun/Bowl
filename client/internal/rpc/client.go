@@ -24,6 +24,15 @@ const (
 
 	// EnvToken 为配置鉴权访问令牌的环境变量名。
 	EnvToken = "BOWL_TOKEN"
+
+	// HTTP2MaxReadFrameSize 为客户端 HTTP/2 接收帧大小上限 (1 MiB)。
+	HTTP2MaxReadFrameSize = 1 << 20
+
+	// HTTP2MaxReceiveBufferPerStream 为客户端单流 HTTP/2 接收流控窗口上限 (< 4 MiB)。
+	HTTP2MaxReceiveBufferPerStream = (4 << 20) - 1
+
+	// HTTP2MaxReceiveBufferPerConnection 为客户端单连接 HTTP/2 接收流控窗口上限 (< 4 MiB)。
+	HTTP2MaxReceiveBufferPerConnection = (4 << 20) - 1
 )
 
 // ClientConfig 定义 StorageServiceClient 的连接配置。
@@ -81,6 +90,41 @@ func ResolveToken(token string) string {
 	return strings.TrimSpace(os.Getenv(EnvToken))
 }
 
+// newHTTPTransport 根据已校验的 endpoint URL scheme 构建 h2c 或 TLS HTTP/2 Transport。
+func newHTTPTransport(endpoint string, tlsConfig *tls.Config) (*http.Transport, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+	}
+
+	h2Cfg := &http.HTTP2Config{
+		MaxReadFrameSize:              HTTP2MaxReadFrameSize,
+		MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,
+		MaxReceiveBufferPerConnection: HTTP2MaxReceiveBufferPerConnection,
+	}
+
+	if strings.EqualFold(u.Scheme, "http") {
+		// 明文 HTTP/2 (h2c) 并发多路复用传输
+		var protocols http.Protocols
+		protocols.SetUnencryptedHTTP2(true)
+		return &http.Transport{
+			Protocols: &protocols,
+			HTTP2:     h2Cfg,
+		}, nil
+	}
+
+	// 标准 TLS HTTP/2 传输
+	tlsTransport := &http.Transport{
+		Proxy:             http.ProxyFromEnvironment,
+		ForceAttemptHTTP2: true,
+		HTTP2:             h2Cfg,
+	}
+	if tlsConfig != nil {
+		tlsTransport.TLSClientConfig = tlsConfig
+	}
+	return tlsTransport, nil
+}
+
 // NewClientFromConfig 根据传入的 ClientConfig 构建 StorageServiceClient。
 // 支持 h2c (明文 HTTP/2) 与 HTTPS TLS 传输，并在 token 非空时注入 Bearer 鉴权头。
 // 底层 http.Client 不设置固定 Timeout，连接生命周期完全由 context.Context 控制。
@@ -94,37 +138,12 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		u, err := url.Parse(endpoint)
+		tr, err := newHTTPTransport(endpoint, cfg.TLSConfig)
 		if err != nil {
-			return nil, fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+			return nil, err
 		}
-
-		if strings.EqualFold(u.Scheme, "http") {
-			// 明文 HTTP/2 (h2c) 并发多路复用传输
-			var protocols http.Protocols
-			protocols.SetUnencryptedHTTP2(true)
-			h2cTransport := &http.Transport{
-				Protocols: &protocols,
-				// 协商 256 KiB 接收帧，降低大响应的帧处理开销。
-				HTTP2: &http.HTTP2Config{
-					MaxReadFrameSize: 256 * 1024,
-				},
-			}
-			httpClient = &http.Client{
-				Transport: h2cTransport,
-			}
-		} else {
-			// 标准 TLS HTTP/2 传输
-			tlsTransport := &http.Transport{
-				Proxy:             http.ProxyFromEnvironment,
-				ForceAttemptHTTP2: true,
-			}
-			if cfg.TLSConfig != nil {
-				tlsTransport.TLSClientConfig = cfg.TLSConfig
-			}
-			httpClient = &http.Client{
-				Transport: tlsTransport,
-			}
+		httpClient = &http.Client{
+			Transport: tr,
 		}
 	}
 

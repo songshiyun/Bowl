@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"crypto/tls"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,4 +87,29 @@ func TestResolveTokenEnvFallback(t *testing.T) {
 func TestResolveTokenEmptyWhenNeitherSet(t *testing.T) {
 	t.Setenv(EnvToken, "")
 	require.Empty(t, ResolveToken(""))
+}
+
+func TestNewHTTPTransportConfiguresHTTP2ForH2CAndTLS(t *testing.T) {
+	t.Run("http_h2c", func(t *testing.T) {
+		tr, err := newHTTPTransport("http://127.0.0.1:9000", nil)
+		require.NoError(t, err)
+		require.NotNil(t, tr.Protocols)
+		require.True(t, tr.Protocols.UnencryptedHTTP2())
+		require.NotNil(t, tr.HTTP2)
+		require.Equal(t, 1<<20, tr.HTTP2.MaxReadFrameSize)
+		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerStream)
+		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerConnection)
+	})
+
+	t.Run("https_tls", func(t *testing.T) {
+		tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
+		tr, err := newHTTPTransport("https://storage.bowl.internal:443", tlsCfg)
+		require.NoError(t, err)
+		require.True(t, tr.ForceAttemptHTTP2)
+		require.Same(t, tlsCfg, tr.TLSClientConfig)
+		require.NotNil(t, tr.HTTP2)
+		require.Equal(t, 1<<20, tr.HTTP2.MaxReadFrameSize)
+		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerStream)
+		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerConnection)
+	})
 }

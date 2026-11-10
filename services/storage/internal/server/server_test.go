@@ -1,12 +1,22 @@
 package server_test
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"net"
+	"net/http"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
+	"github.com/starsrc/bowl/services/storage/internal/config"
+	"github.com/starsrc/bowl/services/storage/internal/control"
+	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/server"
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
@@ -633,4 +643,107 @@ func TestEpochFencingAcrossWriteRPCs(t *testing.T) {
 			requireConnectError(t, tc.call(), connect.CodeFailedPrecondition, "EBUSY")
 		})
 	}
+}
+
+func TestServerHTTP2ConfigAndH2CLargeReadWrite(t *testing.T) {
+	pool, ctx := setupIsolatedTestDB(t, "srv_http2_cfg")
+	dbStore := db.NewStore(pool)
+	mgr := control.New(dbStore, control.WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close())
+	})
+
+	var srvCfg config.ServerConfig
+	srvCfg.ApplyDefaultPort(0)
+	srvCfg.ServerReadMaxBytes = config.DefaultServerReadMaxBytes
+
+	srv, err := server.New(server.Params{
+		Config:  srvCfg,
+		Control: mgr,
+	})
+	require.NoError(t, err)
+
+	httpSrv := srv.HTTPServer()
+	require.NotNil(t, httpSrv)
+	require.NotNil(t, httpSrv.HTTP2)
+	require.Equal(t, 1<<20, httpSrv.HTTP2.MaxReadFrameSize)
+	require.Equal(t, (4<<20)-1, httpSrv.HTTP2.MaxReceiveBufferPerStream)
+	require.Equal(t, (4<<20)-1, httpSrv.HTTP2.MaxReceiveBufferPerConnection)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- httpSrv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, httpSrv.Shutdown(shutCtx))
+		serveErr := <-serveErrCh
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			require.NoError(t, serveErr)
+		}
+	})
+
+	var protocols http.Protocols
+	protocols.SetUnencryptedHTTP2(true)
+	h2cClient := &http.Client{
+		Transport: &http.Transport{
+			Protocols: &protocols,
+			HTTP2: &http.HTTP2Config{
+				MaxReadFrameSize:              1 << 20,
+				MaxReceiveBufferPerStream:     (4 << 20) - 1,
+				MaxReceiveBufferPerConnection: (4 << 20) - 1,
+			},
+		},
+	}
+
+	client := storagev1connect.NewStorageServiceClient(h2cClient, "http://"+ln.Addr().String())
+
+	createDiskResp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "h2c-large-disk",
+		MaxBytes: 16 << 20,
+	}))
+	require.NoError(t, err)
+	diskID := createDiskResp.Msg.GetDisk().GetDiskId()
+
+	mountResp, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: false,
+	}))
+	require.NoError(t, err)
+	epoch := mountResp.Msg.GetEpoch()
+
+	createResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		ParentIno: 1,
+		Name:      []byte("large.bin"),
+		Mode:      0o644,
+		DiskId:    diskID,
+		Epoch:     epoch,
+	}))
+	require.NoError(t, err)
+	fileIno := createResp.Msg.GetInode().GetIno()
+
+	payload := bytes.Repeat([]byte{0x5a, 0xa5, 0x3c, 0xc3}, (1<<20)/4) // 1 MiB
+	writeResp, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		Ino:    fileIno,
+		Fh:     1,
+		Offset: 0,
+		Data:   payload,
+		DiskId: diskID,
+		Epoch:  epoch,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, uint32(len(payload)), writeResp.Msg.GetSize())
+
+	readResp, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		Ino:    fileIno,
+		Fh:     1,
+		Offset: 0,
+		Size:   uint32(len(payload)),
+		DiskId: diskID,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, payload, readResp.Msg.GetData())
 }
