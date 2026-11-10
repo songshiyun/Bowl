@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/bloom"
+	"github.com/cockroachdb/pebble/v2/vfs"
 )
 
 // Pebble 初始化与批次重置阈值常量（ADR-0030 §2.2 & §2.5）。
@@ -26,6 +28,9 @@ const (
 
 	BatchResetMaxReprBytes = 1 << 20 // 1 MiB
 	BatchResetMaxCount     = 8192
+
+	defaultSlowTickThreshold    = 20 * time.Millisecond
+	staleEpochLogRateLimitNanos = int64(time.Second)
 )
 
 // pebbleReader 抽象 *pebble.DB 与 *pebble.Batch 的共享只读接口。
@@ -63,6 +68,59 @@ const (
 	opCompactReap
 )
 
+func (op opKind) String() string {
+	switch op {
+	case opNoop:
+		return "noop"
+	case opMknod:
+		return "mknod"
+	case opMkdir:
+		return "mkdir"
+	case opCreate:
+		return "create"
+	case opSymlink:
+		return "symlink"
+	case opLink:
+		return "link"
+	case opUnlink:
+		return "unlink"
+	case opRmdir:
+		return "rmdir"
+	case opRename:
+		return "rename"
+	case opSetAttr:
+		return "setattr"
+	case opSetXattr:
+		return "setxattr"
+	case opRemoveXattr:
+		return "removexattr"
+	case opWrite:
+		return "write"
+	case opFallocate:
+		return "fallocate"
+	case opFsync:
+		return "fsync"
+	case opFsyncDir:
+		return "fsyncdir"
+	case opPurgeOrphan:
+		return "purge_orphan"
+	case opCleanOrphans:
+		return "clean_orphans"
+	case opAdvanceEpoch:
+		return "advance_epoch"
+	case opUpdateMaxBytes:
+		return "update_max_bytes"
+	case opCompactSelect:
+		return "compact_select"
+	case opCompactRelocate:
+		return "compact_relocate"
+	case opCompactReap:
+		return "compact_reap"
+	default:
+		return "unknown"
+	}
+}
+
 // writeCmd 是投递至 StoreActor 双缓冲 MPSC 队列的命令载体（由 sync.Pool 复用）。
 type writeCmd struct {
 	op   opKind
@@ -70,6 +128,7 @@ type writeCmd struct {
 	err  error
 	done chan struct{} // 容量为 1 的完成信号
 
+	enqueueAt   time.Time
 	epoch       uint64
 	syncBarrier bool
 	syncIno     uint64
@@ -86,6 +145,13 @@ type Options struct {
 	AtimeMode AtimeMode
 	Cache     *pebble.Cache
 	Now       func() time.Time
+	Logger    *slog.Logger
+	Metrics   *Metrics
+
+	// 包内单测注入钩子（生产路径留零值）。
+	pebbleFS          vfs.FS
+	diskSlowThreshold time.Duration
+	slowTickThreshold time.Duration
 }
 
 // NewPebbleOptions 构建符合 ADR-0030 §2.2 规范的 *pebble.Options：
@@ -123,13 +189,17 @@ func NewPebbleOptions(cache *pebble.Cache, readOnly bool) *pebble.Options {
 //
 //nolint:revive // exported: StoreActor 为 ADR-0030 与领域词汇表锁定的核心实体名称。
 type StoreActor struct {
-	dir        string
-	diskID     string
-	readOnly   bool
-	atimeMode  AtimeMode
-	now        func() time.Time
-	db         *pebble.DB
-	ownedCache *pebble.Cache
+	dir            string
+	diskID         string
+	readOnly       bool
+	atimeMode      AtimeMode
+	now            func() time.Time
+	logger         *slog.Logger
+	metrics        *Metrics
+	db             *pebble.DB
+	pebbleListener *pebble.EventListener
+	fsCloser       io.Closer
+	ownedCache     *pebble.Cache
 
 	maxBytes  atomic.Uint64
 	maxInodes atomic.Uint64
@@ -145,22 +215,34 @@ type StoreActor struct {
 	cmdPool sync.Pool
 
 	// 2. Actor 写协程私有状态（仅在单协程 Loop 内无锁读写）
-	batch            *pebble.Batch
-	stat             BranchStat
-	packStats        map[uint64]PackMeta
-	dirtyPackStats   map[uint64]struct{}
-	lastActivePackID uint64
-	nextIno          uint64
-	reservedIno      uint64
-	walDirty         atomic.Bool
-	tickCount        atomic.Uint64
-	batchResetCnt    atomic.Uint64
+	batch                  *pebble.Batch
+	stat                   BranchStat
+	packStats              map[uint64]PackMeta
+	dirtyPackStats         map[uint64]struct{}
+	totalPackPhysicalBytes uint64
+	totalPackLiveBytes     uint64
+	lowWatermarkCount      int
+	lastActivePackID       uint64
+	nextIno                uint64
+	reservedIno            uint64
+	walDirty               atomic.Bool
+	tickCount              atomic.Uint64
+	batchResetCnt          atomic.Uint64
 
-	// 3. 并发读路径无锁镜像（每次 Batch 提交后刷新）
-	atomicLogicalBytes   atomic.Uint64
-	atomicInodes         atomic.Uint64
-	atomicWriterEpoch    atomic.Uint64
-	pendingEpochAdvances atomic.Int32
+	// 3. 并发读路径与监控快照无锁镜像（每次 Batch 提交后刷新）
+	atomicLogicalBytes      atomic.Uint64
+	atomicInodes            atomic.Uint64
+	atomicWriterEpoch       atomic.Uint64
+	atomicPackPhysicalBytes atomic.Uint64
+	atomicPackLiveBytes     atomic.Uint64
+	atomicLowWatermarkPacks atomic.Int64
+	atomicPendingDeadPacks  atomic.Int64
+	pebbleStallCount        atomic.Int64
+	pendingEpochAdvances    atomic.Int32
+
+	lastStaleEpochLogNano   atomic.Int64
+	suppressedStaleEpochLog atomic.Uint64
+	slowTickThreshold       time.Duration
 
 	// 4. 延迟 Atime 内存脏表（读路径登记/叠加，写循环或关闭时合并刷盘）
 	atimeMu    sync.Mutex
@@ -197,6 +279,14 @@ func Open(opts Options) (*StoreActor, error) {
 	if nowFn == nil {
 		nowFn = time.Now
 	}
+	baseLogger := opts.Logger
+	if baseLogger == nil {
+		baseLogger = slog.Default()
+	}
+	slowTickThresh := opts.slowTickThreshold
+	if slowTickThresh <= 0 {
+		slowTickThresh = defaultSlowTickThreshold
+	}
 
 	var ownedCache *pebble.Cache
 	cache := opts.Cache
@@ -214,28 +304,21 @@ func Open(opts Options) (*StoreActor, error) {
 		}
 	}
 
-	pebbleOpts := NewPebbleOptions(cache, opts.ReadOnly)
-	db, err := pebble.Open(opts.Dir, pebbleOpts)
-	if err != nil {
-		if ownedCache != nil {
-			ownedCache.Unref()
-		}
-		return nil, err
-	}
-
 	s := &StoreActor{
-		dir:            opts.Dir,
-		diskID:         opts.DiskID,
-		readOnly:       opts.ReadOnly,
-		atimeMode:      opts.AtimeMode,
-		now:            nowFn,
-		db:             db,
-		ownedCache:     ownedCache,
-		packStats:      make(map[uint64]PackMeta),
-		dirtyPackStats: make(map[uint64]struct{}),
-		dirtyAtime:     make(map[uint64]int64),
-		loopDone:       make(chan struct{}),
-		inFlightPacks:  make(map[uint64]int),
+		dir:               opts.Dir,
+		diskID:            opts.DiskID,
+		readOnly:          opts.ReadOnly,
+		atimeMode:         opts.AtimeMode,
+		now:               nowFn,
+		logger:            baseLogger.With("component", "store", "disk_id", opts.DiskID),
+		metrics:           opts.Metrics,
+		ownedCache:        ownedCache,
+		packStats:         make(map[uint64]PackMeta),
+		dirtyPackStats:    make(map[uint64]struct{}),
+		dirtyAtime:        make(map[uint64]int64),
+		loopDone:          make(chan struct{}),
+		inFlightPacks:     make(map[uint64]int),
+		slowTickThreshold: slowTickThresh,
 	}
 	s.maxBytes.Store(opts.MaxBytes)
 	s.maxInodes.Store(opts.MaxInodes)
@@ -246,24 +329,55 @@ func Open(opts Options) (*StoreActor, error) {
 		}
 	}
 
+	pebbleOpts := NewPebbleOptions(cache, opts.ReadOnly)
+	if opts.pebbleFS != nil {
+		pebbleOpts.FS = opts.pebbleFS
+	}
+	fsCloser := s.configurePebbleObservability(pebbleOpts, baseLogger, opts.diskSlowThreshold)
+
+	db, err := pebble.Open(opts.Dir, pebbleOpts)
+	if err != nil {
+		if fsCloser != nil {
+			_ = fsCloser.Close()
+		}
+		if ownedCache != nil {
+			ownedCache.Unref()
+		}
+		return nil, err
+	}
+	s.db = db
+	s.fsCloser = fsCloser
+
 	if err := s.initOrLoadState(); err != nil {
 		_ = db.Close()
+		if fsCloser != nil {
+			_ = fsCloser.Close()
+		}
 		if ownedCache != nil {
 			ownedCache.Unref()
 		}
 		return nil, err
 	}
 
-	s.blobs = NewBlobStore(s.dir)
+	s.blobs = newBlobStore(
+		s.dir,
+		baseLogger.With("component", "blobstore", "disk_id", opts.DiskID),
+		opts.Metrics,
+	)
 
 	if err := s.syncPackStatsWithBlobs(); err != nil {
 		_ = s.blobs.Close()
 		_ = db.Close()
+		if fsCloser != nil {
+			_ = fsCloser.Close()
+		}
 		if ownedCache != nil {
 			ownedCache.Unref()
 		}
 		return nil, err
 	}
+
+	s.publishAtomicStats()
 
 	if s.readOnly {
 		close(s.loopDone)
@@ -398,6 +512,7 @@ func (s *StoreActor) WriterEpoch() uint64 { return s.atomicWriterEpoch.Load() }
 type advanceEpochOp struct {
 	plans    []inodeReclaimPlan
 	root     Inode
+	oldEpoch uint64
 	epoch    uint64
 	rootAttr Attribute
 }
@@ -417,6 +532,13 @@ func (s *StoreActor) AdvanceEpoch() (uint64, Attribute, error) {
 	cmd.req = op
 	if err := s.submit(cmd); err != nil {
 		return 0, Attribute{}, err
+	}
+	if s.logger != nil {
+		s.logger.Info("writer epoch advanced",
+			"old_epoch", op.oldEpoch,
+			"new_epoch", op.epoch,
+			"reclaimed_orphans", len(op.plans),
+		)
 	}
 	return op.epoch, op.rootAttr, nil
 }
@@ -441,6 +563,7 @@ func (s *StoreActor) validateAdvanceEpochCmd(cmd *writeCmd) error {
 
 func (s *StoreActor) mutateAdvanceEpochCmd(cmd *writeCmd) {
 	op, _ := cmd.req.(*advanceEpochOp)
+	op.oldEpoch = s.stat.WriterEpoch
 	s.stat.WriterEpoch++
 	if len(op.plans) > 0 {
 		s.stat.NextWriteSeq++
@@ -662,11 +785,27 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.op = 0
 	cmd.req = nil
 	cmd.err = nil
+	cmd.enqueueAt = time.Time{}
 	cmd.epoch = 0
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
 	cmd.stagedBlobs = cmd.stagedBlobs[:0]
 	s.cmdPool.Put(cmd)
+}
+
+func (s *StoreActor) lockInode(ino uint64) *sync.Mutex {
+	mu := &s.inodeLocks[ino&0xfff]
+	if mu.TryLock() {
+		return mu
+	}
+	if s.metrics != nil {
+		start := time.Now()
+		mu.Lock()
+		s.metrics.observeInodeLockWait(time.Since(start))
+		return mu
+	}
+	mu.Lock()
+	return mu
 }
 
 func resolveEpoch(epoch []uint64) uint64 {
@@ -711,6 +850,9 @@ func (s *StoreActor) submit(cmd *writeCmd) error {
 }
 
 func (s *StoreActor) enqueueAndWait(cmd *writeCmd) error {
+	if s.metrics != nil {
+		cmd.enqueueAt = time.Now()
+	}
 	s.mb.mu.Lock()
 	if s.mb.closed {
 		s.mb.mu.Unlock()
@@ -814,7 +956,17 @@ func (s *StoreActor) processTick() {
 	if s.beforeTickHook != nil {
 		s.beforeTickHook()
 	}
+	tickStart := time.Now()
 	cmds := s.mb.draining
+	batchSize := len(cmds)
+	if s.metrics != nil {
+		s.metrics.observeTickBatchSize(batchSize)
+		for _, cmd := range cmds {
+			if !cmd.enqueueAt.IsZero() {
+				s.metrics.observeQueueWait(tickStart.Sub(cmd.enqueueAt))
+			}
+		}
+	}
 
 	var (
 		hasSyncBarrier  bool
@@ -859,8 +1011,12 @@ func (s *StoreActor) processTick() {
 
 	// Step 3：批次收敛与合并提交（Seal & Commit）
 	var (
-		commitErr error
-		deadPacks []uint64
+		commitErr      error
+		deadPacks      []uint64
+		packSyncDur    time.Duration
+		walApplyDur    time.Duration
+		deadRemoveDur  time.Duration
+		reclaimedPacks int
 	)
 	if mutated || s.batch.Count() > 0 || hasSyncBarrier || len(s.dirtyPackStats) > 0 {
 		// 顺带将内存 dirtyAtime 与 dirtyPackStats 合入当前批次
@@ -875,23 +1031,27 @@ func (s *StoreActor) processTick() {
 		// 批次末尾仅写 1 次 "sys:stat"
 		BatchSetStatDeferred(s.batch, s.stat)
 	}
+	validateMutateDur := time.Since(tickStart)
+	s.metrics.observePhaseValidateMutate(validateMutateDur)
+
 	if s.batch.Count() > 0 {
 		if hasSyncBarrier {
-			commitErr = s.commitWithSyncBarrier(fsyncFileInodes, deadPacks)
+			packSyncDur, walApplyDur, deadRemoveDur, reclaimedPacks, commitErr = s.commitWithSyncBarrier(fsyncFileInodes, deadPacks)
 		} else {
+			applyStart := time.Now()
 			commitErr = s.db.Apply(s.batch, pebble.NoSync)
+			walApplyDur = time.Since(applyStart)
+			s.metrics.observePhaseWALApplyNoSync(walApplyDur)
 			if commitErr == nil {
 				s.addPendingDeadPacks(deadPacks)
 				s.walDirty.Store(true)
 			}
 		}
 		if commitErr == nil {
-			s.atomicLogicalBytes.Store(s.stat.LogicalBytes)
-			s.atomicInodes.Store(s.stat.Inodes)
-			s.atomicWriterEpoch.Store(s.stat.WriterEpoch)
+			s.publishAtomicStats()
 		}
 	} else if hasSyncBarrier {
-		commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
+		packSyncDur, walApplyDur, deadRemoveDur, reclaimedPacks, commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
 	}
 
 	s.tickCount.Add(1)
@@ -911,6 +1071,21 @@ func (s *StoreActor) processTick() {
 		cmds[i] = nil
 		cmd.done <- struct{}{}
 	}
+
+	totalDur := time.Since(tickStart)
+	if s.slowTickThreshold > 0 && totalDur > s.slowTickThreshold && s.logger != nil {
+		s.logger.Warn("slow actor tick",
+			"batch_size", batchSize,
+			"has_sync_barrier", hasSyncBarrier,
+			"fsync_inodes", len(fsyncFileInodes),
+			"reclaimed_packs", reclaimedPacks,
+			"total_ms", totalDur.Milliseconds(),
+			"validate_mutate_ms", validateMutateDur.Milliseconds(),
+			"pack_sync_ms", packSyncDur.Milliseconds(),
+			"wal_apply_ms", walApplyDur.Milliseconds(),
+			"dead_pack_remove_ms", deadRemoveDur.Milliseconds(),
+		)
+	}
 }
 
 func isExternalWriteOp(op opKind) bool {
@@ -927,8 +1102,31 @@ func isExternalWriteOp(op opKind) bool {
 	}
 }
 
+func (s *StoreActor) logStaleEpochFenced(op opKind, reqEpoch, curEpoch uint64) {
+	if s.logger == nil {
+		return
+	}
+	nowNano := time.Now().UnixNano()
+	prev := s.lastStaleEpochLogNano.Load()
+	if prev == 0 || nowNano-prev >= staleEpochLogRateLimitNanos {
+		if s.lastStaleEpochLogNano.CompareAndSwap(prev, nowNano) {
+			suppressed := s.suppressedStaleEpochLog.Swap(0)
+			s.logger.Warn("stale writer epoch fenced",
+				"op", op.String(),
+				"req_epoch", reqEpoch,
+				"current_epoch", curEpoch,
+				"suppressed", suppressed,
+			)
+			return
+		}
+	}
+	s.suppressedStaleEpochLog.Add(1)
+}
+
 func (s *StoreActor) validateCmd(cmd *writeCmd) error {
 	if isExternalWriteOp(cmd.op) && cmd.epoch != s.stat.WriterEpoch {
+		s.metrics.incEpochFenced()
+		s.logStaleEpochFenced(cmd.op, cmd.epoch, s.stat.WriterEpoch)
 		return ErrStaleEpoch
 	}
 	switch cmd.op {
@@ -1014,15 +1212,31 @@ func (s *StoreActor) mutateCmd(cmd *writeCmd) {
 	}
 }
 
-func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) error {
+func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) (packSyncDur, walSyncDur, deadRemoveDur time.Duration, reclaimed int, err error) {
 	toReclaim := s.takePendingDeadPacks()
-	if err := s.db.ApplyNoSyncWait(s.batch, pebble.Sync); err != nil {
+	applyStart := time.Now()
+	if applyErr := s.db.ApplyNoSyncWait(s.batch, pebble.Sync); applyErr != nil {
+		walSyncDur = time.Since(applyStart)
+		s.metrics.observePhaseWALApplySync(walSyncDur)
 		s.restorePendingDeadPacks(toReclaim)
-		return err
+		return 0, walSyncDur, 0, 0, applyErr
 	}
+	applyDur := time.Since(applyStart)
+
 	toReclaim = append(toReclaim, deadPacks...)
-	dataErr := s.syncFileInodes(fsyncFileInodes)
+	var dataErr error
+	if len(fsyncFileInodes) > 0 {
+		packStart := time.Now()
+		dataErr = s.syncFileInodes(fsyncFileInodes)
+		packSyncDur = time.Since(packStart)
+		s.metrics.observePhasePackSyncBarrier(packSyncDur)
+	}
+
+	waitStart := time.Now()
 	walErr := s.batch.SyncWait()
+	walSyncDur = applyDur + time.Since(waitStart)
+	s.metrics.observePhaseWALApplySync(walSyncDur)
+
 	if walErr != nil {
 		s.restorePendingDeadPacks(toReclaim)
 		s.walDirty.Store(true)
@@ -1030,15 +1244,36 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 		if dataErr == nil {
 			s.walDirty.Store(false)
 		}
-		s.removePacks(toReclaim)
+		if len(toReclaim) > 0 {
+			remStart := time.Now()
+			s.removePacks(toReclaim)
+			deadRemoveDur = time.Since(remStart)
+			reclaimed = len(toReclaim)
+			s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
+		}
 	}
-	return errors.Join(dataErr, walErr)
+	return packSyncDur, walSyncDur, deadRemoveDur, reclaimed, errors.Join(dataErr, walErr)
 }
 
-func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) error {
-	dataErr := s.syncFileInodes(fsyncFileInodes)
-	walErr := s.syncWALAndReclaimDeadPacks()
-	return errors.Join(dataErr, walErr)
+func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) (packSyncDur, walSyncDur, deadRemoveDur time.Duration, reclaimed int, err error) {
+	var dataErr error
+	if len(fsyncFileInodes) > 0 {
+		packStart := time.Now()
+		dataErr = s.syncFileInodes(fsyncFileInodes)
+		packSyncDur = time.Since(packStart)
+		s.metrics.observePhasePackSyncBarrier(packSyncDur)
+	}
+	didWALSync, walDur, reclaimedCnt, remDur, walErr := s.syncWALAndReclaimDeadPacksTimed()
+	if didWALSync {
+		walSyncDur = walDur
+		s.metrics.observePhaseWALApplySync(walSyncDur)
+	}
+	if reclaimedCnt > 0 {
+		deadRemoveDur = remDur
+		reclaimed = reclaimedCnt
+		s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
+	}
+	return packSyncDur, walSyncDur, deadRemoveDur, reclaimed, errors.Join(dataErr, walErr)
 }
 
 func (s *StoreActor) takeDirtyAtime() map[uint64]int64 {
@@ -1085,6 +1320,7 @@ func (s *StoreActor) flushOnClose() error {
 		if applyErr == nil {
 			s.addPendingDeadPacks(deadPacks)
 			s.walDirty.Store(true)
+			s.publishAtomicStats()
 		}
 	}
 	if applyErr != nil {
@@ -1124,13 +1360,18 @@ func (s *StoreActor) closeInternal(discard bool) error {
 		// Step 2 — 排空已入队写批次并等待 Actor 协程退出
 		<-s.loopDone
 
-		// Step 3 — 排空在途直读并安全关闭 Pebble 与常驻 .pack 文件句柄
+		// Step 3 — 排空在途直读并安全关闭 Pebble、健康检测包装与常驻 .pack 文件句柄
 		s.lifecycleMu.Lock()
 		if s.batch != nil {
 			_ = s.batch.Close()
 			s.batch = nil
 		}
 		dbErr := s.db.Close()
+		var fsErr error
+		if s.fsCloser != nil {
+			fsErr = s.fsCloser.Close()
+			s.fsCloser = nil
+		}
 		if s.ownedCache != nil {
 			s.ownedCache.Unref()
 			s.ownedCache = nil
@@ -1141,7 +1382,7 @@ func (s *StoreActor) closeInternal(discard bool) error {
 		}
 		s.lifecycleMu.Unlock()
 
-		s.closeErr = errors.Join(s.closeErr, dbErr, blobErr)
+		s.closeErr = errors.Join(s.closeErr, dbErr, fsErr, blobErr)
 	})
 	return s.closeErr
 }

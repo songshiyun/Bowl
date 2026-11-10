@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"math"
+	"time"
 )
 
 type writeDataOp struct {
@@ -105,6 +106,8 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 		s.unpinStagedBlobs(staged)
 		return 0, Attribute{}, writeErr
 	}
+	s.metrics.recordBlobWrite(writeModeFullBlock, uint64(len(refs)), uint64(len(data)))
+
 	baseBlockIdx := offset / BlobSize
 	for i, ref := range refs {
 		specs[i] = writeBlockSpec{
@@ -115,8 +118,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 	}
 
 	// 预写成功后获取 per-Inode 定序锁，确保持有至阶段 3 db.Apply 完成（<-cmd.done 唤醒）后释放。
-	inoLock := &s.inodeLocks[ino&0xfff]
-	inoLock.Lock()
+	inoLock := s.lockInode(ino)
 	defer inoLock.Unlock()
 
 	op := &writeDataOp{
@@ -148,8 +150,7 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte, epoch uin
 		return 0, Attribute{}, ErrIO
 	}
 
-	inoLock := &s.inodeLocks[ino&0xfff]
-	inoLock.Lock()
+	inoLock := s.lockInode(ino)
 	defer inoLock.Unlock()
 
 	var (
@@ -195,6 +196,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
+			s.metrics.recordBlobWrite(writeModeZeroElide, 1, uint64(len(chunk)))
 			return writeBlockSpec{
 				blockIdx: blockIdx,
 				keep:     false,
@@ -204,6 +206,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		if err != nil {
 			return writeBlockSpec{}, err
 		}
+		s.metrics.recordBlobWrite(writeModeFullBlock, 1, uint64(len(chunk)))
 		return writeBlockSpec{
 			blockIdx: blockIdx,
 			newRef:   ref,
@@ -226,6 +229,11 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		if extRef, ok, extErr := s.stageExtendTail(blobs, ino, oldRef, uint32(inBlock), chunk, uint32(newLen), staged); extErr != nil {
 			return writeBlockSpec{}, extErr
 		} else if ok {
+			var addedBytes uint64
+			if extRef.Length >= oldRef.Length {
+				addedBytes = uint64(extRef.Length - oldRef.Length)
+			}
+			s.metrics.recordBlobWrite(writeModeExtendTail, 1, addedBytes)
 			return writeBlockSpec{
 				blockIdx: blockIdx,
 				newRef:   extRef,
@@ -236,6 +244,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 	}
 
 	if !oldOK && isAllZero(chunk) {
+		s.metrics.recordBlobWrite(writeModeZeroElide, 1, uint64(len(chunk)))
 		return writeBlockSpec{
 			blockIdx: blockIdx,
 			keep:     false,
@@ -244,13 +253,21 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 
 	merged := make([]byte, newLen)
 	if oldOK {
+		var readStart time.Time
+		if s.metrics != nil {
+			readStart = time.Now()
+		}
 		err = blobs.ReadAt(oldRef, 0, merged[:oldRef.Length])
+		if s.metrics != nil {
+			s.metrics.observeBlobRMWRead(time.Since(readStart))
+		}
 		if err != nil {
 			return writeBlockSpec{}, err
 		}
 	}
 	copy(merged[inBlock:], chunk)
 	if isAllZero(merged) {
+		s.metrics.recordBlobWrite(writeModeZeroElide, 1, uint64(len(merged)))
 		return writeBlockSpec{
 			blockIdx: blockIdx,
 			keep:     false,
@@ -260,6 +277,11 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 	ref, err := s.stageAppend(blobs, ino, merged, staged)
 	if err != nil {
 		return writeBlockSpec{}, err
+	}
+	if !oldOK && inBlock == 0 {
+		s.metrics.recordBlobWrite(writeModeExtendTail, 1, uint64(len(merged)))
+	} else {
+		s.metrics.recordBlobWrite(writeModeRMW, 1, uint64(len(merged)))
 	}
 	return writeBlockSpec{
 		blockIdx: blockIdx,

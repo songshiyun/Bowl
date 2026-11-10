@@ -3,10 +3,59 @@ package store
 import (
 	"bytes"
 	"errors"
+	"os"
 	"slices"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 )
+
+func isLowWatermarkMeta(meta PackMeta) bool {
+	return meta.LiveBytes > 0 && meta.LiveBytes*2 <= meta.TotalBytes
+}
+
+func (s *StoreActor) setPackMeta(packID uint64, next PackMeta) {
+	if prev, ok := s.packStats[packID]; ok {
+		s.totalPackPhysicalBytes -= prev.TotalBytes
+		s.totalPackLiveBytes -= prev.LiveBytes
+		if isLowWatermarkMeta(prev) {
+			s.lowWatermarkCount--
+		}
+	}
+	s.totalPackPhysicalBytes += next.TotalBytes
+	s.totalPackLiveBytes += next.LiveBytes
+	if isLowWatermarkMeta(next) {
+		s.lowWatermarkCount++
+	}
+	s.packStats[packID] = next
+}
+
+func (s *StoreActor) deletePackMeta(packID uint64) {
+	if prev, ok := s.packStats[packID]; ok {
+		s.totalPackPhysicalBytes -= prev.TotalBytes
+		s.totalPackLiveBytes -= prev.LiveBytes
+		if isLowWatermarkMeta(prev) {
+			s.lowWatermarkCount--
+		}
+		delete(s.packStats, packID)
+	}
+}
+
+func (s *StoreActor) publishAtomicStats() {
+	s.atomicLogicalBytes.Store(s.stat.LogicalBytes)
+	s.atomicInodes.Store(s.stat.Inodes)
+	s.atomicWriterEpoch.Store(s.stat.WriterEpoch)
+	s.atomicPackPhysicalBytes.Store(s.totalPackPhysicalBytes)
+	s.atomicPackLiveBytes.Store(s.totalPackLiveBytes)
+
+	low := s.lowWatermarkCount
+	if activeID := s.activePackID(); activeID != 0 {
+		if meta, ok := s.packStats[activeID]; ok && isLowWatermarkMeta(meta) {
+			low--
+		}
+	}
+	s.atomicLowWatermarkPacks.Store(int64(max(0, low)))
+}
 
 func (s *StoreActor) loadPackStats() error {
 	iter, err := s.db.NewIter(nil)
@@ -25,7 +74,7 @@ func (s *StoreActor) loadPackStats() error {
 		if decErr != nil {
 			return decErr
 		}
-		s.packStats[packID] = meta
+		s.setPackMeta(packID, meta)
 	}
 	return iter.Error()
 }
@@ -67,7 +116,7 @@ func (s *StoreActor) syncPackStatsWithBlobs() error {
 		cleanBatch := s.db.NewBatch()
 		defer func() { _ = cleanBatch.Close() }()
 		for _, packID := range zeroLiveMetaPacks {
-			delete(s.packStats, packID)
+			s.deletePackMeta(packID)
 			BatchDeletePackMetaDeferred(cleanBatch, packID)
 			if !slices.Contains(deadDiskPacks, packID) {
 				deadDiskPacks = append(deadDiskPacks, packID)
@@ -82,7 +131,12 @@ func (s *StoreActor) syncPackStatsWithBlobs() error {
 		}
 	}
 	for _, packID := range deadDiskPacks {
-		_ = bs.RemovePack(packID)
+		if err := bs.RemovePack(packID); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.metrics.incPackRemoveErrors()
+			if s.logger != nil {
+				s.logger.Warn("startup dead pack remove failed", "pack_id", packID, "err", err)
+			}
+		}
 	}
 	return nil
 }
@@ -100,7 +154,7 @@ func (s *StoreActor) addBlobRef(ref BlobRef) {
 	if meta.LiveBytes > meta.TotalBytes {
 		meta.TotalBytes = meta.LiveBytes
 	}
-	s.packStats[ref.PackID] = meta
+	s.setPackMeta(ref.PackID, meta)
 	s.dirtyPackStats[ref.PackID] = struct{}{}
 }
 
@@ -118,7 +172,7 @@ func (s *StoreActor) removeBlobRef(ref BlobRef) {
 	} else {
 		meta.LiveBytes -= dec
 	}
-	s.packStats[ref.PackID] = meta
+	s.setPackMeta(ref.PackID, meta)
 	s.dirtyPackStats[ref.PackID] = struct{}{}
 }
 
@@ -133,7 +187,7 @@ func (s *StoreActor) recordDeadBlobWrite(ref BlobRef) {
 	if endOffset > meta.TotalBytes {
 		meta.TotalBytes = endOffset
 	}
-	s.packStats[ref.PackID] = meta
+	s.setPackMeta(ref.PackID, meta)
 	s.dirtyPackStats[ref.PackID] = struct{}{}
 }
 
@@ -266,7 +320,7 @@ func (s *StoreActor) flushDirtyPackStatsToBatch(batch *pebble.Batch) (deadPacks 
 			continue
 		}
 		if meta.LiveBytes == 0 && packID != activeID && !s.isPackPinned(packID) {
-			delete(s.packStats, packID)
+			s.deletePackMeta(packID)
 			BatchDeletePackMetaDeferred(batch, packID)
 			deadPacks = append(deadPacks, packID)
 			wrote = true
@@ -289,6 +343,7 @@ func (s *StoreActor) addPendingDeadPacks(packIDs []uint64) {
 			s.pendingDeadPacks = append(s.pendingDeadPacks, id)
 		}
 	}
+	s.atomicPendingDeadPacks.Store(int64(len(s.pendingDeadPacks)))
 	s.deadPacksMu.Unlock()
 }
 
@@ -300,6 +355,7 @@ func (s *StoreActor) takePendingDeadPacks() []uint64 {
 	}
 	out := s.pendingDeadPacks
 	s.pendingDeadPacks = nil
+	s.atomicPendingDeadPacks.Store(0)
 	return out
 }
 
@@ -312,7 +368,12 @@ func (s *StoreActor) removePacks(packIDs []uint64) {
 		return
 	}
 	for _, packID := range packIDs {
-		_ = s.blobs.RemovePack(packID)
+		if err := s.blobs.RemovePack(packID); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.metrics.incPackRemoveErrors()
+			if s.logger != nil {
+				s.logger.Warn("dead pack remove failed", "pack_id", packID, "err", err)
+			}
+		}
 	}
 }
 
@@ -330,16 +391,29 @@ func (s *StoreActor) syncFileInodes(inodes []uint64) error {
 // syncWALAndReclaimDeadPacks 在存在未落盘 NoSync WAL 写入或挂起死包时执行同步 WAL 屏障，
 // 并在 WAL 落盘确认后物理移除已无存活引用的封口 .pack 文件（ADR-0031 §4.2）。
 func (s *StoreActor) syncWALAndReclaimDeadPacks() error {
+	_, _, _, _, err := s.syncWALAndReclaimDeadPacksTimed()
+	return err
+}
+
+func (s *StoreActor) syncWALAndReclaimDeadPacksTimed() (didWALSync bool, walDur time.Duration, reclaimed int, removeDur time.Duration, err error) {
 	toReclaim := s.takePendingDeadPacks()
 	wasDirty := s.walDirty.Swap(false)
 	if !wasDirty && len(toReclaim) == 0 {
-		return nil
+		return false, 0, 0, 0, nil
 	}
-	if err := s.db.LogData(nil, pebble.Sync); err != nil {
+	walStart := time.Now()
+	if syncErr := s.db.LogData(nil, pebble.Sync); syncErr != nil {
+		walDur = time.Since(walStart)
 		s.restorePendingDeadPacks(toReclaim)
 		s.walDirty.Store(true)
-		return err
+		return true, walDur, 0, 0, syncErr
 	}
-	s.removePacks(toReclaim)
-	return nil
+	walDur = time.Since(walStart)
+	if len(toReclaim) > 0 {
+		remStart := time.Now()
+		s.removePacks(toReclaim)
+		removeDur = time.Since(remStart)
+		reclaimed = len(toReclaim)
+	}
+	return true, walDur, reclaimed, removeDur, nil
 }

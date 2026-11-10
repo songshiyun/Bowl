@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // BlobStore 规格与分片热块缓存参数（ADR-0031 §1.2 & §3.1）。
@@ -54,6 +56,8 @@ type hotShard struct {
 // 常驻活跃写句柄与已封口只读句柄池、64 MiB 分片环形热块缓存及脏包屏障追踪表（ADR-0031 §1.2 & §3, ADR-0032 §4）。
 type BlobStore struct {
 	dir         string
+	logger      *slog.Logger
+	metrics     *Metrics
 	dirReady    atomic.Bool
 	maxPackSize atomic.Uint32
 
@@ -104,8 +108,17 @@ func (s *StoreActor) Blobs() *BlobStore {
 
 // NewBlobStore 创建以 base（磁盘根目录）为根的 BlobStore，扫描已有最大 PackID 初始化内置分配器。
 func NewBlobStore(base string) *BlobStore {
+	return newBlobStore(base, slog.Default(), nil)
+}
+
+func newBlobStore(base string, logger *slog.Logger, metrics *Metrics) *BlobStore {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	bs := &BlobStore{
 		dir:          filepath.Join(base, "packs"),
+		logger:       logger,
+		metrics:      metrics,
 		dirtyPacks:   make(map[uint64]uint64),
 		unownedDirty: make(map[uint64]uint64),
 		inoPacks:     make(map[uint64]map[uint64]uint64),
@@ -118,6 +131,49 @@ func NewBlobStore(base string) *BlobStore {
 	bs.minPackID = maxID
 	bs.lastReserved = maxID
 	return bs
+}
+
+func (s *BlobStore) snapshotStats() (openFDs int, hotBytes, hotBlocks uint64) {
+	s.filesMu.RLock()
+	for _, f := range s.packFiles {
+		if f != nil {
+			openFDs++
+		}
+	}
+	s.filesMu.RUnlock()
+
+	for i := range s.hot {
+		sh := &s.hot[i]
+		sh.mu.Lock()
+		if sh.bytes > 0 {
+			hotBytes += uint64(sh.bytes)
+		}
+		if sh.count > 0 {
+			hotBlocks += uint64(sh.count)
+		}
+		sh.mu.Unlock()
+	}
+	return openFDs, hotBytes, hotBlocks
+}
+
+func (s *BlobStore) lockActiveMu() {
+	if s.metrics != nil {
+		start := time.Now()
+		s.mu.Lock()
+		s.metrics.observeBlobMuWait(time.Since(start))
+		return
+	}
+	s.mu.Lock()
+}
+
+func (s *BlobStore) writeAtTimed(file *os.File, data []byte, off int64) (int, error) {
+	if s.metrics != nil {
+		start := time.Now()
+		n, err := file.WriteAt(data, off)
+		s.metrics.observeBlobPwrite(time.Since(start))
+		return n, err
+	}
+	return file.WriteAt(data, off)
 }
 
 // AdvanceMinPackID 确保后续分配的 PackID 严格大于 minPackID（供 StoreActor 启动恢复 sys:pack 时对齐游标）。
@@ -261,7 +317,7 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 		return BlobRef{}, ErrInvalidValue
 	}
 
-	s.mu.Lock()
+	s.lockActiveMu()
 	if s.closed {
 		s.mu.Unlock()
 		return BlobRef{}, ErrClosed
@@ -278,7 +334,7 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 	offset := s.activeOffset
 	file := s.activeFile
 
-	if _, err := file.WriteAt(data, int64(offset)); err != nil {
+	if _, err := s.writeAtTimed(file, data, int64(offset)); err != nil {
 		s.mu.Unlock()
 		return BlobRef{}, err
 	}
@@ -311,7 +367,7 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 	numBlocks := len(data) / BlobSize
 	refs := make([]BlobRef, 0, numBlocks)
 
-	s.mu.Lock()
+	s.lockActiveMu()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, ErrClosed
@@ -334,7 +390,7 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 		baseOffset := s.activeOffset
 		file := s.activeFile
 
-		if _, err := file.WriteAt(data[consumed:consumed+batchBytes], int64(baseOffset)); err != nil {
+		if _, err := s.writeAtTimed(file, data[consumed:consumed+batchBytes], int64(baseOffset)); err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
@@ -372,7 +428,7 @@ func (s *BlobStore) ExtendTail(ino uint64, oldRef BlobRef, patchOffset uint32, p
 	}
 	maxCap := s.maxPackSize.Load()
 
-	s.mu.Lock()
+	s.lockActiveMu()
 	if s.closed {
 		s.mu.Unlock()
 		return BlobRef{}, false, ErrClosed
@@ -410,7 +466,7 @@ func (s *BlobStore) ExtendTail(ino uint64, oldRef BlobRef, patchOffset uint32, p
 	}
 
 	if len(writePayload) > 0 {
-		if _, err := file.WriteAt(writePayload, int64(oldRef.Offset)+int64(writeStart)); err != nil {
+		if _, err := s.writeAtTimed(file, writePayload, int64(oldRef.Offset)+int64(writeStart)); err != nil {
 			s.mu.Unlock()
 			return BlobRef{}, false, err
 		}
@@ -502,7 +558,12 @@ func (s *BlobStore) bgSyncLoop() {
 		s.bgQueue = s.bgQueue[1:]
 		s.mu.Unlock()
 
-		_ = s.syncPack(packID)
+		if err := s.syncPackWithTrigger(packID, syncTriggerBgRotate); err != nil && !errors.Is(err, ErrClosed) {
+			s.metrics.incBgSyncErrors()
+			if s.logger != nil {
+				s.logger.Error("background pack sync failed", "pack_id", packID, "err", err)
+			}
+		}
 	}
 }
 
@@ -553,9 +614,11 @@ func (s *BlobStore) ReadAt(ref BlobRef, offset int64, dst []byte) error {
 		return io.ErrUnexpectedEOF
 	}
 	if s.hotReadAt(ref.PackID, ref.Offset, offset, dst) {
+		s.metrics.incReadHotCache()
 		return nil
 	}
 
+	s.metrics.incReadDiskPack()
 	file, err := s.getOrOpenPackFile(ref.PackID)
 	if err != nil {
 		return err
@@ -633,7 +696,6 @@ func (s *BlobStore) cacheHotCopy(packID uint64, offset uint32, src []byte) {
 	}
 	sh := s.hotShardFor(packID, offset)
 	sh.mu.Lock()
-	defer sh.mu.Unlock()
 	for i := 0; i < sh.count; i++ {
 		idx := (sh.head + i) % len(sh.slots)
 		if sh.slots[idx].packID == packID && sh.slots[idx].offset == offset {
@@ -647,14 +709,18 @@ func (s *BlobStore) cacheHotCopy(packID uint64, offset uint32, src []byte) {
 			copy(dst, src)
 			sh.bytes += len(src) - len(oldData)
 			sh.slots[idx].data = dst
-			sh.trimLocked()
+			evicted := sh.trimLocked()
+			sh.mu.Unlock()
+			s.metrics.addHotCacheEvictions(evicted)
 			return
 		}
 	}
 
 	var reused []byte
+	var evictedCount uint64
 	for (sh.count == len(sh.slots) || sh.bytes+len(src) > hotBlobShardBudget) && sh.count > 0 {
 		evicted := sh.evictOldestTakeBufLocked()
+		evictedCount++
 		if cap(evicted) >= len(src) && cap(evicted) > cap(reused) {
 			reused = evicted
 		}
@@ -671,13 +737,14 @@ func (s *BlobStore) cacheHotCopy(packID uint64, offset uint32, src []byte) {
 	sh.slots[idx] = hotBlob{packID: packID, offset: offset, data: dst}
 	sh.count++
 	sh.bytes += len(dst)
-	sh.trimLocked()
+	evictedCount += sh.trimLocked()
+	sh.mu.Unlock()
+	s.metrics.addHotCacheEvictions(evictedCount)
 }
 
 func (s *BlobStore) extendHotShard(oldRef BlobRef, patchOffset uint32, patchData []byte, newLength uint32) {
 	sh := s.hotShardFor(oldRef.PackID, oldRef.Offset)
 	sh.mu.Lock()
-	defer sh.mu.Unlock()
 	for i := 0; i < sh.count; i++ {
 		idx := (sh.head + i) % len(sh.slots)
 		slot := &sh.slots[idx]
@@ -688,6 +755,8 @@ func (s *BlobStore) extendHotShard(oldRef BlobRef, patchOffset uint32, patchData
 		newLen := int(newLength)
 		if newLen > hotBlobShardBudget {
 			sh.evictBlockLocked(oldRef.PackID, oldRef.Offset)
+			sh.mu.Unlock()
+			s.metrics.addHotCacheEvictions(1)
 			return
 		}
 		var newData []byte
@@ -705,18 +774,24 @@ func (s *BlobStore) extendHotShard(oldRef BlobRef, patchOffset uint32, patchData
 		}
 		sh.bytes += newLen - len(oldData)
 		slot.data = newData
-		sh.trimLocked()
+		evicted := sh.trimLocked()
+		sh.mu.Unlock()
+		s.metrics.addHotCacheEvictions(evicted)
 		return
 	}
+	sh.mu.Unlock()
 }
 
-func (sh *hotShard) trimLocked() {
+func (sh *hotShard) trimLocked() uint64 {
+	var evicted uint64
 	for sh.bytes > hotBlobShardBudget && sh.count > 0 {
 		sh.evictOldestLocked()
+		evicted++
 	}
 	if sh.count == 0 {
 		sh.bytes = 0
 	}
+	return evicted
 }
 
 func (sh *hotShard) evictOldestLocked() {
@@ -811,7 +886,7 @@ func (s *BlobStore) Sync() error {
 	}
 	s.mu.Unlock()
 
-	return s.syncBatch(packs)
+	return s.syncBatch(packs, syncTriggerFlushWAL)
 }
 
 // SyncInode 仅对包含指定 Inode 未刷盘写入的脏 .pack 常驻句柄执行 fdatasync，
@@ -837,10 +912,10 @@ func (s *BlobStore) SyncInode(ino uint64) error {
 	}
 	s.mu.Unlock()
 
-	return s.syncBatch(packs)
+	return s.syncBatch(packs, syncTriggerFsyncBarrier)
 }
 
-func (s *BlobStore) syncPack(packID uint64) error {
+func (s *BlobStore) syncPackWithTrigger(packID uint64, trigger syncTrigger) error {
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -877,14 +952,25 @@ func (s *BlobStore) syncPack(packID uint64) error {
 
 		var syncErr error
 		file, err := s.getOrOpenPackFile(packID)
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
 			syncErr = nil
-		} else if err != nil {
+		case err != nil:
 			syncErr = err
-		} else if err := syncFileData(file); err != nil {
-			syncErr = err
-		} else {
-			s.syncFileCount.Add(1)
+		default:
+			var syncStart time.Time
+			if s.metrics != nil {
+				syncStart = time.Now()
+			}
+			err = syncFileData(file)
+			if s.metrics != nil {
+				s.metrics.observeBlobSync(syncTargetPackData, trigger, time.Since(syncStart))
+			}
+			if err != nil {
+				syncErr = err
+			} else {
+				s.syncFileCount.Add(1)
+			}
 		}
 
 		s.mu.Lock()
@@ -921,7 +1007,7 @@ func (s *BlobStore) completePackSyncLocked(packID, syncedSeq uint64) {
 	}
 }
 
-func (s *BlobStore) syncPacksDirIfNeeded() error {
+func (s *BlobStore) syncPacksDirIfNeeded(trigger syncTrigger) error {
 	for {
 		s.mu.Lock()
 		if !s.dirDirty {
@@ -947,7 +1033,7 @@ func (s *BlobStore) syncPacksDirIfNeeded() error {
 		s.dirFlight = flight
 		s.mu.Unlock()
 
-		syncErr := s.syncPacksDir()
+		syncErr := s.syncPacksDir(trigger)
 
 		s.mu.Lock()
 		s.dirFlight = nil
@@ -962,7 +1048,7 @@ func (s *BlobStore) syncPacksDirIfNeeded() error {
 	}
 }
 
-func (s *BlobStore) syncPacksDir() error {
+func (s *BlobStore) syncPacksDir(trigger syncTrigger) error {
 	handle, err := os.Open(s.dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -970,19 +1056,27 @@ func (s *BlobStore) syncPacksDir() error {
 	if err != nil {
 		return err
 	}
-	if err := errors.Join(handle.Sync(), handle.Close()); err != nil {
-		return err
+	var syncStart time.Time
+	if s.metrics != nil {
+		syncStart = time.Now()
+	}
+	syncErr := errors.Join(handle.Sync(), handle.Close())
+	if s.metrics != nil {
+		s.metrics.observeBlobSync(syncTargetPacksDir, trigger, time.Since(syncStart))
+	}
+	if syncErr != nil {
+		return syncErr
 	}
 	s.syncDirCount.Add(1)
 	return nil
 }
 
-func (s *BlobStore) syncBatch(packs []uint64) error {
+func (s *BlobStore) syncBatch(packs []uint64, trigger syncTrigger) error {
 	var errs []error
 	switch len(packs) {
 	case 0:
 	case 1:
-		if err := s.syncPack(packs[0]); err != nil {
+		if err := s.syncPackWithTrigger(packs[0], trigger); err != nil {
 			errs = append(errs, err)
 		}
 	default:
@@ -999,7 +1093,7 @@ func (s *BlobStore) syncBatch(packs []uint64) error {
 					if i >= len(packs) {
 						return
 					}
-					errList[i] = s.syncPack(packs[i])
+					errList[i] = s.syncPackWithTrigger(packs[i], trigger)
 				}
 			}()
 		}
@@ -1010,7 +1104,7 @@ func (s *BlobStore) syncBatch(packs []uint64) error {
 			}
 		}
 	}
-	if err := s.syncPacksDirIfNeeded(); err != nil {
+	if err := s.syncPacksDirIfNeeded(trigger); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

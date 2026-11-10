@@ -2,6 +2,7 @@ package store
 
 import (
 	"math"
+	"time"
 )
 
 // setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线（ADR-0031 §3.2）：
@@ -19,8 +20,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 		return Attribute{}, ErrIO
 	}
 
-	inoLock := &s.inodeLocks[ino&0xfff]
-	inoLock.Lock()
+	inoLock := s.lockInode(ino)
 	defer inoLock.Unlock()
 
 	newSize := *req.Size
@@ -67,10 +67,19 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 
 func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
 	data := make([]byte, tailLen)
-	if err := blobs.ReadAt(oldRef, 0, data); err != nil {
+	var readStart time.Time
+	if s.metrics != nil {
+		readStart = time.Now()
+	}
+	err := blobs.ReadAt(oldRef, 0, data)
+	if s.metrics != nil {
+		s.metrics.observeBlobRMWRead(time.Since(readStart))
+	}
+	if err != nil {
 		return writeBlockSpec{}, err
 	}
 	if isAllZero(data) {
+		s.metrics.recordBlobWrite(writeModeZeroElide, 1, uint64(len(data)))
 		return writeBlockSpec{
 			blockIdx: blockIdx,
 			keep:     false,
@@ -80,6 +89,7 @@ func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx ui
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
+	s.metrics.recordBlobWrite(writeModeRMW, 1, uint64(len(data)))
 	return writeBlockSpec{
 		blockIdx: blockIdx,
 		newRef:   ref,
@@ -140,8 +150,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ..
 		return ErrIO
 	}
 
-	inoLock := &s.inodeLocks[ino&0xfff]
-	inoLock.Lock()
+	inoLock := s.lockInode(ino)
 	defer inoLock.Unlock()
 
 	zeroRange := mode&FallocPunchHole != 0 || mode&FallocZeroRange != 0
@@ -210,7 +219,14 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	clearEnd := min(inBlock+clearLen, int(oldRef.Length))
 
 	data := make([]byte, oldRef.Length)
+	var readStart time.Time
+	if s.metrics != nil {
+		readStart = time.Now()
+	}
 	err = blobs.ReadAt(oldRef, 0, data)
+	if s.metrics != nil {
+		s.metrics.observeBlobRMWRead(time.Since(readStart))
+	}
 	if err != nil {
 		return writeBlockSpec{}, false, err
 	}
@@ -220,6 +236,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	clear(data[inBlock:clearEnd])
 
 	if isAllZero(data) {
+		s.metrics.recordBlobWrite(writeModeZeroElide, 1, uint64(len(data)))
 		return writeBlockSpec{
 			blockIdx: blockIdx,
 			keep:     false,
@@ -230,6 +247,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	if err != nil {
 		return writeBlockSpec{}, false, err
 	}
+	s.metrics.recordBlobWrite(writeModeFallocZero, 1, uint64(len(data)))
 	return writeBlockSpec{
 		blockIdx: blockIdx,
 		newRef:   ref,
