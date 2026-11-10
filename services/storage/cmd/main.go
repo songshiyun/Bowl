@@ -11,8 +11,7 @@ import (
 
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability/slogx"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/Aether/pkg/observability/obsfx"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/control"
@@ -40,8 +39,7 @@ func run(ctx context.Context, opts ...fx.Option) error {
 	options := []fx.Option{
 		fx.Supply(cfg),
 		config.Module,
-		telemetry.Module,
-		slogx.Module,
+		obsfx.Module,
 		db.Module,
 		control.Module,
 		server.Module,

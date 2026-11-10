@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/Aether/pkg/observability"
 	"github.com/starsrc/Aether/pkg/tx"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
@@ -71,7 +71,7 @@ func OpenPool(cfg config.DBPoolConfig) (*pgxpool.Pool, error) {
 // PoolParams 包含连接池所需依赖。
 type PoolParams struct {
 	fx.In
-	Ready     telemetry.Ready `optional:"true"`
+	Ready     observability.Ready `optional:"true"`
 	Lifecycle fx.Lifecycle
 	Config    config.DBPoolConfig
 }

@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/connect"
 	"go.uber.org/fx"
 
+	"github.com/starsrc/Aether/pkg/observability"
 	"github.com/starsrc/Aether/pkg/observability/telemetry"
 	"github.com/starsrc/Aether/pkg/serverx"
 
@@ -69,15 +70,14 @@ func (s *Server) Addr() string {
 type Params struct {
 	fx.In
 
-	Config         config.ServerConfig
-	Control        control.Manager
-	Observability  serverx.ObservabilityConfig  `optional:"true"`
-	Telemetry      telemetry.Config             `optional:"true"`
-	TelemetryReady telemetry.Ready              `optional:"true"`
-	LogInterceptor connect.UnaryInterceptorFunc `optional:"true"`
-	Logger         *slog.Logger                 `optional:"true"`
-	Lifecycle      fx.Lifecycle                 `optional:"true"`
-	Shutdowner     fx.Shutdowner                `optional:"true"`
+	Config        config.ServerConfig
+	Control       control.Manager
+	Observability serverx.ObservabilityConfig `optional:"true"`
+	Telemetry     telemetry.Config            `optional:"true"`
+	ObsReady      observability.Ready         `optional:"true"`
+	Logger        *slog.Logger                `optional:"true"`
+	Lifecycle     fx.Lifecycle                `optional:"true"`
+	Shutdowner    fx.Shutdowner               `optional:"true"`
 }
 
 // New 构造 Server 实例，组装洋葱拦截器链与 ConnectRPC 处理器，并按需在 Fx 生命周期中注册启停钩子。
@@ -99,16 +99,10 @@ func New(p Params) (*Server, error) {
 	}
 	valInterceptor := NewValidationInterceptor(val)
 
-	var extra []connect.Interceptor
-	if p.LogInterceptor != nil {
-		extra = append(extra, p.LogInterceptor)
-	}
-
 	interceptors, err := serverx.NewInterceptorsWithValidator(
 		quietExpectedNotFound(p.Logger),
 		obsCfg,
 		valInterceptor,
-		extra...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("build interceptors: %w", err)

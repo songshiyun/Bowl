@@ -39,3 +39,27 @@ func TestMetaConfigDefaultsAndValidation(t *testing.T) {
 	negTimeout.EntryTimeoutSecondsVal = -1
 	require.ErrorContains(t, negTimeout.Validate(), "invalid entry timeout")
 }
+
+func TestLoadObservabilityAndInternalPortDefaults(t *testing.T) {
+	t.Setenv("DB_DSN", "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable")
+	t.Setenv("SERVER_PORT", "")
+	t.Setenv("INTERNAL_SERVER_PORT", "")
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	t.Setenv("OTEL_TRUST_REMOTE", "")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, 9000, cfg.Port())
+	require.Equal(t, 9090, cfg.InternalServerPort)
+	require.Equal(t, "bowl-storage", cfg.ServiceName())
+	require.True(t, cfg.TrustRemote())
+	require.True(t, cfg.IsMetricsEnabled())
+	require.True(t, cfg.IsPprofEnabled())
+
+	t.Setenv("INTERNAL_SERVER_PORT", "19090")
+	t.Setenv("OTEL_TRUST_REMOTE", "false")
+	cfgOverride, err := config.Load()
+	require.NoError(t, err)
+	require.Equal(t, 19090, cfgOverride.InternalServerPort)
+	require.False(t, cfgOverride.TrustRemote())
+}

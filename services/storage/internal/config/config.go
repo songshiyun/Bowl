@@ -10,8 +10,7 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
 
-	"github.com/starsrc/Aether/pkg/observability/slogx"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/Aether/pkg/observability"
 	"github.com/starsrc/Aether/pkg/serverx"
 	"github.com/starsrc/Aether/pkg/tx"
 )
@@ -23,11 +22,8 @@ const DefaultServerReadMaxBytes = 8 * 1024 * 1024
 // ServerConfig 作为 serverx.ServerConfig 的类型别名。
 type ServerConfig = serverx.ServerConfig
 
-// LogConfig 作为 slogx.LogConfig 的类型别名。
-type LogConfig = slogx.LogConfig
-
-// TelemetryConfig 作为 telemetry.TelemetryConfig 的类型别名。
-type TelemetryConfig = telemetry.TelemetryConfig
+// ObservabilityConfig 作为 observability.EnvConfig 的类型别名。
+type ObservabilityConfig = observability.EnvConfig
 
 // DBPoolConfig 作为 tx.PoolConfig 的类型别名。
 type DBPoolConfig = tx.PoolConfig
@@ -35,10 +31,21 @@ type DBPoolConfig = tx.PoolConfig
 // Config 聚合 Storage 服务全局配置。
 type Config struct {
 	serverx.ServerConfig
-	slogx.LogConfig
-	telemetry.TelemetryConfig
+	observability.EnvConfig
 	tx.PoolConfig
 	Meta MetaConfig
+}
+
+// ApplyDefaultInternalPort 在未显式指定 INTERNAL_SERVER_PORT 环境变量且端口处于零值或 serverx 默认 8090 时，
+// 将管理/内网监听端口设置为指定的 defaultPort。
+func (c *Config) ApplyDefaultInternalPort(defaultPort int) {
+	if c == nil {
+		return
+	}
+	envVal, envSet := os.LookupEnv("INTERNAL_SERVER_PORT")
+	if (!envSet || strings.TrimSpace(envVal) == "") && (c.InternalServerPort == 0 || c.InternalServerPort == 8090) {
+		c.InternalServerPort = defaultPort
+	}
 }
 
 // Validate 校验全局配置合法性。
@@ -47,8 +54,8 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("validate server config: %w", err)
 	}
 
-	if err := c.TelemetryConfig.Validate(); err != nil {
-		return fmt.Errorf("validate telemetry config: %w", err)
+	if err := c.EnvConfig.Validate(); err != nil {
+		return fmt.Errorf("validate observability config: %w", err)
 	}
 
 	if err := c.PoolConfig.Validate(); err != nil {
@@ -82,7 +89,9 @@ func Load(filenames ...string) (*Config, error) {
 	}
 
 	cfg.ApplyDefaultPort(9000)
+	cfg.ApplyDefaultInternalPort(9090)
 	cfg.ApplyDefaultServiceName("bowl-storage")
+	cfg.ApplyDefaultTrustRemote(true)
 
 	if strings.TrimSpace(os.Getenv("SERVER_READ_MAX_BYTES")) == "" {
 		cfg.ServerReadMaxBytes = DefaultServerReadMaxBytes
