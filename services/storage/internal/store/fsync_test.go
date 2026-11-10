@@ -289,3 +289,64 @@ func TestGroupCommitFsyncAndFsyncDirDualLayerBarrier(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, bytes.Repeat([]byte{0xb2}, 8192), gotB)
 }
+
+func TestFsyncAfterSealedPackBackgroundPreSyncAndConcurrentFsyncBarrier(t *testing.T) {
+	actor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-fsync-bg-seal",
+		MaxBytes: 128 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	blobs := actor.Blobs()
+	blobs.SetMaxPackSize(2 * store.BlobSize)
+
+	fileA, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("sealed-a.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	fileB, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("sealed-b.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	// 1. fileA 写满 Pack 1（512 KiB），fileB 写入 256 KiB 触发 Pack 1 封口并切入 Pack 2
+	_, _, err = actor.Write(fileA.Ino, 0, bytes.Repeat([]byte{0x41}, 2*store.BlobSize))
+	require.NoError(t, err)
+	_, _, err = actor.Write(fileB.Ino, 0, bytes.Repeat([]byte{0x42}, store.BlobSize))
+	require.NoError(t, err)
+
+	// 等待已封口 Pack 1 被后台异步完成 fdatasync
+	require.Eventually(t, func() bool {
+		return blobs.SyncFileCount() == 1
+	}, 2*time.Second, 5*time.Millisecond)
+	require.Equal(t, uint64(0), blobs.SyncDirCount())
+
+	// 2. FsyncDir 仅同步 Pebble WAL，不触发数据文件或 packs/ 目录刷盘
+	require.NoError(t, actor.FsyncDir(store.RootIno))
+	require.False(t, actor.WALDirty())
+	require.Equal(t, uint64(1), blobs.SyncFileCount())
+	require.Equal(t, uint64(0), blobs.SyncDirCount())
+
+	// 3. 新建 .pack (Pack 1) 被后台提前完成 fdatasync 后，首次针对关联 Inode (fileA) 的显式 Fsync：
+	//    - 不重复对 Pack 1 执行 fdatasync（SyncFileCount 保持为 1）
+	//    - 可靠执行 1 次 packs/ 目录 fsync（SyncDirCount 递增为 1）
+	require.NoError(t, actor.Fsync(fileA.Ino))
+	require.Equal(t, uint64(1), blobs.SyncFileCount())
+	require.Equal(t, uint64(1), blobs.SyncDirCount())
+
+	// 4. fileA 跨多个 .pack 连续大写入（4 MiB = 8 个 512 KiB 封包）后立即调用 Fsync(fileA.Ino)，
+	//    前后台协同完成所有关联封包与 packs/ 目录落盘屏障。
+	_, _, err = actor.Write(fileA.Ino, 2*store.BlobSize, bytes.Repeat([]byte{0x43}, 16*store.BlobSize))
+	require.NoError(t, err)
+	require.NoError(t, actor.Fsync(fileA.Ino))
+	require.False(t, blobs.HasDirty())
+	require.False(t, actor.WALDirty())
+	require.GreaterOrEqual(t, blobs.SyncDirCount(), uint64(2))
+}

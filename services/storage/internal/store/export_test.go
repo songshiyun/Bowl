@@ -7,6 +7,13 @@ func (s *StoreActor) SetBeforeCompactRelocateHookForTest(hook func()) {
 	s.beforeCompactRelocateHook = hook
 }
 
+// SetSyncFileHookForTest 注册在 BlobStore.syncPack 执行底层 syncFileData 前触发的测试钩子。
+func (s *BlobStore) SetSyncFileHookForTest(hook func(packID uint64)) {
+	s.mu.Lock()
+	s.syncFileHook = hook
+	s.mu.Unlock()
+}
+
 // HoldTickForTest 占住当前一轮 Actor Tick，使并发测试可将多条真实操作攒入同一 mb.active 批次并在下一轮 Tick 合并演进；
 // 调用返回的 release 函数即可放行当前 Tick。
 func HoldTickForTest(s *StoreActor) (release func()) {

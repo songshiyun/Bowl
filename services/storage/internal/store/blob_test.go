@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -405,4 +408,205 @@ func TestBlobStoreHotShardSlotBufferReuseZeroAllocAfterWarmup(t *testing.T) {
 		require.NoError(t, blobs.ReadAt(ref, 0, got))
 		require.Equal(t, batchPayload[:store.BlobSize], got)
 	}
+}
+
+func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing.T) {
+	base := t.TempDir()
+	blobs := store.NewBlobStore(base)
+	defer func() { require.NoError(t, blobs.Close()) }()
+
+	blobs.SetMaxPackSize(2 * store.BlobSize)
+
+	// 1. ino=10 写满 Pack 1（2 个 256 KiB 块）
+	payload1 := bytes.Repeat([]byte{0x11}, 2*store.BlobSize)
+	refs1, err := blobs.AppendBlocks(10, payload1)
+	require.NoError(t, err)
+	require.Len(t, refs1, 2)
+	require.Equal(t, uint64(1), refs1[0].PackID)
+	require.Equal(t, uint64(1), refs1[1].PackID)
+
+	// 2. ino=20 追加 1 个块触发 Pack 1 封口并切入新活跃包 Pack 2
+	ref2, err := blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), ref2.PackID)
+
+	// 3. 后台刷盘协程自动对已封口的 Pack 1 执行异步 fdatasync
+	require.Eventually(t, func() bool {
+		return blobs.SyncFileCount() == 1
+	}, 2*time.Second, 5*time.Millisecond, "已封口 Pack 1 必须由后台协程自动完成预刷盘")
+	require.Equal(t, uint64(0), blobs.SyncDirCount(), "后台预刷盘仅刷数据文件，不提前执行目录 fsync")
+	require.True(t, blobs.HasDirty())
+
+	// 4. 首次对仅关联已封口新建包 Pack 1 的 ino=10 调用 SyncInode(10)：
+	//    - Pack 1 已被后台刷完消记，SyncFileCount 不得重复递增（保持为 1）
+	//    - 因 Pack 1 属于 dirtyNew 新建包，消记时继承 dirDirty=true，SyncInode(10) 必须可靠执行 1 次 packs/ 目录 fsync
+	require.NoError(t, blobs.SyncInode(10))
+	require.Equal(t, uint64(1), blobs.SyncFileCount(), "已被后台预刷盘的封口包不得在前台 SyncInode 时重复 fdatasync")
+	require.Equal(t, uint64(1), blobs.SyncDirCount(), "新建封口包被后台提前刷完后，首次 SyncInode 必须执行 1 次 packs/ 目录 fsync")
+
+	// 5. 再次调用 SyncInode(10) 应为无操作（SyncFileCount 与 SyncDirCount 均不变）
+	require.NoError(t, blobs.SyncInode(10))
+	require.Equal(t, uint64(1), blobs.SyncFileCount())
+	require.Equal(t, uint64(1), blobs.SyncDirCount())
+
+	// 6. 对活跃包 Pack 2 关联的 ino=20 调用 SyncInode(20)
+	require.NoError(t, blobs.SyncInode(20))
+	require.Equal(t, uint64(2), blobs.SyncFileCount())
+	require.Equal(t, uint64(2), blobs.SyncDirCount())
+	require.False(t, blobs.HasDirty())
+}
+
+func TestBlobStoreForegroundBackgroundSyncCoordinationAndSkipAlreadySynced(t *testing.T) {
+	base := t.TempDir()
+	blobs := store.NewBlobStore(base)
+	defer func() { require.NoError(t, blobs.Close()) }()
+
+	blobs.SetMaxPackSize(store.BlobSize)
+
+	enteredPack1 := make(chan struct{})
+	releasePack1 := make(chan struct{})
+	enteredPack2 := make(chan struct{})
+	releasePack2 := make(chan struct{})
+
+	var pack1HookOnce, pack2HookOnce sync.Once
+	blobs.SetSyncFileHookForTest(func(packID uint64) {
+		switch packID {
+		case 1:
+			pack1HookOnce.Do(func() {
+				close(enteredPack1)
+				<-releasePack1
+			})
+		case 2:
+			pack2HookOnce.Do(func() {
+				close(enteredPack2)
+				<-releasePack2
+			})
+		}
+	})
+
+	// 1. 写入 Pack 1 (ino=10) 并通过写入 Pack 2 (ino=20) 触发 Pack 1 封口进入后台刷盘
+	_, err := blobs.Append(10, bytes.Repeat([]byte{0x11}, store.BlobSize))
+	require.NoError(t, err)
+	_, err = blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
+	require.NoError(t, err)
+
+	// 等待后台协程进入 Pack 1 的 syncPack（尚未执行底层 fdatasync）
+	<-enteredPack1
+
+	// 验证「先刷盘、后消记」：后台刷盘完成前 dirtyPacks 与 inoPacks[10] 仍保留，
+	// 此时前台调用 SyncInode(10) 必须等待 Pack 1 落盘完成后才能返回，绝不提前返回。
+	fgDone := make(chan error, 1)
+	go func() {
+		fgDone <- blobs.SyncInode(10)
+	}()
+
+	select {
+	case fgErr := <-fgDone:
+		t.Fatalf("后台正在刷盘 Pack 1 时，前台 SyncInode(10) 不得在 fdatasync 完成前提前返回 (got %v)", fgErr)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	// 放行 Pack 1 后台刷盘：前后台协同单次完成 Pack 1 的 fdatasync，且前台 SyncInode(10) 完成目录 fsync
+	close(releasePack1)
+	require.NoError(t, <-fgDone)
+	require.Equal(t, uint64(1), blobs.SyncFileCount(), "同一封口包前后台并发刷盘必须去重协同，仅执行 1 次 fdatasync")
+	require.Equal(t, uint64(1), blobs.SyncDirCount(), "前台 SyncInode(10) 等待后台封口包完成后必须执行 1 次目录 fsync")
+
+	// 2. 继续追加写入 Pack 3 (ino=30)、Pack 4 (ino=40)、Pack 5 (ino=50)：
+	//    此时 Pack 2 封口并卡在后台刷盘钩子 enteredPack2，Pack 3 与 Pack 4 已封口排在后台队列中。
+	_, err = blobs.Append(30, bytes.Repeat([]byte{0x33}, store.BlobSize))
+	require.NoError(t, err)
+	<-enteredPack2
+
+	_, err = blobs.Append(40, bytes.Repeat([]byte{0x44}, store.BlobSize))
+	require.NoError(t, err)
+	_, err = blobs.Append(50, bytes.Repeat([]byte{0x55}, store.BlobSize))
+	require.NoError(t, err)
+
+	// 在后台协程仍卡在 Pack 2 期间：
+	// - 前台提前刷完已封口的 Pack 3 (SyncInode(30))
+	// - 前台直接删除已封口的 Pack 4 (RemovePack(4))
+	require.NoError(t, blobs.SyncInode(30))
+	require.Equal(t, uint64(2), blobs.SyncFileCount(), "前台 SyncInode(30) 率先完成 Pack 3 的 fdatasync")
+	require.NoError(t, blobs.RemovePack(4))
+
+	// 放行 Pack 2，等待后台队列排空（Pack 2 完成 fdatasync，Pack 3 已由前台刷完跳过，Pack 4 已被删除跳过）
+	close(releasePack2)
+	require.Eventually(t, func() bool {
+		return blobs.SyncFileCount() == 3
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// 再同步最后一个活跃包 Pack 5 (ino=50)，总 fdatasync 次数精确为 4（Pack 1, 2, 3, 5），无后台滞后重复刷盘
+	require.NoError(t, blobs.SyncInode(50))
+	require.Equal(t, uint64(4), blobs.SyncFileCount())
+	require.False(t, blobs.HasDirty())
+}
+
+func TestBlobStoreSyncBatchBoundedParallelismAndConcurrentRemoveClose(t *testing.T) {
+	base := t.TempDir()
+	blobs := store.NewBlobStore(base)
+	blobs.SetMaxPackSize(store.BlobSize)
+
+	// 1. 先卡住后台协程对 Pack 1 的预刷盘，以便积累 12 个脏 .pack 后测试 syncBatch 多包有界并发（上限 8）
+	enteredPack1 := make(chan struct{})
+	releasePack1 := make(chan struct{})
+	var pack1Once sync.Once
+
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	blobs.SetSyncFileHookForTest(func(packID uint64) {
+		if packID == 1 {
+			pack1Once.Do(func() {
+				close(enteredPack1)
+				<-releasePack1
+			})
+			return
+		}
+		cur := inFlight.Add(1)
+		for {
+			prev := maxInFlight.Load()
+			if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
+				break
+			}
+		}
+		time.Sleep(15 * time.Millisecond)
+		inFlight.Add(-1)
+	})
+
+	const totalPacks = 12
+	for i := range totalPacks {
+		_, err := blobs.Append(uint64(100+i), bytes.Repeat([]byte{byte(i + 1)}, store.BlobSize))
+		require.NoError(t, err)
+	}
+	<-enteredPack1
+
+	// 放行 Pack 1 并立即在前台调用 Sync() 同步全部 12 个脏包
+	close(releasePack1)
+	require.NoError(t, blobs.Sync())
+	require.Equal(t, uint64(totalPacks), blobs.SyncFileCount())
+	require.Equal(t, uint64(1), blobs.SyncDirCount())
+	require.False(t, blobs.HasDirty())
+	require.GreaterOrEqual(t, maxInFlight.Load(), int32(2), "多脏包 syncBatch 必须并发执行 syncPack")
+	require.LessOrEqual(t, maxInFlight.Load(), int32(9), "syncBatch 并发度（至多 8 协程 + 1 后台协程）必须受有界上限约束")
+
+	// 2. 验证高频切包后台预刷盘与并发 SyncInode / RemovePack / Close 无竞态或句柄泄漏
+	blobs.SetSyncFileHookForTest(nil)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := range 24 {
+			_, _ = blobs.Append(200, bytes.Repeat([]byte{byte(0xa0 + i)}, store.BlobSize))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for p := uint64(1); p <= 16; p++ {
+			_ = blobs.SyncInode(200)
+			_ = blobs.RemovePack(p)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	wg.Wait()
+	require.NoError(t, blobs.Close())
 }

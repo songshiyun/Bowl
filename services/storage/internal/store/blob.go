@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,12 +15,25 @@ import (
 
 // BlobStore 规格与分片热块缓存参数（ADR-0031 §1.2 & §3.1）。
 const (
-	BlobIDSegment      uint64 = 4096
-	hotBlobShards             = 16
-	hotBlobSlots              = 64
-	hotBlobTotalBudget        = 64 << 20                           // 64 MiB
-	hotBlobShardBudget        = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
+	BlobIDSegment           uint64 = 4096
+	hotBlobShards                  = 16
+	hotBlobSlots                   = 64
+	hotBlobTotalBudget             = 64 << 20                           // 64 MiB
+	hotBlobShardBudget             = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
+	maxSyncBatchConcurrency        = 8
 )
+
+type packSyncFlight struct {
+	targetSeq uint64
+	done      chan struct{}
+	err       error
+}
+
+type dirSyncFlight struct {
+	targetSeq uint64
+	done      chan struct{}
+	err       error
+}
 
 type hotBlob struct {
 	packID uint64
@@ -53,17 +67,27 @@ type BlobStore struct {
 	// 2. 分片环形热块缓存（16 分片 × 64 槽位，总预算 64 MiB，按 (PackID, Offset) 定位）
 	hot [hotBlobShards]hotShard
 
-	// 3. 活跃 .pack 写句柄与脏包追踪表
+	// 3. 活跃 .pack 写句柄、脏包追踪表与前后台落盘协同状态
 	mu           sync.Mutex
 	closed       bool
 	activePackID uint64
 	activeFile   *os.File
 	activeOffset uint32
-	dirtyPacks   map[uint64]struct{}            // 未完成 fdatasync 的脏 packID 集合
-	unownedDirty map[uint64]struct{}            // 未绑定特定 ino (ino=0) 的脏 packID 集合
-	inoPacks     map[uint64]map[uint64]struct{} // ino -> 未同步脏 packID 集合
-	dirtyNew     map[uint64]struct{}            // 新建尚未执行 packs/ 目录 fsync 的 packID 集合
-	dirDirty     bool                           // packs/ 目录项发生变更（如 RemovePack）需执行目录 fsync
+	writeSeq     uint64
+	dirtyPacks   map[uint64]uint64            // 未完成 fdatasync 的脏 packID -> 最新写序号
+	unownedDirty map[uint64]uint64            // 未绑定特定 ino (ino=0) 的脏 packID -> 最新写序号
+	inoPacks     map[uint64]map[uint64]uint64 // ino -> (未同步脏 packID -> 最新写序号)
+	dirtyNew     map[uint64]struct{}          // 新建尚未完成首次 fdatasync 的 packID 集合
+	dirDirty     bool                         // packs/ 目录项发生变更（新建包落盘或 RemovePack）需执行目录 fsync
+	dirDirtySeq  uint64
+	syncFlights  map[uint64]*packSyncFlight
+	dirFlight    *dirSyncFlight
+
+	bgStarted    bool
+	bgQueue      []uint64
+	bgNotify     chan struct{}
+	bgDone       chan struct{}
+	syncFileHook func(packID uint64)
 
 	// 4. 常驻 .pack 文件句柄表（涵盖活跃包与已封口只读包，0 open/close 并发 ReadAt）
 	filesMu   sync.RWMutex
@@ -82,10 +106,11 @@ func (s *StoreActor) Blobs() *BlobStore {
 func NewBlobStore(base string) *BlobStore {
 	bs := &BlobStore{
 		dir:          filepath.Join(base, "packs"),
-		dirtyPacks:   make(map[uint64]struct{}),
-		unownedDirty: make(map[uint64]struct{}),
-		inoPacks:     make(map[uint64]map[uint64]struct{}),
+		dirtyPacks:   make(map[uint64]uint64),
+		unownedDirty: make(map[uint64]uint64),
+		inoPacks:     make(map[uint64]map[uint64]uint64),
 		dirtyNew:     make(map[uint64]struct{}),
+		syncFlights:  make(map[uint64]*packSyncFlight),
 		packFiles:    make(map[uint64]*os.File),
 	}
 	bs.maxPackSize.Store(PackMaxSize)
@@ -421,6 +446,8 @@ func (s *BlobStore) openNextActivePackLocked() error {
 		return err
 	}
 
+	prevPackID := s.activePackID
+
 	s.filesMu.Lock()
 	s.packFiles[packID] = file
 	s.filesMu.Unlock()
@@ -429,21 +456,75 @@ func (s *BlobStore) openNextActivePackLocked() error {
 	s.activeFile = file
 	s.activeOffset = 0
 	s.dirtyNew[packID] = struct{}{}
+
+	if prevPackID != 0 {
+		if _, dirty := s.dirtyPacks[prevPackID]; dirty {
+			s.enqueueBgSyncLocked(prevPackID)
+		}
+	}
 	return nil
 }
 
+func (s *BlobStore) enqueueBgSyncLocked(packID uint64) {
+	if s.closed || packID == 0 {
+		return
+	}
+	if !s.bgStarted {
+		s.bgStarted = true
+		s.bgNotify = make(chan struct{}, 1)
+		s.bgDone = make(chan struct{})
+		go s.bgSyncLoop()
+	}
+	if !slices.Contains(s.bgQueue, packID) {
+		s.bgQueue = append(s.bgQueue, packID)
+	}
+	select {
+	case s.bgNotify <- struct{}{}:
+	default:
+	}
+}
+
+func (s *BlobStore) bgSyncLoop() {
+	defer close(s.bgDone)
+	for {
+		s.mu.Lock()
+		for len(s.bgQueue) == 0 && !s.closed {
+			s.mu.Unlock()
+			<-s.bgNotify
+			s.mu.Lock()
+		}
+		if s.closed {
+			s.bgQueue = nil
+			s.mu.Unlock()
+			return
+		}
+		packID := s.bgQueue[0]
+		s.bgQueue = s.bgQueue[1:]
+		s.mu.Unlock()
+
+		_ = s.syncPack(packID)
+	}
+}
+
 func (s *BlobStore) markPackDirtyLocked(packID, ino uint64) {
-	s.dirtyPacks[packID] = struct{}{}
+	s.writeSeq++
+	seq := s.writeSeq
+	s.dirtyPacks[packID] = seq
 	if ino == 0 {
-		s.unownedDirty[packID] = struct{}{}
+		s.unownedDirty[packID] = seq
 		return
 	}
 	set := s.inoPacks[ino]
 	if set == nil {
-		set = make(map[uint64]struct{})
+		set = make(map[uint64]uint64)
 		s.inoPacks[ino] = set
 	}
-	set[packID] = struct{}{}
+	set[packID] = seq
+}
+
+func (s *BlobStore) markDirDirtyLocked() {
+	s.dirDirtySeq++
+	s.dirDirty = true
 }
 
 // Read 读取指定 BlobRef 的完整内容。
@@ -725,21 +806,12 @@ func (s *BlobStore) Sync() error {
 		return nil
 	}
 	packs := make([]uint64, 0, len(s.dirtyPacks))
-	needSyncDir := s.dirDirty
 	for packID := range s.dirtyPacks {
 		packs = append(packs, packID)
-		if _, isNew := s.dirtyNew[packID]; isNew {
-			needSyncDir = true
-			delete(s.dirtyNew, packID)
-		}
 	}
-	clear(s.dirtyPacks)
-	clear(s.unownedDirty)
-	clear(s.inoPacks)
-	s.dirDirty = false
 	s.mu.Unlock()
 
-	return s.syncBatch(packs, needSyncDir)
+	return s.syncBatch(packs)
 }
 
 // SyncInode 仅对包含指定 Inode 未刷盘写入的脏 .pack 常驻句柄执行 fdatasync，
@@ -747,64 +819,147 @@ func (s *BlobStore) Sync() error {
 func (s *BlobStore) SyncInode(ino uint64) error {
 	s.mu.Lock()
 	var packs []uint64
-	if set := s.inoPacks[ino]; len(set) > 0 {
-		packs = make([]uint64, 0, len(set))
+	set := s.inoPacks[ino]
+	if len(set) > 0 {
+		packs = make([]uint64, 0, len(set)+len(s.unownedDirty))
 		for packID := range set {
 			packs = append(packs, packID)
 		}
 	}
 	for packID := range s.unownedDirty {
-		packs = append(packs, packID)
+		if _, exists := set[packID]; !exists {
+			packs = append(packs, packID)
+		}
 	}
 	if len(packs) == 0 && !s.dirDirty {
 		s.mu.Unlock()
 		return nil
 	}
+	s.mu.Unlock()
 
-	needSyncDir := s.dirDirty
-	s.dirDirty = false
-	for _, packID := range packs {
-		if _, isNew := s.dirtyNew[packID]; isNew {
-			needSyncDir = true
-			delete(s.dirtyNew, packID)
+	return s.syncBatch(packs)
+}
+
+func (s *BlobStore) syncPack(packID uint64) error {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return ErrClosed
 		}
+		reqSeq, dirty := s.dirtyPacks[packID]
+		if !dirty {
+			s.mu.Unlock()
+			return nil
+		}
+		if flight, ok := s.syncFlights[packID]; ok {
+			s.mu.Unlock()
+			<-flight.done
+			if flight.err != nil {
+				return flight.err
+			}
+			if flight.targetSeq >= reqSeq {
+				return nil
+			}
+			continue
+		}
+		flight := &packSyncFlight{
+			targetSeq: reqSeq,
+			done:      make(chan struct{}),
+		}
+		s.syncFlights[packID] = flight
+		hook := s.syncFileHook
+		s.mu.Unlock()
+
+		if hook != nil {
+			hook(packID)
+		}
+
+		var syncErr error
+		file, err := s.getOrOpenPackFile(packID)
+		if errors.Is(err, os.ErrNotExist) {
+			syncErr = nil
+		} else if err != nil {
+			syncErr = err
+		} else if err := syncFileData(file); err != nil {
+			syncErr = err
+		} else {
+			s.syncFileCount.Add(1)
+		}
+
+		s.mu.Lock()
+		delete(s.syncFlights, packID)
+		if syncErr == nil {
+			s.completePackSyncLocked(packID, reqSeq)
+		}
+		flight.err = syncErr
+		close(flight.done)
+		s.mu.Unlock()
+
+		return syncErr
+	}
+}
+
+func (s *BlobStore) completePackSyncLocked(packID, syncedSeq uint64) {
+	if curSeq, ok := s.dirtyPacks[packID]; ok && curSeq <= syncedSeq {
 		delete(s.dirtyPacks, packID)
+	}
+	if curSeq, ok := s.unownedDirty[packID]; ok && curSeq <= syncedSeq {
 		delete(s.unownedDirty, packID)
-		for owner, set := range s.inoPacks {
+	}
+	for owner, set := range s.inoPacks {
+		if curSeq, ok := set[packID]; ok && curSeq <= syncedSeq {
 			delete(set, packID)
 			if len(set) == 0 {
 				delete(s.inoPacks, owner)
 			}
 		}
 	}
-	delete(s.inoPacks, ino)
-	s.mu.Unlock()
-
-	return s.syncBatch(packs, needSyncDir)
+	if _, isNew := s.dirtyNew[packID]; isNew {
+		delete(s.dirtyNew, packID)
+		s.markDirDirtyLocked()
+	}
 }
 
-func (s *BlobStore) syncPack(packID uint64) error {
-	file, err := s.getOrOpenPackFile(packID)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		s.reMarkPackDirty(packID)
-		return err
-	}
-	if err := syncFileData(file); err != nil {
-		s.reMarkPackDirty(packID)
-		return err
-	}
-	s.syncFileCount.Add(1)
-	return nil
-}
+func (s *BlobStore) syncPacksDirIfNeeded() error {
+	for {
+		s.mu.Lock()
+		if !s.dirDirty {
+			s.mu.Unlock()
+			return nil
+		}
+		reqSeq := s.dirDirtySeq
+		if flight := s.dirFlight; flight != nil {
+			s.mu.Unlock()
+			<-flight.done
+			if flight.err != nil {
+				return flight.err
+			}
+			if flight.targetSeq >= reqSeq {
+				return nil
+			}
+			continue
+		}
+		flight := &dirSyncFlight{
+			targetSeq: reqSeq,
+			done:      make(chan struct{}),
+		}
+		s.dirFlight = flight
+		s.mu.Unlock()
 
-func (s *BlobStore) reMarkPackDirty(packID uint64) {
-	s.mu.Lock()
-	s.dirtyPacks[packID] = struct{}{}
-	s.unownedDirty[packID] = struct{}{}
-	s.mu.Unlock()
+		syncErr := s.syncPacksDir()
+
+		s.mu.Lock()
+		s.dirFlight = nil
+		if syncErr == nil && s.dirDirtySeq <= reqSeq {
+			s.dirDirty = false
+		}
+		flight.err = syncErr
+		close(flight.done)
+		s.mu.Unlock()
+
+		return syncErr
+	}
 }
 
 func (s *BlobStore) syncPacksDir() error {
@@ -813,32 +968,50 @@ func (s *BlobStore) syncPacksDir() error {
 		return nil
 	}
 	if err != nil {
-		s.mu.Lock()
-		s.dirDirty = true
-		s.mu.Unlock()
 		return err
 	}
 	if err := errors.Join(handle.Sync(), handle.Close()); err != nil {
-		s.mu.Lock()
-		s.dirDirty = true
-		s.mu.Unlock()
 		return err
 	}
 	s.syncDirCount.Add(1)
 	return nil
 }
 
-func (s *BlobStore) syncBatch(packs []uint64, needSyncDir bool) error {
+func (s *BlobStore) syncBatch(packs []uint64) error {
 	var errs []error
-	for _, packID := range packs {
-		if err := s.syncPack(packID); err != nil {
+	switch len(packs) {
+	case 0:
+	case 1:
+		if err := s.syncPack(packs[0]); err != nil {
 			errs = append(errs, err)
+		}
+	default:
+		workers := min(len(packs), maxSyncBatchConcurrency)
+		errList := make([]error, len(packs))
+		var nextIdx atomic.Uint32
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				for {
+					i := int(nextIdx.Add(1) - 1)
+					if i >= len(packs) {
+						return
+					}
+					errList[i] = s.syncPack(packs[i])
+				}
+			}()
+		}
+		wg.Wait()
+		for _, err := range errList {
+			if err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
-	if needSyncDir {
-		if err := s.syncPacksDir(); err != nil {
-			errs = append(errs, err)
-		}
+	if err := s.syncPacksDirIfNeeded(); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
@@ -865,8 +1038,14 @@ func (s *BlobStore) RemovePack(packID uint64) error {
 			delete(s.inoPacks, owner)
 		}
 	}
-	s.dirDirty = true
+	s.bgQueue = slices.DeleteFunc(s.bgQueue, func(id uint64) bool { return id == packID })
+	s.markDirDirtyLocked()
+	flight := s.syncFlights[packID]
 	s.mu.Unlock()
+
+	if flight != nil {
+		<-flight.done
+	}
 
 	s.filesMu.Lock()
 	if f, ok := s.packFiles[packID]; ok {
@@ -884,14 +1063,37 @@ func (s *BlobStore) RemovePack(packID uint64) error {
 	return err
 }
 
-// Close 安全关闭所有常驻 .pack 文件句柄（含活跃包与已封口只读包）。
+// Close 安全停止后台刷盘协程并关闭所有常驻 .pack 文件句柄（含活跃包与已封口只读包）。
 func (s *BlobStore) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	s.activePackID = 0
 	s.activeFile = nil
 	s.activeOffset = 0
+	s.bgQueue = nil
+	bgStarted := s.bgStarted
+	bgNotify := s.bgNotify
+	bgDone := s.bgDone
+	flights := make([]*packSyncFlight, 0, len(s.syncFlights))
+	for _, f := range s.syncFlights {
+		flights = append(flights, f)
+	}
+	dirFlight := s.dirFlight
 	s.mu.Unlock()
+
+	if bgStarted {
+		select {
+		case bgNotify <- struct{}{}:
+		default:
+		}
+		<-bgDone
+	}
+	for _, f := range flights {
+		<-f.done
+	}
+	if dirFlight != nil {
+		<-dirFlight.done
+	}
 
 	s.filesMu.Lock()
 	defer s.filesMu.Unlock()
