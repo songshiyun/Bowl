@@ -96,23 +96,22 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 	}
 
 	numBlocks := len(data) / BlobSize
-	specs := make([]writeBlockSpec, 0, numBlocks)
+	specs := make([]writeBlockSpec, numBlocks)
 	var staged []BlobRef
 
-	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 追加写入满块数据。
-	for i := range numBlocks {
-		blockIdx := (offset / BlobSize) + uint64(i)
-		chunk := data[i*BlobSize : (i+1)*BlobSize]
-		ref, writeErr := s.stageAppend(blobs, ino, chunk, &staged)
-		if writeErr != nil {
-			s.unpinStagedBlobs(staged)
-			return 0, Attribute{}, writeErr
-		}
-		specs = append(specs, writeBlockSpec{
-			blockIdx: blockIdx,
+	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 批量追加写入满块数据。
+	refs, writeErr := s.stageAppendBlocks(blobs, ino, data, &staged)
+	if writeErr != nil {
+		s.unpinStagedBlobs(staged)
+		return 0, Attribute{}, writeErr
+	}
+	baseBlockIdx := offset / BlobSize
+	for i, ref := range refs {
+		specs[i] = writeBlockSpec{
+			blockIdx: baseBlockIdx + uint64(i),
 			newRef:   ref,
 			keep:     true,
-		})
+		}
 	}
 
 	// 预写成功后获取 per-Inode 定序锁，确保持有至阶段 3 db.Apply 完成（<-cmd.done 唤醒）后释放。
@@ -324,7 +323,7 @@ func (s *StoreActor) validateWriteCmd(cmd *writeCmd) error {
 		}
 	}
 
-	if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.blocks); err != nil {
+	if err := s.resolveWriteBlockSpecs(s.batch, op.ino, inode.Size, op.blocks); err != nil {
 		return err
 	}
 

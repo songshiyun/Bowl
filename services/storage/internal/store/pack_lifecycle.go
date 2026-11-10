@@ -157,6 +157,25 @@ func (s *StoreActor) stageAppend(blobs *BlobStore, ino uint64, data []byte, stag
 	return ref, nil
 }
 
+// stageAppendBlocks 在 Stage 1 向活跃 .pack 批量追加连续的 256 KiB 满块，并将生成的 BlobRef 序列单次批量加锁纳入预写租约。
+func (s *StoreActor) stageAppendBlocks(blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) ([]BlobRef, error) {
+	refs, err := blobs.AppendBlocks(ino, data)
+	if err != nil {
+		return nil, err
+	}
+	s.inFlightMu.Lock()
+	for _, ref := range refs {
+		if ref.PackID != 0 {
+			s.inFlightPacks[ref.PackID]++
+		}
+	}
+	s.inFlightMu.Unlock()
+	if staged != nil {
+		*staged = append(*staged, refs...)
+	}
+	return refs, nil
+}
+
 // stageExtendTail 在 Stage 1 尝试原地顺延扩展活跃 .pack 最末尾同块，成功后自动将更新后的 BlobRef 纳入预写租约。
 func (s *StoreActor) stageExtendTail(blobs *BlobStore, ino uint64, oldRef BlobRef, patchOffset uint32, data []byte, newLen uint32, staged *[]BlobRef) (BlobRef, bool, error) {
 	extRef, ok, err := blobs.ExtendTail(ino, oldRef, patchOffset, data, newLen)

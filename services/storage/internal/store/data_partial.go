@@ -297,7 +297,7 @@ func (s *StoreActor) validateFallocateCmd(cmd *writeCmd) error {
 			op.fullDeleteKeys = keys
 		}
 
-		if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.partialSpecs); err != nil {
+		if err := s.resolveWriteBlockSpecs(s.batch, op.ino, inode.Size, op.partialSpecs); err != nil {
 			return err
 		}
 	}

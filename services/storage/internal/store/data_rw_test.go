@@ -693,3 +693,34 @@ func TestDeadSealedPackPhysicalReclaimSoftUpdates(t *testing.T) {
 	_, ok = readPackMetaFromDB(t, reopened, 4)
 	require.False(t, ok, "Unlink 将已封口 Pack 4 扣减至 0 后必须同批删除 sys:pack:4")
 }
+
+func TestTailAppendFullBlocksSkipsRedundantOldDataKeyLookup(t *testing.T) {
+	actor, err := store.Open(store.Options{
+		Dir:      t.TempDir(),
+		DiskID:   "disk-tail-skip",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	f, err := actor.Create(store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("tail.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	// 人工注入一条越过当前 inode.Size (0) 的投毒 DataKey(ino, 0)（正常引擎不变量下 blockIdx * BlobSize >= inode.Size 绝不存在旧 DataKey）。
+	// 若 Phase A resolveWriteBlockSpecs 根据 inode.Size 跳过越界新块点查，则不会读取并解码该投毒值；若仍执行点查则会触发 ErrInvalidValue 失败。
+	require.NoError(t, actor.DB().Set(store.DataKey(f.Ino, 0), []byte("bad- poisoned-blob-ref"), nil))
+
+	block0 := bytes.Repeat([]byte{0x7a}, store.BlobSize)
+	written, attr, err := actor.Write(f.Ino, 0, block0)
+	require.NoError(t, err, "尾部追加新块（blockIdx * BlobSize >= inode.Size）必须直接跳过旧 DataKey 点查")
+	require.Equal(t, uint32(store.BlobSize), written)
+	require.Equal(t, uint64(store.BlobSize), attr.Size)
+
+	got, err := actor.Read(f.Ino, 0, store.BlobSize)
+	require.NoError(t, err)
+	require.Equal(t, block0, got)
+}

@@ -91,9 +91,15 @@ func (s *StoreActor) collectDataKeysInRange(reader pebbleReader, ino, startBlock
 	return entries, nil
 }
 
-// resolveWriteBlockSpecs 在 Stage 2 Phase A 中统一从 s.batch 读取各目标逻辑块的实时旧引用状态。
-func (s *StoreActor) resolveWriteBlockSpecs(reader pebbleReader, ino uint64, specs []writeBlockSpec) error {
+// resolveWriteBlockSpecs 在 Stage 2 Phase A 中统一从 s.batch 读取各目标逻辑块的实时旧引用状态；
+// 对于 blockIdx * BlobSize >= inodeSize 的尾部越界新块，根据存储引擎不变量直接判定无旧引用（0 次点查）。
+func (s *StoreActor) resolveWriteBlockSpecs(reader pebbleReader, ino, inodeSize uint64, specs []writeBlockSpec) error {
 	for i := range specs {
+		if specs[i].blockIdx*BlobSize >= inodeSize {
+			specs[i].oldRef = BlobRef{}
+			specs[i].oldOK = false
+			continue
+		}
 		oldRef, oldOK, err := s.readDataBlobRef(reader, ino, specs[i].blockIdx)
 		if err != nil {
 			return err

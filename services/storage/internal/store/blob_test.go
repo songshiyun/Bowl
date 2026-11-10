@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -298,12 +299,110 @@ func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {
 	_, err = blobs.Read(store.BlobRef{})
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 
-	// 4. Close 后幂等且拒绝后续 Append / ExtendTail
+	// 4. Close 后幂等且拒绝后续 Append / AppendBlocks / ExtendTail
 	require.NoError(t, blobs.Close())
 	require.NoError(t, blobs.Close())
 
 	_, err = blobs.Append(1, []byte("after-close"))
 	require.ErrorIs(t, err, store.ErrClosed)
+	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize))
+	require.ErrorIs(t, err, store.ErrClosed)
 	_, _, err = blobs.ExtendTail(1, ref, ref.Length, []byte("!"), ref.Length+1)
 	require.ErrorIs(t, err, store.ErrClosed)
+}
+
+func TestBlobStoreAppendBlocksCoalescingAndCrossPackRollover(t *testing.T) {
+	base := t.TempDir()
+	blobs := store.NewBlobStore(base)
+	defer func() { require.NoError(t, blobs.Close()) }()
+
+	// 非法长度校验：0 字节、非 256 KiB 倍数、或 MaxPackSize < 256 KiB
+	_, err := blobs.AppendBlocks(1, nil)
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize+1024))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+
+	// 将封口容量设为 3 个 256 KiB 块（768 KiB）
+	blobs.SetMaxPackSize(3 * store.BlobSize)
+
+	// 先写入 128 KiB 局部块，使 Pack 1 偏移处于 128 KiB，剩余容量 640 KiB（仅能再容纳 2 个 256 KiB 满块）
+	prefix := bytes.Repeat([]byte{0x05}, 128*1024)
+	refPrefix, err := blobs.Append(10, prefix)
+	require.NoError(t, err)
+	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: 128 * 1024}, refPrefix)
+
+	// 一次性批量追加 4 个 256 KiB 满块（共 1 MiB）：
+	// - 前 2 块（512 KiB）合并单次 WriteAt 写入 Pack 1 [128 KiB, 640 KiB)
+	// - 后 2 块（512 KiB）自动封口 Pack 1 并合并单次 WriteAt 写入 Pack 2 [0, 512 KiB)
+	payload := make([]byte, 4*store.BlobSize)
+	blocks := make([][]byte, 4)
+	for i := range 4 {
+		fill := byte(0x10 + i)
+		blocks[i] = bytes.Repeat([]byte{fill}, store.BlobSize)
+		copy(payload[i*store.BlobSize:(i+1)*store.BlobSize], blocks[i])
+	}
+
+	refs, err := blobs.AppendBlocks(10, payload)
+	require.NoError(t, err)
+	require.Len(t, refs, 4)
+	require.Equal(t, store.BlobRef{PackID: 1, Offset: 128 * 1024, Length: store.BlobSize}, refs[0])
+	require.Equal(t, store.BlobRef{PackID: 1, Offset: 128*1024 + store.BlobSize, Length: store.BlobSize}, refs[1])
+	require.Equal(t, store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, refs[2])
+	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize, Length: store.BlobSize}, refs[3])
+	require.Equal(t, uint64(2), blobs.ActivePackID())
+	require.Equal(t, uint32(2*store.BlobSize), blobs.ActiveOffset())
+
+	// 验证所有块通过热缓存与驱逐后的磁盘读取完全一致
+	for i, ref := range refs {
+		gotHot := make([]byte, store.BlobSize)
+		require.NoError(t, blobs.ReadAt(ref, 0, gotHot))
+		require.Equal(t, blocks[i], gotHot)
+
+		blobs.EvictHot(ref)
+		gotDisk := make([]byte, store.BlobSize)
+		require.NoError(t, blobs.ReadAt(ref, 0, gotDisk))
+		require.Equal(t, blocks[i], gotDisk)
+	}
+}
+
+func TestBlobStoreHotShardSlotBufferReuseZeroAllocAfterWarmup(t *testing.T) {
+	base := t.TempDir()
+	blobs := store.NewBlobStore(base)
+	defer func() { require.NoError(t, blobs.Close()) }()
+
+	block := bytes.Repeat([]byte{0x5a}, store.BlobSize)
+
+	// 预热：写入 256 个 256 KiB 满块（16 分片 × 16 槽位 = 64 MiB 热缓存预算填满）
+	for range 256 {
+		_, err := blobs.Append(1, block)
+		require.NoError(t, err)
+	}
+
+	// 预热填满后，继续追加 256 KiB 满块应原地复用被淘汰的最旧槽位底层切片，不发生 256 KiB 堆分配
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	const MeasureBlocks = 64
+	for i := range MeasureBlocks {
+		block[0] = byte(i)
+		_, err := blobs.Append(1, block)
+		require.NoError(t, err)
+	}
+	runtime.ReadMemStats(&after)
+
+	totalAllocDelta := after.TotalAlloc - before.TotalAlloc
+	// 若未复用底层切片，64 次 256 KiB 分配至少产生 16 MiB (16,777,216 B) 堆分配；复用后仅产生极小文件 I/O 内部开销 (< 512 KiB)
+	require.Less(t, totalAllocDelta, uint64(512*1024), "热缓存填满预热后继续满块写入必须原地复用环形槽位底层切片（避免每次分配 256 KiB）")
+
+	// 验证通过 AppendBlocks 批量追加同样复用底层切片且热缓存读取内容准确
+	batchPayload := bytes.Repeat([]byte{0x6b}, 4*store.BlobSize)
+	runtime.ReadMemStats(&before)
+	refs, err := blobs.AppendBlocks(1, batchPayload)
+	require.NoError(t, err)
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64*1024))
+	for _, ref := range refs {
+		got := make([]byte, store.BlobSize)
+		require.NoError(t, blobs.ReadAt(ref, 0, got))
+		require.Equal(t, batchPayload[:store.BlobSize], got)
+	}
 }

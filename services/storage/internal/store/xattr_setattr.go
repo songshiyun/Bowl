@@ -525,7 +525,7 @@ func (s *StoreActor) validateSetAttrCmd(cmd *writeCmd) error {
 			}
 			op.deleteKeys = keys
 
-			if err := s.resolveWriteBlockSpecs(s.batch, op.ino, op.tailSpecs); err != nil {
+			if err := s.resolveWriteBlockSpecs(s.batch, op.ino, inode.Size, op.tailSpecs); err != nil {
 				return err
 			}
 		} else {

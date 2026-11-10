@@ -267,10 +267,72 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 		Offset: offset,
 		Length: uint32(len(data)),
 	}
-	cached := make([]byte, len(data))
-	copy(cached, data)
-	s.cacheHotOwned(ref.PackID, ref.Offset, cached)
+	s.cacheHotCopy(ref.PackID, ref.Offset, data)
 	return ref, nil
+}
+
+// AppendBlocks 将一个或多个连续的 256 KiB（BlobSize）满块批量追加写入活跃 .pack：
+//   - 当当前活跃 .pack 剩余容量可容纳连续多个满块时，在单次锁与单次 WriteAt 系统调用内合并写入整段数据；
+//   - 跨 MaxPackSize（64 MiB）封口边界时自动分段切入新 .pack，按块顺序返回对应的 BlobRef 序列并写入分片热块缓存。
+func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
+	if len(data) == 0 || len(data)%BlobSize != 0 {
+		return nil, ErrInvalidValue
+	}
+	maxCap := s.maxPackSize.Load()
+	if maxCap < BlobSize {
+		return nil, ErrInvalidValue
+	}
+
+	numBlocks := len(data) / BlobSize
+	refs := make([]BlobRef, 0, numBlocks)
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+
+	for consumed := 0; consumed < len(data); {
+		if s.activeFile == nil || uint64(s.activeOffset)+BlobSize > uint64(maxCap) {
+			if err := s.openNextActivePackLocked(); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+		}
+
+		availBlocks := int((uint64(maxCap) - uint64(s.activeOffset)) / BlobSize)
+		remBlocks := (len(data) - consumed) / BlobSize
+		batchBlocks := min(availBlocks, remBlocks)
+		batchBytes := batchBlocks * BlobSize
+
+		packID := s.activePackID
+		baseOffset := s.activeOffset
+		file := s.activeFile
+
+		if _, err := file.WriteAt(data[consumed:consumed+batchBytes], int64(baseOffset)); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+
+		s.activeOffset = baseOffset + uint32(batchBytes)
+		s.markPackDirtyLocked(packID, ino)
+
+		for b := range batchBlocks {
+			refs = append(refs, BlobRef{
+				PackID: packID,
+				Offset: baseOffset + uint32(b*BlobSize),
+				Length: BlobSize,
+			})
+		}
+		consumed += batchBytes
+	}
+	s.mu.Unlock()
+
+	for i, ref := range refs {
+		chunk := data[i*BlobSize : (i+1)*BlobSize]
+		s.cacheHotCopy(ref.PackID, ref.Offset, chunk)
+	}
+	return refs, nil
 }
 
 // ExtendTail 尝试对位于当前活跃 .pack 最末尾的逻辑块执行原地顺延扩展（ADR-0031 §3.2）：
@@ -484,8 +546,8 @@ func (s *BlobStore) hotShardFor(packID uint64, offset uint32) *hotShard {
 	return &s.hot[shardIdx]
 }
 
-func (s *BlobStore) cacheHotOwned(packID uint64, offset uint32, data []byte) {
-	if len(data) > hotBlobShardBudget {
+func (s *BlobStore) cacheHotCopy(packID uint64, offset uint32, src []byte) {
+	if len(src) > hotBlobShardBudget {
 		return
 	}
 	sh := s.hotShardFor(packID, offset)
@@ -494,19 +556,40 @@ func (s *BlobStore) cacheHotOwned(packID uint64, offset uint32, data []byte) {
 	for i := 0; i < sh.count; i++ {
 		idx := (sh.head + i) % len(sh.slots)
 		if sh.slots[idx].packID == packID && sh.slots[idx].offset == offset {
-			sh.bytes += len(data) - len(sh.slots[idx].data)
-			sh.slots[idx].data = data
+			oldData := sh.slots[idx].data
+			var dst []byte
+			if cap(oldData) >= len(src) {
+				dst = oldData[:len(src)]
+			} else {
+				dst = make([]byte, len(src))
+			}
+			copy(dst, src)
+			sh.bytes += len(src) - len(oldData)
+			sh.slots[idx].data = dst
 			sh.trimLocked()
 			return
 		}
 	}
-	if sh.count == len(sh.slots) {
-		sh.evictOldestLocked()
+
+	var reused []byte
+	for (sh.count == len(sh.slots) || sh.bytes+len(src) > hotBlobShardBudget) && sh.count > 0 {
+		evicted := sh.evictOldestTakeBufLocked()
+		if cap(evicted) >= len(src) && cap(evicted) > cap(reused) {
+			reused = evicted
+		}
 	}
+	var dst []byte
+	if cap(reused) >= len(src) {
+		dst = reused[:len(src)]
+	} else {
+		dst = make([]byte, len(src))
+	}
+	copy(dst, src)
+
 	idx := (sh.head + sh.count) % len(sh.slots)
-	sh.slots[idx] = hotBlob{packID: packID, offset: offset, data: data}
+	sh.slots[idx] = hotBlob{packID: packID, offset: offset, data: dst}
 	sh.count++
-	sh.bytes += len(data)
+	sh.bytes += len(dst)
 	sh.trimLocked()
 }
 
@@ -556,11 +639,17 @@ func (sh *hotShard) trimLocked() {
 }
 
 func (sh *hotShard) evictOldestLocked() {
+	_ = sh.evictOldestTakeBufLocked()
+}
+
+func (sh *hotShard) evictOldestTakeBufLocked() []byte {
 	slot := &sh.slots[sh.head]
-	sh.bytes -= len(slot.data)
+	buf := slot.data
+	sh.bytes -= len(buf)
 	*slot = hotBlob{}
 	sh.head = (sh.head + 1) % len(sh.slots)
 	sh.count--
+	return buf
 }
 
 func (sh *hotShard) evictBlockLocked(packID uint64, offset uint32) {
