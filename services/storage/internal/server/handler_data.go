@@ -22,6 +22,9 @@ func (s *Server) Read(ctx context.Context, req *connect.Request[storagev1.ReadRe
 	if err != nil {
 		return nil, toConnectError(err)
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, toConnectError(ctxErr)
+	}
 	data, err := actor.Read(msg.Ino, msg.Offset, msg.Size)
 	if err != nil {
 		return nil, toConnectError(err)
@@ -44,6 +47,9 @@ func (s *Server) Write(ctx context.Context, req *connect.Request[storagev1.Write
 	actor, err := s.control.Actor(ctx, msg.DiskId)
 	if err != nil {
 		return nil, toConnectError(err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, toConnectError(ctxErr)
 	}
 	written, attr, err := actor.Write(msg.Ino, msg.Offset, msg.Data, msg.Epoch)
 	if err != nil {

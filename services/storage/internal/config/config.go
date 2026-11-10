@@ -36,6 +36,19 @@ type Config struct {
 	Meta MetaConfig
 }
 
+var (
+	_ serverx.AdminServerConfig      = (*Config)(nil)
+	_ observability.AdminRouteConfig = (*Config)(nil)
+)
+
+// InternalPort 返回管理/内网监听端口。
+func (c *Config) InternalPort() int {
+	if c == nil {
+		return 0
+	}
+	return c.InternalServerPort
+}
+
 // ApplyDefaultInternalPort 在未显式指定 INTERNAL_SERVER_PORT 环境变量且端口处于零值或 serverx 默认 8090 时，
 // 将管理/内网监听端口设置为指定的 defaultPort。
 func (c *Config) ApplyDefaultInternalPort(defaultPort int) {
@@ -50,7 +63,7 @@ func (c *Config) ApplyDefaultInternalPort(defaultPort int) {
 
 // Validate 校验全局配置合法性。
 func (c *Config) Validate() error {
-	if err := c.ValidateSinglePort(); err != nil {
+	if err := c.ValidateDualPorts(); err != nil {
 		return fmt.Errorf("validate server config: %w", err)
 	}
 

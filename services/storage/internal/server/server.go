@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	"connectrpc.com/connect"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/fx"
 
 	"github.com/starsrc/Aether/pkg/observability"
@@ -13,7 +16,6 @@ import (
 	"github.com/starsrc/Aether/pkg/serverx"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
-	"github.com/starsrc/bowl/pkg/validator"
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/control"
 )
@@ -31,16 +33,17 @@ const (
 	HTTP2MaxReceiveBufferPerConnection = (4 << 20) - 1
 )
 
-// Server 封装并管理底层 HTTP 服务与 ConnectRPC 路由处理器。
+// Server 封装并管理底层公网 RPC HTTP 服务与内网管理面 HTTP 服务。
 type Server struct {
 	storagev1connect.UnimplementedStorageServiceHandler
-	control    control.Manager
-	config     config.ServerConfig
-	logger     *slog.Logger
-	httpServer *http.Server
+	control     control.Manager
+	config      config.ServerConfig
+	logger      *slog.Logger
+	httpServer  *http.Server
+	adminServer *http.Server
 }
 
-// Handler 返回 HTTP 处理器实例，便于测试与中间件挂载。
+// Handler 返回公网 RPC HTTP 处理器实例，便于测试与中间件挂载。
 func (s *Server) Handler() http.Handler {
 	if s.httpServer != nil {
 		return s.httpServer.Handler
@@ -48,9 +51,22 @@ func (s *Server) Handler() http.Handler {
 	return nil
 }
 
-// HTTPServer 返回底层 HTTP 服务器实例。
+// HTTPServer 返回底层公网 HTTP 服务器实例。
 func (s *Server) HTTPServer() *http.Server {
 	return s.httpServer
+}
+
+// AdminHandler 返回内网管理面 HTTP 处理器实例（未启用内网管理端口时返回 nil）。
+func (s *Server) AdminHandler() http.Handler {
+	if s.adminServer != nil {
+		return s.adminServer.Handler
+	}
+	return nil
+}
+
+// AdminHTTPServer 返回底层内网管理面 HTTP 服务器实例（未启用内网管理端口时返回 nil）。
+func (s *Server) AdminHTTPServer() *http.Server {
+	return s.adminServer
 }
 
 // Control 返回持有的单盘控制面与 StoreActor 实例池管理器。
@@ -58,12 +74,23 @@ func (s *Server) Control() control.Manager {
 	return s.control
 }
 
-// Addr 返回服务器监听的网络地址。
+// Addr 返回公网服务器监听的网络地址。
 func (s *Server) Addr() string {
 	if s.httpServer != nil {
 		return s.httpServer.Addr
 	}
 	return s.config.Addr()
+}
+
+// AdminAddr 返回内网管理服务器监听的网络地址（未启用内网管理端口时返回空字符串）。
+func (s *Server) AdminAddr() string {
+	if s.adminServer != nil {
+		return s.adminServer.Addr
+	}
+	if s.config.InternalServerPort > 0 {
+		return s.config.InternalAddr()
+	}
+	return ""
 }
 
 // Params 定义 Server 初始化所需的依赖注入参数。
@@ -72,20 +99,32 @@ type Params struct {
 
 	Config        config.ServerConfig
 	Control       control.Manager
-	Observability serverx.ObservabilityConfig `optional:"true"`
-	Telemetry     telemetry.Config            `optional:"true"`
-	ObsReady      observability.Ready         `optional:"true"`
-	Logger        *slog.Logger                `optional:"true"`
-	Lifecycle     fx.Lifecycle                `optional:"true"`
-	Shutdowner    fx.Shutdowner               `optional:"true"`
+	Observability serverx.ObservabilityConfig    `optional:"true"`
+	Telemetry     telemetry.Config               `optional:"true"`
+	AdminCfg      observability.AdminRouteConfig `optional:"true"`
+	Gatherer      prometheus.Gatherer            `optional:"true"`
+	Pool          *pgxpool.Pool                  `optional:"true"`
+	ObsReady      observability.Ready            `optional:"true"`
+	Logger        *slog.Logger                   `optional:"true"`
+	Lifecycle     fx.Lifecycle                   `optional:"true"`
+	Shutdowner    fx.Shutdowner                  `optional:"true"`
 }
 
-// New 构造 Server 实例，组装洋葱拦截器链与 ConnectRPC 处理器，并按需在 Fx 生命周期中注册启停钩子。
+// New 构造 Server 实例，组装洋葱拦截器链、公网 ConnectRPC 服务与可选双端口内网管理服务，
+// 并按需在 Fx 生命周期中注册启停钩子。
 //
 //nolint:gocritic // hugeParam: Uber Fx fx.In 参数结构要求按值传入构造器。
 func New(p Params) (*Server, error) {
 	if p.Config.Port() < 0 || p.Config.Port() > 65535 {
 		return nil, fmt.Errorf("invalid server port %d: must be between 0 and 65535", p.Config.Port())
+	}
+	if p.Config.InternalServerPort < 0 || p.Config.InternalServerPort > 65535 {
+		return nil, fmt.Errorf("invalid internal server port %d: must be between 0 and 65535", p.Config.InternalServerPort)
+	}
+	if p.Config.Port() > 0 && p.Config.InternalServerPort > 0 {
+		if err := p.Config.ValidateDualPorts(); err != nil {
+			return nil, err
+		}
 	}
 
 	obsCfg := p.Observability
@@ -93,25 +132,20 @@ func New(p Params) (*Server, error) {
 		obsCfg = toObservabilityConfig(p.Telemetry)
 	}
 
-	val, err := validator.NewStorageValidator()
-	if err != nil {
-		return nil, fmt.Errorf("create storage validator: %w", err)
-	}
-	valInterceptor := NewValidationInterceptor(val)
-
-	interceptors, err := serverx.NewInterceptorsWithValidator(
-		quietExpectedNotFound(p.Logger),
-		obsCfg,
-		valInterceptor,
-	)
+	interceptors, err := BuildInterceptors(obsCfg, p.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("build interceptors: %w", err)
+	}
+
+	logger := p.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	srv := &Server{
 		control: p.Control,
 		config:  p.Config,
-		logger:  quietExpectedNotFound(p.Logger),
+		logger:  logger,
 	}
 
 	mux := http.NewServeMux()
@@ -135,8 +169,28 @@ func New(p Params) (*Server, error) {
 	}
 	srv.httpServer = httpServer
 
+	if p.Config.InternalServerPort > 0 {
+		var readyOpts []observability.AdminOption
+		if p.Pool != nil {
+			readyOpts = append(readyOpts, observability.WithReadyCheck("postgres", func(ctx context.Context) error {
+				return p.Pool.Ping(ctx)
+			}))
+		}
+		srv.adminServer = serverx.NewAdminServer(p.Config, p.Gatherer, p.AdminCfg, readyOpts...)
+	}
+
 	if p.Lifecycle != nil && p.Shutdowner != nil {
-		serverx.RegisterSingleLifecycle(p.Lifecycle, p.Shutdowner, p.Config, "server", httpServer)
+		if srv.adminServer != nil {
+			serverx.RegisterLifecycle(
+				p.Lifecycle,
+				p.Shutdowner,
+				p.Config,
+				serverx.Listener{Name: "public", Server: httpServer},
+				serverx.Listener{Name: "admin", Server: srv.adminServer},
+			)
+		} else {
+			serverx.RegisterSingleLifecycle(p.Lifecycle, p.Shutdowner, p.Config, "server", httpServer)
+		}
 	}
 
 	return srv, nil

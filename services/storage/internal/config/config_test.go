@@ -5,6 +5,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/starsrc/Aether/pkg/observability"
+	"github.com/starsrc/Aether/pkg/serverx"
+
 	"github.com/starsrc/bowl/services/storage/internal/config"
 )
 
@@ -61,5 +64,17 @@ func TestLoadObservabilityAndInternalPortDefaults(t *testing.T) {
 	cfgOverride, err := config.Load()
 	require.NoError(t, err)
 	require.Equal(t, 19090, cfgOverride.InternalServerPort)
+	require.Equal(t, 19090, cfgOverride.InternalPort())
 	require.False(t, cfgOverride.TrustRemote())
+
+	var adminSrvCfg serverx.AdminServerConfig = cfgOverride
+	var adminRouteCfg observability.AdminRouteConfig = cfgOverride
+	require.Equal(t, "0.0.0.0:19090", adminSrvCfg.InternalServerAddress())
+	require.True(t, adminRouteCfg.IsMetricsEnabled())
+	require.True(t, adminRouteCfg.IsPprofEnabled())
+
+	t.Setenv("SERVER_PORT", "9000")
+	t.Setenv("INTERNAL_SERVER_PORT", "9000")
+	_, err = config.Load()
+	require.ErrorContains(t, err, "conflict")
 }
