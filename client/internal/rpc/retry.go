@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -242,7 +243,12 @@ func wrapBudgetExceededError(err error) error {
 
 // NewRetryInterceptor 创建遵循有界指数退避策略的 ConnectRPC 客户端一元拦截器。
 func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
+	return newRetryInterceptor(cfg, nil, nil)
+}
+
+func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics) connect.UnaryInterceptorFunc {
 	config := cfg.withDefaults()
+	retryWarnLimiter := newLogRateLimiter(defaultLogRateLimitInterval)
 
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -250,9 +256,42 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 				return next(ctx, req)
 			}
 
+			ctx, reqID := ensureRequestID(ctx)
+			procedure := req.Spec().Procedure
 			startTime := time.Now()
 			interval := config.InitialInterval
-			var lastErr error
+			var (
+				lastErr          error
+				lastRetryableErr error
+			)
+			attempts := 0
+			retryCount := 0
+
+			exhaustBudget := func(cause error) error {
+				wrapped := wrapBudgetExceededError(cause)
+				if !hasErrorInfo(cause) {
+					metrics.incRetryExhausted(procedure)
+					if logger != nil {
+						traceID := extractTraceID(ctx, req, cause)
+						errMsg := wrapped.Error()
+						if cause != nil {
+							errMsg = cause.Error()
+						}
+						logger.LogAttrs(
+							context.Background(),
+							slog.LevelError,
+							"rpc_retry_exhausted_eio",
+							slog.String("procedure", procedure),
+							slog.Int("attempts", attempts),
+							slog.Int64("elapsed_ms", time.Since(startTime).Milliseconds()),
+							slog.Uint64("req_id", reqID),
+							slog.String("trace_id", traceID),
+							slog.String("err", errMsg),
+						)
+					}
+				}
+				return wrapped
+			}
 
 			attemptCtx := ctx
 			if config.MaxElapsedTime > 0 {
@@ -266,12 +305,16 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 					return nil, err
 				}
 				if err := attemptCtx.Err(); err != nil {
-					if lastErr != nil {
-						return nil, wrapBudgetExceededError(lastErr)
+					if lastRetryableErr != nil {
+						return nil, exhaustBudget(lastRetryableErr)
 					}
-					return nil, wrapBudgetExceededError(err)
+					if lastErr != nil {
+						return nil, exhaustBudget(lastErr)
+					}
+					return nil, exhaustBudget(err)
 				}
 
+				attempts++
 				resp, err := next(attemptCtx, req)
 				if err == nil {
 					return resp, nil
@@ -284,26 +327,48 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 					return nil, err
 				}
 
-				// 若父上下文未取消但重试总预算上下文已耗尽，停止重试并返回错误（映射为 EIO）
+				// 若父上下文未取消但重试总预算上下文已耗尽，停止重试并返回错误（映射为 EIO）；
+				// 若本次尝试因预算到期被本地截断且此前已有真实可重试故障，保留真实故障作为根因以便排障留痕。
 				if attemptCtx.Err() != nil {
-					return nil, wrapBudgetExceededError(err)
+					if !hasErrorInfo(err) && lastRetryableErr != nil {
+						return nil, exhaustBudget(lastRetryableErr)
+					}
+					return nil, exhaustBudget(err)
 				}
 
 				// 若不满足重试条件，立即终止并返回原始错误
-				if !shouldRetry(req.Spec().Procedure, err) {
+				if !shouldRetry(procedure, err) {
 					return nil, err
 				}
+				lastRetryableErr = err
 
 				// 计算已过去的总耗时，若超出总预算则终止重试
 				elapsed := time.Since(startTime)
 				if elapsed >= config.MaxElapsedTime {
-					return nil, wrapBudgetExceededError(lastErr)
+					return nil, exhaustBudget(lastErr)
 				}
 
 				sleepDuration := computeJitteredInterval(interval, config.RandFloat64)
 				remaining := config.MaxElapsedTime - elapsed
 				if sleepDuration > remaining {
 					sleepDuration = remaining
+				}
+
+				retryCount++
+				metrics.incRetry(procedure)
+				if retryCount == 1 && logger != nil && retryWarnLimiter.allow(time.Now()) {
+					traceID := extractTraceID(ctx, req, err)
+					logger.LogAttrs(
+						context.Background(),
+						slog.LevelWarn,
+						"rpc_retry_triggered",
+						slog.String("procedure", procedure),
+						slog.Int("attempt", attempts),
+						slog.Int64("backoff_ms", sleepDuration.Milliseconds()),
+						slog.Uint64("req_id", reqID),
+						slog.String("trace_id", traceID),
+						slog.String("err", err.Error()),
+					)
 				}
 
 				timer := time.NewTimer(sleepDuration)

@@ -5,12 +5,15 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
+	"github.com/starsrc/Aether/pkg/serverx"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -53,6 +56,12 @@ type ClientConfig struct {
 
 	// RetryConfig 为可选的重试策略配置。若为 nil 则默认使用 30s 有界指数退避策略。
 	RetryConfig *RetryConfig
+
+	// Logger 为可选的结构化日志记录器。若为 nil 则静默不输出；配置后输出关键异常与慢调用结构化日志。
+	Logger *slog.Logger
+
+	// Metrics 为可选的客户端 RPC 自定义指标收集器。对 nil 安全。
+	Metrics *Metrics
 }
 
 // ResolveEndpoint 按照显式参数 -> BOWL_STORAGE_ENDPOINT -> 默认 http://127.0.0.1:9000 的回退链解析 endpoint，
@@ -149,16 +158,29 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	var interceptors []connect.Interceptor
 
-	// 1. 默认装配重试拦截器（位于最外层，包裹鉴权与底层网络传输）
+	// 1. 最外层装配重试拦截器（包裹在 otelconnect 外层，使每次网络重试独立计入单次尝试 Span 与客户端延迟分布）
 	retryCfg := RetryConfig{}
 	if cfg.RetryConfig != nil {
 		retryCfg = *cfg.RetryConfig
 	}
 	if !retryCfg.Disable {
-		interceptors = append(interceptors, NewRetryInterceptor(retryCfg))
+		interceptors = append(interceptors, newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics))
 	}
 
-	// 2. 装配 Bearer 令牌鉴权拦截器
+	// 2. 请求关联 X-Request-Id 注入、旧 Epoch 围栏拦截检测与慢调用结构化日志拦截器
+	interceptors = append(interceptors, newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold))
+
+	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并采集客户端 RPC 指标）
+	otelInterceptor, err := otelconnect.NewInterceptor()
+	if err != nil {
+		return nil, fmt.Errorf("create otelconnect interceptor: %w", err)
+	}
+	interceptors = append(interceptors, otelInterceptor)
+
+	// 4. 错误原因标注拦截器（提取服务端 ErrorInfo.Reason 同步写入客户端 Span rpc.error_reason 与 otelconnect.Labeler）
+	interceptors = append(interceptors, serverx.NewErrorReasonInterceptor())
+
+	// 5. Bearer 令牌鉴权拦截器与 Accept-Encoding: identity 拦截器
 	if token != "" {
 		authInterceptor := connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 			return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
