@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -19,7 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"go.uber.org/fx"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/starsrc/Aether/pkg/tx"
 
@@ -132,6 +133,7 @@ type Manager interface {
 	DeleteDisk(ctx context.Context, diskID string) error
 	MountDisk(ctx context.Context, params MountDiskParams) (*MountDiskResult, error)
 	Actor(ctx context.Context, diskID string) (*store.StoreActor, error)
+	Collector() prometheus.Collector
 
 	EntryTimeoutSeconds() float64
 	AttrTimeoutSeconds() float64
@@ -156,6 +158,12 @@ type manager struct {
 	openKeepCache                              bool
 	openDirCache                               bool
 	atimeMode                                  AtimeMode
+
+	baseLogger   *slog.Logger
+	logger       *slog.Logger
+	storeMetrics *store.Metrics
+	collector    *storageEngineCollector
+	removeAll    func(string) error
 
 	cache *pebble.Cache
 
@@ -221,18 +229,49 @@ func WithAtimeMode(mode AtimeMode) Option {
 	return func(m *manager) { m.atimeMode = mode }
 }
 
+// WithLogger 配置控制面与下属 StoreActor 共享的结构化日志器（nil 时保持默认 slog.Default()）。
+func WithLogger(logger *slog.Logger) Option {
+	return func(m *manager) {
+		if logger != nil {
+			m.baseLogger = logger
+			m.logger = logger.With("component", "control")
+		}
+	}
+}
+
+// WithStoreMetrics 配置下属 StoreActor 共享的热路径指标收集器（nil 时保持默认隔离实例）。
+func WithStoreMetrics(metrics *store.Metrics) Option {
+	return func(m *manager) {
+		if metrics != nil {
+			m.storeMetrics = metrics
+		}
+	}
+}
+
+func withEngineCollector(collector *storageEngineCollector) Option {
+	return func(m *manager) {
+		if collector != nil {
+			m.collector = collector
+		}
+	}
+}
+
 // New 创建单盘控制面管理器。
 func New(dbStore db.Store, opts ...Option) Manager {
 	return newManager(dbStore, opts...)
 }
 
 func newManager(dbStore db.Store, opts ...Option) *manager {
+	baseLogger := slog.Default()
 	m := &manager{
 		store:           dbStore,
 		storageRoot:     config.DefaultDataDir,
 		entryTimeout:    DefaultEntryTimeoutSeconds,
 		attrTimeout:     DefaultAttrTimeoutSeconds,
 		dirEntryTimeout: DefaultDirEntryTimeoutSeconds,
+		baseLogger:      baseLogger,
+		logger:          baseLogger.With("component", "control"),
+		removeAll:       os.RemoveAll,
 		cache:           pebble.NewCache(DefaultSharedCacheSize),
 		diskLocks:       make(map[string]*diskLockEntry),
 		actors:          make(map[string]*store.StoreActor),
@@ -242,7 +281,21 @@ func newManager(dbStore db.Store, opts ...Option) *manager {
 			opt(m)
 		}
 	}
+	if m.storeMetrics == nil {
+		m.storeMetrics = store.NewMetrics()
+	}
+	if m.collector == nil {
+		m.collector = newStorageEngineCollector()
+	}
+	m.collector.bind(m)
 	return m
+}
+
+func (m *manager) Collector() prometheus.Collector {
+	if m == nil || m.collector == nil {
+		return newStorageEngineCollector()
+	}
+	return m.collector
 }
 
 func (m *manager) EntryTimeoutSeconds() float64    { return m.entryTimeout }
@@ -287,9 +340,11 @@ func (m *manager) lockDisk(diskID string) func() {
 	}
 }
 
-func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(db.Querier) error) error {
-	return tx.Retry(ctx, func(ctx context.Context) error {
-		return m.store.ExecTx(ctx, fn)
+func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(context.Context, db.Querier) error) error {
+	return tx.Retry(ctx, func(attemptCtx context.Context) error {
+		return m.store.ExecTx(attemptCtx, func(q db.Querier) error {
+			return fn(attemptCtx, q)
+		})
 	}, tx.WithDefaultRetry())
 }
 
@@ -333,7 +388,7 @@ func assembleDisk(row *db.Disk, stat *store.StatFSResult) *Disk {
 	}
 }
 
-func (m *manager) getOrOpenActorLocked(diskID string) (*store.StoreActor, error) {
+func (m *manager) getOrOpenActorLocked(ctx context.Context, diskID string) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
 		m.poolMu.RUnlock()
@@ -351,6 +406,8 @@ func (m *manager) getOrOpenActorLocked(diskID string) (*store.StoreActor, error)
 		DiskID:    diskID,
 		AtimeMode: m.atimeMode,
 		Cache:     cache,
+		Logger:    m.baseLogger,
+		Metrics:   m.storeMetrics,
 	})
 	if err != nil {
 		return nil, err
@@ -359,12 +416,85 @@ func (m *manager) getOrOpenActorLocked(diskID string) (*store.StoreActor, error)
 	m.poolMu.Lock()
 	if m.closed {
 		m.poolMu.Unlock()
-		_ = actor.Close()
+		if closeErr := actor.Close(); closeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "actor close failed after manager closed",
+				"disk_id", diskID,
+				"mode", actorModeLabel(actor.ReadOnly()),
+				"err", closeErr,
+			)
+		}
 		return nil, ErrClosed
+	}
+	if existing := m.actors[diskID]; existing != nil {
+		m.poolMu.Unlock()
+		if closeErr := actor.CloseDiscard(); closeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "actor race loser cleanup failed",
+				"disk_id", diskID,
+				"mode", actorModeLabel(actor.ReadOnly()),
+				"err", closeErr,
+			)
+		}
+		return existing, nil
 	}
 	m.actors[diskID] = actor
 	m.poolMu.Unlock()
+
+	mode := actorModeLabel(actor.ReadOnly())
+	m.collector.incActorLoad(actor.ReadOnly())
+	m.logger.InfoContext(ctx, "actor loaded",
+		"disk_id", diskID,
+		"epoch", actor.WriterEpoch(),
+		"mode", mode,
+	)
 	return actor, nil
+}
+
+func (m *manager) evictIdleActor(ctx context.Context, diskID string) (bool, error) {
+	pgID, err := parseDiskID(diskID)
+	if err != nil {
+		return false, err
+	}
+	diskID = pgID.String()
+
+	unlockDisk := m.lockDisk(diskID)
+	defer unlockDisk()
+
+	m.poolMu.Lock()
+	if m.closed {
+		m.poolMu.Unlock()
+		return false, ErrClosed
+	}
+	actor := m.actors[diskID]
+	if actor == nil {
+		m.poolMu.Unlock()
+		return false, nil
+	}
+	delete(m.actors, diskID)
+	m.poolMu.Unlock()
+
+	epoch := actor.WriterEpoch()
+	mode := actorModeLabel(actor.ReadOnly())
+	m.collector.incActorEviction()
+
+	if closeErr := actor.Close(); closeErr != nil {
+		m.collector.incCleanupError()
+		m.logger.WarnContext(ctx, "evict idle actor close failed",
+			"disk_id", diskID,
+			"epoch", epoch,
+			"mode", mode,
+			"err", closeErr,
+		)
+		return true, fmt.Errorf("驱逐空闲磁盘存储实例: %w", closeErr)
+	}
+
+	m.logger.InfoContext(ctx, "actor evicted",
+		"disk_id", diskID,
+		"epoch", epoch,
+		"mode", mode,
+	)
+	return true, nil
 }
 
 func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error) {
@@ -399,39 +529,70 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		MaxBytes:  params.MaxBytes,
 		AtimeMode: m.atimeMode,
 		Cache:     cache,
+		Logger:    m.baseLogger,
+		Metrics:   m.storeMetrics,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("初始化磁盘存储: %w", err)
 	}
 
 	var row db.Disk
-	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+	err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
 		var createErr error
-		row, createErr = q.CreateDisk(ctx, db.CreateDiskParams{
+		row, createErr = q.CreateDisk(txCtx, db.CreateDiskParams{
 			DiskID: pgID,
 			Name:   params.Name,
 		})
 		return createErr
 	})
 	if err != nil {
-		_ = actor.CloseDiscard()
-		_ = os.RemoveAll(dir)
+		if closeErr := actor.CloseDiscard(); closeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "create disk rollback close failed",
+				"disk_id", diskID,
+				"err", closeErr,
+			)
+		}
+		if removeErr := m.removeAll(dir); removeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "create disk rollback remove dir failed",
+				"disk_id", diskID,
+				"dir", dir,
+				"err", removeErr,
+			)
+		}
 		return nil, fmt.Errorf("创建磁盘: %w", err)
 	}
 
 	m.poolMu.Lock()
 	if m.closed {
 		m.poolMu.Unlock()
-		_ = actor.Close()
+		if closeErr := actor.Close(); closeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "create disk close failed after manager closed",
+				"disk_id", diskID,
+				"err", closeErr,
+			)
+		}
 		return nil, ErrClosed
 	}
 	m.actors[diskID] = actor
 	m.poolMu.Unlock()
 
+	mode := actorModeLabel(actor.ReadOnly())
+	m.collector.incActorLoad(actor.ReadOnly())
+
 	stat, err := actor.StatFS()
 	if err != nil {
 		return nil, err
 	}
+	m.logger.InfoContext(ctx, "disk created",
+		"disk_id", diskID,
+		"name", params.Name,
+		"max_bytes", params.MaxBytes,
+		"epoch", actor.WriterEpoch(),
+		"mode", mode,
+	)
 	return assembleDisk(&row, &stat), nil
 }
 
@@ -453,7 +614,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 		return nil, err
 	}
 
-	actor, err := m.getOrOpenActorLocked(diskID)
+	actor, err := m.getOrOpenActorLocked(ctx, diskID)
 	if err != nil {
 		return nil, err
 	}
@@ -553,7 +714,7 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	for i := range rows {
 		row := rows[i]
 		diskID := row.DiskID.String()
-		actor, actorErr := m.actorForDiskID(diskID)
+		actor, actorErr := m.actorForDiskID(ctx, diskID)
 		if actorErr != nil {
 			return nil, actorErr
 		}
@@ -570,7 +731,7 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 	}, nil
 }
 
-func (m *manager) actorForDiskID(diskID string) (*store.StoreActor, error) {
+func (m *manager) actorForDiskID(ctx context.Context, diskID string) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
 		m.poolMu.RUnlock()
@@ -584,7 +745,7 @@ func (m *manager) actorForDiskID(diskID string) (*store.StoreActor, error) {
 
 	unlockDisk := m.lockDisk(diskID)
 	defer unlockDisk()
-	return m.getOrOpenActorLocked(diskID)
+	return m.getOrOpenActorLocked(ctx, diskID)
 }
 
 func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error) {
@@ -617,7 +778,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil, err
 	}
 
-	actor, err := m.getOrOpenActorLocked(diskID)
+	actor, err := m.getOrOpenActorLocked(ctx, diskID)
 	if err != nil {
 		return nil, err
 	}
@@ -629,9 +790,9 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	}
 
 	if params.Name != nil {
-		err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
+		err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
 			var updateErr error
-			row, updateErr = q.UpdateDisk(ctx, db.UpdateDiskParams{
+			row, updateErr = q.UpdateDisk(txCtx, db.UpdateDiskParams{
 				DiskID: pgID,
 				Name:   *params.Name,
 			})
@@ -662,8 +823,8 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	unlockDisk := m.lockDisk(diskID)
 	defer unlockDisk()
 
-	err = m.execSyncWriteTxWithRetry(ctx, func(q db.Querier) error {
-		count, delErr := q.DeleteDisk(ctx, pgID)
+	err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
+		count, delErr := q.DeleteDisk(txCtx, pgID)
 		if delErr != nil {
 			return delErr
 		}
@@ -681,20 +842,59 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	delete(m.actors, diskID)
 	m.poolMu.Unlock()
 
+	var (
+		epoch       uint64
+		mode        = actorModeRW
+		cleanupErrs []error
+	)
 	if actor != nil {
+		epoch = actor.WriterEpoch()
+		mode = actorModeLabel(actor.ReadOnly())
 		if closeErr := actor.CloseDiscard(); closeErr != nil {
-			return fmt.Errorf("关闭磁盘存储实例: %w", closeErr)
+			m.collector.incCleanupError()
+			m.logger.WarnContext(ctx, "delete disk actor close failed",
+				"disk_id", diskID,
+				"epoch", epoch,
+				"mode", mode,
+				"err", closeErr,
+			)
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("关闭磁盘存储实例: %w", closeErr))
 		}
 	}
 
-	if removeErr := os.RemoveAll(m.diskDir(diskID)); removeErr != nil {
-		return fmt.Errorf("清理磁盘存储目录: %w", removeErr)
+	dir := m.diskDir(diskID)
+	if removeErr := m.removeAll(dir); removeErr != nil {
+		m.collector.incCleanupError()
+		m.logger.WarnContext(ctx, "delete disk directory cleanup failed",
+			"disk_id", diskID,
+			"dir", dir,
+			"epoch", epoch,
+			"mode", mode,
+			"err", removeErr,
+		)
+		cleanupErrs = append(cleanupErrs, fmt.Errorf("清理磁盘存储目录: %w", removeErr))
 	}
+
+	if len(cleanupErrs) > 0 {
+		return errors.Join(cleanupErrs...)
+	}
+
+	m.logger.InfoContext(ctx, "disk deleted",
+		"disk_id", diskID,
+		"epoch", epoch,
+		"mode", mode,
+	)
 	return nil
 }
 
 func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*MountDiskResult, error) {
-	actor, err := m.Actor(ctx, params.DiskID)
+	pgID, err := parseDiskID(params.DiskID)
+	if err != nil {
+		return nil, err
+	}
+	diskID := pgID.String()
+
+	actor, err := m.Actor(ctx, diskID)
 	if err != nil {
 		return nil, err
 	}
@@ -703,6 +903,11 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 		if attrErr != nil {
 			return nil, attrErr
 		}
+		m.logger.InfoContext(ctx, "disk mounted",
+			"disk_id", diskID,
+			"epoch", uint64(0),
+			"mode", actorModeRO,
+		)
 		return &MountDiskResult{
 			Epoch:               0,
 			RootAttr:            rootAttr,
@@ -711,10 +916,17 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 		}, nil
 	}
 
+	prevEpoch := actor.WriterEpoch()
 	epoch, rootAttr, err := actor.AdvanceEpoch()
 	if err != nil {
 		return nil, err
 	}
+	m.logger.InfoContext(ctx, "disk epoch fenced",
+		"disk_id", diskID,
+		"prev_epoch", prevEpoch,
+		"epoch", epoch,
+		"mode", actorModeRW,
+	)
 	return &MountDiskResult{
 		Epoch:               epoch,
 		RootAttr:            rootAttr,
@@ -761,7 +973,7 @@ func (m *manager) Actor(ctx context.Context, diskID string) (*store.StoreActor, 
 		}
 		return nil, err
 	}
-	return m.getOrOpenActorLocked(diskID)
+	return m.getOrOpenActorLocked(ctx, diskID)
 }
 
 func (m *manager) Close() error {
@@ -778,59 +990,18 @@ func (m *manager) Close() error {
 	m.poolMu.Unlock()
 
 	var errs []error
-	for _, actor := range actors {
-		errs = append(errs, actor.Close())
+	for diskID, actor := range actors {
+		if closeErr := actor.Close(); closeErr != nil {
+			m.collector.incCleanupError()
+			m.logger.Warn("manager shutdown actor close failed",
+				"disk_id", diskID,
+				"err", closeErr,
+			)
+			errs = append(errs, closeErr)
+		}
 	}
 	if cache != nil {
 		cache.Unref()
 	}
 	return errors.Join(errs...)
 }
-
-// ManagerParams 定义控制面管理器的 Fx 依赖注入参数。
-type ManagerParams struct {
-	fx.In
-	Lifecycle fx.Lifecycle `optional:"true"`
-	Store     db.Store
-	MetaCfg   *config.MetaConfig `optional:"true"`
-	MetaVal   config.MetaConfig  `optional:"true"`
-}
-
-//nolint:gocritic // hugeParam: fx.In 依赖注入参数结构体必须按值传递。
-func newManagerFromParams(params ManagerParams) Manager {
-	cfg := params.MetaCfg
-	if cfg == nil && params.MetaVal != (config.MetaConfig{}) {
-		cfg = &params.MetaVal
-	}
-	var opts []Option
-	if cfg != nil {
-		mode := AtimeModeNoAtime
-		switch cfg.AtimeMode() {
-		case "relatime":
-			mode = AtimeModeRelAtime
-		case "strictatime":
-			mode = AtimeModeStrictAtime
-		}
-		opts = append(opts,
-			WithStorageRoot(cfg.DataDir()),
-			WithAtimeMode(mode),
-			WithEntryTimeout(cfg.EntryTimeoutSeconds()),
-			WithAttrTimeout(cfg.AttrTimeoutSeconds()),
-			WithDirEntryTimeout(cfg.DirEntryTimeoutSeconds()),
-			WithOpenKeepCache(cfg.OpenKeepCache()),
-			WithOpenDirCache(cfg.OpenDirCache()),
-		)
-	}
-	m := newManager(params.Store, opts...)
-	if params.Lifecycle != nil {
-		params.Lifecycle.Append(fx.Hook{
-			OnStop: func(context.Context) error {
-				return m.Close()
-			},
-		})
-	}
-	return m
-}
-
-// Module 提供单盘控制面管理器依赖。
-var Module = fx.Module("control", fx.Provide(newManagerFromParams))
