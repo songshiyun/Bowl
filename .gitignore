@@ -31,6 +31,8 @@ go.work.sum
 .tdd_list.md
 docker-compose.yaml
 services/storage/vendor/
+client/vendor/
+benchmark/**/results/telemetry-*.tar.gz
 .worktrees/
 .archify/
 

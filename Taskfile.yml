@@ -38,6 +38,12 @@ tasks:
     cmds:
       - go -C services/storage mod vendor
 
+  vendor:client:
+    desc: "Vendor dependencies for client CLI (ensures offline docker build and test)"
+    internal: true
+    cmds:
+      - go -C client mod vendor
+
   run:
     desc: "Start all services in background via docker compose (supports TAG=xxx, e.g. task run TAG=test)"
     deps: [init]
@@ -111,7 +117,7 @@ tasks:
 
   test:client:
     desc: "Build client and run unit tests inside Linux Docker container"
-    deps: [build:client:test]
+    deps: [vendor:client, build:client:test]
     cmds:
       - docker run --rm
         -v bowl-go-mod-cache:/go/pkg/mod
@@ -124,7 +130,7 @@ tasks:
 
   test:client:e2e:
     desc: "Run Linux FUSE client black-box E2E tests inside privileged test container"
-    deps: [init, vendor:storage, build:client:test]
+    deps: [init, vendor:storage, vendor:client, build:client:test]
     cmds:
       - defer: sh -c 'if [ "${KEEP_E2E_ENV:-0}" != "1" ]; then docker compose -f {{.COMPOSE_FILE}} down --remove-orphans; fi'
       - docker compose -f {{.COMPOSE_FILE}} up -d --build --wait storage-service

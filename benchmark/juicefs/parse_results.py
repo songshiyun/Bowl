@@ -138,11 +138,29 @@ def parse_fio_json(json_path: Path, direction: str) -> dict[str, Any]:
     runtime_ms = int(stat.get("runtime", job.get("job_runtime", 0)))
     io_bytes = int(stat.get("io_bytes", 0))
 
-    clat = stat.get("clat_ns", {}) or stat.get("lat_ns", {})
-    mean_ms = round(float(clat.get("mean", 0.0)) / 1e6, 3)
-    pct = clat.get("percentile", {}) or {}
-    p95_ms = round(float(pct.get("95.000000", 0.0)) / 1e6, 3)
-    p99_ms = round(float(pct.get("99.000000", 0.0)) / 1e6, 3)
+    lat_ns = stat.get("lat_ns") or {}
+    slat_ns = stat.get("slat_ns") or {}
+    clat_ns = stat.get("clat_ns") or {}
+
+    slat_mean = float(slat_ns.get("mean", 0.0))
+    clat_mean = float(clat_ns.get("mean", 0.0))
+    lat_mean = float(lat_ns.get("mean", 0.0))
+    total_mean_ns = lat_mean if lat_mean > 0 else (slat_mean + clat_mean)
+    mean_ms = round(total_mean_ns / 1e6, 3)
+
+    lat_pct = lat_ns.get("percentile") or {}
+    if lat_pct:
+        p95_ms = round(float(lat_pct["95.000000"]) / 1e6, 3) if "95.000000" in lat_pct else None
+        p99_ms = round(float(lat_pct["99.000000"]) / 1e6, 3) if "99.000000" in lat_pct else None
+    elif slat_mean > clat_mean:
+        # 旧版 fio JSON 未开启 --lat_percentiles=1，且 libaio+direct=1 下真实耗时落在 slat_ns，
+        # 严禁用微秒级 clat_ns 分位数冒充总延迟。
+        p95_ms = None
+        p99_ms = None
+    else:
+        clat_pct = clat_ns.get("percentile") or {}
+        p95_ms = round(float(clat_pct["95.000000"]) / 1e6, 3) if "95.000000" in clat_pct else None
+        p99_ms = round(float(clat_pct["99.000000"]) / 1e6, 3) if "99.000000" in clat_pct else None
 
     return {
         "bw_mib_s": bw_mib_s,
@@ -575,9 +593,14 @@ def render_report(summary: dict[str, Any]) -> str:
         frd = rd_fio.get(case_key, {})
 
         def fmt_lat(d: dict) -> str:
-            if not d:
+            if not d or d.get("lat_mean_ms") is None:
                 return "—"
-            return f"{d.get('lat_mean_ms', 0):.2f} / {d.get('lat_p95_ms', 0):.2f} / {d.get('lat_p99_ms', 0):.2f} ms"
+            mean_str = f"{d['lat_mean_ms']:.2f}"
+            p95_val = d.get("lat_p95_ms")
+            p99_val = d.get("lat_p99_ms")
+            p95_str = f"{p95_val:.2f}" if p95_val is not None else "N/A"
+            p99_str = f"{p99_val:.2f}" if p99_val is not None else "N/A"
+            return f"{mean_str} / {p95_str} / {p99_str} ms"
 
         lines.append(f"| **{case_label}** | `{fmt_lat(fb)}` | `{fmt_lat(fpg)}` | `{fmt_lat(frd)}` |")
     lines.append("")

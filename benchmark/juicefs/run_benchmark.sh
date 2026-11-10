@@ -43,11 +43,73 @@ KEY_CREATED=0
 INSTANCES_CREATED_AT=""
 INSTANCES_DELETED_AT=""
 REMAINING_INSTANCES=0
+TELEMETRY_FETCHED=0
 
 mkdir -p "${RESULTS_DIR}"
 
 log() {
   printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+fetch_telemetry_archive() {
+  if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
+    return 0
+  fi
+  TELEMETRY_FETCHED=1
+
+  local old_opts
+  old_opts="$(set +o)"
+  set +e
+
+  local stage_dir="${WORK_DIR}/telemetry-${RUN_TS}"
+  local archive_path="${RESULTS_DIR}/telemetry-${RUN_TS}.tar.gz"
+  mkdir -p "${stage_dir}"
+
+  if [[ -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    log "Collecting client telemetry from ${CLIENT_SSH_HOST}..."
+    ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF_CLI_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
+[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount.log || true
+curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > /tmp/bowl-telemetry/client/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/client/diskstats/final.txt 2>/dev/null || true
+dmesg -T 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/client/logs/dmesg-tail.log || true
+EOF_CLI_TELEM
+    if ! ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "tar -czf - -C /tmp/bowl-telemetry client" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream client telemetry from ${CLIENT_SSH_HOST} (non-fatal)."
+    fi
+  fi
+
+  if [[ -n "${SERVER_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    log "Collecting server telemetry from ${SERVER_SSH_HOST}..."
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF_SRV_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble
+journalctl -u bowl-storage --no-pager > /tmp/bowl-telemetry/server/logs/bowl-storage.log 2>/dev/null || true
+journalctl -u postgresql -u 'postgresql@*' --no-pager -n 300 > /tmp/bowl-telemetry/server/logs/postgresql.log 2>/dev/null || true
+journalctl -k --no-pager 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/server/logs/kernel.log || true
+{ free -m; df -h; } > /tmp/bowl-telemetry/server/logs/server-state.log 2>/dev/null || true
+if [[ -d /var/lib/bowl/data ]]; then
+  (cd /var/lib/bowl/data && find . -name 'LOG*' -exec cp --parents -a {} /tmp/bowl-telemetry/server/pebble/ \;) 2>/dev/null || true
+fi
+curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > /tmp/bowl-telemetry/server/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/server/diskstats/final.txt 2>/dev/null || true
+EOF_SRV_TELEM
+    if ! ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "tar -czf - -C /tmp/bowl-telemetry server" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream server telemetry from ${SERVER_SSH_HOST} (non-fatal)."
+    fi
+  fi
+
+  if find "${stage_dir}" -type f 2>/dev/null | grep -q .; then
+    if tar -czf "${archive_path}" -C "${WORK_DIR}" "telemetry-${RUN_TS}" 2>/dev/null; then
+      log "Telemetry archive saved to ${archive_path}"
+    else
+      log "WARN: Failed to create telemetry archive ${archive_path} (non-fatal)."
+    fi
+  else
+    log "WARN: No remote telemetry files available to archive (instances may not have initialized)."
+  fi
+
+  eval "${old_opts}"
+  return 0
 }
 
 cleanup() {
@@ -57,12 +119,9 @@ cleanup() {
   # 失败时先回传原始输出，避免释放实例后丢失失败证据。
   if [[ "${exit_code}" != "0" && -n "${CLIENT_SSH_HOST:-}" ]]; then
     scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
-    ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u postgresql -u postgresql@16-main --no-pager -n 200" > "${RESULTS_DIR}/postgresql.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -k --no-pager | grep -Ei 'out of memory|oom-kill|killed process' || true" > "${RESULTS_DIR}/kernel-oom.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "free -m; df -h /var/lib/bowl/data; systemctl is-active postgresql@16-main || true" > "${RESULTS_DIR}/server-state.log" 2>/dev/null
   fi
+
+  fetch_telemetry_archive
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
@@ -127,11 +186,11 @@ trap cleanup EXIT
 if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
   log "Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64..."
   GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-w -s" \
+    go -C "${REPO_ROOT}/services/storage" build -trimpath \
     -o "${WORK_DIR}/storage-service" ./cmd
 
   GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
+    go -C "${REPO_ROOT}/client" build -trimpath \
     -o "${WORK_DIR}/bowl" ./cmd/bowl
 
   GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
@@ -399,6 +458,8 @@ After=network.target postgresql.service
 Type=simple
 Environment="SERVER_HOST=0.0.0.0"
 Environment="SERVER_PORT=9000"
+Environment="INTERNAL_SERVER_HOST=127.0.0.1"
+Environment="INTERNAL_SERVER_PORT=9090"
 Environment="SERVER_READ_MAX_BYTES=16777216"
 Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
 Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
@@ -408,7 +469,7 @@ Environment="STORAGE_ATIME_MODE=noatime"
 Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=1.0"
 Environment="STORAGE_ATTR_TIMEOUT_SECONDS=1.0"
 Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="LOG_LEVEL=warn"
+Environment="LOG_LEVEL=info"
 Environment="OTEL_ENABLED=false"
 ExecStart=/usr/local/bin/storage-service
 Restart=always
@@ -444,11 +505,11 @@ log "Measuring Server local NVMe SSD disk baseline..."
 SERVER_INFO_JSON="$(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
 mkdir -p /mnt/nvme/disk_bench
-WRITE_BW_BPS="$(fio --name=nvme-seq-w --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
-READ_BW_BPS="$(fio --name=nvme-seq-r --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --direct=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
-RANDW_IOPS="$(fio --name=nvme-rand-w --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.iops // 0')"
-RANDR_IOPS="$(fio --name=nvme-rand-r --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.iops // 0')"
-FSYNC_JSON="$(fio --name=nvme-fsync-w --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --output-format=json | sed -n '/^{/,$p')"
+WRITE_BW_BPS="$(fio --name=nvme-seq-w --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
+READ_BW_BPS="$(fio --name=nvme-seq-r --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --direct=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
+RANDW_IOPS="$(fio --name=nvme-rand-w --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --lat_percentiles=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.iops // 0')"
+RANDR_IOPS="$(fio --name=nvme-rand-r --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --lat_percentiles=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.iops // 0')"
+FSYNC_JSON="$(fio --name=nvme-fsync-w --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p')"
 FSYNC_IOPS="$(echo "${FSYNC_JSON}" | jq -r '.jobs[0].write.iops // 0')"
 FSYNC_P99_US="$(echo "${FSYNC_JSON}" | jq -r '((.jobs[0].sync.lat_ns.percentile["99.000000"] // 0) + (.jobs[0].write.clat_ns.percentile["99.000000"] // 0)) / 1000.0')"
 rm -rf /mnt/nvme/disk_bench
@@ -634,6 +695,46 @@ TIMINGS_FILE="${OUT_DIR}/stage_timings.jsonl"
 : > "${TIMINGS_FILE}"
 
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
+"${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble" || true
+BOWL_PROFILE_PIDS=()
+
+capture_bowl_snapshot() {
+  local target="$1"
+  local phase="$2"
+  [[ "${target}" == "bowl" ]] || return 0
+  curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > "/tmp/bowl-telemetry/client/metrics/${phase}.prom" 2>/dev/null || true
+  cat /proc/diskstats > "/tmp/bowl-telemetry/client/diskstats/${phase}.txt" 2>/dev/null || true
+  "${SSH_SRV[@]}" "curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > '/tmp/bowl-telemetry/server/metrics/${phase}.prom' 2>/dev/null || true; cat /proc/diskstats > '/tmp/bowl-telemetry/server/diskstats/${phase}.txt' 2>/dev/null || true" || true
+}
+
+start_bowl_cpu_profile() {
+  local target="$1"
+  local stage="$2"
+  local sec="${3:-10}"
+  BOWL_PROFILE_PIDS=()
+  [[ "${target}" == "bowl" ]] || return 0
+  (curl -fsS --max-time 25 "http://127.0.0.1:9567/debug/pprof/profile?seconds=${sec}" -o "/tmp/bowl-telemetry/client/pprof/${stage}_cpu.pb.gz" 2>/dev/null || true) &
+  BOWL_PROFILE_PIDS+=("$!")
+  ("${SSH_SRV[@]}" "curl -fsS --max-time 25 'http://127.0.0.1:9090/debug/pprof/profile?seconds=${sec}' -o '/tmp/bowl-telemetry/server/pprof/${stage}_cpu.pb.gz' 2>/dev/null || true") &
+  BOWL_PROFILE_PIDS+=("$!")
+}
+
+finish_bowl_stage_profiles() {
+  local target="$1"
+  local stage="$2"
+  [[ "${target}" == "bowl" ]] || return 0
+  local pid
+  if [[ ${#BOWL_PROFILE_PIDS[@]} -gt 0 ]]; then
+    for pid in "${BOWL_PROFILE_PIDS[@]}"; do
+      [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true
+    done
+  fi
+  BOWL_PROFILE_PIDS=()
+  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/heap" -o "/tmp/bowl-telemetry/client/pprof/${stage}_heap.pb.gz" 2>/dev/null || true
+  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/mutex" -o "/tmp/bowl-telemetry/client/pprof/${stage}_mutex.pb.gz" 2>/dev/null || true
+  "${SSH_SRV[@]}" "curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/heap' -o '/tmp/bowl-telemetry/server/pprof/${stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/mutex' -o '/tmp/bowl-telemetry/server/pprof/${stage}_mutex.pb.gz' 2>/dev/null || true" || true
+}
 
 drop_all_caches() {
   sync
@@ -662,11 +763,13 @@ run_suites_on_mount() {
   # 1. juicefs bench -p 4
   echo "[${target}] [1/3] Running juicefs bench ${mp} -p 4 ..."
   drop_all_caches
+  capture_bowl_snapshot "${target}" "juicefs_bench_pre"
   local t0
   t0="$(date +%s.%N)"
   /usr/local/bin/juicefs bench "${mp}" -p 4 </dev/null 2>&1 | tee "${OUT_DIR}/bench_${target}.log"
   local t1
   t1="$(date +%s.%N)"
+  capture_bowl_snapshot "${target}" "juicefs_bench_post"
   record_timing "${target}" "juicefs_bench" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2. fio suite (8 workloads)
@@ -680,44 +783,54 @@ run_suites_on_mount() {
   # 2.1 seq_write_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_write_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
-  fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
+  capture_bowl_snapshot "${target}" "fio_seq_write_1job_pre"
+  start_bowl_cpu_profile "${target}" "fio_seq_write_1job" 10
+  fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
+  finish_bowl_stage_profiles "${target}" "fio_seq_write_1job"
+  capture_bowl_snapshot "${target}" "fio_seq_write_1job_post"
 
   # 2.2 seq_read_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_read_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
-  fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
+  capture_bowl_snapshot "${target}" "fio_seq_read_1job_pre"
+  start_bowl_cpu_profile "${target}" "fio_seq_read_1job" 10
+  fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
+  finish_bowl_stage_profiles "${target}" "fio_seq_read_1job"
+  capture_bowl_snapshot "${target}" "fio_seq_read_1job_post"
   rm -f "${fio_dir}"/seq1*
 
   # 2.3 seq_write_16jobs (4M, 1G x 16 = 16GiB)
   echo "  -> [${target}] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
-  fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
+  capture_bowl_snapshot "${target}" "fio_multi_and_direct_pre"
+  fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
 
   # 2.4 seq_read_16jobs (4M, 1G x 16 = 16GiB)
   echo "  -> [${target}] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
-  fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
+  fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
   rm -f "${fio_dir}"/seq16*
 
   # 2.5 direct_write_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
 
   # 2.6 direct_read_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
 
   # 2.7 direct_randwrite_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
 
   # 2.8 direct_randread_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
+  capture_bowl_snapshot "${target}" "fio_multi_and_direct_post"
 
   rm -rf "${fio_dir}"
   t1="$(date +%s.%N)"
@@ -727,12 +840,14 @@ run_suites_on_mount() {
   echo "[${target}] [3/3] Running mdtest suite on ${mp} ..."
   t0="$(date +%s.%N)"
   drop_all_caches
+  capture_bowl_snapshot "${target}" "mdtest_pre"
   /usr/local/bin/mdtest -d "${mp}/mdtest_1p" -b 6 -I 8 -z 4 </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_1proc.log"
   rm -rf "${mp}/mdtest_1p"
 
   drop_all_caches
   mpirun --allow-run-as-root --oversubscribe -np 4 /usr/local/bin/mdtest -d "${mp}/mdtest_4p" -b 3 -z 2 -I 20 -u </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_4proc.log"
   rm -rf "${mp}/mdtest_4p"
+  capture_bowl_snapshot "${target}" "mdtest_post"
   t1="$(date +%s.%N)"
   record_timing "${target}" "mdtest" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
 }
@@ -752,10 +867,18 @@ if has_target "bowl"; then
   echo "${CREATE_JSON}" > "${OUT_DIR}/bowl_disk.json"
 
   mkdir -p /mnt/bowl
-  /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+  /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
+    --endpoint "${ENDPOINT}" \
+    --allow-other \
+    --admin-addr 127.0.0.1:9567 \
+    --stats-file \
+    --log-level info \
+    --log-file /var/log/bowl-mount.log
   run_suites_on_mount "bowl" "/mnt/bowl"
+  capture_bowl_snapshot "bowl" "before_umount"
   /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
-  "${SSH_SRV[@]}" "systemctl stop bowl-storage && rm -rf /var/lib/bowl/data/* && mkdir -p /var/lib/bowl/data"
+  [[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount-phase.log || true
+  "${SSH_SRV[@]}" "systemctl stop bowl-storage && mkdir -p /tmp/bowl-telemetry/server/pebble /tmp/bowl-telemetry/server/logs && (cd /var/lib/bowl/data && find . -name 'LOG*' -exec cp --parents -a {} /tmp/bowl-telemetry/server/pebble/ \; 2>/dev/null || true) && (journalctl -u bowl-storage --no-pager > /tmp/bowl-telemetry/server/logs/bowl-storage-bowl-phase.log 2>/dev/null || true) && rm -rf /var/lib/bowl/data/* && mkdir -p /var/lib/bowl/data"
 fi
 
 # ------------------------------------------------------------------------------
@@ -855,6 +978,7 @@ fi
 # ==============================================================================
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
 # ==============================================================================
+fetch_telemetry_archive
 log "Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md..."
 if [[ "${KEEP_INSTANCES}" != "1" ]]; then
   aliyun ecs DeleteInstances \

@@ -58,6 +58,7 @@ SERVER_INSTANCE_ID=""
 CLIENT_INSTANCE_ID=""
 INSTANCES_CREATED_AT=""
 INSTANCES_DELETED_AT=""
+TELEMETRY_FETCHED=0
 
 SSH_OPTS=(
   -o StrictHostKeyChecking=no
@@ -72,6 +73,67 @@ log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
 }
 
+fetch_telemetry_archive() {
+  if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
+    return 0
+  fi
+  TELEMETRY_FETCHED=1
+
+  local old_opts
+  old_opts="$(set +o)"
+  set +e
+
+  local stage_dir="${WORK_DIR}/telemetry-${RUN_TS}"
+  local archive_path="${RESULTS_DIR}/telemetry-${RUN_TS}.tar.gz"
+  mkdir -p "${stage_dir}"
+
+  if [[ -n "${CLIENT_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
+    log "Collecting client telemetry from ${CLIENT_PUB_IP}..."
+    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "bash -s" <<'EOF_CLI_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
+[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount.log || true
+curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > /tmp/bowl-telemetry/client/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/client/diskstats/final.txt 2>/dev/null || true
+dmesg -T 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/client/logs/dmesg-tail.log || true
+EOF_CLI_TELEM
+    if ! ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "tar -czf - -C /tmp/bowl-telemetry client" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream client telemetry from ${CLIENT_PUB_IP} (non-fatal)."
+    fi
+  fi
+
+  if [[ -n "${SERVER_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
+    log "Collecting server telemetry from ${SERVER_PUB_IP}..."
+    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "bash -s" <<'EOF_SRV_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble
+journalctl -u bowl-storage --no-pager > /tmp/bowl-telemetry/server/logs/bowl-storage.log 2>/dev/null || true
+journalctl -u postgresql -u 'postgresql@*' --no-pager -n 300 > /tmp/bowl-telemetry/server/logs/postgresql.log 2>/dev/null || true
+journalctl -k --no-pager 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/server/logs/kernel.log || true
+{ free -m; df -h; } > /tmp/bowl-telemetry/server/logs/server-state.log 2>/dev/null || true
+if [[ -d /var/lib/bowl/data ]]; then
+  (cd /var/lib/bowl/data && find . -name 'LOG*' -exec cp --parents -a {} /tmp/bowl-telemetry/server/pebble/ \;) 2>/dev/null || true
+fi
+curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > /tmp/bowl-telemetry/server/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/server/diskstats/final.txt 2>/dev/null || true
+EOF_SRV_TELEM
+    if ! ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "tar -czf - -C /tmp/bowl-telemetry server" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream server telemetry from ${SERVER_PUB_IP} (non-fatal)."
+    fi
+  fi
+
+  if find "${stage_dir}" -type f 2>/dev/null | grep -q .; then
+    if tar -czf "${archive_path}" -C "${WORK_DIR}" "telemetry-${RUN_TS}" 2>/dev/null; then
+      log "Telemetry archive saved to ${archive_path}"
+    else
+      log "WARN: Failed to create telemetry archive ${archive_path} (non-fatal)."
+    fi
+  else
+    log "WARN: No remote telemetry files available to archive (instances may not have initialized)."
+  fi
+
+  eval "${old_opts}"
+  return 0
+}
+
 cleanup() {
   local exit_code=$?
   set +e
@@ -80,11 +142,9 @@ cleanup() {
   # 失败时先回传已有输出，保留退出原因，再释放按量资源。
   if [[ "${exit_code}" != "0" && -n "${CLIENT_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
     scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
-    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
   fi
-  if [[ "${exit_code}" != "0" && -n "${SERVER_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
-    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
-  fi
+
+  fetch_telemetry_archive
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
@@ -149,10 +209,10 @@ record_stage() {
 STAGE_START=$(date +%s)
 log "Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64..."
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-s -w" -o "${WORK_DIR}/storage-service" ./cmd
+  go -C "${REPO_ROOT}/services/storage" build -trimpath -o "${WORK_DIR}/storage-service" ./cmd
 
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-s -w" -o "${WORK_DIR}/bowl" ./cmd/bowl
+  go -C "${REPO_ROOT}/client" build -trimpath -o "${WORK_DIR}/bowl" ./cmd/bowl
 
 GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
 if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
@@ -357,6 +417,8 @@ After=network.target postgresql.service
 Type=simple
 Environment="SERVER_HOST=0.0.0.0"
 Environment="SERVER_PORT=9000"
+Environment="INTERNAL_SERVER_HOST=127.0.0.1"
+Environment="INTERNAL_SERVER_PORT=9090"
 Environment="SERVER_READ_MAX_BYTES=16777216"
 Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
 Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
@@ -366,7 +428,7 @@ Environment="STORAGE_ATIME_MODE=noatime"
 Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=1.0"
 Environment="STORAGE_ATTR_TIMEOUT_SECONDS=1.0"
 Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="LOG_LEVEL=warn"
+Environment="LOG_LEVEL=info"
 Environment="OTEL_ENABLED=false"
 ExecStart=/usr/local/bin/storage-service
 Restart=always
@@ -549,7 +611,51 @@ ENDPOINT="http://${SERVER_PRIV_IP}:9000"
 CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "d9-bench-disk" --endpoint "${ENDPOINT}" --json)"
 DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
 echo "${CREATE_JSON}" > /tmp/bench_results/bowl_disk.json
-/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
+  --endpoint "${ENDPOINT}" \
+  --allow-other \
+  --admin-addr 127.0.0.1:9567 \
+  --stats-file \
+  --log-level info \
+  --log-file /var/log/bowl-mount.log
+
+cat > /opt/bench/bowl_telemetry.sh <<'TELEM_SH'
+mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
+BOWL_PROFILE_PIDS=()
+
+capture_bowl_snapshot() {
+  local phase="$1"
+  curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > "/tmp/bowl-telemetry/client/metrics/${phase}.prom" 2>/dev/null || true
+  cat /proc/diskstats > "/tmp/bowl-telemetry/client/diskstats/${phase}.txt" 2>/dev/null || true
+  "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble && curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > '/tmp/bowl-telemetry/server/metrics/${phase}.prom' 2>/dev/null || true; cat /proc/diskstats > '/tmp/bowl-telemetry/server/diskstats/${phase}.txt' 2>/dev/null || true" || true
+}
+
+start_bowl_cpu_profile() {
+  local stage="$1"
+  local sec="${2:-10}"
+  local delay="${3:-0}"
+  BOWL_PROFILE_PIDS=()
+  ( [[ "${delay}" != "0" ]] && sleep "${delay}"; curl -fsS --max-time 25 "http://127.0.0.1:9567/debug/pprof/profile?seconds=${sec}" -o "/tmp/bowl-telemetry/client/pprof/${stage}_cpu.pb.gz" 2>/dev/null || true ) &
+  BOWL_PROFILE_PIDS+=("$!")
+  ( [[ "${delay}" != "0" ]] && sleep "${delay}"; "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 25 'http://127.0.0.1:9090/debug/pprof/profile?seconds=${sec}' -o '/tmp/bowl-telemetry/server/pprof/${stage}_cpu.pb.gz' 2>/dev/null || true" ) &
+  BOWL_PROFILE_PIDS+=("$!")
+}
+
+finish_bowl_stage_profiles() {
+  local stage="$1"
+  local pid
+  if [[ ${#BOWL_PROFILE_PIDS[@]} -gt 0 ]]; then
+    for pid in "${BOWL_PROFILE_PIDS[@]}"; do
+      [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true
+    done
+  fi
+  BOWL_PROFILE_PIDS=()
+  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/heap" -o "/tmp/bowl-telemetry/client/pprof/${stage}_heap.pb.gz" 2>/dev/null || true
+  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/mutex" -o "/tmp/bowl-telemetry/client/pprof/${stage}_mutex.pb.gz" 2>/dev/null || true
+  "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/heap' -o '/tmp/bowl-telemetry/server/pprof/${stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/mutex' -o '/tmp/bowl-telemetry/server/pprof/${stage}_mutex.pb.gz' 2>/dev/null || true" || true
+}
+TELEM_SH
+chmod +x /opt/bench/bowl_telemetry.sh
 
 # 2. Provision two isolated Drive9 tenants (one for drive9_default, one for drive9_sync)
 provision_drive9_tenant() {
@@ -743,6 +849,7 @@ run_juicefs_bench_for_target() {
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bench/bowl_telemetry.sh
 if [[ "${TARGET_KEY}" == "bowl" ]]; then
   "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; systemctl start postgresql bowl-storage"
 else
@@ -755,7 +862,9 @@ fi
 rm -rf "${MP:?}"/*
 sync && echo 3 > /proc/sys/vm/drop_caches || true
 "${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches" || true
+[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "suite1_juicefs_bench_pre"
 /usr/local/bin/juicefs bench "${MP}" -p 4 2>&1 | tee "/tmp/bench_results/bench_${TARGET_KEY}.log"
+[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "suite1_juicefs_bench_post"
 if [[ "${TARGET_KEY}" == "drive9_default" ]]; then
   DRIVE9_SERVER="http://${SERVER_PRIV_IP}:9009" DRIVE9_API_KEY="$(cat /opt/bench/api_key_default.txt)" \
     /usr/local/bin/drive9 mount drain --timeout 300s "${MP}" || true
@@ -779,6 +888,7 @@ ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='$
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bench/bowl_telemetry.sh
 DROP_CMD="sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@${SERVER_PRIV_IP} 'sync && echo 3 > /proc/sys/vm/drop_caches'"
 
 # 1. Run Bowl (Cold & Hot) with TiDB/Drive9 stopped on Server
@@ -788,6 +898,7 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
+capture_bowl_snapshot "suite2_d9_cold_pre"
 python3 /opt/bench/drive9_fuse_bench.py \
   --target bowl=/mnt/bowl \
   --runs 3 \
@@ -804,8 +915,25 @@ python3 /opt/bench/drive9_fuse_bench.py \
   --random-reads 1000 \
   --macro-files 200 \
   --macro-total-mib 20 \
-  --out /tmp/bench_results/d9_cold_bowl.json
+  --out /tmp/bench_results/d9_cold_bowl.json &
+D9_COLD_PID=$!
+(
+  while kill -0 "${D9_COLD_PID}" 2>/dev/null; do
+    if pgrep -x go >/dev/null 2>&1; then
+      start_bowl_cpu_profile "macro_go_build" 10 0
+      finish_bowl_stage_profiles "macro_go_build"
+      exit 0
+    fi
+    sleep 0.5
+  done
+) &
+D9_WATCH_PID=$!
+wait "${D9_COLD_PID}"
+wait "${D9_WATCH_PID}" 2>/dev/null || true
+finish_bowl_stage_profiles "suite2_d9_cold"
+capture_bowl_snapshot "suite2_d9_cold_post"
 
+capture_bowl_snapshot "suite2_d9_hot_pre"
 python3 /opt/bench/drive9_fuse_bench.py \
   --target bowl=/mnt/bowl \
   --runs 3 \
@@ -822,6 +950,7 @@ python3 /opt/bench/drive9_fuse_bench.py \
   --macro-files 200 \
   --macro-total-mib 20 \
   --out /tmp/bench_results/d9_hot_bowl.json
+capture_bowl_snapshot "suite2_d9_hot_post"
 
 # 2. Run Drive9 Default & Sync (Cold & Hot) with Bowl stopped on Server
 "${SSH_SRV[@]}" "systemctl stop bowl-storage 2>/dev/null || true; systemctl start tidb drive9-server"
@@ -914,6 +1043,7 @@ run_perf_baseline_for_target() {
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bench/bowl_telemetry.sh
 if [[ "${TARGET_KEY}" == "bowl" ]]; then
   "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; systemctl start postgresql bowl-storage"
   for _ in $(seq 1 30); do
@@ -930,10 +1060,18 @@ fi
 rm -rf "${MP:?}"/*
 sync && echo 3 > /proc/sys/vm/drop_caches || true
 "${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches" || true
+if [[ "${TARGET_KEY}" == "bowl" ]]; then
+  capture_bowl_snapshot "suite3_sqlite_wal_pre"
+  start_bowl_cpu_profile "sqlite_wal" 10 2
+fi
 python3 /opt/bench/fuse_perf_baseline.py \
   "${MP}/perf_baseline" \
   "/tmp/bench_results/perf_baseline_${TARGET_KEY}.json" \
   64 1024 16 2 256
+if [[ "${TARGET_KEY}" == "bowl" ]]; then
+  finish_bowl_stage_profiles "sqlite_wal"
+  capture_bowl_snapshot "suite3_sqlite_wal_post"
+fi
 if [[ "${TARGET_KEY}" == "drive9_default" ]]; then
   DRIVE9_SERVER="http://${SERVER_PRIV_IP}:9009" DRIVE9_API_KEY="$(cat /opt/bench/api_key_default.txt)" \
     /usr/local/bin/drive9 mount drain --timeout 300s "${MP}" || true
@@ -955,6 +1093,9 @@ run_perf_baseline_for_target "drive9_sync" "/mnt/drive9_sync"
 # ------------------------------------------------------------------------------
 log "Downloading raw benchmark results to ${RESULTS_DIR}..."
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "/usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true" >/dev/null 2>&1 || true
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "systemctl stop bowl-storage 2>/dev/null || true" >/dev/null 2>&1 || true
+fetch_telemetry_archive
 
 DELETED_SERVER_ID="${SERVER_INSTANCE_ID}"
 DELETED_CLIENT_ID="${CLIENT_INSTANCE_ID}"

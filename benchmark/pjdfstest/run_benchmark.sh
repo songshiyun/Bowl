@@ -42,6 +42,7 @@ KEY_CREATED=0
 INSTANCES_CREATED_AT=""
 INSTANCES_DELETED_AT=""
 REMAINING_INSTANCES=0
+TELEMETRY_FETCHED=0
 
 mkdir -p "${RESULTS_DIR}"
 
@@ -49,9 +50,77 @@ log() {
   printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
 }
 
+fetch_telemetry_archive() {
+  if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
+    return 0
+  fi
+  TELEMETRY_FETCHED=1
+
+  local old_opts
+  old_opts="$(set +o)"
+  set +e
+
+  local stage_dir="${WORK_DIR}/telemetry-${RUN_TS}"
+  local archive_path="${RESULTS_DIR}/telemetry-${RUN_TS}.tar.gz"
+  mkdir -p "${stage_dir}"
+
+  if [[ -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    log "Collecting client telemetry from ${CLIENT_SSH_HOST}..."
+    ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF_CLI_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
+[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount.log || true
+curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > /tmp/bowl-telemetry/client/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/client/diskstats/final.txt 2>/dev/null || true
+dmesg -T 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/client/logs/dmesg-tail.log || true
+EOF_CLI_TELEM
+    if ! ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "tar -czf - -C /tmp/bowl-telemetry client" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream client telemetry from ${CLIENT_SSH_HOST} (non-fatal)."
+    fi
+  fi
+
+  if [[ -n "${SERVER_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    log "Collecting server telemetry from ${SERVER_SSH_HOST}..."
+    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF_SRV_TELEM' >/dev/null 2>&1
+mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble
+journalctl -u bowl-storage --no-pager > /tmp/bowl-telemetry/server/logs/bowl-storage.log 2>/dev/null || true
+journalctl -u postgresql -u 'postgresql@*' --no-pager -n 300 > /tmp/bowl-telemetry/server/logs/postgresql.log 2>/dev/null || true
+journalctl -k --no-pager 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/server/logs/kernel.log || true
+{ free -m; df -h; } > /tmp/bowl-telemetry/server/logs/server-state.log 2>/dev/null || true
+if [[ -d /var/lib/bowl/data ]]; then
+  (cd /var/lib/bowl/data && find . -name 'LOG*' -exec cp --parents -a {} /tmp/bowl-telemetry/server/pebble/ \;) 2>/dev/null || true
+fi
+curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > /tmp/bowl-telemetry/server/metrics/final.prom 2>/dev/null || true
+cat /proc/diskstats > /tmp/bowl-telemetry/server/diskstats/final.txt 2>/dev/null || true
+EOF_SRV_TELEM
+    if ! ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "tar -czf - -C /tmp/bowl-telemetry server" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
+      log "WARN: Failed to stream server telemetry from ${SERVER_SSH_HOST} (non-fatal)."
+    fi
+  fi
+
+  if find "${stage_dir}" -type f 2>/dev/null | grep -q .; then
+    if tar -czf "${archive_path}" -C "${WORK_DIR}" "telemetry-${RUN_TS}" 2>/dev/null; then
+      log "Telemetry archive saved to ${archive_path}"
+    else
+      log "WARN: Failed to create telemetry archive ${archive_path} (non-fatal)."
+    fi
+  else
+    log "WARN: No remote telemetry files available to archive (instances may not have initialized)."
+  fi
+
+  eval "${old_opts}"
+  return 0
+}
+
 cleanup() {
   local exit_code=$?
   set +e
+
+  if [[ "${exit_code}" != "0" && -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log" 2>/dev/null
+    scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl" 2>/dev/null
+  fi
+
+  fetch_telemetry_archive
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
@@ -116,11 +185,11 @@ trap cleanup EXIT
 # ==============================================================================
 log "Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64..."
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-w -s" \
+  go -C "${REPO_ROOT}/services/storage" build -trimpath \
   -o "${WORK_DIR}/storage-service" ./cmd
 
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
+  go -C "${REPO_ROOT}/client" build -trimpath \
   -o "${WORK_DIR}/bowl" ./cmd/bowl
 
 GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
@@ -251,6 +320,11 @@ elif [[ "${SERVER_OK}" == "0" && "${CLIENT_OK}" == "0" ]]; then
   exit 1
 fi
 
+# Allow Client root SSH into Server over VPC private IP for Server localhost (:9090) telemetry scrapes
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ssh/id_rsa"
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
+
 # ==============================================================================
 # Step 3: Deploy Storage Service + PostgreSQL on Server Node (Local NVMe SSD)
 # ==============================================================================
@@ -283,7 +357,7 @@ mount --bind /mnt/nvme/bowl /var/lib/bowl
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq postgresql iperf3 fio jq
+apt-get install -y -qq postgresql iperf3 fio jq curl ca-certificates
 
 systemctl enable --now postgresql
 sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
@@ -304,6 +378,8 @@ After=network.target postgresql.service
 Type=simple
 Environment="SERVER_HOST=0.0.0.0"
 Environment="SERVER_PORT=9000"
+Environment="INTERNAL_SERVER_HOST=127.0.0.1"
+Environment="INTERNAL_SERVER_PORT=9090"
 Environment="SERVER_READ_MAX_BYTES=16777216"
 Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
 Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
@@ -313,7 +389,7 @@ Environment="STORAGE_ATIME_MODE=strictatime"
 Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=0"
 Environment="STORAGE_ATTR_TIMEOUT_SECONDS=0"
 Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=0"
-Environment="LOG_LEVEL=warn"
+Environment="LOG_LEVEL=info"
 Environment="OTEL_ENABLED=false"
 ExecStart=/usr/local/bin/storage-service
 Restart=always
@@ -366,7 +442,7 @@ mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq fuse3 libfuse3-dev iperf3 git build-essential autoconf automake libtool pkg-config perl python3 jq
+apt-get install -y -qq fuse3 libfuse3-dev iperf3 git build-essential autoconf automake libtool pkg-config perl python3 jq curl ca-certificates
 
 grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
 
@@ -462,7 +538,12 @@ mkdir -p /mnt/bowl
 if grep -q " /mnt/bowl " /proc/self/mountinfo; then
   /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
 fi
-/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
+  --endpoint "${ENDPOINT}" \
+  --allow-other \
+  --admin-addr 127.0.0.1:9567 \
+  --log-level info \
+  --log-file /var/log/bowl-mount.log
 mkdir -p /mnt/bowl/work
 
 CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
@@ -501,9 +582,10 @@ log "Client mounted /mnt/bowl over VPC internal network: $(echo "${CLIENT_MOUNT_
 TEST_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Step 5/6: Running full pjdfstest suite on /mnt/bowl/work..."
 
-ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "python3 -u -" <<'PYEOF'
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' python3 -u -" <<'PYEOF'
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -515,6 +597,79 @@ work_dir.mkdir(parents=True, exist_ok=True)
 
 log_path = Path("/tmp/pjdfstest.log")
 timings_path = Path("/tmp/stage_timings.jsonl")
+server_priv_ip = os.environ.get("SERVER_PRIV_IP", "")
+
+cli_telem = Path("/tmp/bowl-telemetry/client")
+for sub in ("logs", "metrics", "diskstats", "pprof"):
+    (cli_telem / sub).mkdir(parents=True, exist_ok=True)
+
+ssh_srv_base = [
+    "ssh",
+    "-n",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "IdentitiesOnly=yes",
+    "-i", "/root/.ssh/id_rsa",
+    f"root@{server_priv_ip}",
+]
+
+
+def capture_snapshot(phase: str) -> None:
+    subprocess.run(
+        ["sh", "-c", f"curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > '{cli_telem}/metrics/{phase}.prom' 2>/dev/null || true"],
+        check=False,
+    )
+    try:
+        shutil.copyfile("/proc/diskstats", cli_telem / "diskstats" / f"{phase}.txt")
+    except OSError:
+        pass
+    if server_priv_ip:
+        subprocess.run(
+            ssh_srv_base + [
+                "mkdir -p /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble && "
+                f"curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > '/tmp/bowl-telemetry/server/metrics/{phase}.prom' 2>/dev/null || true; "
+                f"cat /proc/diskstats > '/tmp/bowl-telemetry/server/diskstats/{phase}.txt' 2>/dev/null || true"
+            ],
+            check=False,
+        )
+
+
+def start_cpu_profile(stage: str, sec: int = 10) -> list[subprocess.Popen]:
+    procs: list[subprocess.Popen] = []
+    procs.append(
+        subprocess.Popen(
+            ["sh", "-c", f"curl -fsS --max-time 25 'http://127.0.0.1:9567/debug/pprof/profile?seconds={sec}' -o '{cli_telem}/pprof/{stage}_cpu.pb.gz' 2>/dev/null || true"]
+        )
+    )
+    if server_priv_ip:
+        procs.append(
+            subprocess.Popen(
+                ssh_srv_base + [
+                    f"mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 25 'http://127.0.0.1:9090/debug/pprof/profile?seconds={sec}' -o '/tmp/bowl-telemetry/server/pprof/{stage}_cpu.pb.gz' 2>/dev/null || true"
+                ]
+            )
+        )
+    return procs
+
+
+def finish_stage_profiles(stage: str, procs: list[subprocess.Popen]) -> None:
+    for p in procs:
+        try:
+            p.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    subprocess.run(
+        ["sh", "-c", f"curl -fsS --max-time 10 'http://127.0.0.1:9567/debug/pprof/heap' -o '{cli_telem}/pprof/{stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9567/debug/pprof/mutex' -o '{cli_telem}/pprof/{stage}_mutex.pb.gz' 2>/dev/null || true"],
+        check=False,
+    )
+    if server_priv_ip:
+        subprocess.run(
+            ssh_srv_base + [
+                f"mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/heap' -o '/tmp/bowl-telemetry/server/pprof/{stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/mutex' -o '/tmp/bowl-telemetry/server/pprof/{stage}_mutex.pb.gz' 2>/dev/null || true"
+            ],
+            check=False,
+        )
+
 
 env = os.environ.copy()
 env["PATH"] = f"/opt/pjdfstest:/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')}"
@@ -522,9 +677,15 @@ env["PATH"] = f"/opt/pjdfstest:/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')
 subdirs = sorted([d.name for d in tests_root.iterdir() if d.is_dir()])
 print(f"[pjdfstest-runner] Discovered {len(subdirs)} syscall directories: {', '.join(subdirs)}", flush=True)
 
+capture_snapshot("suite_pre")
+slow_dirs = {"chown", "rename", "unlink"}
+
 with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encoding="utf-8") as tim_f:
     for idx, dname in enumerate(subdirs, 1):
         target_dir = tests_root / dname
+        if dname in slow_dirs:
+            capture_snapshot(f"{dname}_pre")
+        prof_procs = start_cpu_profile(dname, 10) if dname == "chown" else []
         t0 = time.monotonic()
         print(f"[{idx:02d}/{len(subdirs):02d}] Running prove --timer -rv {target_dir} ...", flush=True)
         proc = subprocess.run(
@@ -537,6 +698,10 @@ with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encod
             errors="replace",
         )
         elapsed = round(time.monotonic() - t0, 3)
+        if dname == "chown":
+            finish_stage_profiles(dname, prof_procs)
+        if dname in slow_dirs:
+            capture_snapshot(f"{dname}_post")
         log_f.write(f"# === DIRECTORY: {dname} (rc={proc.returncode}, duration_sec={elapsed}) ===\n")
         log_f.write(proc.stdout)
         if not proc.stdout.endswith("\n"):
@@ -556,6 +721,8 @@ with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encod
             "duration_sec": elapsed,
         }) + "\n")
         tim_f.flush()
+
+capture_snapshot("suite_post")
 PYEOF
 
 TEST_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -563,8 +730,10 @@ log "pjdfstest execution finished at ${TEST_COMPLETED_AT}."
 
 # Unmount cleanly and fetch logs
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "/usr/local/bin/bowl umount /mnt/bowl || umount /mnt/bowl || true"
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "systemctl stop bowl-storage 2>/dev/null || true"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
+fetch_telemetry_archive
 
 # ==============================================================================
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
