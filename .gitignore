@@ -29,7 +29,6 @@ go.work.sum
 .idea/
 .DS_Store
 .tdd_list.md
-docker-compose.yaml
 services/storage/vendor/
 client/vendor/
 benchmark/**/results/telemetry-*.tar.gz

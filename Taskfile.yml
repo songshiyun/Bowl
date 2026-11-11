@@ -1,8 +1,8 @@
 version: '3'
 
 vars:
-  COMPOSE_FILE: docker-compose.yaml
-  COMPOSE_EXAMPLE: docker-compose.yaml.example
+  ENV: '{{.ENV | default "dev"}}'
+  COMPOSE_FILE: 'deploy/{{.ENV}}/docker-compose.yaml'
   STORAGE_DOCKERFILE: services/storage/Dockerfile
   STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME | default "bowl-storage"}}'
   TAG: '{{.TAG | default "latest"}}'
@@ -24,14 +24,6 @@ tasks:
     cmds:
       - task --list
 
-  init:
-    desc: "Ensure docker-compose.yaml exists (copies from example if missing)"
-    status:
-      - test -f {{.COMPOSE_FILE}}
-    cmds:
-      - cp {{.COMPOSE_EXAMPLE}} {{.COMPOSE_FILE}}
-      - echo "Created {{.COMPOSE_FILE}} from {{.COMPOSE_EXAMPLE}}."
-
   vendor:storage:
     desc: "Vendor dependencies for storage service (ensures offline docker build)"
     internal: true
@@ -45,17 +37,16 @@ tasks:
       - go -C client mod vendor
 
   run:
-    desc: "Start all services in background via docker compose (supports TAG=xxx, e.g. task run TAG=test)"
-    deps: [init]
+    desc: "Start services via docker compose (ENV=dev|prod, default dev; supports TAG=xxx)"
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} up -d {{.CLI_ARGS}}
+      - docker compose -f {{.COMPOSE_FILE}} up -d --remove-orphans {{.CLI_ARGS}}
 
   build:
-    desc: "Build new docker image(s) via docker compose (supports TAG=xxx, e.g. task build TAG=test)"
-    deps: [init, vendor:storage]
+    desc: "Build docker image(s) via docker compose (ENV=dev|prod, default dev; supports TAG=xxx)"
+    deps: [vendor:storage]
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'
@@ -74,17 +65,17 @@ tasks:
       - docker build -t {{.CLIENT_TEST_IMAGE}}:{{.TAG}} -f {{.CLIENT_DOCKERFILE}} client {{.CLI_ARGS}}
 
   down:
-    desc: "Stop and remove docker compose containers and networks"
+    desc: "Stop and remove docker compose containers and networks (ENV=dev|prod)"
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} down {{.CLI_ARGS}}
+      - docker compose -f {{.COMPOSE_FILE}} down --remove-orphans {{.CLI_ARGS}}
 
   logs:
-    desc: "Follow docker compose service logs"
+    desc: "Follow docker compose service logs (ENV=dev|prod)"
     cmds:
       - docker compose -f {{.COMPOSE_FILE}} logs -f {{.CLI_ARGS}}
 
   ps:
-    desc: "Show status of docker compose services"
+    desc: "Show status of docker compose services (ENV=dev|prod)"
     cmds:
       - docker compose -f {{.COMPOSE_FILE}} ps
 
@@ -130,7 +121,7 @@ tasks:
 
   test:client:e2e:
     desc: "Run Linux FUSE client black-box E2E tests inside privileged test container"
-    deps: [init, vendor:storage, vendor:client, build:client:test]
+    deps: [vendor:storage, vendor:client, build:client:test]
     cmds:
       - defer: sh -c 'if [ "${KEEP_E2E_ENV:-0}" != "1" ]; then docker compose -f {{.COMPOSE_FILE}} down --remove-orphans; fi'
       - docker compose -f {{.COMPOSE_FILE}} up -d --build --wait storage-service
@@ -151,7 +142,7 @@ tasks:
 
   test:e2e:
     desc: "Run cross-service E2E tests against live docker compose services"
-    deps: [init, vendor:storage]
+    deps: [vendor:storage]
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'

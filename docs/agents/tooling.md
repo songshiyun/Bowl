@@ -16,7 +16,7 @@
 
 根目录 `go.work` 已 gitignore。在 `.worktrees/<ticket>` 内执行 `go`（含 `go test`、`go tool cover`）命令时，必须通过根目录 [`Taskfile.yml`](../../Taskfile.yml)（已内置 `GOWORK=off`）或显式指定 `GOWORK=off` 并带 `-C services/storage` 或 `-C client` 运行，切勿在根模块直接跑子模块路径或无隔离运行。
 
-本机只有一套 bowl 容器栈：[`docker-compose.yaml.example`](../../docker-compose.yaml.example) 固定了容器名（`bowl-postgres` 等）与端口，`Taskfile.yml` 已固定 `COMPOSE_PROJECT_NAME=bowl`。一律通过 `task` 操作容器栈（绕过 `task` 直接调用 `docker compose` 时显式带 `-p bowl`）；容器已在运行时直接复用。多个任务共用同一容器栈时（并行修复节点、深度审查汇合验证），以 `KEEP_E2E_ENV=1 task test:e2e` / `KEEP_E2E_ENV=1 task test:client:e2e` 运行 E2E，避免收尾时关停他人正在使用的容器栈。
+本机只有一套 bowl 容器栈：[`deploy/dev/docker-compose.yaml`](../../deploy/dev/docker-compose.yaml) 与 [`deploy/prod/docker-compose.yaml`](../../deploy/prod/docker-compose.yaml) 固定了项目名（`name: bowl`）、容器名（`bowl-postgres` 等）与端口，`Taskfile.yml` 通过 `ENV=dev|prod`（默认 `dev`）切换环境并固定 `COMPOSE_PROJECT_NAME=bowl`。一律通过 `task` 操作容器栈（绕过 `task` 直接调用 `docker compose` 时显式带 `-f deploy/<env>/docker-compose.yaml`）；容器已在运行时直接复用。多个任务共用同一容器栈时（并行修复节点、深度审查汇合验证），以 `KEEP_E2E_ENV=1 task test:e2e` / `KEEP_E2E_ENV=1 task test:client:e2e` 运行 E2E，避免收尾时关停他人正在使用的容器栈。
 
 ## 提交前守门
 
