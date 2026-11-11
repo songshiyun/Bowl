@@ -1,0 +1,69 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:16:54 CST
+Duration: 10s, Total samples = 860ms ( 8.60%)
+Showing nodes accounting for 430ms, 50.00% of 860ms total
+Showing top 25 nodes out of 402
+      flat  flat%   sum%        cum   cum%
+     110ms 12.79% 12.79%      110ms 12.79%  internal/runtime/syscall/linux.Syscall6
+      20ms  2.33% 15.12%       20ms  2.33%  github.com/cockroachdb/pebble/v2/internal/arenaskl.(*flushIterator).Next
+      20ms  2.33% 17.44%       30ms  3.49%  runtime.(*unwinder).resolveInternal
+      20ms  2.33% 19.77%       60ms  6.98%  runtime.findRunnable
+      20ms  2.33% 22.09%       20ms  2.33%  runtime.futex
+      20ms  2.33% 24.42%       40ms  4.65%  runtime.pcvalue
+      20ms  2.33% 26.74%       30ms  3.49%  runtime.sellock
+      20ms  2.33% 29.07%       20ms  2.33%  runtime.step
+      20ms  2.33% 31.40%       20ms  2.33%  time.nextStdChunk
+      10ms  1.16% 32.56%       10ms  1.16%  cel.dev/cel-go/common/types.String.Equal
+      10ms  1.16% 33.72%       10ms  1.16%  cmpbody
+      10ms  1.16% 34.88%       10ms  1.16%  connectrpc.com/connect.(*connectUnaryHandlerConn).getHTTPMethod
+      10ms  1.16% 36.05%       10ms  1.16%  github.com/cockroachdb/pebble/v2.(*Iterator).Close
+      10ms  1.16% 37.21%       10ms  1.16%  github.com/cockroachdb/pebble/v2.(*levelIter).Close
+      10ms  1.16% 38.37%       20ms  2.33%  github.com/cockroachdb/pebble/v2.(*mergingIter).nextEntry
+      10ms  1.16% 39.53%       10ms  1.16%  github.com/cockroachdb/pebble/v2/internal/arenaskl.(*Skiplist).findSpliceForLevel
+      10ms  1.16% 40.70%       10ms  1.16%  github.com/cockroachdb/pebble/v2/record.(*LogWriter).SyncRecord
+      10ms  1.16% 41.86%       10ms  1.16%  github.com/cockroachdb/pebble/v2/sstable.(*BlockPropertiesFilterer).intersectsUserPropsAndFinishInit
+      10ms  1.16% 43.02%       10ms  1.16%  github.com/cockroachdb/pebble/v2/sstable/colblk.(*DataBlockIter).Next
+      10ms  1.16% 44.19%       10ms  1.16%  github.com/cockroachdb/pebble/v2/sstable/colblk.(*PrefixBytesBuilder).Put
+      10ms  1.16% 45.35%       10ms  1.16%  github.com/cockroachdb/pebble/v2/sstable/colblk.(*UintBuilder).Get
+      10ms  1.16% 46.51%       20ms  2.33%  github.com/cockroachdb/pebble/v2/sstable/colblk.(*UintBuilder).Size
+      10ms  1.16% 47.67%       10ms  1.16%  github.com/cockroachdb/pebble/v2/sstable/colblk.uintColumnSize (inline)
+      10ms  1.16% 48.84%       30ms  3.49%  github.com/starsrc/bowl/services/storage/internal/server.(*countingReadCloser).Read
+      10ms  1.16% 50.00%       60ms  6.98%  github.com/starsrc/bowl/services/storage/internal/store.(*StoreActor).processTick
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:16:54 CST
+Duration: 10s, Total samples = 860ms ( 8.60%)
+Showing nodes accounting for 110ms, 12.79% of 860ms total
+Showing top 25 nodes out of 402
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      310ms 36.05%  net/http.(*http2serverConn).runHandler
+         0     0%     0%      270ms 31.40%  net/http.HandlerFunc.ServeHTTP
+         0     0%     0%      270ms 31.40%  net/http.serverHandler.ServeHTTP
+         0     0%     0%      260ms 30.23%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0%     0%      260ms 30.23%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0%     0%      260ms 30.23%  net/http.(*ServeMux).ServeHTTP
+         0     0%     0%      260ms 30.23%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0%     0%      220ms 25.58%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0%     0%      220ms 25.58%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0%     0%      150ms 17.44%  runtime/pprof.Do
+         0     0%     0%      140ms 16.28%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0%     0%      140ms 16.28%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0%     0%      140ms 16.28%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0%     0%      140ms 16.28%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+         0     0%     0%      120ms 13.95%  net/http.(*conn).serve
+         0     0%     0%      110ms 12.79%  bufio.(*Writer).Flush
+     110ms 12.79% 12.79%      110ms 12.79%  internal/runtime/syscall/linux.Syscall6
+         0     0% 12.79%      110ms 12.79%  net/http.(*conn).maybeServeUnencryptedHTTP2
+         0     0% 12.79%      110ms 12.79%  net/http.(*http2Server).ServeConn (inline)
+         0     0% 12.79%      110ms 12.79%  net/http.(*http2Server).serveConn
+         0     0% 12.79%      110ms 12.79%  net/http.(*http2serverConn).serve
+         0     0% 12.79%      110ms 12.79%  net/http.(*http2serverConn).writeFrameAsync
+         0     0% 12.79%      110ms 12.79%  net/http.http2ConfigureServer.func2
+         0     0% 12.79%      110ms 12.79%  net/http.http2ConfigureServer.func4
+         0     0% 12.79%       90ms 10.47%  internal/poll.ignoringEINTRIO (inline)

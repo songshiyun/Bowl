@@ -1,0 +1,67 @@
+=== Top Self Hotspots (-flat) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: inuse_space
+Time: 2026-11-12 03:15:58 CST
+Showing nodes accounting for 16361.22kB, 100% of 16361.22kB total
+Showing top 25 nodes out of 137
+      flat  flat%   sum%        cum   cum%
+ 5953.18kB 36.39% 36.39%  5953.18kB 36.39%  github.com/hanwen/go-fuse/v2/fuse.NewServer.func2
+ 4097.37kB 25.04% 61.43%  4097.37kB 25.04%  github.com/starsrc/bowl/client/internal/rpc.init.func1
+ 1184.27kB  7.24% 68.67%  1184.27kB  7.24%  google.golang.org/grpc/internal/mem.(*sizedBufferPool).Get
+ 1024.41kB  6.26% 74.93%  1024.41kB  6.26%  go.opentelemetry.io/otel/sdk/trace.(*recordingSpan).snapshot
+  515.19kB  3.15% 78.08%   515.19kB  3.15%  strings.(*Replacer).build
+  513.50kB  3.14% 81.22%   513.50kB  3.14%  google.golang.org/protobuf/internal/filedesc.(*File).initDecls
+     513kB  3.14% 84.35%      513kB  3.14%  runtime.mallocgc
+  512.10kB  3.13% 87.48%   512.10kB  3.13%  connectrpc.com/connect.(*compressionOption).apply (inline)
+  512.10kB  3.13% 90.61%   512.10kB  3.13%  google.golang.org/protobuf/internal/filedesc.(*Fields).lazyInit.func1
+  512.07kB  3.13% 93.74%   512.07kB  3.13%  google.golang.org/protobuf/internal/impl.fieldInfoForList
+  512.01kB  3.13% 96.87%   512.01kB  3.13%  encoding/json.typeFields
+  512.01kB  3.13%   100%   512.01kB  3.13%  google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run
+         0     0%   100%   512.10kB  3.13%  buf.build/go/protovalidate.init
+         0     0%   100%   512.10kB  3.13%  buf.build/go/protovalidate.makeNumericDescriptors
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*Client[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]).CallUnary
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0%   100%   512.10kB  3.13%  connectrpc.com/connect.(*compressionOption).applyToClient
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*connectUnaryClientConn).Receive
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.(*errorTranslatingClientConn).Receive
+         0     0%   100%   512.10kB  3.13%  connectrpc.com/connect.NewClient[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.NewClient[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func1
+         0     0%   100%  4097.37kB 25.04%  connectrpc.com/connect.NewClient[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0%   100%   512.10kB  3.13%  connectrpc.com/connect.newClientConfig
+
+=== Top Cumulative Hotspots (-cum) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: inuse_space
+Time: 2026-11-12 03:15:58 CST
+Showing nodes accounting for 5.81MB, 36.39% of 15.98MB total
+Showing top 25 nodes out of 137
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%    10.82MB 67.69%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
+         0     0%     0%     9.81MB 61.43%  sync.(*Pool).Get
+         0     0%     0%     7.99MB 50.01%  github.com/hanwen/go-fuse/v2/fuse.(*Server).Serve
+         0     0%     0%     7.99MB 50.01%  github.com/starsrc/bowl/client/internal/cli.defaultServeFUSE.func1
+         0     0%     0%     5.81MB 36.39%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest
+    5.81MB 36.39% 36.39%     5.81MB 36.39%  github.com/hanwen/go-fuse/v2/fuse.NewServer.func2
+         0     0% 36.39%        5MB 31.30%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
+         0     0% 36.39%        5MB 31.30%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest
+         0     0% 36.39%        5MB 31.30%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest.func1
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*Client[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]).CallUnary
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*connectUnaryClientConn).Receive
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.(*errorTranslatingClientConn).Receive
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.NewClient[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func1
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.NewClient[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.receiveUnaryMessage[go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/connect.receiveUnaryResponse[go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]
+         0     0% 36.39%        4MB 25.04%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0% 36.39%        4MB 25.04%  github.com/hanwen/go-fuse/v2/fuse.doRead
+         0     0% 36.39%        4MB 25.04%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0% 36.39%        4MB 25.04%  github.com/starsrc/bowl/client/internal/fusefs.(*InstrumentedRawFS).Read
+         0     0% 36.39%        4MB 25.04%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Read
+         0     0% 36.39%        4MB 25.04%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Read.func3

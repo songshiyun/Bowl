@@ -1,0 +1,69 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:15:34 CST
+Duration: 10s, Total samples = 220ms ( 2.20%)
+Showing nodes accounting for 220ms, 100% of 220ms total
+Showing top 25 nodes out of 153
+      flat  flat%   sum%        cum   cum%
+      20ms  9.09%  9.09%       20ms  9.09%  runtime.futex
+      10ms  4.55% 13.64%       40ms 18.18%  buf.build/go/protovalidate.(*validator).Validate
+      10ms  4.55% 18.18%       10ms  4.55%  cel.dev/cel-go/common/stdlib.init.0.func1
+      10ms  4.55% 22.73%       10ms  4.55%  connectrpc.com/otelconnect.(*streamingStateV1).metricAttributes
+      10ms  4.55% 27.27%       10ms  4.55%  github.com/cockroachdb/pebble/v2.(*DB).getInternal
+      10ms  4.55% 31.82%       10ms  4.55%  github.com/prometheus/client_golang/prometheus.(*histogram).findBucket
+      10ms  4.55% 36.36%       10ms  4.55%  github.com/prometheus/client_golang/prometheus.(*metricMap).Collect
+      10ms  4.55% 40.91%       10ms  4.55%  google.golang.org/protobuf/internal/filedesc.(*Field).Number
+      10ms  4.55% 45.45%       10ms  4.55%  internal/poll.(*fdMutex).rwlock
+      10ms  4.55% 50.00%       10ms  4.55%  internal/runtime/atomic.(*Uint64).Add
+      10ms  4.55% 54.55%       10ms  4.55%  internal/runtime/syscall/linux.Syscall6
+      10ms  4.55% 59.09%       10ms  4.55%  internal/strconv.fmtF
+      10ms  4.55% 63.64%       10ms  4.55%  regexp.(*Regexp).doExecute
+      10ms  4.55% 68.18%       10ms  4.55%  runtime.(*stkframe).getStackMap
+      10ms  4.55% 72.73%       10ms  4.55%  runtime.mapassign
+      10ms  4.55% 77.27%       10ms  4.55%  runtime.nanotime
+      10ms  4.55% 81.82%       10ms  4.55%  runtime.newproc1
+      10ms  4.55% 86.36%       10ms  4.55%  runtime.pcvalue
+      10ms  4.55% 90.91%       10ms  4.55%  runtime.scanObjectsSmall
+      10ms  4.55% 95.45%       10ms  4.55%  runtime.selectgo
+      10ms  4.55%   100%       20ms  9.09%  vendor/golang.org/x/net/http2/hpack.(*Encoder).WriteField
+         0     0%   100%       30ms 13.64%  buf.build/go/protovalidate.(*message).EvaluateMessage
+         0     0%   100%       20ms  9.09%  buf.build/go/protovalidate.(*value).EvaluateField
+         0     0%   100%       10ms  4.55%  buf.build/go/protovalidate.celPrograms.Evaluate
+         0     0%   100%       10ms  4.55%  buf.build/go/protovalidate.compiledProgram.eval
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:15:34 CST
+Duration: 10s, Total samples = 220ms ( 2.20%)
+Showing nodes accounting for 10ms, 4.55% of 220ms total
+Showing top 25 nodes out of 153
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%       80ms 36.36%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0%     0%       80ms 36.36%  net/http.(*ServeMux).ServeHTTP
+         0     0%     0%       80ms 36.36%  net/http.HandlerFunc.ServeHTTP
+         0     0%     0%       80ms 36.36%  net/http.serverHandler.ServeHTTP
+         0     0%     0%       70ms 31.82%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0%     0%       70ms 31.82%  net/http.(*http2serverConn).runHandler
+         0     0%     0%       70ms 31.82%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0%     0%       60ms 27.27%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0%     0%       60ms 27.27%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0%     0%       50ms 22.73%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0%     0%       50ms 22.73%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0%     0%       50ms 22.73%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0%     0%       50ms 22.73%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+      10ms  4.55%  4.55%       40ms 18.18%  buf.build/go/protovalidate.(*validator).Validate
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/Aether/pkg/observability/slogx.NewConnectInterceptor.func2.1
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/bowl/pkg/validator.(*storageValidator).Validate
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1.1
+         0     0%  4.55%       40ms 18.18%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewValidationInterceptor.func1.1
+         0     0%  4.55%       40ms 18.18%  net/http.(*http2serverConn).writeFrameAsync
+         0     0%  4.55%       40ms 18.18%  runtime/pprof.Do
+         0     0%  4.55%       30ms 13.64%  buf.build/go/protovalidate.(*message).EvaluateMessage
+         0     0%  4.55%       30ms 13.64%  buf.build/go/protovalidate.field.EvaluateMessage
+         0     0%  4.55%       30ms 13.64%  buf.build/go/protovalidate.messageEvaluators.EvaluateMessage

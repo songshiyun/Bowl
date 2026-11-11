@@ -1,0 +1,1550 @@
+[
+  {
+    "trace_id": "0e98e7194e3a38e6021228f9d522ca11",
+    "total_duration_ms": 0.512,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.512,
+    "server_max_span_ms": 0.082,
+    "client_rpc_span_ms": 0.476,
+    "server_rpc_span_ms": 0.082,
+    "rpc_network_codec_ms": 0.394,
+    "client_local_overhead_ms": 0.036,
+    "network_or_client_overhead_ms": 0.394,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.512,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.476,
+        "start_offset_ms": 0.021,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.082,
+        "start_offset_ms": 0.183,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.013,
+        "start_offset_ms": 0.222,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.008,
+        "start_offset_ms": 0.21,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "1a0104156763e6ee03d8a1f83dc6ce1d",
+    "total_duration_ms": 0.474,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.474,
+    "server_max_span_ms": 0.122,
+    "client_rpc_span_ms": 0.449,
+    "server_rpc_span_ms": 0.122,
+    "rpc_network_codec_ms": 0.327,
+    "client_local_overhead_ms": 0.025,
+    "network_or_client_overhead_ms": 0.327,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.474,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.449,
+        "start_offset_ms": 0.013,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.122,
+        "start_offset_ms": 0.113,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.028,
+        "start_offset_ms": 0.172,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.007,
+        "start_offset_ms": 0.159,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "8a4cddbcb26f0d201365da61eeeb07d4",
+    "total_duration_ms": 0.447,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.447,
+    "server_max_span_ms": 0.068,
+    "client_rpc_span_ms": 0.412,
+    "server_rpc_span_ms": 0.068,
+    "rpc_network_codec_ms": 0.344,
+    "client_local_overhead_ms": 0.035,
+    "network_or_client_overhead_ms": 0.344,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.447,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.412,
+        "start_offset_ms": 0.021,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.068,
+        "start_offset_ms": 0.126,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.156,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.149,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "5e89086e1c29e5ee0dcaf64cdffc9d56",
+    "total_duration_ms": 0.428,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.428,
+    "server_max_span_ms": 0.082,
+    "client_rpc_span_ms": 0.406,
+    "server_rpc_span_ms": 0.082,
+    "rpc_network_codec_ms": 0.324,
+    "client_local_overhead_ms": 0.022,
+    "network_or_client_overhead_ms": 0.324,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.428,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.406,
+        "start_offset_ms": 0.011,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.082,
+        "start_offset_ms": 0.128,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.171,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.158,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "2b648c93342b068301180aebf09c7fe3",
+    "total_duration_ms": 0.423,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.423,
+    "server_max_span_ms": 0.068,
+    "client_rpc_span_ms": 0.391,
+    "server_rpc_span_ms": 0.068,
+    "rpc_network_codec_ms": 0.323,
+    "client_local_overhead_ms": 0.032,
+    "network_or_client_overhead_ms": 0.323,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.423,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.391,
+        "start_offset_ms": 0.015,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.068,
+        "start_offset_ms": 0.113,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.009,
+        "start_offset_ms": 0.146,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.139,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "db42b67f14fd02dd0a1b23cb5f0f003e",
+    "total_duration_ms": 0.412,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.412,
+    "server_max_span_ms": 0.095,
+    "client_rpc_span_ms": 0.383,
+    "server_rpc_span_ms": 0.095,
+    "rpc_network_codec_ms": 0.288,
+    "client_local_overhead_ms": 0.029,
+    "network_or_client_overhead_ms": 0.288,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.412,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.383,
+        "start_offset_ms": 0.01,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.095,
+        "start_offset_ms": 0.066,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.015,
+        "start_offset_ms": 0.116,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.107,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "4d80a14466ab056e0d8bc2ddbb75d57f",
+    "total_duration_ms": 0.387,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.387,
+    "server_max_span_ms": 0.085,
+    "client_rpc_span_ms": 0.351,
+    "server_rpc_span_ms": 0.085,
+    "rpc_network_codec_ms": 0.266,
+    "client_local_overhead_ms": 0.036,
+    "network_or_client_overhead_ms": 0.266,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.387,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.351,
+        "start_offset_ms": 0.026,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.085,
+        "start_offset_ms": 0.104,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.011,
+        "start_offset_ms": 0.156,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.148,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "4f4fa0bf52af7ad20dc888814379c5eb",
+    "total_duration_ms": 0.364,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.364,
+    "server_max_span_ms": 0.082,
+    "client_rpc_span_ms": 0.346,
+    "server_rpc_span_ms": 0.082,
+    "rpc_network_codec_ms": 0.264,
+    "client_local_overhead_ms": 0.018,
+    "network_or_client_overhead_ms": 0.264,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.364,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.346,
+        "start_offset_ms": 0.008,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.082,
+        "start_offset_ms": 0.053,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.099,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.092,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "12e14237d02434bc0fd238dc8af3938d",
+    "total_duration_ms": 0.354,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.354,
+    "server_max_span_ms": 0.055,
+    "client_rpc_span_ms": 0.324,
+    "server_rpc_span_ms": 0.055,
+    "rpc_network_codec_ms": 0.269,
+    "client_local_overhead_ms": 0.03,
+    "network_or_client_overhead_ms": 0.269,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.354,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.324,
+        "start_offset_ms": 0.017,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.055,
+        "start_offset_ms": 0.085,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.107,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.103,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "d6db0d42059cc3ce006cf8e94f2fa541",
+    "total_duration_ms": 0.335,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.335,
+    "server_max_span_ms": 0.051,
+    "client_rpc_span_ms": 0.299,
+    "server_rpc_span_ms": 0.051,
+    "rpc_network_codec_ms": 0.248,
+    "client_local_overhead_ms": 0.036,
+    "network_or_client_overhead_ms": 0.248,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.335,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.299,
+        "start_offset_ms": 0.013,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.051,
+        "start_offset_ms": 0.079,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.008,
+        "start_offset_ms": 0.104,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.099,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "fa2578ecbd454a41038944a7e65132e5",
+    "total_duration_ms": 0.307,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.307,
+    "server_max_span_ms": 0.055,
+    "client_rpc_span_ms": 0.285,
+    "server_rpc_span_ms": 0.055,
+    "rpc_network_codec_ms": 0.23,
+    "client_local_overhead_ms": 0.022,
+    "network_or_client_overhead_ms": 0.23,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.307,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.285,
+        "start_offset_ms": 0.012,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.055,
+        "start_offset_ms": 0.042,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.008,
+        "start_offset_ms": 0.065,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.06,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "f6b26accf3d0e8a90fc16546eaa36254",
+    "total_duration_ms": 0.305,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.305,
+    "server_max_span_ms": 0.053,
+    "client_rpc_span_ms": 0.28,
+    "server_rpc_span_ms": 0.053,
+    "rpc_network_codec_ms": 0.227,
+    "client_local_overhead_ms": 0.025,
+    "network_or_client_overhead_ms": 0.227,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.305,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.28,
+        "start_offset_ms": 0.009,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.053,
+        "start_offset_ms": 0.058,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.082,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.077,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "544eedf461ff94770211d3106613f7d6",
+    "total_duration_ms": 0.01,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.01,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "c04fd799da7a97bc00a9773d698720c2",
+    "total_duration_ms": 0.004,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.004,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "1f5cc3e4303708b0154ebe6b454c6aa2",
+    "total_duration_ms": 0.004,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.004,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "f4d91a31d566930c13443c43609ae329",
+    "total_duration_ms": 0.004,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.004,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "cd7ca9d177e833760c0dadaf59d401cb",
+    "total_duration_ms": 0.004,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.004,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "a9246d3cfe4a65b70b0ccdb3ca37f055",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "78b5d8dfa9f242ce03c5a5a82153b96c",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "49562a3f37d0da69181492abbe6966c2",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "229bd781e89ccfb5090ba3a0979f92b1",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "21464872ead99deb0094c32c18fd52fa",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "83b54ffeed39a5530f46fd28e23b5f43",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "0dda9f98c2907ecd160f6c7fde2c58ee",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "e2ca393b66ceb7cd0791775a354cfb66",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "d63393fa6b65da3712e8fca22e7627a8",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "56f9d7475d25cd3a153fd144bac7648b",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "16c9f4e7f0bc4891079a40db1c662484",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "d67fd54a380e87140ccb5054602cfb7d",
+    "total_duration_ms": 0.003,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.003,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "5656deee326d53ea0469b700c7946d9a",
+    "total_duration_ms": 0.002,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.002,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  }
+]

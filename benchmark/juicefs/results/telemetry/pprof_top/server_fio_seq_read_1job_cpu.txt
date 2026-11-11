@@ -1,0 +1,71 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:15:25 CST
+Duration: 10s, Total samples = 6s (59.99%)
+Showing nodes accounting for 5.55s, 92.50% of 6s total
+Dropped 189 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 129
+      flat  flat%   sum%        cum   cum%
+     3.36s 56.00% 56.00%      3.36s 56.00%  internal/runtime/syscall/linux.Syscall6
+     1.99s 33.17% 89.17%      1.99s 33.17%  runtime.memmove
+     0.08s  1.33% 90.50%      0.08s  1.33%  runtime.futex
+     0.01s  0.17% 90.67%      1.39s 23.17%  bufio.(*Writer).Write
+     0.01s  0.17% 90.83%      0.03s   0.5%  bytes.(*Reader).WriteTo
+     0.01s  0.17% 91.00%      2.13s 35.50%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+     0.01s  0.17% 91.17%      0.03s   0.5%  github.com/cockroachdb/pebble/v2/internal/arenaskl.(*Iterator).seekForBaseSplice
+     0.01s  0.17% 91.33%      0.81s 13.50%  google.golang.org/protobuf/proto.MarshalOptions.marshal
+     0.01s  0.17% 91.50%      0.04s  0.67%  internal/poll.(*FD).Read
+     0.01s  0.17% 91.67%      3.07s 51.17%  net/http.(*http2serverConn).runHandler
+     0.01s  0.17% 91.83%      0.03s   0.5%  runtime.(*unwinder).resolveInternal
+     0.01s  0.17% 92.00%      0.03s   0.5%  runtime.netpoll
+     0.01s  0.17% 92.17%      0.04s  0.67%  runtime.notesleep
+     0.01s  0.17% 92.33%      0.04s  0.67%  runtime.selectgo
+     0.01s  0.17% 92.50%      3.34s 55.67%  syscall.RawSyscall6
+         0     0% 92.50%      0.09s  1.50%  bufio.(*Writer).Flush
+         0     0% 92.50%      0.03s   0.5%  compress/flate.(*compressor).deflate
+         0     0% 92.50%      3.03s 50.50%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0% 92.50%      0.84s 14.00%  connectrpc.com/connect.(*connectUnaryHandlerConn).Send
+         0     0% 92.50%      0.84s 14.00%  connectrpc.com/connect.(*connectUnaryMarshaler).Marshal
+         0     0% 92.50%      0.03s   0.5%  connectrpc.com/connect.(*connectUnaryMarshaler).write
+         0     0% 92.50%      0.84s 14.00%  connectrpc.com/connect.(*errorTranslatingHandlerConnCloser).Send
+         0     0% 92.50%      2.05s 34.17%  connectrpc.com/connect.NewUnaryHandler[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func1
+         0     0% 92.50%         3s 50.00%  connectrpc.com/connect.NewUnaryHandler[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0% 92.50%      0.03s   0.5%  connectrpc.com/connect.writeSender.Send
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:15:25 CST
+Duration: 10s, Total samples = 6s (59.99%)
+Showing nodes accounting for 3.39s, 56.50% of 6s total
+Dropped 189 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 129
+      flat  flat%   sum%        cum   cum%
+     3.36s 56.00% 56.00%      3.36s 56.00%  internal/runtime/syscall/linux.Syscall6
+     0.01s  0.17% 56.17%      3.34s 55.67%  syscall.RawSyscall6
+         0     0% 56.17%      3.09s 51.50%  net/http.HandlerFunc.ServeHTTP
+         0     0% 56.17%      3.09s 51.50%  net/http.serverHandler.ServeHTTP
+         0     0% 56.17%      3.08s 51.33%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0% 56.17%      3.07s 51.17%  net/http.(*ServeMux).ServeHTTP
+     0.01s  0.17% 56.33%      3.07s 51.17%  net/http.(*http2serverConn).runHandler
+         0     0% 56.33%      3.06s 51.00%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0% 56.33%      3.06s 51.00%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0% 56.33%      3.03s 50.50%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0% 56.33%      3.03s 50.50%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0% 56.33%         3s 50.00%  connectrpc.com/connect.NewUnaryHandler[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+     0.01s  0.17% 56.50%      2.13s 35.50%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0% 56.50%      2.13s 35.50%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0% 56.50%      2.13s 35.50%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0% 56.50%      2.13s 35.50%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+         0     0% 56.50%      2.06s 34.33%  github.com/starsrc/Aether/pkg/observability/slogx.NewConnectInterceptor.func2.1
+         0     0% 56.50%      2.06s 34.33%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0% 56.50%      2.06s 34.33%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1
+         0     0% 56.50%      2.06s 34.33%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1.1
+         0     0% 56.50%      2.06s 34.33%  runtime/pprof.Do
+         0     0% 56.50%      2.05s 34.17%  connectrpc.com/connect.NewUnaryHandler[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func1
+         0     0% 56.50%      2.05s 34.17%  github.com/starsrc/bowl/services/storage/internal/server.(*Server).Read
+         0     0% 56.50%      2.05s 34.17%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewValidationInterceptor.func1.1
+         0     0% 56.50%      2.03s 33.83%  github.com/starsrc/bowl/services/storage/internal/store.(*StoreActor).ReadInto

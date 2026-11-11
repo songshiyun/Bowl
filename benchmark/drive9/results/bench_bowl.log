@@ -1,12 +1,19 @@
-2026/11/11 02:50:49.250891 juicefs[8306] <WARNING>: open stats file under mount point /mnt/bowl: open /mnt/bowl/.stats: no such file or directory [stats.go:349]
 Benchmark finished!
 BlockSize: 1.0 MiB, BigFileSize: 1.0 GiB, SmallFileSize: 128 KiB, SmallFileCount: 100, NumThreads: 4
+Time used: 6.4 s, CPU: 218.4%, Memory: 588.7 MiB
 +------------------+------------------+--------------+
 |       ITEM       |       VALUE      |     COST     |
 +------------------+------------------+--------------+
-|   Write big file |    1699.27 MiB/s |  2.41 s/file |
-|    Read big file |    1504.90 MiB/s |  2.72 s/file |
-| Write small file |   1392.0 files/s | 2.87 ms/file |
-|  Read small file |   3970.5 files/s | 1.01 ms/file |
-|        Stat file | 115646.0 files/s | 0.03 ms/file |
+|   Write big file |    1649.21 MiB/s |  2.48 s/file |
+|    Read big file |    1383.14 MiB/s |  2.96 s/file |
+| Write small file |   1738.9 files/s | 2.30 ms/file |
+|  Read small file |   3789.0 files/s | 1.06 ms/file |
+|        Stat file |  35967.1 files/s | 0.11 ms/file |
+|   FUSE operation | 52832 operations |   0.30 ms/op |
+|      Update meta |   809 operations |   0.38 ms/op |
+|       Put object |  9006 operations |   0.64 ms/op |
+|       Get object | 33176 operations |   0.29 ms/op |
+|    Delete object |   405 operations |   0.29 ms/op |
+| Write into cache |  4088 operations |   1.19 ms/op |
+|  Read from cache | 32610 operations |   0.06 ms/op |
 +------------------+------------------+--------------+

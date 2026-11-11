@@ -1,0 +1,69 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:17:25 CST
+Duration: 6s, Total samples = 1.78s (29.66%)
+Showing nodes accounting for 1.77s, 99.44% of 1.78s total
+Showing top 25 nodes out of 242
+      flat  flat%   sum%        cum   cum%
+     1.09s 61.24% 61.24%      1.09s 61.24%  internal/runtime/syscall/linux.Syscall6
+     0.43s 24.16% 85.39%      0.43s 24.16%  runtime.memmove
+     0.02s  1.12% 86.52%      0.02s  1.12%  internal/runtime/atomic.(*Uint32).CompareAndSwap
+     0.02s  1.12% 87.64%      0.02s  1.12%  runtime.sellock
+     0.01s  0.56% 88.20%      0.01s  0.56%  bytes.(*Buffer).Bytes
+     0.01s  0.56% 88.76%      0.01s  0.56%  compress/flate.(*compressor).deflate
+     0.01s  0.56% 89.33%      0.01s  0.56%  github.com/cockroachdb/pebble/v2/internal/arenaskl.(*Skiplist).randomHeight
+     0.01s  0.56% 89.89%      0.01s  0.56%  internal/runtime/atomic.(*Bool).Load
+     0.01s  0.56% 90.45%      0.01s  0.56%  internal/runtime/maps.ctrlGroup.matchH2
+     0.01s  0.56% 91.01%      0.03s  1.69%  internal/runtime/syscall/linux.EpollWait
+     0.01s  0.56% 91.57%      0.01s  0.56%  internal/sync.(*Mutex).Lock
+     0.01s  0.56% 92.13%      0.01s  0.56%  net/http.(*http2Framer).readMetaFrame
+     0.01s  0.56% 92.70%      0.06s  3.37%  net/http.(*http2bufferedWriter).Flush
+     0.01s  0.56% 93.26%      0.04s  2.25%  net/http.(*http2requestBody).Read
+     0.01s  0.56% 93.82%      0.04s  2.25%  net/http.(*http2serverConn).writeFrame
+     0.01s  0.56% 94.38%      0.01s  0.56%  runtime.(*stkframe).getStackMap
+     0.01s  0.56% 94.94%      0.02s  1.12%  runtime.adjustframe
+     0.01s  0.56% 95.51%      0.03s  1.69%  runtime.copystack
+     0.01s  0.56% 96.07%      0.01s  0.56%  runtime.futex
+     0.01s  0.56% 96.63%      0.01s  0.56%  runtime.mapaccess2_faststr
+     0.01s  0.56% 97.19%      0.01s  0.56%  runtime.mapassign_fast64
+     0.01s  0.56% 97.75%      0.01s  0.56%  runtime.nanotime
+     0.01s  0.56% 98.31%      0.02s  1.12%  runtime.newobject
+     0.01s  0.56% 98.88%      0.01s  0.56%  runtime.procPin (inline)
+     0.01s  0.56% 99.44%      0.03s  1.69%  sync.(*Pool).Get
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:17:25 CST
+Duration: 6s, Total samples = 1780ms (29.66%)
+Showing nodes accounting for 1520ms, 85.39% of 1780ms total
+Showing top 25 nodes out of 242
+      flat  flat%   sum%        cum   cum%
+    1090ms 61.24% 61.24%     1090ms 61.24%  internal/runtime/syscall/linux.Syscall6
+         0     0% 61.24%     1070ms 60.11%  syscall.RawSyscall6
+         0     0% 61.24%      960ms 53.93%  net/http.HandlerFunc.ServeHTTP
+         0     0% 61.24%      960ms 53.93%  net/http.serverHandler.ServeHTTP
+         0     0% 61.24%      950ms 53.37%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0% 61.24%      950ms 53.37%  net/http.(*http2serverConn).runHandler
+         0     0% 61.24%      950ms 53.37%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0% 61.24%      940ms 52.81%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0% 61.24%      930ms 52.25%  net/http.(*ServeMux).ServeHTTP
+         0     0% 61.24%      920ms 51.69%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0% 61.24%      920ms 51.69%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0% 61.24%      650ms 36.52%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0% 61.24%      650ms 36.52%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0% 61.24%      650ms 36.52%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0% 61.24%      650ms 36.52%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+         0     0% 61.24%      640ms 35.96%  github.com/starsrc/Aether/pkg/observability/slogx.NewConnectInterceptor.func2.1
+         0     0% 61.24%      640ms 35.96%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0% 61.24%      640ms 35.96%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1
+         0     0% 61.24%      640ms 35.96%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1.1
+         0     0% 61.24%      640ms 35.96%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewValidationInterceptor.func1.1
+         0     0% 61.24%      640ms 35.96%  runtime/pprof.Do
+         0     0% 61.24%      620ms 34.83%  syscall.Syscall6
+         0     0% 61.24%      540ms 30.34%  connectrpc.com/connect.NewUnaryHandler[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0% 61.24%      450ms 25.28%  syscall.Syscall
+     430ms 24.16% 85.39%      430ms 24.16%  runtime.memmove

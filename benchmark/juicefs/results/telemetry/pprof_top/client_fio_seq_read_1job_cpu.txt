@@ -1,0 +1,71 @@
+=== Top Self Hotspots (-flat) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: cpu
+Time: 2026-11-12 03:15:25 CST
+Duration: 10s, Total samples = 5.12s (51.20%)
+Showing nodes accounting for 4.68s, 91.41% of 5.12s total
+Dropped 223 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 143
+      flat  flat%   sum%        cum   cum%
+     2.25s 43.95% 43.95%      2.25s 43.95%  internal/runtime/syscall/linux.Syscall6
+     1.91s 37.30% 81.25%      1.91s 37.30%  runtime.memmove
+     0.08s  1.56% 82.81%      0.08s  1.56%  runtime.(*mspan).writeHeapBitsSmall
+     0.07s  1.37% 84.18%      0.07s  1.37%  sync/atomic.(*Uint64).CompareAndSwap (inline)
+     0.04s  0.78% 84.96%      0.20s  3.91%  runtime.findRunnable
+     0.04s  0.78% 85.74%      0.04s  0.78%  runtime.futex
+     0.03s  0.59% 86.33%      0.12s  2.34%  net/http.http2getDataBufferChunk
+     0.03s  0.59% 86.91%      0.03s  0.59%  runtime.nextFreeFast (inline)
+     0.03s  0.59% 87.50%      0.03s  0.59%  runtime.usleep
+     0.03s  0.59% 88.09%      0.03s  0.59%  sync.(*poolDequeue).pushHead
+     0.02s  0.39% 88.48%      0.04s  0.78%  runtime.(*stkframe).getStackMap
+     0.02s  0.39% 88.87%      0.09s  1.76%  runtime.netpoll
+     0.01s   0.2% 89.06%      1.34s 26.17%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+     0.01s   0.2% 89.26%      0.04s  0.78%  context.WithDeadlineCause
+     0.01s   0.2% 89.45%      0.18s  3.52%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest
+     0.01s   0.2% 89.65%      0.15s  2.93%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest.func1 (inline)
+     0.01s   0.2% 89.84%      0.07s  1.37%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).trySplice
+     0.01s   0.2% 90.04%      0.04s  0.78%  internal/poll.(*FD).Write
+     0.01s   0.2% 90.23%      0.07s  1.37%  internal/runtime/syscall/linux.EpollWait
+     0.01s   0.2% 90.43%      0.05s  0.98%  net/http.(*http2clientStream).encodeAndWriteHeaders
+     0.01s   0.2% 90.62%      0.14s  2.73%  net/http.(*http2dataBuffer).lastChunkOrAlloc
+     0.01s   0.2% 90.82%      0.14s  2.73%  runtime.mallocgc
+     0.01s   0.2% 91.02%      0.03s  0.59%  runtime.selectgo
+     0.01s   0.2% 91.21%      0.04s  0.78%  runtime.stealWork
+     0.01s   0.2% 91.41%      0.05s  0.98%  runtime.systemstack
+
+=== Top Cumulative Hotspots (-cum) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: cpu
+Time: 2026-11-12 03:15:25 CST
+Duration: 10s, Total samples = 5.12s (51.20%)
+Showing nodes accounting for 4.17s, 81.45% of 5.12s total
+Dropped 223 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 143
+      flat  flat%   sum%        cum   cum%
+     2.25s 43.95% 43.95%      2.25s 43.95%  internal/runtime/syscall/linux.Syscall6
+         0     0% 43.95%      2.20s 42.97%  syscall.Syscall
+         0     0% 43.95%      2.19s 42.77%  syscall.RawSyscall6
+         0     0% 43.95%      1.99s 38.87%  net/http.(*http2ClientConn).readLoop
+         0     0% 43.95%      1.99s 38.87%  net/http.(*http2clientConnReadLoop).run
+     1.91s 37.30% 81.25%      1.91s 37.30%  runtime.memmove
+         0     0% 81.25%      1.61s 31.45%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
+         0     0% 81.25%      1.48s 28.91%  syscall.Read (partial-inline)
+         0     0% 81.25%      1.48s 28.91%  syscall.read
+         0     0% 81.25%      1.43s 27.93%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
+         0     0% 81.25%      1.38s 26.95%  net/http.(*http2Framer).ReadFrame
+         0     0% 81.25%      1.37s 26.76%  internal/poll.ignoringEINTRIO (inline)
+         0     0% 81.25%      1.35s 26.37%  bufio.(*Reader).Read
+         0     0% 81.25%      1.35s 26.37%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Read.func3
+         0     0% 81.25%      1.35s 26.37%  internal/poll.(*FD).Read
+         0     0% 81.25%      1.35s 26.37%  io.ReadAtLeast
+         0     0% 81.25%      1.35s 26.37%  io.ReadFull (inline)
+         0     0% 81.25%      1.35s 26.37%  net.(*conn).Read
+         0     0% 81.25%      1.35s 26.37%  net.(*netFD).Read
+         0     0% 81.25%      1.34s 26.17%  connectrpc.com/connect.(*Client[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]).CallUnary
+     0.01s   0.2% 81.45%      1.34s 26.17%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0% 81.45%      1.34s 26.17%  connectrpc.com/connect.NewClient[go.shape.e80ba5ebc5f7385136069f97c3374d2892f8c315d57d93e4b627333ca6474eba,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Data []uint8 "protobuf:\"bytes,1,opt,name=data,proto3\" json:\"data,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0% 81.45%      1.34s 26.17%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRetryInterceptor.func3.1
+         0     0% 81.45%      1.34s 26.17%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.(*storageServiceClient).Read
+         0     0% 81.45%      1.33s 25.98%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1

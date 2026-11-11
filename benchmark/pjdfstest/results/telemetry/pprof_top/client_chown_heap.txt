@@ -1,0 +1,67 @@
+=== Top Self Hotspots (-flat) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: inuse_space
+Time: 2026-11-12 03:15:04 CST
+Showing nodes accounting for 15026.39kB, 100% of 15026.39kB total
+Showing top 25 nodes out of 112
+      flat  flat%   sum%        cum   cum%
+ 7143.82kB 47.54% 47.54%  7143.82kB 47.54%  github.com/hanwen/go-fuse/v2/fuse.NewServer.func2
+ 2707.76kB 18.02% 65.56%  3252.42kB 21.64%  compress/flate.NewWriter (inline)
+  544.67kB  3.62% 69.19%   544.67kB  3.62%  compress/flate.(*compressor).initDeflate (inline)
+  528.17kB  3.51% 72.70%   528.17kB  3.51%  google.golang.org/grpc/internal/mem.(*SimpleBufferPool).Get
+  515.19kB  3.43% 76.13%   515.19kB  3.43%  strings.(*Replacer).build
+  513.50kB  3.42% 79.55%   513.50kB  3.42%  google.golang.org/protobuf/internal/filedesc.(*File).initDecls
+     513kB  3.41% 82.96%      513kB  3.41%  runtime.mallocgc
+  512.10kB  3.41% 86.37%   512.10kB  3.41%  connectrpc.com/connect.(*compressionOption).apply (inline)
+  512.10kB  3.41% 89.78%   512.10kB  3.41%  google.golang.org/protobuf/internal/filedesc.(*Fields).lazyInit.func1
+  512.07kB  3.41% 93.19%   512.07kB  3.41%  google.golang.org/protobuf/internal/impl.fieldInfoForList
+  512.01kB  3.41% 96.59%   512.01kB  3.41%  encoding/json.typeFields
+  512.01kB  3.41%   100%   512.01kB  3.41%  google.golang.org/grpc/internal/grpcsync.(*CallbackSerializer).run
+         0     0%   100%   512.10kB  3.41%  buf.build/go/protovalidate.init
+         0     0%   100%   512.10kB  3.41%  buf.build/go/protovalidate.makeNumericDescriptors
+         0     0%   100%  3252.42kB 21.64%  bufio.(*Writer).Flush
+         0     0%   100%   544.67kB  3.62%  compress/flate.(*compressor).init
+         0     0%   100%  3252.42kB 21.64%  compress/gzip.(*Writer).Write
+         0     0%   100%   512.10kB  3.41%  connectrpc.com/connect.(*compressionOption).applyToClient
+         0     0%   100%   512.10kB  3.41%  connectrpc.com/connect.NewClient[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]
+         0     0%   100%   512.10kB  3.41%  connectrpc.com/connect.newClientConfig
+         0     0%   100%   512.01kB  3.41%  encoding/json.(*encodeState).marshal
+         0     0%   100%   512.01kB  3.41%  encoding/json.(*encodeState).reflectValue
+         0     0%   100%   512.01kB  3.41%  encoding/json.Marshal
+         0     0%   100%   512.01kB  3.41%  encoding/json.MarshalIndent
+         0     0%   100%   512.01kB  3.41%  encoding/json.cachedTypeFields
+
+=== Top Cumulative Hotspots (-cum) ===
+File: bowl
+Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Type: inuse_space
+Time: 2026-11-12 03:15:04 CST
+Showing nodes accounting for 9.62MB, 65.56% of 14.67MB total
+Showing top 25 nodes out of 112
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     6.98MB 47.54%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest
+    6.98MB 47.54% 47.54%     6.98MB 47.54%  github.com/hanwen/go-fuse/v2/fuse.NewServer.func2
+         0     0% 47.54%     6.98MB 47.54%  sync.(*Pool).Get
+         0     0% 47.54%     5.81MB 39.62%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
+         0     0% 47.54%     4.18MB 28.48%  net/http.(*ServeMux).ServeHTTP
+         0     0% 47.54%     4.18MB 28.48%  net/http.(*conn).serve
+         0     0% 47.54%     4.18MB 28.48%  net/http.HandlerFunc.ServeHTTP
+         0     0% 47.54%     4.18MB 28.48%  net/http.serverHandler.ServeHTTP
+         0     0% 47.54%     3.68MB 25.07%  github.com/prometheus/client_golang/prometheus/promhttp.HandlerForTransactional.func1
+         0     0% 47.54%     3.68MB 25.07%  github.com/prometheus/common/expfmt.MetricFamilyToOpenMetrics
+         0     0% 47.54%     3.68MB 25.07%  github.com/prometheus/common/expfmt.NewEncoder.func9
+         0     0% 47.54%     3.68MB 25.07%  github.com/prometheus/common/expfmt.encoderCloser.Encode
+         0     0% 47.54%     3.18MB 21.64%  bufio.(*Writer).Flush
+    2.64MB 18.02% 65.56%     3.18MB 21.64%  compress/flate.NewWriter (inline)
+         0     0% 65.56%     3.18MB 21.64%  compress/gzip.(*Writer).Write
+         0     0% 65.56%     3.18MB 21.64%  github.com/prometheus/common/expfmt.MetricFamilyToOpenMetrics.func1
+         0     0% 65.56%     2.66MB 18.16%  runtime.main
+         0     0% 65.56%     2.33MB 15.85%  github.com/hanwen/go-fuse/v2/fuse.(*Server).Serve
+         0     0% 65.56%     2.33MB 15.85%  github.com/starsrc/bowl/client/internal/cli.defaultServeFUSE.func1
+         0     0% 65.56%     1.66MB 11.33%  github.com/starsrc/bowl/client/internal/cli.Execute
+         0     0% 65.56%     1.66MB 11.33%  github.com/starsrc/bowl/client/internal/cli.executeMount
+         0     0% 65.56%     1.66MB 11.33%  github.com/starsrc/bowl/client/internal/cli.runDaemonWorker
+         0     0% 65.56%     1.66MB 11.33%  github.com/starsrc/bowl/client/internal/cli.runMount
+         0     0% 65.56%     1.66MB 11.33%  main.main
+         0     0% 65.56%     1.50MB 10.24%  sync.(*Once).Do (inline)

@@ -1,0 +1,71 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:16:36 CST
+Duration: 10s, Total samples = 6.79s (67.90%)
+Showing nodes accounting for 3.16s, 46.54% of 6.79s total
+Dropped 497 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 340
+      flat  flat%   sum%        cum   cum%
+     0.78s 11.49% 11.49%      0.78s 11.49%  internal/runtime/syscall/linux.Syscall6
+     0.67s  9.87% 21.35%      0.67s  9.87%  runtime.futex
+     0.12s  1.77% 23.12%      0.12s  1.77%  runtime.memclrNoHeapPointers
+     0.12s  1.77% 24.89%      0.12s  1.77%  runtime.nextFreeFast (inline)
+     0.10s  1.47% 26.36%      0.10s  1.47%  runtime.lock2
+     0.10s  1.47% 27.84%      0.23s  3.39%  runtime.pcvalue
+     0.10s  1.47% 29.31%      0.49s  7.22%  runtime.selectgo
+     0.10s  1.47% 30.78%      0.12s  1.77%  runtime.step
+     0.10s  1.47% 32.25%      0.10s  1.47%  runtime.unlock2
+     0.09s  1.33% 33.58%      0.95s 13.99%  runtime.findRunnable
+     0.08s  1.18% 34.76%      0.15s  2.21%  github.com/cockroachdb/pebble/v2/internal/arenaskl.(*Skiplist).findSpliceForLevel
+     0.08s  1.18% 35.94%      0.08s  1.18%  runtime.nanotime (inline)
+     0.07s  1.03% 36.97%      0.07s  1.03%  internal/runtime/maps.ctrlGroup.matchH2
+     0.07s  1.03% 38.00%      0.07s  1.03%  runtime.findfunc
+     0.07s  1.03% 39.03%      0.07s  1.03%  runtime.memmove
+     0.06s  0.88% 39.91%      0.22s  3.24%  runtime.(*stkframe).getStackMap
+     0.06s  0.88% 40.80%      0.16s  2.36%  vendor/golang.org/x/net/http2/hpack.(*Decoder).parseFieldIndexed
+     0.05s  0.74% 41.53%      0.05s  0.74%  cmpbody
+     0.05s  0.74% 42.27%      0.05s  0.74%  runtime.(*mspan).writeHeapBitsSmall
+     0.05s  0.74% 43.00%      0.13s  1.91%  runtime.(*unwinder).resolveInternal
+     0.05s  0.74% 43.74%      0.27s  3.98%  runtime.newobject
+     0.05s  0.74% 44.48%      0.05s  0.74%  runtime.usleep
+     0.05s  0.74% 45.21%      0.08s  1.18%  sync.(*Pool).Get
+     0.05s  0.74% 45.95%      0.05s  0.74%  time.runtimeNow
+     0.04s  0.59% 46.54%      0.12s  1.77%  connectrpc.com/connect.(*connectUnaryMarshaler).Marshal
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: cpu
+Time: 2026-11-12 03:16:36 CST
+Duration: 10s, Total samples = 6.79s (67.90%)
+Showing nodes accounting for 1.02s, 15.02% of 6.79s total
+Dropped 497 nodes (cum <= 0.03s)
+Showing top 25 nodes out of 340
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%      2.31s 34.02%  net/http.(*http2serverConn).runHandler
+     0.01s  0.15%  0.15%      2.04s 30.04%  net/http.serverHandler.ServeHTTP
+     0.01s  0.15%  0.29%      2.03s 29.90%  net/http.HandlerFunc.ServeHTTP
+         0     0%  0.29%      2.03s 29.90%  net/http.unencryptedHTTP2Request.ServeHTTP
+     0.01s  0.15%  0.44%      2.01s 29.60%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0%  0.44%      1.94s 28.57%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+     0.01s  0.15%  0.59%      1.91s 28.13%  net/http.(*ServeMux).ServeHTTP
+     0.01s  0.15%  0.74%      1.84s 27.10%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0%  0.74%      1.84s 27.10%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0%  0.74%      1.17s 17.23%  runtime.mcall
+     0.04s  0.59%  1.33%      1.15s 16.94%  runtime.schedule
+         0     0%  1.33%      1.07s 15.76%  runtime.park_m
+         0     0%  1.33%      1.01s 14.87%  github.com/starsrc/bowl/services/storage/internal/store.(*StoreActor).runLoop
+         0     0%  1.33%         1s 14.73%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+     0.01s  0.15%  1.47%         1s 14.73%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0%  1.47%         1s 14.73%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+     0.02s  0.29%  1.77%         1s 14.73%  github.com/starsrc/bowl/services/storage/internal/store.(*StoreActor).processTick
+     0.03s  0.44%  2.21%      0.98s 14.43%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+     0.09s  1.33%  3.53%      0.95s 13.99%  runtime.findRunnable
+     0.78s 11.49% 15.02%      0.78s 11.49%  internal/runtime/syscall/linux.Syscall6
+         0     0% 15.02%      0.78s 11.49%  runtime/pprof.Do
+         0     0% 15.02%      0.74s 10.90%  github.com/starsrc/Aether/pkg/observability/slogx.NewConnectInterceptor.func2.1
+         0     0% 15.02%      0.74s 10.90%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0% 15.02%      0.73s 10.75%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1
+         0     0% 15.02%      0.72s 10.60%  net/http.(*conn).serve

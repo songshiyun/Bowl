@@ -1,0 +1,67 @@
+=== Top Self Hotspots (-flat) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: inuse_space
+Time: 2026-11-12 03:15:58 CST
+Showing nodes accounting for 23623.96kB, 100% of 23623.96kB total
+Showing top 25 nodes out of 222
+      flat  flat%   sum%        cum   cum%
+ 4097.37kB 17.34% 17.34%  4097.37kB 17.34%  github.com/starsrc/bowl/services/storage/internal/server.init.func1
+ 4097.37kB 17.34% 34.69%  4097.37kB 17.34%  github.com/starsrc/bowl/services/storage/internal/server.init.func2
+ 4080.46kB 17.27% 51.96%  4080.46kB 17.27%  github.com/cockroachdb/pebble/v2/internal/manual.New
+ 1538.09kB  6.51% 58.47%  1538.09kB  6.51%  google.golang.org/protobuf/internal/filedesc.(*Message).unmarshalFull
+ 1184.27kB  5.01% 63.48%  1184.27kB  5.01%  google.golang.org/grpc/internal/mem.(*sizedBufferPool).Get
+    1026kB  4.34% 67.83%     1026kB  4.34%  runtime.mallocgc
+  902.59kB  3.82% 71.65%   902.59kB  3.82%  compress/flate.NewWriter
+  536.37kB  2.27% 73.92%   536.37kB  2.27%  github.com/starsrc/bowl/services/storage/internal/store.newBlobStore
+  521.05kB  2.21% 76.12%   521.05kB  2.21%  encoding/xml.map.init.0
+  516.01kB  2.18% 78.31%   516.01kB  2.18%  google.golang.org/protobuf/internal/filedesc.(*File).initDecls
+  516.01kB  2.18% 80.49%   516.01kB  2.18%  hash/crc32.slicingMakeTable
+  512.08kB  2.17% 82.66%   512.08kB  2.17%  github.com/prometheus/client_golang/prometheus.newHistogram
+  512.07kB  2.17% 84.83%   512.07kB  2.17%  buf.build/go/protovalidate.tryBuildNativeNumericRules[go.shape.uint64,go.shape.*uint8]
+  512.07kB  2.17% 87.00%   512.07kB  2.17%  google.golang.org/protobuf/internal/impl.fieldInfoForScalar
+  512.04kB  2.17% 89.16%   512.04kB  2.17%  context.withCancel
+  512.03kB  2.17% 91.33%   512.03kB  2.17%  github.com/antlr4-go/antlr/v4.NewDFA
+  512.02kB  2.17% 93.50%   512.02kB  2.17%  connectrpc.com/connect.extractProtoPath
+  512.02kB  2.17% 95.67%   512.02kB  2.17%  github.com/jackc/pgx/v5/pgtype.initDefaultMap
+  512.02kB  2.17% 97.83%   512.02kB  2.17%  github.com/antlr4-go/antlr/v4.(*BaseATNState).AddTransition
+  512.01kB  2.17%   100%   512.01kB  2.17%  buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate.FieldPathElement_builder.Build
+         0     0%   100%  2048.12kB  8.67%  buf.build/go/protovalidate.(*builder).build
+         0     0%   100%  2048.12kB  8.67%  buf.build/go/protovalidate.(*builder).buildField
+         0     0%   100%  2048.12kB  8.67%  buf.build/go/protovalidate.(*builder).buildMessage
+         0     0%   100%  2048.12kB  8.67%  buf.build/go/protovalidate.(*builder).buildValue
+         0     0%   100%  1536.05kB  6.50%  buf.build/go/protovalidate.(*builder).processFieldExpressions
+
+=== Top Cumulative Hotspots (-cum) ===
+File: storage-service
+Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Type: inuse_space
+Time: 2026-11-12 03:15:58 CST
+Showing nodes accounting for 0, 0% of 23.07MB total
+Showing top 25 nodes out of 222
+      flat  flat%   sum%        cum   cum%
+         0     0%     0%     9.91MB 42.96%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0%     0%     9.91MB 42.96%  net/http.(*ServeMux).ServeHTTP
+         0     0%     0%     9.91MB 42.96%  net/http.HandlerFunc.ServeHTTP
+         0     0%     0%     9.91MB 42.96%  net/http.serverHandler.ServeHTTP
+         0     0%     0%     8.53MB 36.96%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0%     0%     8.53MB 36.96%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0%     0%     8.53MB 36.96%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0%     0%     8.53MB 36.96%  net/http.(*http2serverConn).runHandler
+         0     0%     0%     8.53MB 36.96%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0%     0%        8MB 34.69%  sync.(*Pool).Get
+         0     0%     0%     5.52MB 23.91%  runtime.main
+         0     0%     0%     4.53MB 19.61%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0%     0%     4.53MB 19.61%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/Aether/pkg/observability/slogx.NewConnectInterceptor.func2.1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/Aether/pkg/serverx.NewInterceptorsWithValidator.NewMaskInterceptor.func1.1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewStorageObservabilityInterceptor.func4.1.1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors.NewValidationInterceptor.func1.1
+         0     0%     0%     4.53MB 19.61%  github.com/starsrc/bowl/services/storage/internal/server.New.newWritePayloadReleaseInterceptor.func2.1
+         0     0%     0%     4.53MB 19.61%  runtime/pprof.Do
+         0     0%     0%        4MB 17.35%  go.uber.org/dig.(*Scope).Invoke
+         0     0%     0%        4MB 17.35%  go.uber.org/dig.(*constructorNode).Call
+         0     0%     0%        4MB 17.35%  go.uber.org/dig.defaultInvoker
+         0     0%     0%        4MB 17.35%  go.uber.org/dig.paramList.BuildList

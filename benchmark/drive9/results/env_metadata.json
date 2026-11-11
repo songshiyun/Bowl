@@ -14,29 +14,31 @@
     "data_disk_size_gib": 894
   },
   "server_node": {
-    "instance_id": "i-rj980079ks7kdbsi3ntz",
-    "public_ip": "43.110.150.249",
-    "private_ip": "172.16.1.194",
+    "instance_id": "i-rj95goqmagl76j2rt5r4",
+    "public_ip": "43.110.154.118",
+    "private_ip": "172.16.1.195",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
     "kernel": "6.8.0-147-generic",
     "os_release": "Ubuntu 24.04.5 LTS",
-    "pg_version": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)",
+    "pg_version": "postgres (PostgreSQL) 18.6",
+    "bowl_pg_version": "postgres (PostgreSQL) 18.6",
+    "docker_version": "Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2",
     "tidb_version": "v8.5.5",
     "data_disk_device": "/dev/nvme1n1",
     "data_disk_size_gib": 894,
     "disk_seq_write_mib_s": 1998.05,
     "disk_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69953,
-    "local_randread_4k_iops": 699869,
-    "local_fsync_4k_iops": 42099,
-    "local_fsync_4k_p99_us": 228.1
+    "local_randwrite_4k_iops": 69959,
+    "local_randread_4k_iops": 699768,
+    "local_fsync_4k_iops": 50472,
+    "local_fsync_4k_p99_us": 63.1
   },
   "client_node": {
-    "instance_id": "i-rj980079ks7kdbsi3nu0",
-    "public_ip": "43.110.153.205",
-    "private_ip": "172.16.1.195",
+    "instance_id": "i-rj95goqmagl76j2rt5r5",
+    "public_ip": "43.110.155.87",
+    "private_ip": "172.16.1.194",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
@@ -48,19 +50,22 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.042/0.075/0.211/0.044 ms",
-    "iperf3_gbps": 21.19
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.042/0.084/0.289/0.058 ms",
+    "iperf3_gbps": 21.22
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69953,
-    "local_randread_4k_iops": 699869,
-    "local_fsync_4k_iops": 42099,
-    "local_fsync_4k_p99_us": 228.1
+    "local_randwrite_4k_iops": 69959,
+    "local_randread_4k_iops": 699768,
+    "local_fsync_4k_iops": 50472,
+    "local_fsync_4k_p99_us": 63.1
   },
   "bowl_config": {
-    "git_commit": "9c60a34-dirty",
+    "git_commit": "8afc63c",
+    "deploy_profile": "deploy/prod (docker-compose.yaml + storage.env)",
+    "observability_stack": "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=0.10) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+    "telemetry_dir": "results/telemetry",
     "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
     "blob_layout": "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
     "blob_size_bytes": 262144,
@@ -87,11 +92,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9bench-kp-20261110-184517",
-    "server_instance_ids": "i-rj980079ks7kdbsi3ntz",
-    "client_instance_ids": "i-rj980079ks7kdbsi3nu0",
-    "instances_created_at": "2026-11-10T18:45:31Z",
-    "instances_deleted_at": "2026-11-10T19:10:52Z",
+    "key_pair_name": "bowl-d9bench-kp-20261111-191124",
+    "server_instance_ids": "i-rj95goqmagl76j2rt5r4",
+    "client_instance_ids": "i-rj95goqmagl76j2rt5r5",
+    "instances_created_at": "2026-11-11T19:11:39Z",
+    "instances_deleted_at": "2026-11-11T19:38:04Z",
     "remaining_benchmark_instances": 0
   }
 }

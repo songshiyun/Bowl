@@ -1,0 +1,3223 @@
+[
+  {
+    "trace_id": "0e9ba3ed20830f310374783fb8e16cb9",
+    "total_duration_ms": 0.984,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.StatFs",
+    "span_count": 4,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.984,
+    "server_max_span_ms": 0.148,
+    "client_rpc_span_ms": 0.926,
+    "server_rpc_span_ms": 0.148,
+    "rpc_network_codec_ms": 0.778,
+    "client_local_overhead_ms": 0.058,
+    "network_or_client_overhead_ms": 0.778,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.StatFs",
+        "duration_ms": 0.984,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "StatFs"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/StatFS",
+        "duration_ms": 0.926,
+        "start_offset_ms": 0.04,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/StatFS",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/StatFS",
+        "duration_ms": 0.148,
+        "start_offset_ms": 0.461,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/StatFS",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.012,
+        "start_offset_ms": 0.545,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "55cf7026f255aaa811fb301878e8d4ba",
+    "total_duration_ms": 0.98,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Symlink",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.98,
+    "server_max_span_ms": 0.173,
+    "client_rpc_span_ms": 0.902,
+    "server_rpc_span_ms": 0.173,
+    "rpc_network_codec_ms": 0.729,
+    "client_local_overhead_ms": 0.078,
+    "network_or_client_overhead_ms": 0.729,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Symlink",
+        "duration_ms": 0.98,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Symlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.902,
+        "start_offset_ms": 0.052,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.173,
+        "start_offset_ms": 0.495,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.072,
+        "start_offset_ms": 0.566,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.026,
+        "start_offset_ms": 0.566,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.592,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.562,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "6f0d59f959f65c450c9f43e1fcef6799",
+    "total_duration_ms": 0.672,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Create",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.672,
+    "server_max_span_ms": 0.139,
+    "client_rpc_span_ms": 0.632,
+    "server_rpc_span_ms": 0.139,
+    "rpc_network_codec_ms": 0.493,
+    "client_local_overhead_ms": 0.04,
+    "network_or_client_overhead_ms": 0.493,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Create",
+        "duration_ms": 0.672,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Create"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Create",
+        "duration_ms": 0.632,
+        "start_offset_ms": 0.024,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Create",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Create",
+        "duration_ms": 0.139,
+        "start_offset_ms": 0.309,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Create",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.075,
+        "start_offset_ms": 0.353,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.048,
+        "start_offset_ms": 0.353,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.402,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.352,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "366fee47a4df479a0e4ea649d5f83f31",
+    "total_duration_ms": 0.606,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mkdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.606,
+    "server_max_span_ms": 0.117,
+    "client_rpc_span_ms": 0.552,
+    "server_rpc_span_ms": 0.117,
+    "rpc_network_codec_ms": 0.435,
+    "client_local_overhead_ms": 0.054,
+    "network_or_client_overhead_ms": 0.435,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mkdir",
+        "duration_ms": 0.606,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mkdir"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.552,
+        "start_offset_ms": 0.03,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.117,
+        "start_offset_ms": 0.274,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.044,
+        "start_offset_ms": 0.311,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.011,
+        "start_offset_ms": 0.311,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.323,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.31,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "bf5764c81053578c181dd06c07cb29d5",
+    "total_duration_ms": 0.588,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rmdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.588,
+    "server_max_span_ms": 0.124,
+    "client_rpc_span_ms": 0.548,
+    "server_rpc_span_ms": 0.124,
+    "rpc_network_codec_ms": 0.424,
+    "client_local_overhead_ms": 0.04,
+    "network_or_client_overhead_ms": 0.424,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rmdir",
+        "duration_ms": 0.588,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTEMPTY",
+          "fuse.op": "Rmdir",
+          "fuse.status_code": 39,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTEMPTY"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rmdir",
+        "duration_ms": 0.548,
+        "start_offset_ms": 0.026,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: directory not empty",
+          "rpc.method": "storage.v1.StorageService/Rmdir",
+          "rpc.response.status_code": "FAILED_PRECONDITION"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rmdir",
+        "duration_ms": 0.124,
+        "start_offset_ms": 0.253,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rmdir",
+          "rpc.response.status_code": "FAILED_PRECONDITION"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.037,
+        "start_offset_ms": 0.287,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.021,
+        "start_offset_ms": 0.287,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.285,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.0,
+        "start_offset_ms": 0.308,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "076765436a6cd78c0e70b17d89ad7822",
+    "total_duration_ms": 0.573,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Readlink",
+    "span_count": 4,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.573,
+    "server_max_span_ms": 0.114,
+    "client_rpc_span_ms": 0.529,
+    "server_rpc_span_ms": 0.114,
+    "rpc_network_codec_ms": 0.415,
+    "client_local_overhead_ms": 0.044,
+    "network_or_client_overhead_ms": 0.415,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Readlink",
+        "duration_ms": 0.573,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Readlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Readlink",
+        "duration_ms": 0.529,
+        "start_offset_ms": 0.031,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Readlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Readlink",
+        "duration_ms": 0.114,
+        "start_offset_ms": 0.323,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Readlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.385,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "6a3f9335467f3db318ce905b9e2b4803",
+    "total_duration_ms": 0.564,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Link",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.564,
+    "server_max_span_ms": 0.101,
+    "client_rpc_span_ms": 0.53,
+    "server_rpc_span_ms": 0.101,
+    "rpc_network_codec_ms": 0.429,
+    "client_local_overhead_ms": 0.034,
+    "network_or_client_overhead_ms": 0.429,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Link",
+        "duration_ms": 0.564,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Link"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Link",
+        "duration_ms": 0.53,
+        "start_offset_ms": 0.021,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Link",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Link",
+        "duration_ms": 0.101,
+        "start_offset_ms": 0.307,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Link",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.044,
+        "start_offset_ms": 0.346,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.017,
+        "start_offset_ms": 0.346,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.364,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.344,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "d1d63e156c9897c415bd2210379c1390",
+    "total_duration_ms": 0.563,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.563,
+    "server_max_span_ms": 0.063,
+    "client_rpc_span_ms": 0.521,
+    "server_rpc_span_ms": 0.063,
+    "rpc_network_codec_ms": 0.458,
+    "client_local_overhead_ms": 0.042,
+    "network_or_client_overhead_ms": 0.458,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.563,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.521,
+        "start_offset_ms": 0.023,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.063,
+        "start_offset_ms": 0.279,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.305,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.31,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "e35b92f417ed8b8d0fcf83ccfedbf086",
+    "total_duration_ms": 0.559,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rename",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.559,
+    "server_max_span_ms": 0.117,
+    "client_rpc_span_ms": 0.521,
+    "server_rpc_span_ms": 0.117,
+    "rpc_network_codec_ms": 0.404,
+    "client_local_overhead_ms": 0.038,
+    "network_or_client_overhead_ms": 0.404,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rename",
+        "duration_ms": 0.559,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTEMPTY",
+          "fuse.op": "Rename",
+          "fuse.status_code": 39,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTEMPTY"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.521,
+        "start_offset_ms": 0.026,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: directory not empty",
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "FAILED_PRECONDITION"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.117,
+        "start_offset_ms": 0.236,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "FAILED_PRECONDITION"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.029,
+        "start_offset_ms": 0.269,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.015,
+        "start_offset_ms": 0.269,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.266,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.0,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "5b4662a12e8f252911f5cce527665494",
+    "total_duration_ms": 0.552,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mkdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.552,
+    "server_max_span_ms": 0.096,
+    "client_rpc_span_ms": 0.516,
+    "server_rpc_span_ms": 0.096,
+    "rpc_network_codec_ms": 0.42,
+    "client_local_overhead_ms": 0.036,
+    "network_or_client_overhead_ms": 0.42,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mkdir",
+        "duration_ms": 0.552,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mkdir"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.516,
+        "start_offset_ms": 0.022,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.096,
+        "start_offset_ms": 0.289,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.039,
+        "start_offset_ms": 0.33,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.014,
+        "start_offset_ms": 0.33,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.328,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.345,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "46cdf348d21803e50e4d94cfee9b68bd",
+    "total_duration_ms": 0.551,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.StatFs",
+    "span_count": 4,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.551,
+    "server_max_span_ms": 0.067,
+    "client_rpc_span_ms": 0.508,
+    "server_rpc_span_ms": 0.067,
+    "rpc_network_codec_ms": 0.441,
+    "client_local_overhead_ms": 0.043,
+    "network_or_client_overhead_ms": 0.441,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.StatFs",
+        "duration_ms": 0.551,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "StatFs"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/StatFS",
+        "duration_ms": 0.508,
+        "start_offset_ms": 0.026,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/StatFS",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/StatFS",
+        "duration_ms": 0.067,
+        "start_offset_ms": 0.267,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/StatFS",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.007,
+        "start_offset_ms": 0.304,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "324f7468fe10e96c1930cb9aaca12d85",
+    "total_duration_ms": 0.545,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rmdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.545,
+    "server_max_span_ms": 0.097,
+    "client_rpc_span_ms": 0.493,
+    "server_rpc_span_ms": 0.097,
+    "rpc_network_codec_ms": 0.396,
+    "client_local_overhead_ms": 0.052,
+    "network_or_client_overhead_ms": 0.396,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rmdir",
+        "duration_ms": 0.545,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Rmdir"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rmdir",
+        "duration_ms": 0.493,
+        "start_offset_ms": 0.026,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rmdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rmdir",
+        "duration_ms": 0.097,
+        "start_offset_ms": 0.314,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rmdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.048,
+        "start_offset_ms": 0.339,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.021,
+        "start_offset_ms": 0.339,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.36,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.338,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "dfc3bb18c859a4dc0e105b95d6d2ab62",
+    "total_duration_ms": 0.533,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rename",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.533,
+    "server_max_span_ms": 0.108,
+    "client_rpc_span_ms": 0.49,
+    "server_rpc_span_ms": 0.108,
+    "rpc_network_codec_ms": 0.382,
+    "client_local_overhead_ms": 0.043,
+    "network_or_client_overhead_ms": 0.382,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rename",
+        "duration_ms": 0.533,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Rename"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.49,
+        "start_offset_ms": 0.027,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.108,
+        "start_offset_ms": 0.287,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.055,
+        "start_offset_ms": 0.324,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.02,
+        "start_offset_ms": 0.324,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.32,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.344,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "f570a0aa43843a040e86466bd9d7e883",
+    "total_duration_ms": 0.519,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.519,
+    "server_max_span_ms": 0.074,
+    "client_rpc_span_ms": 0.467,
+    "server_rpc_span_ms": 0.074,
+    "rpc_network_codec_ms": 0.393,
+    "client_local_overhead_ms": 0.052,
+    "network_or_client_overhead_ms": 0.393,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.519,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.467,
+        "start_offset_ms": 0.028,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.074,
+        "start_offset_ms": 0.239,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.273,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.282,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "4c2b812089e603a116eb6924476fcd3b",
+    "total_duration_ms": 0.516,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.516,
+    "server_max_span_ms": 0.099,
+    "client_rpc_span_ms": 0.472,
+    "server_rpc_span_ms": 0.099,
+    "rpc_network_codec_ms": 0.373,
+    "client_local_overhead_ms": 0.044,
+    "network_or_client_overhead_ms": 0.373,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.516,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.472,
+        "start_offset_ms": 0.028,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.099,
+        "start_offset_ms": 0.246,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.041,
+        "start_offset_ms": 0.286,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.286,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.296,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "82f162e77a1ba38011a4ea9fecf8e8a9",
+    "total_duration_ms": 0.515,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.515,
+    "server_max_span_ms": 0.063,
+    "client_rpc_span_ms": 0.474,
+    "server_rpc_span_ms": 0.063,
+    "rpc_network_codec_ms": 0.411,
+    "client_local_overhead_ms": 0.041,
+    "network_or_client_overhead_ms": 0.411,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.515,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.474,
+        "start_offset_ms": 0.028,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.063,
+        "start_offset_ms": 0.249,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.276,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.285,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "576098f2ff73faac0e8e30be38f05ed3",
+    "total_duration_ms": 0.486,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.486,
+    "server_max_span_ms": 0.068,
+    "client_rpc_span_ms": 0.43,
+    "server_rpc_span_ms": 0.068,
+    "rpc_network_codec_ms": 0.362,
+    "client_local_overhead_ms": 0.056,
+    "network_or_client_overhead_ms": 0.362,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.486,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.43,
+        "start_offset_ms": 0.037,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.068,
+        "start_offset_ms": 0.244,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.281,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.274,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "2bfc57939a3a7d6e08c4fc15965e6deb",
+    "total_duration_ms": 0.484,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Readlink",
+    "span_count": 4,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.484,
+    "server_max_span_ms": 0.057,
+    "client_rpc_span_ms": 0.435,
+    "server_rpc_span_ms": 0.057,
+    "rpc_network_codec_ms": 0.378,
+    "client_local_overhead_ms": 0.049,
+    "network_or_client_overhead_ms": 0.378,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Readlink",
+        "duration_ms": 0.484,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Readlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Readlink",
+        "duration_ms": 0.435,
+        "start_offset_ms": 0.037,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Readlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Readlink",
+        "duration_ms": 0.057,
+        "start_offset_ms": 0.261,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Readlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.293,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "0d7bf2de27ebe6a912fbf61d46b2cead",
+    "total_duration_ms": 0.484,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rename",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.484,
+    "server_max_span_ms": 0.119,
+    "client_rpc_span_ms": 0.444,
+    "server_rpc_span_ms": 0.119,
+    "rpc_network_codec_ms": 0.325,
+    "client_local_overhead_ms": 0.04,
+    "network_or_client_overhead_ms": 0.325,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rename",
+        "duration_ms": 0.484,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Rename"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.444,
+        "start_offset_ms": 0.023,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.119,
+        "start_offset_ms": 0.256,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.07,
+        "start_offset_ms": 0.29,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.042,
+        "start_offset_ms": 0.29,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.333,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.288,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "bd15490e7339a09903bd8cf748ac317c",
+    "total_duration_ms": 0.482,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Symlink",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.482,
+    "server_max_span_ms": 0.073,
+    "client_rpc_span_ms": 0.435,
+    "server_rpc_span_ms": 0.073,
+    "rpc_network_codec_ms": 0.362,
+    "client_local_overhead_ms": 0.047,
+    "network_or_client_overhead_ms": 0.362,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Symlink",
+        "duration_ms": 0.482,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Symlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.435,
+        "start_offset_ms": 0.029,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.073,
+        "start_offset_ms": 0.255,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.027,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.009,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.294,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.283,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "2543b5a1d3ceea760135918a07933501",
+    "total_duration_ms": 0.482,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Symlink",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.482,
+    "server_max_span_ms": 0.089,
+    "client_rpc_span_ms": 0.444,
+    "server_rpc_span_ms": 0.089,
+    "rpc_network_codec_ms": 0.355,
+    "client_local_overhead_ms": 0.038,
+    "network_or_client_overhead_ms": 0.355,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Symlink",
+        "duration_ms": 0.482,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Symlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.444,
+        "start_offset_ms": 0.024,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Symlink",
+        "duration_ms": 0.089,
+        "start_offset_ms": 0.275,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Symlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.033,
+        "start_offset_ms": 0.313,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.01,
+        "start_offset_ms": 0.313,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.323,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.311,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "98700746c0b2272e18b809bb931a593a",
+    "total_duration_ms": 0.479,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 6,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.479,
+    "server_max_span_ms": 0.063,
+    "client_rpc_span_ms": 0.434,
+    "server_rpc_span_ms": 0.063,
+    "rpc_network_codec_ms": 0.371,
+    "client_local_overhead_ms": 0.045,
+    "network_or_client_overhead_ms": 0.371,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.479,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Lookup"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.434,
+        "start_offset_ms": 0.027,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.063,
+        "start_offset_ms": 0.243,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.277,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.286,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.289,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "696d6e229e33eb4315f08612989d76d1",
+    "total_duration_ms": 0.474,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.474,
+    "server_max_span_ms": 0.054,
+    "client_rpc_span_ms": 0.401,
+    "server_rpc_span_ms": 0.054,
+    "rpc_network_codec_ms": 0.347,
+    "client_local_overhead_ms": 0.073,
+    "network_or_client_overhead_ms": 0.347,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.474,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.401,
+        "start_offset_ms": 0.057,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.054,
+        "start_offset_ms": 0.262,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.289,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.283,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "470124dac9abeb041804ded1c0dd58b5",
+    "total_duration_ms": 0.474,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Unlink",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.474,
+    "server_max_span_ms": 0.123,
+    "client_rpc_span_ms": 0.42,
+    "server_rpc_span_ms": 0.123,
+    "rpc_network_codec_ms": 0.297,
+    "client_local_overhead_ms": 0.054,
+    "network_or_client_overhead_ms": 0.297,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Unlink",
+        "duration_ms": 0.474,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Unlink"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Unlink",
+        "duration_ms": 0.42,
+        "start_offset_ms": 0.034,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Unlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Unlink",
+        "duration_ms": 0.123,
+        "start_offset_ms": 0.232,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Unlink",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.077,
+        "start_offset_ms": 0.261,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.036,
+        "start_offset_ms": 0.261,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.297,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.259,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "88d2b17af7ff690006d62703804c52ba",
+    "total_duration_ms": 0.474,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mkdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.474,
+    "server_max_span_ms": 0.084,
+    "client_rpc_span_ms": 0.432,
+    "server_rpc_span_ms": 0.084,
+    "rpc_network_codec_ms": 0.348,
+    "client_local_overhead_ms": 0.042,
+    "network_or_client_overhead_ms": 0.348,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mkdir",
+        "duration_ms": 0.474,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mkdir"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.432,
+        "start_offset_ms": 0.026,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.084,
+        "start_offset_ms": 0.251,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.04,
+        "start_offset_ms": 0.28,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.015,
+        "start_offset_ms": 0.28,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.295,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.278,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "4adad12b671ac0a9129e37c6a092f656",
+    "total_duration_ms": 0.473,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.473,
+    "server_max_span_ms": 0.068,
+    "client_rpc_span_ms": 0.442,
+    "server_rpc_span_ms": 0.068,
+    "rpc_network_codec_ms": 0.374,
+    "client_local_overhead_ms": 0.031,
+    "network_or_client_overhead_ms": 0.374,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.473,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.442,
+        "start_offset_ms": 0.018,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.068,
+        "start_offset_ms": 0.236,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.274,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.264,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "310d613f1d79c5b20576aecf7e335ba5",
+    "total_duration_ms": 0.471,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.471,
+    "server_max_span_ms": 0.071,
+    "client_rpc_span_ms": 0.425,
+    "server_rpc_span_ms": 0.071,
+    "rpc_network_codec_ms": 0.354,
+    "client_local_overhead_ms": 0.046,
+    "network_or_client_overhead_ms": 0.354,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.471,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.425,
+        "start_offset_ms": 0.028,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.071,
+        "start_offset_ms": 0.199,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.006,
+        "start_offset_ms": 0.224,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.24,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "3c3b7e2a4fe1acb8088a366098780436",
+    "total_duration_ms": 0.471,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 6,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.471,
+    "server_max_span_ms": 0.059,
+    "client_rpc_span_ms": 0.429,
+    "server_rpc_span_ms": 0.059,
+    "rpc_network_codec_ms": 0.37,
+    "client_local_overhead_ms": 0.042,
+    "network_or_client_overhead_ms": 0.37,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.471,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Lookup"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.429,
+        "start_offset_ms": 0.029,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.059,
+        "start_offset_ms": 0.287,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.318,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.326,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.329,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "0784f124f2c09d32067913b2283090cc",
+    "total_duration_ms": 0.469,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.469,
+    "server_max_span_ms": 0.103,
+    "client_rpc_span_ms": 0.43,
+    "server_rpc_span_ms": 0.103,
+    "rpc_network_codec_ms": 0.327,
+    "client_local_overhead_ms": 0.039,
+    "network_or_client_overhead_ms": 0.327,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.469,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.43,
+        "start_offset_ms": 0.025,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.103,
+        "start_offset_ms": 0.225,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.051,
+        "start_offset_ms": 0.252,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.03,
+        "start_offset_ms": 0.252,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.283,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.251,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "f868e9920aab458000d021a2ecaa815f",
+    "total_duration_ms": 0.468,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mkdir",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.468,
+    "server_max_span_ms": 0.126,
+    "client_rpc_span_ms": 0.453,
+    "server_rpc_span_ms": 0.126,
+    "rpc_network_codec_ms": 0.327,
+    "client_local_overhead_ms": 0.015,
+    "network_or_client_overhead_ms": 0.327,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mkdir",
+        "duration_ms": 0.468,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mkdir"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.453,
+        "start_offset_ms": 0.007,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mkdir",
+        "duration_ms": 0.126,
+        "start_offset_ms": 0.247,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mkdir",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.049,
+        "start_offset_ms": 0.3,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.016,
+        "start_offset_ms": 0.3,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.296,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.316,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "22d73a9971559c500d26d050f88258cd",
+    "total_duration_ms": 0.467,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Rename",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.467,
+    "server_max_span_ms": 0.113,
+    "client_rpc_span_ms": 0.429,
+    "server_rpc_span_ms": 0.113,
+    "rpc_network_codec_ms": 0.316,
+    "client_local_overhead_ms": 0.038,
+    "network_or_client_overhead_ms": 0.316,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Rename",
+        "duration_ms": 0.467,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Rename"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.429,
+        "start_offset_ms": 0.022,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Rename",
+        "duration_ms": 0.113,
+        "start_offset_ms": 0.227,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Rename",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.053,
+        "start_offset_ms": 0.272,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.026,
+        "start_offset_ms": 0.272,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.298,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.269,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "51e2a880a5df95920d8cabde74572bb0",
+    "total_duration_ms": 0.466,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.466,
+    "server_max_span_ms": 0.081,
+    "client_rpc_span_ms": 0.422,
+    "server_rpc_span_ms": 0.081,
+    "rpc_network_codec_ms": 0.341,
+    "client_local_overhead_ms": 0.044,
+    "network_or_client_overhead_ms": 0.341,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.466,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.422,
+        "start_offset_ms": 0.029,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.081,
+        "start_offset_ms": 0.244,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.044,
+        "start_offset_ms": 0.267,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.012,
+        "start_offset_ms": 0.267,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.28,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.266,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "ca029cd43a7f3b7307b4035da5c0053f",
+    "total_duration_ms": 0.465,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 6,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.465,
+    "server_max_span_ms": 0.058,
+    "client_rpc_span_ms": 0.425,
+    "server_rpc_span_ms": 0.058,
+    "rpc_network_codec_ms": 0.367,
+    "client_local_overhead_ms": 0.04,
+    "network_or_client_overhead_ms": 0.367,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.465,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Lookup"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.425,
+        "start_offset_ms": 0.023,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.058,
+        "start_offset_ms": 0.221,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.25,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.261,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.259,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "1eb1895c8f5097eb006ac3f07f229636",
+    "total_duration_ms": 0.464,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.464,
+    "server_max_span_ms": 0.063,
+    "client_rpc_span_ms": 0.423,
+    "server_rpc_span_ms": 0.063,
+    "rpc_network_codec_ms": 0.36,
+    "client_local_overhead_ms": 0.041,
+    "network_or_client_overhead_ms": 0.36,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.464,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.423,
+        "start_offset_ms": 0.025,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.063,
+        "start_offset_ms": 0.238,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.273,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.267,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "51472e6836eb1fc00340a2f12b56924a",
+    "total_duration_ms": 0.464,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.464,
+    "server_max_span_ms": 0.074,
+    "client_rpc_span_ms": 0.404,
+    "server_rpc_span_ms": 0.074,
+    "rpc_network_codec_ms": 0.33,
+    "client_local_overhead_ms": 0.06,
+    "network_or_client_overhead_ms": 0.33,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.464,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.404,
+        "start_offset_ms": 0.043,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.074,
+        "start_offset_ms": 0.245,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.023,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.008,
+        "start_offset_ms": 0.284,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.281,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.293,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "7984efce7e7327ff16b65ec4232c18f1",
+    "total_duration_ms": 0.463,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.463,
+    "server_max_span_ms": 0.058,
+    "client_rpc_span_ms": 0.429,
+    "server_rpc_span_ms": 0.058,
+    "rpc_network_codec_ms": 0.371,
+    "client_local_overhead_ms": 0.034,
+    "network_or_client_overhead_ms": 0.371,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.463,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.429,
+        "start_offset_ms": 0.019,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.058,
+        "start_offset_ms": 0.232,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/GetXattr",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.266,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.002,
+        "start_offset_ms": 0.258,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "f7b411146a83dadb137a0cfeae33eb92",
+    "total_duration_ms": 0.462,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 6,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.462,
+    "server_max_span_ms": 0.056,
+    "client_rpc_span_ms": 0.417,
+    "server_rpc_span_ms": 0.056,
+    "rpc_network_codec_ms": 0.361,
+    "client_local_overhead_ms": 0.045,
+    "network_or_client_overhead_ms": 0.361,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.462,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Lookup"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.417,
+        "start_offset_ms": 0.03,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.056,
+        "start_offset_ms": 0.274,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.302,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.311,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.315,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "d72ed121fc1799560132568d037e641e",
+    "total_duration_ms": 0.456,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.456,
+    "server_max_span_ms": 0.082,
+    "client_rpc_span_ms": 0.419,
+    "server_rpc_span_ms": 0.082,
+    "rpc_network_codec_ms": 0.337,
+    "client_local_overhead_ms": 0.037,
+    "network_or_client_overhead_ms": 0.337,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.456,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.419,
+        "start_offset_ms": 0.022,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.082,
+        "start_offset_ms": 0.225,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.045,
+        "start_offset_ms": 0.248,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.025,
+        "start_offset_ms": 0.248,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.247,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.274,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "a51c7c9444fc324e0e20f2a9f3f0fde3",
+    "total_duration_ms": 0.448,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Mknod",
+    "span_count": 7,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.448,
+    "server_max_span_ms": 0.078,
+    "client_rpc_span_ms": 0.4,
+    "server_rpc_span_ms": 0.078,
+    "rpc_network_codec_ms": 0.322,
+    "client_local_overhead_ms": 0.048,
+    "network_or_client_overhead_ms": 0.322,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Mknod",
+        "duration_ms": 0.448,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Mknod"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.4,
+        "start_offset_ms": 0.024,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Mknod",
+        "duration_ms": 0.078,
+        "start_offset_ms": 0.235,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Mknod",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.Tick",
+        "duration_ms": 0.048,
+        "start_offset_ms": 0.252,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseA",
+        "duration_ms": 0.032,
+        "start_offset_ms": 0.252,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.PhaseB",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.285,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.QueueWait",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.251,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "29581c39f655b9be0d677f6020d2d72d",
+    "total_duration_ms": 0.444,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 6,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": false,
+    "client_max_span_ms": 0.444,
+    "server_max_span_ms": 0.062,
+    "client_rpc_span_ms": 0.393,
+    "server_rpc_span_ms": 0.062,
+    "rpc_network_codec_ms": 0.331,
+    "client_local_overhead_ms": 0.051,
+    "network_or_client_overhead_ms": 0.331,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.444,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.op": "Lookup"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.393,
+        "start_offset_ms": 0.035,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.062,
+        "start_offset_ms": 0.242,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "OK"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.27,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.001,
+        "start_offset_ms": 0.276,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.0,
+        "start_offset_ms": 0.278,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  }
+]
