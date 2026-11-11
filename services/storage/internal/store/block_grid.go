@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"math"
 
@@ -27,6 +28,23 @@ func (s *StoreActor) readDataBlobRef(reader pebbleReader, ino, blockIdx uint64) 
 	var keyBuf [DataKeyLen]byte
 	putDataKey(keyBuf[:], ino, blockIdx)
 	val, closer, err := reader.Get(keyBuf[:])
+	if errors.Is(err, pebble.ErrNotFound) {
+		return BlobRef{}, false, nil
+	}
+	if err != nil {
+		return BlobRef{}, false, err
+	}
+	ref, decErr := DecodeBlobRef(val)
+	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
+		return BlobRef{}, false, errors.Join(decErr, closeErr)
+	}
+	return ref, true, nil
+}
+
+func (s *StoreActor) readDataBlobRefFromDB(ctx context.Context, ino, blockIdx uint64) (BlobRef, bool, error) {
+	var keyBuf [DataKeyLen]byte
+	putDataKey(keyBuf[:], ino, blockIdx)
+	val, closer, err := s.dbGetPoint(ctx, keyBuf[:])
 	if errors.Is(err, pebble.ErrNotFound) {
 		return BlobRef{}, false, nil
 	}

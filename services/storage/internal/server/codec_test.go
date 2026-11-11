@@ -214,3 +214,78 @@ func TestWritePayloadReleaseOnValidationRejectAndOrphanedGC(t *testing.T) {
 		return leasedWritePayloadCount() == 0
 	}, 2*time.Second, 10*time.Millisecond, "孤儿 WriteRequest 租约必须在 GC 后自动归零")
 }
+
+func registerAbandonedReadResponse(t *testing.T) {
+	t.Helper()
+	buf := acquireReadPayloadBuf()
+	buf[0] = 0x99
+	resp := &storagev1.ReadResponse{
+		Data: buf[:4096:4096],
+	}
+	registerLeasedReadPayload(resp, buf)
+	require.Equal(t, 1, leasedReadPayloadCount())
+	runtime.KeepAlive(resp)
+}
+
+func marshalAndReleaseReadPayload(t *testing.T, codec *protoBinaryCodec, dst []byte) []byte {
+	t.Helper()
+	buf := acquireReadPayloadBuf()
+	resp := &storagev1.ReadResponse{
+		Data: buf[:maxReadWriteSize:maxReadWriteSize],
+	}
+	registerLeasedReadPayload(resp, buf)
+	out, err := codec.MarshalAppend(dst[:0], resp)
+	require.NoError(t, err)
+	require.Nil(t, resp.Data)
+	require.Zero(t, leasedReadPayloadCount())
+	return out
+}
+
+func TestProtoBinaryCodecReadResponsePoolAndOrphanedGC(t *testing.T) {
+	codec := &protoBinaryCodec{}
+	payload := bytes.Repeat([]byte{0x41, 0x42, 0x43, 0x44}, maxReadWriteSize/4)
+
+	// 1. Marshal 与 MarshalStable 编码完成后立即释放 4 MiB 池租约，且编码出的字节完整保真
+	buf1 := acquireReadPayloadBuf()
+	copy(buf1[:], payload)
+	resp1 := &storagev1.ReadResponse{Data: buf1[:maxReadWriteSize:maxReadWriteSize]}
+	registerLeasedReadPayload(resp1, buf1)
+	require.Equal(t, 1, leasedReadPayloadCount())
+
+	wireBytes, err := codec.Marshal(resp1)
+	require.NoError(t, err)
+	require.Nil(t, resp1.Data)
+	require.Zero(t, leasedReadPayloadCount())
+
+	var checkResp storagev1.ReadResponse
+	require.NoError(t, proto.Unmarshal(wireBytes, &checkResp))
+	require.Equal(t, payload, checkResp.Data)
+
+	buf2 := acquireReadPayloadBuf()
+	copy(buf2[:4096], payload[:4096])
+	resp2 := &storagev1.ReadResponse{Data: buf2[:4096:4096]}
+	registerLeasedReadPayload(resp2, buf2)
+	_, err = codec.MarshalStable(resp2)
+	require.NoError(t, err)
+	require.Zero(t, leasedReadPayloadCount())
+
+	// 2. 预热池与目标序列化帧缓冲后，连续 8 次 4 MiB ReadResponse 借池 + MarshalAppend 堆分配增量严格 < 64 KiB
+	frameDst := make([]byte, 0, maxReadWriteSize+64)
+	frameDst = marshalAndReleaseReadPayload(t, codec, frameDst)
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range 8 {
+		frameDst = marshalAndReleaseReadPayload(t, codec, frameDst)
+	}
+	runtime.ReadMemStats(&after)
+	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64<<10))
+	require.Zero(t, leasedReadPayloadCount())
+
+	// 3. 未进入 Marshal 即被丢弃的孤儿 ReadResponse 在 GC 后通过 runtime.AddCleanup 自动回收
+	registerAbandonedReadResponse(t)
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return leasedReadPayloadCount() == 0
+	}, 2*time.Second, 10*time.Millisecond, "孤儿 ReadResponse 租约必须在 GC 后自动归零")
+}

@@ -41,8 +41,17 @@ type Server struct {
 	control     control.Manager
 	config      config.ServerConfig
 	logger      *slog.Logger
+	httpMetrics *HTTPMetrics
 	httpServer  *http.Server
 	adminServer *http.Server
+}
+
+// HTTPMetrics 返回公网 HTTP 全包指标收集器实例。
+func (s *Server) HTTPMetrics() *HTTPMetrics {
+	if s == nil {
+		return nil
+	}
+	return s.httpMetrics
 }
 
 // Handler 返回公网 RPC HTTP 处理器实例，便于测试与中间件挂载。
@@ -107,6 +116,8 @@ type Params struct {
 	Gatherer      prometheus.Gatherer            `optional:"true"`
 	Pool          *pgxpool.Pool                  `optional:"true"`
 	ObsReady      observability.Ready            `optional:"true"`
+	FineBuckets   FineBucketsReady               `optional:"true"`
+	HTTPMetrics   *HTTPMetrics                   `optional:"true"`
 	Logger        *slog.Logger                   `optional:"true"`
 	Lifecycle     fx.Lifecycle                   `optional:"true"`
 	Shutdowner    fx.Shutdowner                  `optional:"true"`
@@ -144,10 +155,16 @@ func New(p Params) (*Server, error) {
 		logger = slog.Default()
 	}
 
+	httpMetrics := p.HTTPMetrics
+	if httpMetrics == nil {
+		httpMetrics = NewHTTPMetrics()
+	}
+
 	srv := &Server{
-		control: p.Control,
-		config:  p.Config,
-		logger:  logger,
+		control:     p.Control,
+		config:      p.Config,
+		logger:      logger,
+		httpMetrics: httpMetrics,
 	}
 
 	mux := http.NewServeMux()
@@ -170,6 +187,7 @@ func New(p Params) (*Server, error) {
 	mux.Handle(path, handler)
 
 	httpServer := serverx.NewHTTPServer(p.Config.Addr(), mux, p.Config)
+	httpServer.Handler = WrapHTTPHandler(httpServer.Handler, httpMetrics)
 	httpServer.HTTP2 = &http.HTTP2Config{
 		MaxReadFrameSize:              HTTP2MaxReadFrameSize,
 		MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,

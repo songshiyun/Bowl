@@ -7,7 +7,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -102,7 +107,7 @@ func TestEvictIdleActorAndClosedPoolFencing(t *testing.T) {
 		MaxBytes: 4 << 20,
 	})
 	require.NoError(t, err)
-	epoch, _, err := seedActor.AdvanceEpoch()
+	epoch, _, err := seedActor.AdvanceEpoch(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), epoch)
 	require.NoError(t, seedActor.Close())
@@ -124,7 +129,7 @@ func TestEvictIdleActorAndClosedPoolFencing(t *testing.T) {
 	evictedAfterLoad, err := mgr.evictIdleActor(ctx, diskID)
 	require.NoError(t, err)
 	require.True(t, evictedAfterLoad)
-	_, err = loaded.StatFS()
+	_, err = loaded.StatFS(ctx)
 	require.ErrorIs(t, err, store.ErrClosed)
 
 	reloaded, err := mgr.getOrOpenActorLocked(ctx, diskID)
@@ -140,4 +145,102 @@ func TestEvictIdleActorAndClosedPoolFencing(t *testing.T) {
 	require.ErrorIs(t, err, ErrClosed)
 	_, err = mgr.CreateDisk(ctx, CreateDiskParams{Name: "after-close", MaxBytes: 4096})
 	require.ErrorIs(t, err, ErrClosed)
+}
+
+func TestOpenDiskActorMetricsAndSpanWithZeroAllocHotPath(t *testing.T) {
+	const (
+		diskID        = "018f0000-0000-7000-8000-000000000011"
+		missingDiskID = "018f0000-0000-7000-8000-000000000012"
+	)
+	root := t.TempDir()
+
+	seedActor, err := store.Open(store.Options{
+		Dir:      filepath.Join(root, "disks", diskID),
+		DiskID:   diskID,
+		MaxBytes: 4 << 20,
+	})
+	require.NoError(t, err)
+	require.NoError(t, seedActor.Close())
+
+	prevTP := otel.GetTracerProvider()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prevTP)
+	})
+
+	mgr := newManager(nil, WithStorageRoot(root))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	reg := prometheus.NewRegistry()
+	require.NoError(t, reg.Register(mgr.Collector()))
+
+	sampledCtx, rootSpan := tp.Tracer("test-control").Start(context.Background(), "rpc.GetDisk")
+	loaded, err := mgr.getOrOpenActorLocked(sampledCtx, diskID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	// 只读打开不存在的目录将返回错误并记录 result="error"
+	_, err = mgr.openDiskActor(sampledCtx, store.Options{
+		Dir:      filepath.Join(root, "disks", missingDiskID),
+		DiskID:   missingDiskID,
+		ReadOnly: true,
+	})
+	require.Error(t, err)
+	rootSpan.End()
+
+	// 验证已加载盘热路径 Actor(ctx, diskID) 零分配且不产生多余 Span
+	exporter.Reset()
+	unsampledCtx := context.Background()
+	allocs := testing.AllocsPerRun(100, func() {
+		got, aErr := mgr.Actor(unsampledCtx, diskID)
+		if aErr != nil || got != loaded {
+			t.Fatalf("unexpected Actor result: %v, %v", got, aErr)
+		}
+	})
+	require.Zero(t, allocs, "已加载磁盘热路径 Actor(ctx, diskID) 必须保持 0 allocs/op")
+	require.Empty(t, exporter.GetSpans(), "命中缓存池热路径不应产生 OpenDiskActor 子 Span")
+
+	// 重新验证冷启动时产生了 2 个 control.OpenDiskActor 子 Span（成功 + 失败）
+	sampledCtx2, rootSpan2 := tp.Tracer("test-control").Start(context.Background(), "rpc.Reload")
+	_, err = mgr.evictIdleActor(sampledCtx2, diskID)
+	require.NoError(t, err)
+	_, err = mgr.getOrOpenActorLocked(sampledCtx2, diskID)
+	require.NoError(t, err)
+	rootSpan2.End()
+
+	spans := exporter.GetSpans()
+	var openSpanCount int
+	for _, sp := range spans {
+		if sp.Name == "control.OpenDiskActor" {
+			openSpanCount++
+		}
+	}
+	require.Equal(t, 1, openSpanCount)
+
+	fams, err := reg.Gather()
+	require.NoError(t, err)
+	var openHistMetrics []*dto.Metric
+	for _, fam := range fams {
+		if fam.GetName() == "bowl_storage_control_open_actor_duration_seconds" {
+			openHistMetrics = fam.GetMetric()
+		}
+	}
+	require.NotEmpty(t, openHistMetrics)
+
+	counts := make(map[string]uint64)
+	for _, m := range openHistMetrics {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "result" {
+				counts[lp.GetValue()] = m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	require.Equal(t, uint64(2), counts["ok"], "两次成功冷加载应记录 result=ok 计数 2")
+	require.Equal(t, uint64(1), counts["error"], "一次失败开盘应记录 result=error 计数 1")
 }

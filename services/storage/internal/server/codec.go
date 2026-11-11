@@ -18,7 +18,8 @@ import (
 
 const (
 	codecNameProto          = "proto"
-	writePayloadRetainedCap = 8 // 常驻 8 x 4 MiB = 32 MiB noscan 缓冲（免受 GC 周期驱逐与清零）
+	writePayloadRetainedCap = 8 // 常驻 8 x 4 MiB = 32 MiB noscan 写缓冲（免受 GC 周期驱逐与清零）
+	readPayloadRetainedCap  = 8 // 常驻 8 x 4 MiB = 32 MiB noscan 读缓冲（免受 GC 周期驱逐与清零）
 )
 
 type writePayloadLease struct {
@@ -130,6 +131,115 @@ func leasedWritePayloadCount() int {
 	return len(leasedPayloads)
 }
 
+type readPayloadLease struct {
+	key      weak.Pointer[storagev1.ReadResponse]
+	buf      *[maxReadWriteSize]byte
+	cleanup  runtime.Cleanup
+	released atomic.Bool
+}
+
+func (l *readPayloadLease) release(stopCleanup bool) {
+	if l == nil || !l.released.CompareAndSwap(false, true) {
+		return
+	}
+	if stopCleanup {
+		l.cleanup.Stop()
+	}
+	leasedReadPayloadsMu.Lock()
+	if leasedReadPayloads[l.key] == l {
+		delete(leasedReadPayloads, l.key)
+	}
+	leasedReadPayloadsMu.Unlock()
+	recycleReadPayloadBuf(l.buf)
+	l.buf = nil
+}
+
+func cleanupOrphanedReadPayloadLease(l *readPayloadLease) {
+	l.release(false)
+}
+
+var (
+	readPayloadFreeCh = make(chan *[maxReadWriteSize]byte, readPayloadRetainedCap)
+	readPayloadPool   = sync.Pool{
+		New: func() any {
+			return new([maxReadWriteSize]byte)
+		},
+	}
+
+	leasedReadPayloadsMu sync.Mutex
+	leasedReadPayloads   = make(map[weak.Pointer[storagev1.ReadResponse]]*readPayloadLease)
+)
+
+func acquireReadPayloadBuf() *[maxReadWriteSize]byte {
+	select {
+	case buf := <-readPayloadFreeCh:
+		return buf
+	default:
+	}
+	buf, _ := readPayloadPool.Get().(*[maxReadWriteSize]byte)
+	if buf == nil {
+		return new([maxReadWriteSize]byte)
+	}
+	return buf
+}
+
+func recycleReadPayloadBuf(buf *[maxReadWriteSize]byte) {
+	if buf == nil {
+		return
+	}
+	select {
+	case readPayloadFreeCh <- buf:
+	default:
+		readPayloadPool.Put(buf)
+	}
+}
+
+func registerLeasedReadPayload(msg *storagev1.ReadResponse, buf *[maxReadWriteSize]byte) {
+	key := weak.Make(msg)
+	lease := &readPayloadLease{
+		key: key,
+		buf: buf,
+	}
+	lease.cleanup = runtime.AddCleanup(msg, cleanupOrphanedReadPayloadLease, lease)
+
+	var prev *readPayloadLease
+	leasedReadPayloadsMu.Lock()
+	if old := leasedReadPayloads[key]; old != nil && old != lease {
+		prev = old
+	}
+	leasedReadPayloads[key] = lease
+	leasedReadPayloadsMu.Unlock()
+
+	if prev != nil {
+		prev.release(true)
+	}
+}
+
+func releaseReadPayload(msg *storagev1.ReadResponse) {
+	if msg == nil {
+		return
+	}
+	key := weak.Make(msg)
+	leasedReadPayloadsMu.Lock()
+	lease := leasedReadPayloads[key]
+	if lease != nil {
+		delete(leasedReadPayloads, key)
+	}
+	leasedReadPayloadsMu.Unlock()
+
+	if lease != nil {
+		msg.Data = nil
+		lease.release(true)
+	}
+}
+
+// leasedReadPayloadCount 返回当前尚未归还池的 ReadResponse 缓冲区数量（仅供单测校验零泄漏）。
+func leasedReadPayloadCount() int {
+	leasedReadPayloadsMu.Lock()
+	defer leasedReadPayloadsMu.Unlock()
+	return len(leasedReadPayloads)
+}
+
 // newWritePayloadReleaseInterceptor 构造挂载在拦截器链最外层的生命周期回收器，
 // 确保无论请求在校验拦截器被拒、正常处理完成还是发生异常，借用的 4 MiB 写缓冲均确定性归还 sync.Pool。
 func newWritePayloadReleaseInterceptor() connect.UnaryInterceptorFunc {
@@ -162,6 +272,9 @@ func (c *protoBinaryCodec) Marshal(message any) ([]byte, error) {
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
 	}
+	if readResp, ok := message.(*storagev1.ReadResponse); ok && readResp != nil {
+		defer releaseReadPayload(readResp)
+	}
 	return proto.Marshal(protoMsg)
 }
 
@@ -170,6 +283,9 @@ func (c *protoBinaryCodec) MarshalAppend(dst []byte, message any) ([]byte, error
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
 	}
+	if readResp, ok := message.(*storagev1.ReadResponse); ok && readResp != nil {
+		defer releaseReadPayload(readResp)
+	}
 	return proto.MarshalOptions{}.MarshalAppend(dst, protoMsg)
 }
 
@@ -177,6 +293,9 @@ func (c *protoBinaryCodec) MarshalStable(message any) ([]byte, error) {
 	protoMsg, ok := message.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
+	}
+	if readResp, ok := message.(*storagev1.ReadResponse); ok && readResp != nil {
+		defer releaseReadPayload(readResp)
 	}
 	return proto.MarshalOptions{Deterministic: true}.Marshal(protoMsg)
 }

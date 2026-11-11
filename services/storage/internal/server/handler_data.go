@@ -25,14 +25,34 @@ func (s *Server) Read(ctx context.Context, req *connect.Request[storagev1.ReadRe
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	data, err := actor.Read(msg.Ino, msg.Offset, msg.Size)
-	if err != nil {
-		return nil, toConnectError(err)
+	if msg.Size == 0 {
+		data, rErr := actor.Read(ctx, msg.Ino, msg.Offset, 0)
+		if rErr != nil {
+			return nil, toConnectError(rErr)
+		}
+		return connect.NewResponse(&storagev1.ReadResponse{Data: data}), nil
 	}
 
-	return connect.NewResponse(&storagev1.ReadResponse{
+	leased := acquireReadPayloadBuf()
+	data, err := actor.ReadInto(ctx, msg.Ino, msg.Offset, msg.Size, leased[:0])
+	if err != nil {
+		recycleReadPayloadBuf(leased)
+		return nil, toConnectError(err)
+	}
+	if len(data) == 0 {
+		recycleReadPayloadBuf(leased)
+		return connect.NewResponse(&storagev1.ReadResponse{}), nil
+	}
+
+	respMsg := &storagev1.ReadResponse{
 		Data: data,
-	}), nil
+	}
+	if &data[0] == &leased[0] {
+		registerLeasedReadPayload(respMsg, leased)
+	} else {
+		recycleReadPayloadBuf(leased)
+	}
+	return connect.NewResponse(respMsg), nil
 }
 
 // Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
@@ -51,7 +71,7 @@ func (s *Server) Write(ctx context.Context, req *connect.Request[storagev1.Write
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	written, attr, err := actor.Write(msg.Ino, msg.Offset, msg.Data, msg.Epoch)
+	written, attr, err := actor.Write(ctx, msg.Ino, msg.Offset, msg.Data, msg.Epoch)
 	if err != nil {
 		return nil, toConnectError(err)
 	}

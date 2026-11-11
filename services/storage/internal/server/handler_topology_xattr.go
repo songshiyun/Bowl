@@ -21,7 +21,7 @@ func (s *Server) Link(ctx context.Context, req *connect.Request[storagev1.LinkRe
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.Link(store.LinkReq{
+	attr, err := actor.Link(ctx, store.LinkReq{
 		Ino:          req.Msg.GetIno(),
 		NewParentIno: req.Msg.GetNewParentIno(),
 		NewName:      req.Msg.GetNewName(),
@@ -50,7 +50,7 @@ func (s *Server) Unlink(ctx context.Context, req *connect.Request[storagev1.Unli
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.Unlink(req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetOpenInClient(), req.Msg.GetEpoch()); err != nil {
+	if err := actor.Unlink(ctx, req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetOpenInClient(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -69,7 +69,7 @@ func (s *Server) Rmdir(ctx context.Context, req *connect.Request[storagev1.Rmdir
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.Rmdir(req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
+	if err := actor.Rmdir(ctx, req.Msg.GetParentIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -88,7 +88,7 @@ func (s *Server) Rename(ctx context.Context, req *connect.Request[storagev1.Rena
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	err = actor.Rename(store.RenameReq{
+	err = actor.Rename(ctx, store.RenameReq{
 		OldParentIno:     req.Msg.GetOldParentIno(),
 		OldName:          req.Msg.GetOldName(),
 		NewParentIno:     req.Msg.GetNewParentIno(),
@@ -116,7 +116,7 @@ func (s *Server) SetXattr(ctx context.Context, req *connect.Request[storagev1.Se
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.SetXattr(req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetValue(), req.Msg.GetFlags(), req.Msg.GetEpoch()); err != nil {
+	if err := actor.SetXattr(ctx, req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetValue(), req.Msg.GetFlags(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -132,7 +132,7 @@ func (s *Server) GetXattr(ctx context.Context, req *connect.Request[storagev1.Ge
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	val, err := actor.GetXattr(req.Msg.GetIno(), req.Msg.GetName())
+	val, err := actor.GetXattr(ctx, req.Msg.GetIno(), req.Msg.GetName())
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -151,7 +151,7 @@ func (s *Server) ListXattr(ctx context.Context, req *connect.Request[storagev1.L
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	names, err := actor.ListXattr(req.Msg.GetIno())
+	names, err := actor.ListXattr(ctx, req.Msg.GetIno())
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -173,7 +173,7 @@ func (s *Server) RemoveXattr(ctx context.Context, req *connect.Request[storagev1
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.RemoveXattr(req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
+	if err := actor.RemoveXattr(ctx, req.Msg.GetIno(), req.Msg.GetName(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -192,7 +192,7 @@ func (s *Server) ReclaimOrphan(ctx context.Context, req *connect.Request[storage
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.PurgeOrphanInode(req.Msg.GetIno(), req.Msg.GetEpoch()); err != nil {
+	if err := actor.PurgeOrphanInode(ctx, req.Msg.GetIno(), req.Msg.GetEpoch()); err != nil {
 		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&storagev1.ReclaimOrphanResponse{}), nil

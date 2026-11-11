@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,6 +16,8 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/bloom"
 	"github.com/cockroachdb/pebble/v2/vfs"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Pebble 初始化与批次重置阈值常量（ADR-0030 §2.2 & §2.5）。
@@ -129,6 +132,8 @@ type writeCmd struct {
 	done chan struct{} // 容量为 1 的完成信号
 
 	enqueueAt   time.Time
+	dequeueAt   time.Time
+	spanCtx     trace.SpanContext
 	epoch       uint64
 	syncBarrier bool
 	syncIno     uint64
@@ -519,7 +524,7 @@ type advanceEpochOp struct {
 
 // AdvanceEpoch 通过 Actor 队列原子递增 WriterEpoch 并以 pebble.Sync 持久化至 "sys:stat"，
 // 同时清扫所有残留 Orphan Inode 并返回新 WriterEpoch 与根目录 Inode(1) 的最新 Attribute（ADR-0032）。
-func (s *StoreActor) AdvanceEpoch() (uint64, Attribute, error) {
+func (s *StoreActor) AdvanceEpoch(ctx context.Context) (uint64, Attribute, error) {
 	if s.readOnly {
 		return 0, Attribute{}, ErrReadOnly
 	}
@@ -530,7 +535,7 @@ func (s *StoreActor) AdvanceEpoch() (uint64, Attribute, error) {
 	cmd := s.acquireCmd()
 	cmd.op = opAdvanceEpoch
 	cmd.req = op
-	if err := s.submit(cmd); err != nil {
+	if err := s.submit(ctx, cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	if s.logger != nil {
@@ -582,7 +587,7 @@ type updateMaxBytesOp struct {
 }
 
 // UpdateMaxBytes 通过 Actor 队列在线扩容或安全缩容单盘逻辑容量配额上限，并以 pebble.Sync 持久化至 "sys:stat"（ADR-0032）。
-func (s *StoreActor) UpdateMaxBytes(maxBytes uint64) error {
+func (s *StoreActor) UpdateMaxBytes(ctx context.Context, maxBytes uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -592,7 +597,7 @@ func (s *StoreActor) UpdateMaxBytes(maxBytes uint64) error {
 	cmd := s.acquireCmd()
 	cmd.op = opUpdateMaxBytes
 	cmd.req = &updateMaxBytesOp{maxBytes: maxBytes}
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateUpdateMaxBytesCmd(cmd *writeCmd) error {
@@ -629,7 +634,13 @@ func (s *StoreActor) BatchReallocCount() uint64 { return s.batchResetCnt.Load() 
 func (s *StoreActor) WALDirty() bool { return s.walDirty.Load() }
 
 // StatFS 直接从内存原子镜像读取逻辑已用字节数与节点数（0 锁、0 I/O，ADR-0030 §2.4）。
-func (s *StoreActor) StatFS() (StatFSResult, error) {
+func (s *StoreActor) StatFS(_ context.Context) (StatFSResult, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpStatFS, time.Since(opStart))
+		}()
+	}
 	if s.closing.Load() {
 		return StatFSResult{}, ErrClosed
 	}
@@ -665,7 +676,13 @@ func (s *StoreActor) StatFS() (StatFSResult, error) {
 }
 
 // GetAttr 在 lifecycleMu.RLock() 守卫下直接调用 db.Get(InodeKey) 原地解码并叠加 dirtyAtime（严禁创建 Snapshot）。
-func (s *StoreActor) GetAttr(ino uint64) (Attribute, error) {
+func (s *StoreActor) GetAttr(ctx context.Context, ino uint64) (Attribute, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpGetAttr, time.Since(opStart))
+		}()
+	}
 	if ino == 0 || ino > math.MaxInt64 {
 		return Attribute{}, ErrInvalid
 	}
@@ -675,15 +692,78 @@ func (s *StoreActor) GetAttr(ino uint64) (Attribute, error) {
 	}
 	defer unlock()
 
-	inode, err := s.readInode(s.db, ino)
+	inode, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return Attribute{}, err
 	}
-	if err := s.checkInodeLive(s.db, &inode); err != nil {
+	if err := s.checkInodeLiveFromDB(ctx, &inode); err != nil {
 		return Attribute{}, err
 	}
 	s.overlayAtime(&inode)
 	return inode.ToAttribute(), nil
+}
+
+func (s *StoreActor) dbGetPoint(ctx context.Context, key []byte) ([]byte, io.Closer, error) {
+	var span trace.Span
+	if isSpanRecording(ctx) {
+		_, span = startChildSpan(ctx, "store.KVGet")
+	}
+	var start time.Time
+	if s.metrics != nil {
+		start = time.Now()
+	}
+	val, closer, err := s.db.Get(key)
+	if s.metrics != nil {
+		s.metrics.observeKVPointGet(time.Since(start))
+	}
+	if span != nil {
+		span.SetAttributes(attribute.Bool("kv.found", err == nil))
+		var spanErr error
+		if err != nil && !errors.Is(err, pebble.ErrNotFound) {
+			spanErr = err
+		}
+		finishSpan(span, spanErr)
+	}
+	return val, closer, err
+}
+
+func (s *StoreActor) readInodeFromDB(ctx context.Context, ino uint64) (Inode, error) {
+	var keyBuf [InodeKeyLen]byte
+	putInodeKey(keyBuf[:], ino)
+	val, closer, err := s.dbGetPoint(ctx, keyBuf[:])
+	if errors.Is(err, pebble.ErrNotFound) {
+		return Inode{}, ErrNotFound
+	}
+	if err != nil {
+		return Inode{}, err
+	}
+	inode, decErr := DecodeInode(val)
+	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
+		return Inode{}, errors.Join(decErr, closeErr)
+	}
+	if inode.Ino != ino {
+		return Inode{}, ErrInvalidValue
+	}
+	return inode, nil
+}
+
+func (s *StoreActor) checkInodeLiveFromDB(ctx context.Context, inode *Inode) error {
+	if inode.Nlink != 0 {
+		return nil
+	}
+	if s.readOnly {
+		return ErrNotFound
+	}
+	var keyBuf [OrphanKeyLen]byte
+	putOrphanKey(keyBuf[:], inode.Ino)
+	_, closer, err := s.dbGetPoint(ctx, keyBuf[:])
+	if errors.Is(err, pebble.ErrNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return closer.Close()
 }
 
 func (s *StoreActor) readInode(reader pebbleReader, ino uint64) (Inode, error) {
@@ -786,6 +866,8 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	cmd.req = nil
 	cmd.err = nil
 	cmd.enqueueAt = time.Time{}
+	cmd.dequeueAt = time.Time{}
+	cmd.spanCtx = trace.SpanContext{}
 	cmd.epoch = 0
 	cmd.syncBarrier = false
 	cmd.syncIno = 0
@@ -793,15 +875,20 @@ func (s *StoreActor) releaseCmd(cmd *writeCmd) {
 	s.cmdPool.Put(cmd)
 }
 
-func (s *StoreActor) lockInode(ino uint64) *sync.Mutex {
+func (s *StoreActor) lockInode(ctx context.Context, ino uint64) *sync.Mutex {
 	mu := &s.inodeLocks[ino&0xfff]
 	if mu.TryLock() {
 		return mu
 	}
-	if s.metrics != nil {
-		start := time.Now()
+	recording := isSpanRecording(ctx)
+	if s.metrics != nil || recording {
+		waitStart := time.Now()
 		mu.Lock()
-		s.metrics.observeInodeLockWait(time.Since(start))
+		waitEnd := time.Now()
+		s.metrics.observeInodeLockWait(waitEnd.Sub(waitStart))
+		if recording {
+			recordWindowSpan(ctx, "store.InodeLockWait", waitStart, waitEnd, nil, attribute.Int64("inode.ino", int64(ino)))
+		}
 		return mu
 	}
 	mu.Lock()
@@ -826,14 +913,14 @@ func (s *StoreActor) isDefinitelyStaleEpoch(epoch uint64) bool {
 	return false
 }
 
-func (s *StoreActor) submitStaleEpoch(op opKind, epoch uint64) error {
+func (s *StoreActor) submitStaleEpoch(ctx context.Context, op opKind, epoch uint64) error {
 	cmd := s.acquireCmd()
 	cmd.op = op
 	cmd.epoch = epoch
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
-func (s *StoreActor) submit(cmd *writeCmd) error {
+func (s *StoreActor) submit(ctx context.Context, cmd *writeCmd) error {
 	if s.readOnly {
 		s.unpinStagedBlobs(cmd.stagedBlobs)
 		s.releaseCmd(cmd)
@@ -846,12 +933,16 @@ func (s *StoreActor) submit(cmd *writeCmd) error {
 		return err
 	}
 	defer unlock()
-	return s.enqueueAndWait(cmd)
+	return s.enqueueAndWait(ctx, cmd)
 }
 
-func (s *StoreActor) enqueueAndWait(cmd *writeCmd) error {
-	if s.metrics != nil {
+func (s *StoreActor) enqueueAndWait(ctx context.Context, cmd *writeCmd) error {
+	recording := isSpanRecording(ctx)
+	if s.metrics != nil || recording {
 		cmd.enqueueAt = time.Now()
+	}
+	if recording {
+		cmd.spanCtx = sampledSpanContext(ctx)
 	}
 	s.mb.mu.Lock()
 	if s.mb.closed {
@@ -868,6 +959,9 @@ func (s *StoreActor) enqueueAndWait(cmd *writeCmd) error {
 	s.mb.mu.Unlock()
 
 	<-cmd.done
+	if recording && !cmd.enqueueAt.IsZero() && !cmd.dequeueAt.IsZero() {
+		recordWindowSpan(ctx, "store.QueueWait", cmd.enqueueAt, cmd.dequeueAt, nil, attribute.String("store.op", cmd.op.String()))
+	}
 	cmdErr := cmd.err
 	s.releaseCmd(cmd)
 	return cmdErr
@@ -961,33 +1055,74 @@ func (s *StoreActor) processTick() {
 	batchSize := len(cmds)
 	if s.metrics != nil {
 		s.metrics.observeTickBatchSize(batchSize)
-		for _, cmd := range cmds {
-			if !cmd.enqueueAt.IsZero() {
-				s.metrics.observeQueueWait(tickStart.Sub(cmd.enqueueAt))
-			}
+	}
+
+	var sampledCount int
+	for _, cmd := range cmds {
+		cmd.dequeueAt = tickStart
+		if s.metrics != nil && !cmd.enqueueAt.IsZero() {
+			s.metrics.observeQueueWait(tickStart.Sub(cmd.enqueueAt))
 		}
+		if cmd.spanCtx.IsValid() {
+			sampledCount++
+		}
+	}
+
+	var (
+		tickCtx  context.Context
+		tickSpan trace.Span
+	)
+	if sampledCount > 0 {
+		links := make([]trace.Link, 0, sampledCount)
+		var parentSC trace.SpanContext
+		for _, cmd := range cmds {
+			if !cmd.spanCtx.IsValid() {
+				continue
+			}
+			if !parentSC.IsValid() {
+				parentSC = cmd.spanCtx
+			}
+			links = append(links, trace.Link{
+				SpanContext: cmd.spanCtx,
+				Attributes:  []attribute.KeyValue{attribute.String("store.op", cmd.op.String())},
+			})
+		}
+		parentCtx := trace.ContextWithRemoteSpanContext(context.Background(), parentSC)
+		tickCtx, tickSpan = currentStoreTracer().Start(parentCtx, "store.Tick",
+			trace.WithTimestamp(tickStart),
+			trace.WithLinks(links...),
+			trace.WithAttributes(attribute.Int("batch_size", batchSize)),
+		)
 	}
 
 	var (
 		hasSyncBarrier  bool
 		fsyncFileInodes []uint64
 		mutated         bool
+		phaseADur       time.Duration
+		phaseBDur       time.Duration
 	)
 
 	// Step 2：逐条两阶段串行演进（Phase A Validate -> Phase B Mutate）
 	for _, cmd := range cmds {
 		// Phase A — 纯内存只读预校验（绝不触碰 s.batch 写接口）
-		if err := s.validateCmd(cmd); err != nil {
+		aStart := time.Now()
+		err := s.validateCmd(cmd)
+		phaseADur += time.Since(aStart)
+		if err != nil {
+			bStart := time.Now()
 			for _, ref := range cmd.stagedBlobs {
 				s.recordDeadBlobWrite(ref)
 			}
 			s.unpinStagedBlobs(cmd.stagedBlobs)
 			cmd.stagedBlobs = cmd.stagedBlobs[:0]
 			cmd.err = err
+			phaseBDur += time.Since(bStart)
 			continue
 		}
 
 		// Phase B — 内存记账与原地写入（必定成功）
+		bStart := time.Now()
 		prevCount := s.batch.Count()
 		prevStat := s.stat
 		s.mutateCmd(cmd)
@@ -1007,6 +1142,7 @@ func (s *StoreActor) processTick() {
 				fsyncFileInodes = append(fsyncFileInodes, cmd.syncIno)
 			}
 		}
+		phaseBDur += time.Since(bStart)
 	}
 
 	// Step 3：批次收敛与合并提交（Seal & Commit）
@@ -1018,6 +1154,7 @@ func (s *StoreActor) processTick() {
 		deadRemoveDur  time.Duration
 		reclaimedPacks int
 	)
+	sealStart := time.Now()
 	if mutated || s.batch.Count() > 0 || hasSyncBarrier || len(s.dirtyPackStats) > 0 {
 		// 顺带将内存 dirtyAtime 与 dirtyPackStats 合入当前批次
 		s.flushDirtyAtimeToBatch(s.batch)
@@ -1031,12 +1168,28 @@ func (s *StoreActor) processTick() {
 		// 批次末尾仅写 1 次 "sys:stat"
 		BatchSetStatDeferred(s.batch, s.stat)
 	}
-	validateMutateDur := time.Since(tickStart)
-	s.metrics.observePhaseValidateMutate(validateMutateDur)
+	phaseBDur += time.Since(sealStart)
+	s.metrics.observePhaseAValidate(phaseADur)
+	s.metrics.observePhaseBMutate(phaseBDur)
+
+	if tickSpan != nil {
+		phaseAEnd := tickStart.Add(phaseADur)
+		phaseBEnd := phaseAEnd.Add(phaseBDur)
+		recordWindowSpan(tickCtx, "store.PhaseA", tickStart, phaseAEnd, nil, attribute.Int("batch_size", batchSize))
+		recordWindowSpan(tickCtx, "store.PhaseB", phaseAEnd, phaseBEnd, nil, attribute.Int("batch_counts", int(s.batch.Count())))
+	}
 
 	if s.batch.Count() > 0 {
 		if hasSyncBarrier {
+			var syncSpan trace.Span
+			if tickSpan != nil {
+				_, syncSpan = startChildSpan(tickCtx, "store.SyncBarrier",
+					attribute.Bool("has_batch", true),
+					attribute.Int("fsync_inodes", len(fsyncFileInodes)),
+				)
+			}
 			packSyncDur, walApplyDur, deadRemoveDur, reclaimedPacks, commitErr = s.commitWithSyncBarrier(fsyncFileInodes, deadPacks)
+			finishSpan(syncSpan, commitErr)
 		} else {
 			applyStart := time.Now()
 			commitErr = s.db.Apply(s.batch, pebble.NoSync)
@@ -1051,7 +1204,23 @@ func (s *StoreActor) processTick() {
 			s.publishAtomicStats()
 		}
 	} else if hasSyncBarrier {
+		var syncSpan trace.Span
+		if tickSpan != nil {
+			_, syncSpan = startChildSpan(tickCtx, "store.SyncBarrier",
+				attribute.Bool("has_batch", false),
+				attribute.Int("fsync_inodes", len(fsyncFileInodes)),
+			)
+		}
 		packSyncDur, walApplyDur, deadRemoveDur, reclaimedPacks, commitErr = s.syncBarrierWithoutBatch(fsyncFileInodes)
+		finishSpan(syncSpan, commitErr)
+	}
+
+	if tickSpan != nil {
+		tickSpan.SetAttributes(
+			attribute.Bool("has_sync_barrier", hasSyncBarrier),
+			attribute.Int("reclaimed_packs", reclaimedPacks),
+		)
+		finishSpan(tickSpan, commitErr)
 	}
 
 	s.tickCount.Add(1)
@@ -1080,7 +1249,8 @@ func (s *StoreActor) processTick() {
 			"fsync_inodes", len(fsyncFileInodes),
 			"reclaimed_packs", reclaimedPacks,
 			"total_ms", totalDur.Milliseconds(),
-			"validate_mutate_ms", validateMutateDur.Milliseconds(),
+			"phase_a_ms", phaseADur.Milliseconds(),
+			"phase_b_ms", phaseBDur.Milliseconds(),
 			"pack_sync_ms", packSyncDur.Milliseconds(),
 			"wal_apply_ms", walApplyDur.Milliseconds(),
 			"dead_pack_remove_ms", deadRemoveDur.Milliseconds(),
@@ -1221,7 +1391,6 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 		s.restorePendingDeadPacks(toReclaim)
 		return 0, walSyncDur, 0, 0, applyErr
 	}
-	applyDur := time.Since(applyStart)
 
 	toReclaim = append(toReclaim, deadPacks...)
 	var dataErr error
@@ -1232,9 +1401,9 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 		s.metrics.observePhasePackSyncBarrier(packSyncDur)
 	}
 
-	waitStart := time.Now()
 	walErr := s.batch.SyncWait()
-	walSyncDur = applyDur + time.Since(waitStart)
+	// 记录从 ApplyNoSyncWait 提交至 SyncWait 返回的完整 WAL 同步墙钟耗时，避免被并发执行的 .pack fdatasync 掩盖。
+	walSyncDur = time.Since(applyStart)
 	s.metrics.observePhaseWALApplySync(walSyncDur)
 
 	if walErr != nil {
@@ -1256,22 +1425,52 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 }
 
 func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) (packSyncDur, walSyncDur, deadRemoveDur time.Duration, reclaimed int, err error) {
-	var dataErr error
-	if len(fsyncFileInodes) > 0 {
+	toReclaim := s.takePendingDeadPacks()
+	wasDirty := s.walDirty.Swap(false)
+	needPackSync := len(fsyncFileInodes) > 0
+	needWALSync := wasDirty || len(toReclaim) > 0
+
+	var (
+		dataErr error
+		walErr  error
+	)
+	switch {
+	case needPackSync && needWALSync:
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			packStart := time.Now()
+			dataErr = s.syncFileInodes(fsyncFileInodes)
+			packSyncDur = time.Since(packStart)
+		})
+		walStart := time.Now()
+		walErr = s.db.LogData(nil, pebble.Sync)
+		walSyncDur = time.Since(walStart)
+		wg.Wait()
+	case needPackSync:
 		packStart := time.Now()
 		dataErr = s.syncFileInodes(fsyncFileInodes)
 		packSyncDur = time.Since(packStart)
+	case needWALSync:
+		walStart := time.Now()
+		walErr = s.db.LogData(nil, pebble.Sync)
+		walSyncDur = time.Since(walStart)
+	}
+
+	if needPackSync {
 		s.metrics.observePhasePackSyncBarrier(packSyncDur)
 	}
-	didWALSync, walDur, reclaimedCnt, remDur, walErr := s.syncWALAndReclaimDeadPacksTimed()
-	if didWALSync {
-		walSyncDur = walDur
+	if needWALSync {
 		s.metrics.observePhaseWALApplySync(walSyncDur)
-	}
-	if reclaimedCnt > 0 {
-		deadRemoveDur = remDur
-		reclaimed = reclaimedCnt
-		s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
+		if walErr != nil {
+			s.restorePendingDeadPacks(toReclaim)
+			s.walDirty.Store(true)
+		} else if len(toReclaim) > 0 {
+			remStart := time.Now()
+			s.removePacks(toReclaim)
+			deadRemoveDur = time.Since(remStart)
+			reclaimed = len(toReclaim)
+			s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
+		}
 	}
 	return packSyncDur, walSyncDur, deadRemoveDur, reclaimed, errors.Join(dataErr, walErr)
 }

@@ -21,6 +21,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/starsrc/Aether/pkg/tx"
 
@@ -28,6 +32,8 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
+
+const controlInstrumentationName = "github.com/starsrc/bowl/services/storage/internal/control"
 
 // 控制面常量定义。
 const (
@@ -388,6 +394,30 @@ func assembleDisk(row *db.Disk, stat *store.StatFSResult) *Disk {
 	}
 }
 
+//nolint:gocritic // hugeParam: store.Options 按值传递保持与 store.Open 构造契约一致。
+func (m *manager) openDiskActor(ctx context.Context, opts store.Options) (*store.StoreActor, error) {
+	var span trace.Span
+	if ctx != nil && trace.SpanFromContext(ctx).IsRecording() {
+		_, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(ctx, "control.OpenDiskActor",
+			trace.WithAttributes(
+				attribute.String("disk.id", opts.DiskID),
+				attribute.Bool("disk.read_only", opts.ReadOnly),
+			),
+		)
+	}
+	openStart := time.Now()
+	actor, err := store.Open(opts)
+	m.collector.observeOpenActor(err == nil, time.Since(openStart))
+	if span != nil {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}
+	return actor, err
+}
+
 func (m *manager) getOrOpenActorLocked(ctx context.Context, diskID string) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
@@ -401,7 +431,7 @@ func (m *manager) getOrOpenActorLocked(ctx context.Context, diskID string) (*sto
 	cache := m.cache
 	m.poolMu.RUnlock()
 
-	actor, err := store.Open(store.Options{
+	actor, err := m.openDiskActor(ctx, store.Options{
 		Dir:       m.diskDir(diskID),
 		DiskID:    diskID,
 		AtimeMode: m.atimeMode,
@@ -523,7 +553,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	m.poolMu.RUnlock()
 
 	dir := m.diskDir(diskID)
-	actor, err := store.Open(store.Options{
+	actor, err := m.openDiskActor(ctx, store.Options{
 		Dir:       dir,
 		DiskID:    diskID,
 		MaxBytes:  params.MaxBytes,
@@ -582,7 +612,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	mode := actorModeLabel(actor.ReadOnly())
 	m.collector.incActorLoad(actor.ReadOnly())
 
-	stat, err := actor.StatFS()
+	stat, err := actor.StatFS(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +648,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 	if err != nil {
 		return nil, err
 	}
-	stat, err := actor.StatFS()
+	stat, err := actor.StatFS(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -718,7 +748,7 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 		if actorErr != nil {
 			return nil, actorErr
 		}
-		stat, statErr := actor.StatFS()
+		stat, statErr := actor.StatFS(ctx)
 		if statErr != nil {
 			return nil, statErr
 		}
@@ -784,7 +814,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	}
 
 	if params.MaxBytes != nil {
-		if maxErr := actor.UpdateMaxBytes(*params.MaxBytes); maxErr != nil {
+		if maxErr := actor.UpdateMaxBytes(ctx, *params.MaxBytes); maxErr != nil {
 			return nil, maxErr
 		}
 	}
@@ -806,7 +836,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		}
 	}
 
-	stat, err := actor.StatFS()
+	stat, err := actor.StatFS(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -899,7 +929,7 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 		return nil, err
 	}
 	if params.ReadOnly {
-		rootAttr, attrErr := actor.GetAttr(store.RootIno)
+		rootAttr, attrErr := actor.GetAttr(ctx, store.RootIno)
 		if attrErr != nil {
 			return nil, attrErr
 		}
@@ -917,7 +947,7 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 	}
 
 	prevEpoch := actor.WriterEpoch()
-	epoch, rootAttr, err := actor.AdvanceEpoch()
+	epoch, rootAttr, err := actor.AdvanceEpoch(ctx)
 	if err != nil {
 		return nil, err
 	}

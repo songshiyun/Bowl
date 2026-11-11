@@ -10,6 +10,14 @@ import (
 
 var _ prometheus.Collector = (*Metrics)(nil)
 
+// FineDurationBuckets 定义存储引擎统一的微秒级至秒级精细桶边界（5µs ~ 10s）。
+var FineDurationBuckets = []float64{
+	0.000005, 0.00001, 0.000025, 0.00005, 0.0001,
+	0.00025, 0.0005, 0.001, 0.0025, 0.005,
+	0.01, 0.025, 0.05, 0.1, 0.25,
+	0.5, 1.0, 2.5, 5.0, 10.0,
+}
+
 type blobWriteMode int
 
 const (
@@ -55,6 +63,33 @@ var syncTriggerNames = [syncTriggerCount]string{
 	syncTriggerFsyncBarrier: "fsync_barrier",
 	syncTriggerBgRotate:     "bg_rotate",
 	syncTriggerFlushWAL:     "flush_wal",
+}
+
+type readOpKind int
+
+const (
+	readOpRead readOpKind = iota
+	readOpLookup
+	readOpGetAttr
+	readOpReadDir
+	readOpReadDirPlus
+	readOpReadlink
+	readOpGetXattr
+	readOpListXattr
+	readOpStatFS
+	readOpCount
+)
+
+var readOpNames = [readOpCount]string{
+	readOpRead:        "read",
+	readOpLookup:      "lookup",
+	readOpGetAttr:     "getattr",
+	readOpReadDir:     "readdir",
+	readOpReadDirPlus: "readdirplus",
+	readOpReadlink:    "readlink",
+	readOpGetXattr:    "getxattr",
+	readOpListXattr:   "listxattr",
+	readOpStatFS:      "statfs",
 }
 
 // ActorMetricsSnapshot 承载单个 StoreActor 实例在抓取时刻的无锁/低开销状态快照，
@@ -122,15 +157,22 @@ type Metrics struct {
 	blobRMWReadDur     prometheus.Histogram
 	blobMuWait         prometheus.Histogram
 	blobPwriteDur      prometheus.Histogram
+	blobPreadDur       prometheus.Histogram
 	blobSyncDurVec     *prometheus.HistogramVec
+	readOpDurVec       *prometheus.HistogramVec
+	kvReadDurVec       *prometheus.HistogramVec
 
 	// 预绑定 Observer 缓存，消除热路径 WithLabelValues 哈希查找与切片分配。
-	phaseValidateMutate  prometheus.Observer
+	phaseAValidate       prometheus.Observer
+	phaseBMutate         prometheus.Observer
 	phasePackSyncBarrier prometheus.Observer
 	phaseWALApplySync    prometheus.Observer
 	phaseWALApplyNoSync  prometheus.Observer
 	phaseDeadPackRemove  prometheus.Observer
 	blobSyncObservers    [syncTargetCount][syncTriggerCount]prometheus.Observer
+	readOpObservers      [readOpCount]prometheus.Observer
+	kvPointGetObserver   prometheus.Observer
+	kvPrefixScanObserver prometheus.Observer
 
 	// 无锁原子计数器与对应 Desc（热路径 0 allocs/op）。
 	writeBlocksDesc       *prometheus.Desc
@@ -158,26 +200,35 @@ type Metrics struct {
 
 // NewMetrics 创建隔离的存储引擎指标收集器实例。
 func NewMetrics() *Metrics {
-	latencyBuckets := prometheus.ExponentialBuckets(0.00001, 2, 20) // 10µs ~ 5.24s
-	ioBuckets := prometheus.ExponentialBuckets(0.000005, 2, 20)     // 5µs ~ 2.62s
-
 	phaseVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "bowl_storage_actor_tick_phase_duration_seconds",
 		Help:    "Duration of StoreActor group-commit tick phases in seconds.",
-		Buckets: latencyBuckets,
+		Buckets: FineDurationBuckets,
 	}, []string{"phase"})
 
 	syncDurVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "bowl_storage_blob_sync_duration_seconds",
 		Help:    "Duration of pack file fdatasync and packs directory fsync operations in seconds.",
-		Buckets: latencyBuckets,
+		Buckets: FineDurationBuckets,
 	}, []string{"target", "trigger"})
+
+	readOpVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bowl_storage_read_op_duration_seconds",
+		Help:    "Duration of read-only StoreActor operations in seconds by operation.",
+		Buckets: FineDurationBuckets,
+	}, []string{"op"})
+
+	kvReadVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bowl_storage_kv_read_duration_seconds",
+		Help:    "Duration of Pebble KV point lookups and prefix scans on read paths in seconds.",
+		Buckets: FineDurationBuckets,
+	}, []string{"op"})
 
 	m := &Metrics{
 		actorQueueWait: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_actor_queue_wait_seconds",
 			Help:    "Time commands spend waiting in the StoreActor MPSC queue before tick processing.",
-			Buckets: latencyBuckets,
+			Buckets: FineDurationBuckets,
 		}),
 		actorTickBatchSize: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_actor_tick_batch_size",
@@ -188,30 +239,41 @@ func NewMetrics() *Metrics {
 		inodeLockWait: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_inode_lock_wait_seconds",
 			Help:    "Contended wait duration when acquiring per-inode serialization locks.",
-			Buckets: latencyBuckets,
+			Buckets: FineDurationBuckets,
 		}),
 		blobRMWReadDur: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_blob_rmw_read_duration_seconds",
 			Help:    "Duration of reading existing blocks during read-modify-write partial updates.",
-			Buckets: ioBuckets,
+			Buckets: FineDurationBuckets,
 		}),
 		blobMuWait: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_blob_mu_wait_seconds",
 			Help:    "Wait duration to acquire BlobStore active pack mutex.",
-			Buckets: ioBuckets,
+			Buckets: FineDurationBuckets,
 		}),
 		blobPwriteDur: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "bowl_storage_blob_pwrite_duration_seconds",
 			Help:    "Duration of pwrite (WriteAt) system calls to active pack files.",
-			Buckets: ioBuckets,
+			Buckets: FineDurationBuckets,
+		}),
+		blobPreadDur: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "bowl_storage_blob_pread_duration_seconds",
+			Help:    "Duration of pread (ReadAt) system calls to pack files on cold block reads.",
+			Buckets: FineDurationBuckets,
 		}),
 		blobSyncDurVec: syncDurVec,
+		readOpDurVec:   readOpVec,
+		kvReadDurVec:   kvReadVec,
 
-		phaseValidateMutate:  phaseVec.WithLabelValues("validate_mutate"),
+		phaseAValidate:       phaseVec.WithLabelValues("phase_a_validate"),
+		phaseBMutate:         phaseVec.WithLabelValues("phase_b_mutate"),
 		phasePackSyncBarrier: phaseVec.WithLabelValues("pack_sync_barrier"),
 		phaseWALApplySync:    phaseVec.WithLabelValues("wal_apply_sync"),
 		phaseWALApplyNoSync:  phaseVec.WithLabelValues("wal_apply_nosync"),
 		phaseDeadPackRemove:  phaseVec.WithLabelValues("dead_pack_remove"),
+
+		kvPointGetObserver:   kvReadVec.WithLabelValues("point_get"),
+		kvPrefixScanObserver: kvReadVec.WithLabelValues("prefix_scan"),
 
 		writeBlocksDesc: prometheus.NewDesc(
 			"bowl_storage_blob_write_blocks_total",
@@ -277,6 +339,9 @@ func NewMetrics() *Metrics {
 			)
 		}
 	}
+	for op := range readOpCount {
+		m.readOpObservers[op] = readOpVec.WithLabelValues(readOpNames[op])
+	}
 
 	return m
 }
@@ -293,7 +358,10 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	m.blobRMWReadDur.Describe(ch)
 	m.blobMuWait.Describe(ch)
 	m.blobPwriteDur.Describe(ch)
+	m.blobPreadDur.Describe(ch)
 	m.blobSyncDurVec.Describe(ch)
+	m.readOpDurVec.Describe(ch)
+	m.kvReadDurVec.Describe(ch)
 
 	ch <- m.writeBlocksDesc
 	ch <- m.writeBytesDesc
@@ -318,7 +386,10 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	m.blobRMWReadDur.Collect(ch)
 	m.blobMuWait.Collect(ch)
 	m.blobPwriteDur.Collect(ch)
+	m.blobPreadDur.Collect(ch)
 	m.blobSyncDurVec.Collect(ch)
+	m.readOpDurVec.Collect(ch)
+	m.kvReadDurVec.Collect(ch)
 
 	for mode := range writeModeCount {
 		label := blobWriteModeNames[mode]
@@ -394,11 +465,18 @@ func (m *Metrics) observeTickBatchSize(n int) {
 	m.actorTickBatchSize.Observe(float64(n))
 }
 
-func (m *Metrics) observePhaseValidateMutate(d time.Duration) {
+func (m *Metrics) observePhaseAValidate(d time.Duration) {
 	if m == nil {
 		return
 	}
-	m.phaseValidateMutate.Observe(max(0, d.Seconds()))
+	m.phaseAValidate.Observe(max(0, d.Seconds()))
+}
+
+func (m *Metrics) observePhaseBMutate(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.phaseBMutate.Observe(max(0, d.Seconds()))
 }
 
 func (m *Metrics) observePhasePackSyncBarrier(d time.Duration) {
@@ -434,6 +512,34 @@ func (m *Metrics) observeInodeLockWait(d time.Duration) {
 		return
 	}
 	m.inodeLockWait.Observe(max(0, d.Seconds()))
+}
+
+func (m *Metrics) observeReadOp(op readOpKind, d time.Duration) {
+	if m == nil || op < 0 || op >= readOpCount {
+		return
+	}
+	m.readOpObservers[op].Observe(max(0, d.Seconds()))
+}
+
+func (m *Metrics) observeKVPointGet(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.kvPointGetObserver.Observe(max(0, d.Seconds()))
+}
+
+func (m *Metrics) observeKVPrefixScan(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.kvPrefixScanObserver.Observe(max(0, d.Seconds()))
+}
+
+func (m *Metrics) observeBlobPread(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.blobPreadDur.Observe(max(0, d.Seconds()))
 }
 
 func (m *Metrics) recordBlobWrite(mode blobWriteMode, blocks, bytes uint64) {

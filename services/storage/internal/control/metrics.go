@@ -28,6 +28,13 @@ func actorModeLabel(readOnly bool) string {
 
 var walFsyncBucketBoundsSeconds = buildWALFsyncBucketBoundsSeconds()
 
+var controlOpenActorBuckets = []float64{
+	0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
+	0.001, 0.0025, 0.005, 0.01, 0.025,
+	0.05, 0.1, 0.25, 0.5, 1.0,
+	2.5, 5.0, 10.0,
+}
+
 func buildWALFsyncBucketBoundsSeconds() []float64 {
 	bounds := make([]float64, 0, len(pebble.FsyncLatencyBuckets))
 	for _, ns := range pebble.FsyncLatencyBuckets {
@@ -82,6 +89,9 @@ type storageEngineCollector struct {
 	controlActorLoadsDesc     *prometheus.Desc
 	controlActorEvictionsDesc *prometheus.Desc
 	controlCleanupErrorsDesc  *prometheus.Desc
+	openActorDurVec           *prometheus.HistogramVec
+	openActorOK               prometheus.Observer
+	openActorErr              prometheus.Observer
 
 	actorLoadsRW   atomic.Uint64
 	actorLoadsRO   atomic.Uint64
@@ -90,6 +100,12 @@ type storageEngineCollector struct {
 }
 
 func newStorageEngineCollector() *storageEngineCollector {
+	openDurVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bowl_storage_control_open_actor_duration_seconds",
+		Help:    "Duration of opening and recovering StoreActor instances on cold paths in seconds.",
+		Buckets: controlOpenActorBuckets,
+	}, []string{"result"})
+
 	return &storageEngineCollector{
 		disksLoadedDesc: prometheus.NewDesc(
 			"bowl_storage_disks_loaded",
@@ -271,6 +287,9 @@ func newStorageEngineCollector() *storageEngineCollector {
 			nil,
 			nil,
 		),
+		openActorDurVec: openDurVec,
+		openActorOK:     openDurVec.WithLabelValues("ok"),
+		openActorErr:    openDurVec.WithLabelValues("error"),
 	}
 }
 
@@ -304,6 +323,18 @@ func (c *storageEngineCollector) incCleanupError() {
 		return
 	}
 	c.cleanupErrors.Add(1)
+}
+
+func (c *storageEngineCollector) observeOpenActor(ok bool, d time.Duration) {
+	if c == nil {
+		return
+	}
+	secs := max(0, d.Seconds())
+	if ok {
+		c.openActorOK.Observe(secs)
+		return
+	}
+	c.openActorErr.Observe(secs)
 }
 
 // Describe 实现 prometheus.Collector。
@@ -345,6 +376,7 @@ func (c *storageEngineCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.controlActorLoadsDesc
 	ch <- c.controlActorEvictionsDesc
 	ch <- c.controlCleanupErrorsDesc
+	c.openActorDurVec.Describe(ch)
 }
 
 // Collect 实现 prometheus.Collector。
@@ -520,4 +552,5 @@ func (c *storageEngineCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.controlActorLoadsDesc, prometheus.CounterValue, float64(c.actorLoadsRO.Load()), actorModeRO)
 	ch <- prometheus.MustNewConstMetric(c.controlActorEvictionsDesc, prometheus.CounterValue, float64(c.actorEvictions.Load()))
 	ch <- prometheus.MustNewConstMetric(c.controlCleanupErrorsDesc, prometheus.CounterValue, float64(c.cleanupErrors.Load()))
+	c.openActorDurVec.Collect(ch)
 }

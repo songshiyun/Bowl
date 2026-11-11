@@ -19,6 +19,36 @@ import (
 // 确保可承载协议承诺的 4 MiB 二进制写入载荷以及 Connect JSON Base64 编码后的完整请求包，同时保留明确防 OOM 上界。
 const DefaultServerReadMaxBytes = 8 * 1024 * 1024
 
+var otlpEndpointEnvVars = [...]string{
+	"OTEL_EXPORTER_OTLP_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+}
+
+// NormalizeOTLPEndpoint 对缺少协议前缀（http:// 或 https://）的非空 OTLP 地址自动补齐 http://，
+// 避免裸 host:port（如 jaeger:4317）被 OTel SDK url.Parse 当作 scheme 解析失败。
+func NormalizeOTLPEndpoint(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.Contains(trimmed, "://") {
+		return trimmed
+	}
+	return "http://" + trimmed
+}
+
+func normalizeOTLPEnvVars() {
+	for _, key := range otlpEndpointEnvVars {
+		val, ok := os.LookupEnv(key)
+		if !ok {
+			continue
+		}
+		normalized := NormalizeOTLPEndpoint(val)
+		if normalized != "" && normalized != val {
+			_ = os.Setenv(key, normalized)
+		}
+	}
+}
+
 // ServerConfig 作为 serverx.ServerConfig 的类型别名。
 type ServerConfig = serverx.ServerConfig
 
@@ -96,11 +126,15 @@ func Load(filenames ...string) (*Config, error) {
 		}
 	}
 
+	normalizeOTLPEnvVars()
+
 	var cfg Config
 	if err := env.Parse(&cfg); err != nil {
 		return nil, fmt.Errorf("parse environment variables: %w", err)
 	}
 
+	cfg.OtelEndpoint = NormalizeOTLPEndpoint(cfg.OtelEndpoint)
+	cfg.OtelTracesEndpoint = NormalizeOTLPEndpoint(cfg.OtelTracesEndpoint)
 	cfg.ApplyDefaultPort(9000)
 	cfg.ApplyDefaultInternalPort(9090)
 	cfg.ApplyDefaultServiceName("bowl-storage")

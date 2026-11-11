@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"math"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 // setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线（ADR-0031 §3.2）：
 //   - 完全落入截断区间的整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
 //   - 边界残块在 inodeLocks[ino&0xfff] 保护下读取有效前缀，若全为零则直接删除该 DataKey，否则追加写入活跃 .pack 并更新 DataKey -> newRef。
-func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, error) {
+func (s *StoreActor) setAttrWithSize(ctx context.Context, ino uint64, req SetAttrReq) (Attribute, error) {
 	unlock, err := s.enter()
 	if err != nil {
 		return Attribute{}, err
@@ -20,7 +21,7 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 		return Attribute{}, ErrIO
 	}
 
-	inoLock := s.lockInode(ino)
+	inoLock := s.lockInode(ctx, ino)
 	defer inoLock.Unlock()
 
 	newSize := *req.Size
@@ -34,12 +35,12 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 		tailBlock := (newSize - 1) / BlobSize
 		tailLen := uint32(newSize - tailBlock*BlobSize)
 		if tailLen < BlobSize {
-			oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, tailBlock)
+			oldRef, oldOK, err := s.readDataBlobRefFromDB(ctx, ino, tailBlock)
 			if err != nil {
 				return Attribute{}, err
 			}
 			if oldOK && oldRef.Length > tailLen {
-				spec, err := s.prepareTruncateTailBlock(blobs, ino, tailBlock, oldRef, tailLen, &staged)
+				spec, err := s.prepareTruncateTailBlock(ctx, blobs, ino, tailBlock, oldRef, tailLen, &staged)
 				if err != nil {
 					s.unpinStagedBlobs(staged)
 					return Attribute{}, err
@@ -59,19 +60,19 @@ func (s *StoreActor) setAttrWithSize(ino uint64, req SetAttrReq) (Attribute, err
 	cmd.epoch = req.Epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
-	if err := s.enqueueAndWait(cmd); err != nil {
+	if err := s.enqueueAndWait(ctx, cmd); err != nil {
 		return Attribute{}, err
 	}
 	return op.attr, nil
 }
 
-func (s *StoreActor) prepareTruncateTailBlock(blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
+func (s *StoreActor) prepareTruncateTailBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
 	data := make([]byte, tailLen)
 	var readStart time.Time
 	if s.metrics != nil {
 		readStart = time.Now()
 	}
-	err := blobs.ReadAt(oldRef, 0, data)
+	err := blobs.ReadAtContext(ctx, oldRef, 0, data)
 	if s.metrics != nil {
 		s.metrics.observeBlobRMWRead(time.Since(readStart))
 	}
@@ -116,13 +117,13 @@ type fallocateDataOp struct {
 //   - 支持 mode: 0（默认预留扩展）、FallocKeepSize、FallocPunchHole|FallocKeepSize、FallocZeroRange、FallocZeroRange|FallocKeepSize；
 //   - 完全落入打洞/置零区间的 256 KiB 整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
 //   - 首尾边界残块在 inodeLocks[ino&0xfff] 保护下读取并清零目标子区间，若打洞后全为零则直接删除该 DataKey，否则追加写入活跃 .pack 并更新 DataKey -> newRef。
-func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ...uint64) error {
+func (s *StoreActor) Fallocate(ctx context.Context, ino, offset, length uint64, mode uint32, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opFallocate, ep)
+		return s.submitStaleEpoch(ctx, opFallocate, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -150,7 +151,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ..
 		return ErrIO
 	}
 
-	inoLock := s.lockInode(ino)
+	inoLock := s.lockInode(ctx, ino)
 	defer inoLock.Unlock()
 
 	zeroRange := mode&FallocPunchHole != 0 || mode&FallocZeroRange != 0
@@ -181,7 +182,7 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ..
 				// 完整 256 KiB 块交由阶段 2 范围扫描删除
 				continue
 			}
-			spec, hasSpec, err := s.preparePunchPartialBlock(blobs, ino, blockIdx, inBlock, clearLen, &staged)
+			spec, hasSpec, err := s.preparePunchPartialBlock(ctx, blobs, ino, blockIdx, inBlock, clearLen, &staged)
 			if err != nil {
 				s.unpinStagedBlobs(staged)
 				return err
@@ -205,11 +206,11 @@ func (s *StoreActor) Fallocate(ino, offset, length uint64, mode uint32, epoch ..
 	cmd.epoch = ep
 	cmd.req = op
 	cmd.stagedBlobs = staged
-	return s.enqueueAndWait(cmd)
+	return s.enqueueAndWait(ctx, cmd)
 }
 
-func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, staged *[]BlobRef) (writeBlockSpec, bool, error) {
-	oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
+func (s *StoreActor) preparePunchPartialBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, staged *[]BlobRef) (writeBlockSpec, bool, error) {
+	oldRef, oldOK, err := s.readDataBlobRefFromDB(ctx, ino, blockIdx)
 	if err != nil || !oldOK {
 		return writeBlockSpec{}, false, err
 	}
@@ -223,7 +224,7 @@ func (s *StoreActor) preparePunchPartialBlock(blobs *BlobStore, ino, blockIdx ui
 	if s.metrics != nil {
 		readStart = time.Now()
 	}
-	err = blobs.ReadAt(oldRef, 0, data)
+	err = blobs.ReadAtContext(ctx, oldRef, 0, data)
 	if s.metrics != nil {
 		s.metrics.observeBlobRMWRead(time.Since(readStart))
 	}

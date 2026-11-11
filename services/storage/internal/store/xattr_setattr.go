@@ -2,11 +2,14 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -114,13 +117,13 @@ func checkXattrListQuota(reader pebbleReader, ino uint64, newName []byte) (err e
 }
 
 // SetXattr 在 Actor 双阶段循环内设置或覆盖节点扩展属性。
-func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32, epoch ...uint64) error {
+func (s *StoreActor) SetXattr(ctx context.Context, ino uint64, name, value []byte, flags uint32, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opSetXattr, ep)
+		return s.submitStaleEpoch(ctx, opSetXattr, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -144,7 +147,7 @@ func (s *StoreActor) SetXattr(ino uint64, name, value []byte, flags uint32, epoc
 		value: value,
 		flags: flags,
 	}
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateSetXattrCmd(cmd *writeCmd) error {
@@ -197,7 +200,13 @@ func (s *StoreActor) mutateSetXattrCmd(cmd *writeCmd) {
 }
 
 // GetXattr 在并发直读快路径（lifecycleMu.RLock()）直接调用 db.Get(XattrKey) 读取节点扩展属性值。
-func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
+func (s *StoreActor) GetXattr(ctx context.Context, ino uint64, name []byte) ([]byte, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpGetXattr, time.Since(opStart))
+		}()
+	}
 	if err := validateNodeIno(ino); err != nil {
 		return nil, err
 	}
@@ -210,11 +219,11 @@ func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
 	}
 	defer unlock()
 
-	inode, err := s.readInode(s.db, ino)
+	inode, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
-	err = s.checkInodeLive(s.db, &inode)
+	err = s.checkInodeLiveFromDB(ctx, &inode)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +231,7 @@ func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
 		return nil, ErrNoData
 	}
 
-	val, closer, err := s.db.Get(XattrKey(ino, name))
+	val, closer, err := s.dbGetPoint(ctx, XattrKey(ino, name))
 	if errors.Is(err, pebble.ErrNotFound) {
 		return nil, ErrNoData
 	}
@@ -238,7 +247,13 @@ func (s *StoreActor) GetXattr(ino uint64, name []byte) ([]byte, error) {
 
 // ListXattr 在并发直读快路径（lifecycleMu.RLock()）通过 db.NewIter(nil) + iter.SeekPrefixGE(XattrPrefix(ino))
 // 触发 15B 前缀布隆过滤器，按字节字典序升序返回节点扩展属性名列表。
-func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
+func (s *StoreActor) ListXattr(ctx context.Context, ino uint64) (names [][]byte, err error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpListXattr, time.Since(opStart))
+		}()
+	}
 	err = validateNodeIno(ino)
 	if err != nil {
 		return nil, err
@@ -249,14 +264,32 @@ func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
 	}
 	defer unlock()
 
-	inode, err := s.readInode(s.db, ino)
+	inode, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
-	err = s.checkInodeLive(s.db, &inode)
+	err = s.checkInodeLiveFromDB(ctx, &inode)
 	if err != nil {
 		return nil, err
 	}
+
+	var scanSpan trace.Span
+	if isSpanRecording(ctx) {
+		_, scanSpan = startChildSpan(ctx, "store.KVScan",
+			attribute.String("scan.kind", "xattrs"),
+			attribute.Int64("inode.ino", int64(ino)),
+		)
+	}
+	var scanStart time.Time
+	if s.metrics != nil {
+		scanStart = time.Now()
+	}
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.observeKVPrefixScan(time.Since(scanStart))
+		}
+		finishSpan(scanSpan, err)
+	}()
 
 	iter, err := s.db.NewIter(nil)
 	if err != nil {
@@ -280,13 +313,13 @@ func (s *StoreActor) ListXattr(ino uint64) (names [][]byte, err error) {
 }
 
 // RemoveXattr 在 Actor 双阶段循环内删除节点指定扩展属性。
-func (s *StoreActor) RemoveXattr(ino uint64, name []byte, epoch ...uint64) error {
+func (s *StoreActor) RemoveXattr(ctx context.Context, ino uint64, name []byte, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opRemoveXattr, ep)
+		return s.submitStaleEpoch(ctx, opRemoveXattr, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -302,7 +335,7 @@ func (s *StoreActor) RemoveXattr(ino uint64, name []byte, epoch ...uint64) error
 		ino:  ino,
 		name: name,
 	}
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateRemoveXattrCmd(cmd *writeCmd) error {
@@ -463,7 +496,7 @@ func (s *StoreActor) applySetAttrFields(inode *Inode, req SetAttrReq, nowNano in
 }
 
 // SetAttr 在 Actor 双阶段循环内修改节点属性。
-func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq, epoch ...uint64) (Attribute, error) {
+func (s *StoreActor) SetAttr(ctx context.Context, ino uint64, req SetAttrReq, epoch ...uint64) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
@@ -471,7 +504,7 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq, epoch ...uint64) (Attri
 		req.Epoch = epoch[0]
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opSetAttr, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opSetAttr, req.Epoch)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return Attribute{}, err
@@ -480,7 +513,7 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq, epoch ...uint64) (Attri
 		return Attribute{}, err
 	}
 	if req.Size != nil {
-		return s.setAttrWithSize(ino, req)
+		return s.setAttrWithSize(ctx, ino, req)
 	}
 
 	op := &setAttrOp{
@@ -491,7 +524,7 @@ func (s *StoreActor) SetAttr(ino uint64, req SetAttrReq, epoch ...uint64) (Attri
 	cmd.op = opSetAttr
 	cmd.epoch = req.Epoch
 	cmd.req = op
-	if err := s.submit(cmd); err != nil {
+	if err := s.submit(ctx, cmd); err != nil {
 		return Attribute{}, err
 	}
 	return op.attr, nil

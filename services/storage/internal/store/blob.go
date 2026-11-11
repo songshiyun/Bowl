@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -13,6 +14,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // BlobStore 规格与分片热块缓存参数（ADR-0031 §1.2 & §3.1）。
@@ -600,6 +604,11 @@ func (s *BlobStore) Read(ref BlobRef) ([]byte, error) {
 //   - 优先从 hotShard 分片锁内直接拷贝（0 系统调用）；
 //   - 未命中则直接对常驻 .pack 文件句柄执行单次 ReadAt(dst, int64(ref.Offset)+offset)。
 func (s *BlobStore) ReadAt(ref BlobRef, offset int64, dst []byte) error {
+	return s.ReadAtContext(context.Background(), ref, offset, dst)
+}
+
+// ReadAtContext 按块内相对偏移 offset 读取指定区间，并在命中磁盘冷读时记录 pread 耗时直方图与按需创建 store.BlobPread 子 Span。
+func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64, dst []byte) (err error) {
 	if len(dst) == 0 {
 		return nil
 	}
@@ -615,11 +624,28 @@ func (s *BlobStore) ReadAt(ref BlobRef, offset int64, dst []byte) error {
 	}
 
 	s.metrics.incReadDiskPack()
+	var span trace.Span
+	if isSpanRecording(ctx) {
+		_, span = startChildSpan(ctx, "store.BlobPread",
+			attribute.Int64("pack.id", int64(ref.PackID)),
+			attribute.Int64("pack.offset", int64(ref.Offset)+offset),
+			attribute.Int("read.bytes", len(dst)),
+		)
+		defer func() { finishSpan(span, err) }()
+	}
+
 	file, err := s.getOrOpenPackFile(ref.PackID)
 	if err != nil {
 		return err
 	}
+	var preadStart time.Time
+	if s.metrics != nil {
+		preadStart = time.Now()
+	}
 	n, err := file.ReadAt(dst, int64(ref.Offset)+offset)
+	if s.metrics != nil {
+		s.metrics.observeBlobPread(time.Since(preadStart))
+	}
 	if errors.Is(err, io.EOF) {
 		if n == len(dst) {
 			return nil

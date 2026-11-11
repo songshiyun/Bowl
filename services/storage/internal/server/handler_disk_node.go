@@ -160,10 +160,10 @@ func (s *Server) StatFS(ctx context.Context, req *connect.Request[storagev1.Stat
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if _, err = actor.GetAttr(req.Msg.Ino); err != nil {
+	if _, err = actor.GetAttr(ctx, req.Msg.Ino); err != nil {
 		return nil, toConnectError(err)
 	}
-	res, err := actor.StatFS()
+	res, err := actor.StatFS(ctx)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -191,7 +191,7 @@ func (s *Server) Lookup(ctx context.Context, req *connect.Request[storagev1.Look
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	_, attr, err := actor.Lookup(req.Msg.ParentIno, req.Msg.Name)
+	_, attr, err := actor.Lookup(ctx, req.Msg.ParentIno, req.Msg.Name)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -211,7 +211,7 @@ func (s *Server) GetAttr(ctx context.Context, req *connect.Request[storagev1.Get
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.GetAttr(req.Msg.Ino)
+	attr, err := actor.GetAttr(ctx, req.Msg.Ino)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -256,7 +256,7 @@ func (s *Server) SetAttr(ctx context.Context, req *connect.Request[storagev1.Set
 		input.Mtime = &mtime
 	}
 
-	attr, err := actor.SetAttr(req.Msg.Ino, input, req.Msg.Epoch)
+	attr, err := actor.SetAttr(ctx, req.Msg.Ino, input, req.Msg.Epoch)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -281,7 +281,7 @@ func (s *Server) Mknod(ctx context.Context, req *connect.Request[storagev1.Mknod
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.Mknod(store.MknodReq{
+	attr, err := actor.Mknod(ctx, store.MknodReq{
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Mode:      req.Msg.Mode,
@@ -315,7 +315,7 @@ func (s *Server) Mkdir(ctx context.Context, req *connect.Request[storagev1.Mkdir
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.Mkdir(store.MkdirReq{
+	attr, err := actor.Mkdir(ctx, store.MkdirReq{
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Mode:      req.Msg.Mode,
@@ -348,7 +348,7 @@ func (s *Server) Symlink(ctx context.Context, req *connect.Request[storagev1.Sym
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.Symlink(store.SymlinkReq{
+	attr, err := actor.Symlink(ctx, store.SymlinkReq{
 		ParentIno: req.Msg.ParentIno,
 		Name:      req.Msg.Name,
 		Target:    req.Msg.Target,
@@ -375,7 +375,7 @@ func (s *Server) Readlink(ctx context.Context, req *connect.Request[storagev1.Re
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	target, err := actor.Readlink(req.Msg.Ino)
+	target, err := actor.Readlink(ctx, req.Msg.Ino)
 	if err != nil {
 		return nil, toConnectError(err)
 	}

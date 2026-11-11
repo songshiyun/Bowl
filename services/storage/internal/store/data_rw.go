@@ -1,9 +1,13 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"math"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type writeDataOp struct {
@@ -39,13 +43,13 @@ func isAllZero(data []byte) bool {
 //   - 满 256 KiB 对齐整块写：阶段 1 在不持 inodeLocks 的状态下向活跃 .pack 追加写入满块数据，随后获取 s.inodeLocks[ino&0xfff] 投递进 Actor 双阶段队列；
 //   - 局部或非对齐跨块写：全程持 s.inodeLocks[ino&0xfff]，若命中活跃 .pack 最末尾同块则走 ExtendTail 原地顺延写指针，否则读取旧块合并后通过 Append 追加至活跃 .pack；
 //   - 在 Actor Phase B 的同一个 IndexedBatch 中原子更新 InodeKey 与涉及的全部 DataKey -> 16B BlobRef{PackID, Offset, Length}。
-func (s *StoreActor) Write(ino, offset uint64, data []byte, epoch ...uint64) (uint32, Attribute, error) {
+func (s *StoreActor) Write(ctx context.Context, ino, offset uint64, data []byte, epoch ...uint64) (uint32, Attribute, error) {
 	if s.readOnly {
 		return 0, Attribute{}, ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return 0, Attribute{}, s.submitStaleEpoch(opWrite, ep)
+		return 0, Attribute{}, s.submitStaleEpoch(ctx, opWrite, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return 0, Attribute{}, err
@@ -58,17 +62,17 @@ func (s *StoreActor) Write(ino, offset uint64, data []byte, epoch ...uint64) (ui
 	}
 
 	if len(data) == 0 {
-		return s.writeZeroBytes(ino, offset, ep)
+		return s.writeZeroBytes(ctx, ino, offset, ep)
 	}
 
 	if isFullBlockAlignedWrite(offset, data) {
-		return s.writeFullBlocks(ino, offset, data, ep)
+		return s.writeFullBlocks(ctx, ino, offset, data, ep)
 	}
 
-	return s.writePartialData(ino, offset, data, ep)
+	return s.writePartialData(ctx, ino, offset, data, ep)
 }
 
-func (s *StoreActor) writeZeroBytes(ino, offset, epoch uint64) (uint32, Attribute, error) {
+func (s *StoreActor) writeZeroBytes(ctx context.Context, ino, offset, epoch uint64) (uint32, Attribute, error) {
 	op := &writeDataOp{
 		ino:     ino,
 		offset:  offset,
@@ -78,13 +82,13 @@ func (s *StoreActor) writeZeroBytes(ino, offset, epoch uint64) (uint32, Attribut
 	cmd.op = opWrite
 	cmd.epoch = epoch
 	cmd.req = op
-	if err := s.submit(cmd); err != nil {
+	if err := s.submit(ctx, cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	return 0, op.attr, nil
 }
 
-func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
+func (s *StoreActor) writeFullBlocks(ctx context.Context, ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
 	unlock, err := s.enter()
 	if err != nil {
 		return 0, Attribute{}, err
@@ -101,7 +105,16 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 	var staged []BlobRef
 
 	// 阶段 1：在不持有 inodeLocks 的状态下向活跃 .pack 批量追加写入满块数据。
+	var blobSpan trace.Span
+	if isSpanRecording(ctx) {
+		_, blobSpan = startChildSpan(ctx, "store.BlobWrite",
+			attribute.Int64("inode.ino", int64(ino)),
+			attribute.Int("write.bytes", len(data)),
+			attribute.String("write.mode", "full_block"),
+		)
+	}
 	refs, writeErr := s.stageAppendBlocks(blobs, ino, data, &staged)
+	finishSpan(blobSpan, writeErr)
 	if writeErr != nil {
 		s.unpinStagedBlobs(staged)
 		return 0, Attribute{}, writeErr
@@ -118,7 +131,7 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 	}
 
 	// 预写成功后获取 per-Inode 定序锁，确保持有至阶段 3 db.Apply 完成（<-cmd.done 唤醒）后释放。
-	inoLock := s.lockInode(ino)
+	inoLock := s.lockInode(ctx, ino)
 	defer inoLock.Unlock()
 
 	op := &writeDataOp{
@@ -132,13 +145,13 @@ func (s *StoreActor) writeFullBlocks(ino, offset uint64, data []byte, epoch uint
 	cmd.epoch = epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
-	if err := s.enqueueAndWait(cmd); err != nil {
+	if err := s.enqueueAndWait(ctx, cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) writePartialData(ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
+func (s *StoreActor) writePartialData(ctx context.Context, ino, offset uint64, data []byte, epoch uint64) (uint32, Attribute, error) {
 	unlock, err := s.enter()
 	if err != nil {
 		return 0, Attribute{}, err
@@ -150,29 +163,44 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte, epoch uin
 		return 0, Attribute{}, ErrIO
 	}
 
-	inoLock := s.lockInode(ino)
+	inoLock := s.lockInode(ctx, ino)
 	defer inoLock.Unlock()
 
 	var (
-		specs  []writeBlockSpec
-		staged []BlobRef
+		specs    []writeBlockSpec
+		staged   []BlobRef
+		blobSpan trace.Span
+		stageCtx = ctx
 	)
+	if isSpanRecording(ctx) {
+		stageCtx, blobSpan = startChildSpan(ctx, "store.BlobWrite",
+			attribute.Int64("inode.ino", int64(ino)),
+			attribute.Int("write.bytes", len(data)),
+			attribute.String("write.mode", "partial"),
+		)
+	}
 
+	var prepErr error
 	for pos, consumed := offset, 0; consumed < len(data); {
 		blockIdx := pos / BlobSize
 		inBlock := int(pos % BlobSize)
 		length := min(len(data)-consumed, BlobSize-inBlock)
 		chunk := data[consumed : consumed+length]
 
-		spec, err := s.preparePartialWriteBlock(blobs, ino, blockIdx, inBlock, chunk, &staged)
+		spec, err := s.preparePartialWriteBlock(stageCtx, blobs, ino, blockIdx, inBlock, chunk, &staged)
 		if err != nil {
-			s.unpinStagedBlobs(staged)
-			return 0, Attribute{}, err
+			prepErr = err
+			break
 		}
 		specs = append(specs, spec)
 
 		pos += uint64(length)
 		consumed += length
+	}
+	finishSpan(blobSpan, prepErr)
+	if prepErr != nil {
+		s.unpinStagedBlobs(staged)
+		return 0, Attribute{}, prepErr
 	}
 
 	op := &writeDataOp{
@@ -186,13 +214,13 @@ func (s *StoreActor) writePartialData(ino, offset uint64, data []byte, epoch uin
 	cmd.epoch = epoch
 	cmd.req = op
 	cmd.stagedBlobs = staged
-	if err := s.enqueueAndWait(cmd); err != nil {
+	if err := s.enqueueAndWait(ctx, cmd); err != nil {
 		return 0, Attribute{}, err
 	}
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, staged *[]BlobRef) (writeBlockSpec, error) {
+func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, staged *[]BlobRef) (writeBlockSpec, error) {
 	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
@@ -214,7 +242,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		}, nil
 	}
 
-	oldRef, oldOK, err := s.readDataBlobRef(s.db, ino, blockIdx)
+	oldRef, oldOK, err := s.readDataBlobRefFromDB(ctx, ino, blockIdx)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -257,7 +285,7 @@ func (s *StoreActor) preparePartialWriteBlock(blobs *BlobStore, ino, blockIdx ui
 		if s.metrics != nil {
 			readStart = time.Now()
 		}
-		err = blobs.ReadAt(oldRef, 0, merged[:oldRef.Length])
+		err = blobs.ReadAtContext(ctx, oldRef, 0, merged[:oldRef.Length])
 		if s.metrics != nil {
 			s.metrics.observeBlobRMWRead(time.Since(readStart))
 		}
@@ -390,7 +418,19 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 //   - 单块读直接调 1 次 s.db.Get(DataKey)，跨块读调 s.db.NewIter(nil) + SeekPrefixGE(DataKey(ino, firstBlock))；
 //   - 稀疏空洞直接填零；
 //   - 通过 16B BlobRef{PackID, Offset, Length} 优先从 hotShard 拷贝，未命中直接对常驻 .pack 句柄执行 ReadAt（0 open/close、0 撕裂读、无 ENOENT 重试）。
-func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
+func (s *StoreActor) Read(ctx context.Context, ino, offset uint64, size uint32) ([]byte, error) {
+	return s.ReadInto(ctx, ino, offset, size, nil)
+}
+
+// ReadInto 在队列外执行无锁并发直读；当 cap(dst) >= readLen 时直接复用调用方提供的池化缓冲，
+// 且仅对真实稀疏空洞区间执行精确清零，彻底消除对即将被物理块数据覆盖缓冲区的冗余清零开销。
+func (s *StoreActor) ReadInto(ctx context.Context, ino, offset uint64, size uint32, dst []byte) ([]byte, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpRead, time.Since(opStart))
+		}()
+	}
 	if err := validateNodeIno(ino); err != nil {
 		return nil, err
 	}
@@ -404,11 +444,11 @@ func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
 	}
 	defer unlock()
 
-	inode, err := s.readInode(s.db, ino)
+	inode, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, &inode); err != nil {
+	if err := s.checkInodeLiveFromDB(ctx, &inode); err != nil {
 		return nil, err
 	}
 	switch inode.Mode & S_IFMT {
@@ -424,18 +464,27 @@ func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
 	}
 
 	readLen := min(uint64(size), inode.Size-offset)
-	out := make([]byte, readLen)
+	var (
+		out       []byte
+		preZeroed bool
+	)
+	if uint64(cap(dst)) >= readLen {
+		out = dst[:readLen]
+	} else {
+		out = make([]byte, readLen)
+		preZeroed = true
+	}
 	end := offset + readLen
 
 	firstBlock := offset / BlobSize
 	lastBlock := (end - 1) / BlobSize
 
 	if firstBlock == lastBlock {
-		if err := s.readSingleBlock(ino, firstBlock, offset, end, offset, out); err != nil {
+		if err := s.readSingleBlock(ctx, ino, firstBlock, offset, end, offset, out, preZeroed); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := s.readMultiBlocks(ino, firstBlock, lastBlock, offset, end, out); err != nil {
+		if err := s.readMultiBlocks(ctx, ino, firstBlock, lastBlock, offset, end, out, preZeroed); err != nil {
 			return nil, err
 		}
 	}
@@ -444,53 +493,114 @@ func (s *StoreActor) Read(ino, offset uint64, size uint32) ([]byte, error) {
 	return out, nil
 }
 
-func (s *StoreActor) readSingleBlock(ino, blockIdx, rangeStart, rangeEnd, baseOffset uint64, out []byte) error {
-	ref, ok, err := s.readDataBlobRef(s.db, ino, blockIdx)
-	if err != nil || !ok {
-		return err
-	}
-	return s.readBlockSlice(ref, rangeStart, rangeEnd, baseOffset, out)
-}
-
-func (s *StoreActor) readMultiBlocks(ino, firstBlock, lastBlock, offset, end uint64, out []byte) (err error) {
-	iter, err := s.db.NewIter(nil)
+func (s *StoreActor) readSingleBlock(ctx context.Context, ino, blockIdx, rangeStart, rangeEnd, baseOffset uint64, out []byte, preZeroed bool) error {
+	ref, ok, err := s.readDataBlobRefFromDB(ctx, ino, blockIdx)
 	if err != nil {
 		return err
+	}
+	if !ok {
+		if !preZeroed {
+			dstStart := rangeStart - baseOffset
+			clear(out[dstStart : dstStart+(rangeEnd-rangeStart)])
+		}
+		return nil
+	}
+	return s.readBlockSlice(ctx, ref, rangeStart, rangeEnd, baseOffset, out, preZeroed)
+}
+
+type scannedDataBlock struct {
+	blockIdx uint64
+	ref      BlobRef
+}
+
+func (s *StoreActor) scanDataBlockRefs(ctx context.Context, ino, firstBlock, lastBlock uint64) (hits []scannedDataBlock, err error) {
+	var span trace.Span
+	if isSpanRecording(ctx) {
+		_, span = startChildSpan(ctx, "store.KVScan",
+			attribute.String("scan.kind", "data_blocks"),
+			attribute.Int64("inode.ino", int64(ino)),
+		)
+	}
+	var scanStart time.Time
+	if s.metrics != nil {
+		scanStart = time.Now()
+	}
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.observeKVPrefixScan(time.Since(scanStart))
+		}
+		if span != nil {
+			span.SetAttributes(attribute.Int("scan.hits", len(hits)))
+			finishSpan(span, err)
+		}
+	}()
+
+	iter, err := s.db.NewIter(nil)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { err = errors.Join(err, iter.Close()) }()
 
 	var startKey [DataKeyLen]byte
 	putDataKey(startKey[:], ino, firstBlock)
 
+	capHint := int(min(lastBlock-firstBlock+1, uint64(32)))
+	hits = make([]scannedDataBlock, 0, capHint)
 	for valid := iter.SeekPrefixGE(startKey[:]); valid; valid = iter.Next() {
 		keyIno, blockIdx, decErr := DecodeDataKey(iter.Key())
 		if decErr != nil {
-			return decErr
+			return nil, decErr
 		}
 		if keyIno != ino || blockIdx > lastBlock {
 			break
 		}
 		ref, decErr := DecodeBlobRef(iter.Value())
 		if decErr != nil {
-			return decErr
+			return nil, decErr
 		}
+		hits = append(hits, scannedDataBlock{
+			blockIdx: blockIdx,
+			ref:      ref,
+		})
+	}
+	if iterErr := iter.Error(); iterErr != nil {
+		return nil, iterErr
+	}
+	return hits, nil
+}
 
-		blockStart := blockIdx * BlobSize
+func (s *StoreActor) readMultiBlocks(ctx context.Context, ino, firstBlock, lastBlock, offset, end uint64, out []byte, preZeroed bool) error {
+	hits, err := s.scanDataBlockRefs(ctx, ino, firstBlock, lastBlock)
+	if err != nil {
+		return err
+	}
+
+	filledEnd := offset
+	for _, h := range hits {
+		blockStart := h.blockIdx * BlobSize
 		blockEnd := blockStart + BlobSize
 		rangeStart := max(offset, blockStart)
 		rangeEnd := min(end, blockEnd)
 		if rangeStart >= rangeEnd {
 			continue
 		}
-		if err := s.readBlockSlice(ref, rangeStart, rangeEnd, offset, out); err != nil {
+		if !preZeroed && rangeStart > filledEnd {
+			clear(out[filledEnd-offset : rangeStart-offset])
+		}
+		if err := s.readBlockSlice(ctx, h.ref, rangeStart, rangeEnd, offset, out, preZeroed); err != nil {
 			return err
 		}
+		filledEnd = rangeEnd
 	}
-	return iter.Error()
+	if !preZeroed && filledEnd < end {
+		clear(out[filledEnd-offset : end-offset])
+	}
+	return nil
 }
 
-// readBlockSlice 从 ref 指向的物理封包区间读取 [rangeStart, rangeEnd) 填入 out。
-func (s *StoreActor) readBlockSlice(ref BlobRef, rangeStart, rangeEnd, baseOffset uint64, out []byte) error {
+// readBlockSlice 从 ref 指向的物理封包区间读取 [rangeStart, rangeEnd) 填入 out，
+// 仅对块内尾部稀疏未落盘区间执行清零，避免对有效物理载荷区间的双重写入。
+func (s *StoreActor) readBlockSlice(ctx context.Context, ref BlobRef, rangeStart, rangeEnd, baseOffset uint64, out []byte, preZeroed bool) error {
 	blobs := s.blobs
 	if blobs == nil {
 		return ErrIO
@@ -499,10 +609,18 @@ func (s *StoreActor) readBlockSlice(ref BlobRef, rangeStart, rangeEnd, baseOffse
 	reqLen := rangeEnd - rangeStart
 	dstStart := rangeStart - baseOffset
 	dst := out[dstStart : dstStart+reqLen]
-	clear(dst)
 	if inBlockStart >= uint64(ref.Length) {
+		if !preZeroed {
+			clear(dst)
+		}
 		return nil
 	}
 	n := min(reqLen, uint64(ref.Length)-inBlockStart)
-	return blobs.ReadAt(ref, int64(inBlockStart), dst[:n])
+	if err := blobs.ReadAtContext(ctx, ref, int64(inBlockStart), dst[:n]); err != nil {
+		return err
+	}
+	if !preZeroed && n < reqLen {
+		clear(dst[n:])
+	}
+	return nil
 }

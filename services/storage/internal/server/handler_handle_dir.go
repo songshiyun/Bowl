@@ -29,7 +29,7 @@ func (s *Server) Create(ctx context.Context, req *connect.Request[storagev1.Crea
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	attr, err := actor.Create(store.CreateReq{
+	attr, err := actor.Create(ctx, store.CreateReq{
 		ParentIno: msg.ParentIno,
 		Name:      msg.Name,
 		Mode:      msg.Mode,
@@ -72,7 +72,7 @@ func (s *Server) Fsync(ctx context.Context, req *connect.Request[storagev1.Fsync
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.Fsync(msg.Ino, msg.Epoch); err != nil {
+	if err := actor.Fsync(ctx, msg.Ino, msg.Epoch); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -95,7 +95,7 @@ func (s *Server) FsyncDir(ctx context.Context, req *connect.Request[storagev1.Fs
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.FsyncDir(msg.Ino, msg.Epoch); err != nil {
+	if err := actor.FsyncDir(ctx, msg.Ino, msg.Epoch); err != nil {
 		return nil, toConnectError(err)
 	}
 
@@ -115,7 +115,7 @@ func (s *Server) ReadDir(ctx context.Context, req *connect.Request[storagev1.Rea
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	res, err := actor.ReadDir(msg.Ino, msg.Offset, msg.Limit)
+	res, err := actor.ReadDir(ctx, msg.Ino, msg.Offset, msg.Limit)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -148,7 +148,7 @@ func (s *Server) ReadDirPlus(ctx context.Context, req *connect.Request[storagev1
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	res, err := actor.ReadDirPlus(msg.Ino, msg.Offset, msg.Limit)
+	res, err := actor.ReadDirPlus(ctx, msg.Ino, msg.Offset, msg.Limit)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
@@ -192,7 +192,7 @@ func (s *Server) Fallocate(ctx context.Context, req *connect.Request[storagev1.F
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, toConnectError(ctxErr)
 	}
-	if err := actor.Fallocate(msg.Ino, msg.Offset, msg.Length, msg.Mode, msg.Epoch); err != nil {
+	if err := actor.Fallocate(ctx, msg.Ino, msg.Offset, msg.Length, msg.Mode, msg.Epoch); err != nil {
 		return nil, toConnectError(err)
 	}
 

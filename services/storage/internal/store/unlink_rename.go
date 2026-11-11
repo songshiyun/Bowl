@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math"
 
@@ -174,13 +175,13 @@ func (s *StoreActor) applyInodeReclaimPlan(plan *inodeReclaimPlan) {
 }
 
 // Rmdir 在 Actor 双阶段循环内移除空目录并递减父目录 Nlink 与分支节点计数。
-func (s *StoreActor) Rmdir(parentIno uint64, name []byte, epoch ...uint64) error {
+func (s *StoreActor) Rmdir(ctx context.Context, parentIno uint64, name []byte, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opRmdir, ep)
+		return s.submitStaleEpoch(ctx, opRmdir, ep)
 	}
 	if err := validateNodeIno(parentIno); err != nil {
 		return err
@@ -197,7 +198,7 @@ func (s *StoreActor) Rmdir(parentIno uint64, name []byte, epoch ...uint64) error
 	cmd.op = opRmdir
 	cmd.epoch = ep
 	cmd.req = op
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateRmdirCmd(cmd *writeCmd) error {
@@ -300,13 +301,13 @@ type cleanOrphansOp struct {
 
 // Unlink 在 Actor 双阶段循环内移除非目录目录项并递减目标节点 Nlink；
 // 当 Nlink 归零时按 openHandle 转为孤儿节点或直接物理回收。
-func (s *StoreActor) Unlink(parentIno uint64, name []byte, openHandle bool, epoch ...uint64) error {
+func (s *StoreActor) Unlink(ctx context.Context, parentIno uint64, name []byte, openHandle bool, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opUnlink, ep)
+		return s.submitStaleEpoch(ctx, opUnlink, ep)
 	}
 	if err := validateNodeIno(parentIno); err != nil {
 		return err
@@ -324,7 +325,7 @@ func (s *StoreActor) Unlink(parentIno uint64, name []byte, openHandle bool, epoc
 	cmd.op = opUnlink
 	cmd.epoch = ep
 	cmd.req = op
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateUnlinkCmd(cmd *writeCmd) error {
@@ -406,13 +407,13 @@ func (s *StoreActor) mutateUnlinkCmd(cmd *writeCmd) {
 }
 
 // PurgeOrphanInode 在 Actor 双阶段循环内物理清理指定孤儿节点及其关联 XattrKey、DataKey 与配额统计。
-func (s *StoreActor) PurgeOrphanInode(ino uint64, epoch ...uint64) error {
+func (s *StoreActor) PurgeOrphanInode(ctx context.Context, ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	ep := resolveEpoch(epoch)
 	if s.isDefinitelyStaleEpoch(ep) {
-		return s.submitStaleEpoch(opPurgeOrphan, ep)
+		return s.submitStaleEpoch(ctx, opPurgeOrphan, ep)
 	}
 	if err := validateNodeIno(ino); err != nil {
 		return err
@@ -423,7 +424,7 @@ func (s *StoreActor) PurgeOrphanInode(ino uint64, epoch ...uint64) error {
 	cmd.op = opPurgeOrphan
 	cmd.epoch = ep
 	cmd.req = op
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validatePurgeOrphanCmd(cmd *writeCmd) error {
@@ -463,7 +464,7 @@ func (s *StoreActor) mutatePurgeOrphanCmd(cmd *writeCmd) {
 }
 
 // CleanOrphans 在 Actor 双阶段循环内批量扫描并清理分支内所有孤儿节点。
-func (s *StoreActor) CleanOrphans() error {
+func (s *StoreActor) CleanOrphans(ctx context.Context) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -472,7 +473,7 @@ func (s *StoreActor) CleanOrphans() error {
 	cmd := s.acquireCmd()
 	cmd.op = opCleanOrphans
 	cmd.req = op
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) collectOrphanInodes(reader pebbleReader) (inos []uint64, err error) {
@@ -613,12 +614,12 @@ func (s *StoreActor) isSubdirectory(reader pebbleReader, childIno, ancestorIno u
 // Rename 在 Actor 双阶段循环内执行目录项重命名（支持默认覆盖、RenameNoreplace 与 RenameExchange）。
 //
 //nolint:gocritic // hugeParam: Rename 公开契约按值接收 RenameReq。
-func (s *StoreActor) Rename(req RenameReq) error {
+func (s *StoreActor) Rename(ctx context.Context, req RenameReq) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return s.submitStaleEpoch(opRename, req.Epoch)
+		return s.submitStaleEpoch(ctx, opRename, req.Epoch)
 	}
 	if req.Flags&RenameWhiteout != 0 {
 		return ErrNotSupported
@@ -647,7 +648,7 @@ func (s *StoreActor) Rename(req RenameReq) error {
 	cmd.op = opRename
 	cmd.epoch = req.Epoch
 	cmd.req = op
-	return s.submit(cmd)
+	return s.submit(ctx, cmd)
 }
 
 func (s *StoreActor) validateRenameCmd(cmd *writeCmd) error {

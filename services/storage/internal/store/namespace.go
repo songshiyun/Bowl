@@ -2,12 +2,15 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math"
 	"slices"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // MknodReq 定义 Mknod 节点创建参数。
@@ -127,12 +130,12 @@ func isDotOrDotDot(name []byte) bool {
 }
 
 // Mknod 在 Actor 双阶段循环内创建非目录节点（S_IFREG / S_IFCHR / S_IFBLK / S_IFIFO / S_IFSOCK）。
-func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
+func (s *StoreActor) Mknod(ctx context.Context, req MknodReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opMknod, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opMknod, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -151,7 +154,7 @@ func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
 	}
 
 	effMode := modeType | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opMknod, req.Epoch, &createNodeOp{
+	return s.submitCreateNode(ctx, opMknod, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -162,12 +165,12 @@ func (s *StoreActor) Mknod(req MknodReq) (Attribute, error) {
 }
 
 // Mkdir 在 Actor 双阶段循环内创建子目录并递增父目录 Nlink。
-func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
+func (s *StoreActor) Mkdir(ctx context.Context, req MkdirReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opMkdir, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opMkdir, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -184,7 +187,7 @@ func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
 	}
 
 	effMode := S_IFDIR | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opMkdir, req.Epoch, &createNodeOp{
+	return s.submitCreateNode(ctx, opMkdir, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -194,12 +197,12 @@ func (s *StoreActor) Mkdir(req MkdirReq) (Attribute, error) {
 }
 
 // Create 在 Actor 双阶段循环内创建常规文件节点。
-func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
+func (s *StoreActor) Create(ctx context.Context, req CreateReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opCreate, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opCreate, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -219,7 +222,7 @@ func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
 	}
 
 	effMode := S_IFREG | ((req.Mode & PermMask) &^ (req.Umask & 0o777))
-	return s.submitCreateNode(opCreate, req.Epoch, &createNodeOp{
+	return s.submitCreateNode(ctx, opCreate, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      effMode,
@@ -229,12 +232,12 @@ func (s *StoreActor) Create(req CreateReq) (Attribute, error) {
 }
 
 // Symlink 在 Actor 双阶段循环内创建符号链接节点。
-func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
+func (s *StoreActor) Symlink(ctx context.Context, req SymlinkReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opSymlink, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opSymlink, req.Epoch)
 	}
 	if err := validateNodeIno(req.ParentIno); err != nil {
 		return Attribute{}, err
@@ -249,7 +252,7 @@ func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
 		return Attribute{}, ErrNameTooLong
 	}
 
-	return s.submitCreateNode(opSymlink, req.Epoch, &createNodeOp{
+	return s.submitCreateNode(ctx, opSymlink, req.Epoch, &createNodeOp{
 		parentIno: req.ParentIno,
 		name:      req.Name,
 		mode:      S_IFLNK | 0o777,
@@ -260,12 +263,12 @@ func (s *StoreActor) Symlink(req SymlinkReq) (Attribute, error) {
 }
 
 // Link 在 Actor 双阶段循环内为已存在的非目录节点创建硬链接并递增 Nlink。
-func (s *StoreActor) Link(req LinkReq) (Attribute, error) {
+func (s *StoreActor) Link(ctx context.Context, req LinkReq) (Attribute, error) {
 	if s.readOnly {
 		return Attribute{}, ErrReadOnly
 	}
 	if s.isDefinitelyStaleEpoch(req.Epoch) {
-		return Attribute{}, s.submitStaleEpoch(opLink, req.Epoch)
+		return Attribute{}, s.submitStaleEpoch(ctx, opLink, req.Epoch)
 	}
 	if err := validateNodeIno(req.Ino); err != nil {
 		return Attribute{}, err
@@ -286,18 +289,18 @@ func (s *StoreActor) Link(req LinkReq) (Attribute, error) {
 	cmd.op = opLink
 	cmd.epoch = req.Epoch
 	cmd.req = op
-	if err := s.submit(cmd); err != nil {
+	if err := s.submit(ctx, cmd); err != nil {
 		return Attribute{}, err
 	}
 	return op.attr, nil
 }
 
-func (s *StoreActor) submitCreateNode(kind opKind, epoch uint64, op *createNodeOp) (Attribute, error) {
+func (s *StoreActor) submitCreateNode(ctx context.Context, kind opKind, epoch uint64, op *createNodeOp) (Attribute, error) {
 	cmd := s.acquireCmd()
 	cmd.op = kind
 	cmd.epoch = epoch
 	cmd.req = op
-	if err := s.submit(cmd); err != nil {
+	if err := s.submit(ctx, cmd); err != nil {
 		return Attribute{}, err
 	}
 	return op.attr, nil
@@ -483,7 +486,13 @@ func (s *StoreActor) mutateLinkCmd(cmd *writeCmd) {
 }
 
 // Lookup 在并发直读快路径（lifecycleMu.RLock()）解析父目录下指定名称，返回 Entry 与叠加 dirtyAtime 后的 Attribute。
-func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, error) {
+func (s *StoreActor) Lookup(ctx context.Context, parentIno uint64, name []byte) (Entry, Attribute, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpLookup, time.Since(opStart))
+		}()
+	}
 	if err := validateNodeIno(parentIno); err != nil {
 		return Entry{}, Attribute{}, err
 	}
@@ -500,7 +509,7 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 	}
 	defer unlock()
 
-	parent, err := s.readInode(s.db, parentIno)
+	parent, err := s.readInodeFromDB(ctx, parentIno)
 	if err != nil {
 		return Entry{}, Attribute{}, err
 	}
@@ -509,7 +518,7 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 	}
 
 	if bytes.Equal(name, []byte("..")) {
-		err = s.checkInodeLive(s.db, &parent)
+		err = s.checkInodeLiveFromDB(ctx, &parent)
 		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
@@ -521,11 +530,11 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 			return Entry{}, Attribute{}, ErrNotFound
 		}
 		var grandparent Inode
-		grandparent, err = s.readInode(s.db, parent.ParentIno)
+		grandparent, err = s.readInodeFromDB(ctx, parent.ParentIno)
 		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
-		err = s.checkInodeLive(s.db, &grandparent)
+		err = s.checkInodeLiveFromDB(ctx, &grandparent)
 		if err != nil {
 			return Entry{}, Attribute{}, err
 		}
@@ -544,11 +553,11 @@ func (s *StoreActor) Lookup(parentIno uint64, name []byte) (Entry, Attribute, er
 		return Entry{}, Attribute{}, ErrNotFound
 	}
 
-	entry, err := s.readEntry(s.db, parentIno, name)
+	entry, err := s.readEntryFromDB(ctx, parentIno, name)
 	if err != nil {
 		return Entry{}, Attribute{}, err
 	}
-	child, err := s.readInode(s.db, entry.Ino)
+	child, err := s.readInodeFromDB(ctx, entry.Ino)
 	if err != nil {
 		return Entry{}, Attribute{}, err
 	}
@@ -574,8 +583,29 @@ func (s *StoreActor) readEntry(reader pebbleReader, parentIno uint64, name []byt
 	return entry, nil
 }
 
+func (s *StoreActor) readEntryFromDB(ctx context.Context, parentIno uint64, name []byte) (Entry, error) {
+	val, closer, err := s.dbGetPoint(ctx, EntryKey(parentIno, name))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return Entry{}, ErrNotFound
+	}
+	if err != nil {
+		return Entry{}, err
+	}
+	entry, decErr := DecodeEntry(val)
+	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
+		return Entry{}, errors.Join(decErr, closeErr)
+	}
+	return entry, nil
+}
+
 // Readlink 在并发直读快路径（lifecycleMu.RLock()）读取符号链接目标路径并按策略非阻塞登记 dirtyAtime。
-func (s *StoreActor) Readlink(ino uint64) ([]byte, error) {
+func (s *StoreActor) Readlink(ctx context.Context, ino uint64) ([]byte, error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpReadlink, time.Since(opStart))
+		}()
+	}
 	if err := validateNodeIno(ino); err != nil {
 		return nil, err
 	}
@@ -585,11 +615,11 @@ func (s *StoreActor) Readlink(ino uint64) ([]byte, error) {
 	}
 	defer unlock()
 
-	inode, err := s.readInode(s.db, ino)
+	inode, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkInodeLive(s.db, &inode); err != nil {
+	if err := s.checkInodeLiveFromDB(ctx, &inode); err != nil {
 		return nil, err
 	}
 	if inode.Mode&S_IFMT != S_IFLNK {
@@ -629,7 +659,13 @@ func (s *StoreActor) touchReadAtime(inode *Inode) {
 
 // ReadDir 在并发直读快路径（lifecycleMu.RLock()）通过 db.NewIter(nil) + iter.SeekPrefixGE(EntryPrefix(ino))
 // 触发 15B 前缀布隆过滤器扫描目录项，合成 "." 与 ".." 并按游标 offset 分页返回。
-func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []DirEntry, err error) {
+func (s *StoreActor) ReadDir(ctx context.Context, ino, offset uint64, maxEntries uint32) (entries []DirEntry, err error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpReadDir, time.Since(opStart))
+		}()
+	}
 	err = validateNodeIno(ino)
 	if err != nil {
 		return nil, err
@@ -643,7 +679,7 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 	}
 	defer unlock()
 
-	dir, err := s.readInode(s.db, ino)
+	dir, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +687,7 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 		return nil, ErrNotDir
 	}
 	if dir.Nlink == 0 {
-		err = s.checkInodeLive(s.db, &dir)
+		err = s.checkInodeLiveFromDB(ctx, &dir)
 		if err != nil {
 			return nil, err
 		}
@@ -671,7 +707,7 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 		dotDotIno := dir.Ino
 		dotDotMode := dir.Mode
 		if ino != RootIno && dir.ParentIno > 0 {
-			parent, readErr := s.readInode(s.db, dir.ParentIno)
+			parent, readErr := s.readInodeFromDB(ctx, dir.ParentIno)
 			if readErr == nil {
 				dotDotIno = parent.Ino
 				dotDotMode = parent.Mode
@@ -689,6 +725,24 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 	if len(entries) == limit {
 		return entries, nil
 	}
+
+	var scanSpan trace.Span
+	if isSpanRecording(ctx) {
+		_, scanSpan = startChildSpan(ctx, "store.KVScan",
+			attribute.String("scan.kind", "dir_entries"),
+			attribute.Int64("inode.ino", int64(ino)),
+		)
+	}
+	var scanStart time.Time
+	if s.metrics != nil {
+		scanStart = time.Now()
+	}
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.observeKVPrefixScan(time.Since(scanStart))
+		}
+		finishSpan(scanSpan, err)
+	}()
 
 	// 严格使用 db.NewIter(nil) + iter.SeekPrefixGE(EntryPrefix(ino)) 激活 15B Prefix Bloom Filter。
 	iter, err := s.db.NewIter(nil)
@@ -737,7 +791,13 @@ func (s *StoreActor) ReadDir(ino, offset uint64, maxEntries uint32) (entries []D
 // ReadDirPlus 在并发直读快路径（lifecycleMu.RLock()）扫出当前页目录项后，
 // 将子项按 Ino 升序排序并复用同一个 iter 循环调用 iter.SeekPrefixGE(InodeKey(ino))
 // 激活 Pebble TrySeekUsingNext 批量获取子项 Attribute。
-func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries []DirEntryPlus, err error) {
+func (s *StoreActor) ReadDirPlus(ctx context.Context, ino, offset uint64, maxEntries uint32) (entries []DirEntryPlus, err error) {
+	if s.metrics != nil {
+		opStart := time.Now()
+		defer func() {
+			s.metrics.observeReadOp(readOpReadDirPlus, time.Since(opStart))
+		}()
+	}
 	err = validateNodeIno(ino)
 	if err != nil {
 		return nil, err
@@ -751,7 +811,7 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 	}
 	defer unlock()
 
-	dir, err := s.readInode(s.db, ino)
+	dir, err := s.readInodeFromDB(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
@@ -759,7 +819,7 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 		return nil, ErrNotDir
 	}
 	if dir.Nlink == 0 {
-		err = s.checkInodeLive(s.db, &dir)
+		err = s.checkInodeLiveFromDB(ctx, &dir)
 		if err != nil {
 			return nil, err
 		}
@@ -783,7 +843,7 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 		parentIno := dir.Ino
 		parentMode := dir.Mode
 		if ino != RootIno && dir.ParentIno > 0 {
-			parent, readErr := s.readInode(s.db, dir.ParentIno)
+			parent, readErr := s.readInodeFromDB(ctx, dir.ParentIno)
 			if readErr == nil {
 				s.overlayAtime(&parent)
 				parentAttr = parent.ToAttribute()
@@ -804,6 +864,24 @@ func (s *StoreActor) ReadDirPlus(ino, offset uint64, maxEntries uint32) (entries
 	if len(entries) == limit {
 		return entries, nil
 	}
+
+	var scanSpan trace.Span
+	if isSpanRecording(ctx) {
+		_, scanSpan = startChildSpan(ctx, "store.KVScan",
+			attribute.String("scan.kind", "dir_entries_plus"),
+			attribute.Int64("inode.ino", int64(ino)),
+		)
+	}
+	var scanStart time.Time
+	if s.metrics != nil {
+		scanStart = time.Now()
+	}
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.observeKVPrefixScan(time.Since(scanStart))
+		}
+		finishSpan(scanSpan, err)
+	}()
 
 	iter, err := s.db.NewIter(nil)
 	if err != nil {

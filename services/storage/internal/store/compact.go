@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"slices"
 )
@@ -27,7 +28,7 @@ type compactRelocateOp struct {
 //     - Phase A：通过 s.batch.Get(DataKey(ino, blockIdx)) 原子 CAS 校验目标节点仍存活且 curRef == oldRef；若已被前台并发覆写、截断或删除，跳过指针更新并将预写 newRef 记为死空间（不计入 LiveBytes）；
 //     - Phase B：仅对通过 CAS 校验的块将 DataKey 更新为 newRef，扣减 srcPackID 的 LiveBytes 并累加 newRef.PackID 的 LiveBytes；
 //  4. 当 srcPackID 的 LiveBytes 归零后，强制先完成目标新 .pack 的 fdatasync（blobs.Sync()）与 Pebble WAL Sync（FlushWAL()）双重持久化屏障，随后删除旧 .pack 文件。
-func (s *StoreActor) CompactPacks() error {
+func (s *StoreActor) CompactPacks(ctx context.Context) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -42,7 +43,7 @@ func (s *StoreActor) CompactPacks() error {
 		return ErrIO
 	}
 
-	candidates, err := s.selectLowWatermarkPacks()
+	candidates, err := s.selectLowWatermarkPacks(ctx)
 	if err != nil {
 		return err
 	}
@@ -98,7 +99,7 @@ func (s *StoreActor) CompactPacks() error {
 		cmd.req = op
 		cmd.stagedBlobs = staged
 
-		relocErr := s.enqueueAndWait(cmd)
+		relocErr := s.enqueueAndWait(ctx, cmd)
 		if relocErr != nil {
 			s.unpinPackIDs(candidates)
 			return relocErr
@@ -114,18 +115,18 @@ func (s *StoreActor) CompactPacks() error {
 	}
 
 	// 触发已归零候选封口包的 sys:pack 删除与 WAL Sync + RemovePack
-	if err := s.reapZeroLiveCandidatePacks(candidates); err != nil {
+	if err := s.reapZeroLiveCandidatePacks(ctx, candidates); err != nil {
 		return err
 	}
 	return s.FlushWAL()
 }
 
-func (s *StoreActor) selectLowWatermarkPacks() ([]uint64, error) {
+func (s *StoreActor) selectLowWatermarkPacks(ctx context.Context) ([]uint64, error) {
 	var candidates []uint64
 	cmd := s.acquireCmd()
 	cmd.op = opCompactSelect
 	cmd.req = &candidates
-	if err := s.enqueueAndWait(cmd); err != nil {
+	if err := s.enqueueAndWait(ctx, cmd); err != nil {
 		return nil, err
 	}
 	return candidates, nil
@@ -237,14 +238,14 @@ func (s *StoreActor) mutateCompactRelocateCmd(cmd *writeCmd) {
 	}
 }
 
-func (s *StoreActor) reapZeroLiveCandidatePacks(candidates []uint64) error {
+func (s *StoreActor) reapZeroLiveCandidatePacks(ctx context.Context, candidates []uint64) error {
 	if len(candidates) == 0 {
 		return nil
 	}
 	cmd := s.acquireCmd()
 	cmd.op = opCompactReap
 	cmd.req = candidates
-	return s.enqueueAndWait(cmd)
+	return s.enqueueAndWait(ctx, cmd)
 }
 
 func (s *StoreActor) mutateCompactReapCmd(cmd *writeCmd) {

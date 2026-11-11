@@ -81,6 +81,8 @@ services:
         condition: service_completed_successfully
       jaeger:
         condition: service_started
+      alloy:
+        condition: service_started
     networks:
       - bowl-net
 
@@ -140,8 +142,9 @@ services:
       - bowl-net
 
   # ==============================================================================
-  # Logs Collector (Grafana Alloy — http://127.0.0.1:9123)
-  # 自动采集 bowl 项目所有容器日志推送至 Loki
+  # Telemetry Collector (Grafana Alloy — http://127.0.0.1:9123)
+  # 1) 采集 bowl 容器日志与 pebble_events.log 推送至 Loki
+  # 2) OTLP 接收链路追踪并执行 >10ms 慢请求 / ERROR Span 尾部保留后推送至 Jaeger
   # ==============================================================================
   alloy:
     image: grafana/alloy:v1.7.1
@@ -154,12 +157,16 @@ services:
       - "/etc/alloy/config.alloy"
     ports:
       - "127.0.0.1:${ALLOY_PORT:-9123}:12345"
+      - "127.0.0.1:${ALLOY_OTLP_GRPC_PORT:-9417}:4317"
+      - "127.0.0.1:${ALLOY_OTLP_HTTP_PORT:-9418}:4318"
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - storage_data:/var/lib/bowl/data:ro
       - alloy_data:/var/lib/alloy/data
     depends_on:
       - loki
+      - jaeger
     networks:
       - bowl-net
 
