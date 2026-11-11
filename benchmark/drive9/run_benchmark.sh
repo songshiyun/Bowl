@@ -841,6 +841,7 @@ DROP_CMD="sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecki
 
 # 通过轻量外部导入钩子在 timed() 计时窗外打细粒度快照与 pprof（不改动 drive9_fuse_bench.py 任何逻辑与参数）
 SERVER_PRIV_IP="${SERVER_PRIV_IP}" DROP_CMD="${DROP_CMD}" DRIVE9_GIT_COMMIT="${DRIVE9_GIT_COMMIT}" python3 - <<'PY_BOWL_COLD'
+import functools
 import os
 import subprocess
 import sys
@@ -891,66 +892,75 @@ orig_run_cmd = b.run_command
 state = {"sw": 0, "sr": 0, "smw": 0, "mk": 0, "mc": 0, "go_prof": None, "sr_prof": None, "smw_prof": None}
 
 
-def hooked_seq_write(base, mib, config):
+@functools.wraps(orig_seq_write)
+def hooked_seq_write(root, mib, config, *args, **kwargs):
     idx = state["sw"]
     state["sw"] += 1
     if idx == 0:
         run_helper("capture_bowl_snapshot 'd9_cold_io_pre'")
-    return orig_seq_write(base, mib, config)
+    return orig_seq_write(root, mib, config, *args, **kwargs)
 
 
-def hooked_seq_read(base, mib, config):
+@functools.wraps(orig_seq_read)
+def hooked_seq_read(root, mib, config, *args, **kwargs):
     idx = state["sr"]
     state["sr"] += 1
     if idx == 0:
         run_helper("capture_bowl_snapshot 'd9_cold_seq_read_pre'")
         state["sr_prof"] = start_async_cpu("seq_read", 6)
-    res = orig_seq_read(base, mib, config)
-    if idx == runs - 1:
-        finish_async_prof("seq_read", state["sr_prof"])
-        state["sr_prof"] = None
-        run_helper("capture_bowl_snapshot 'd9_cold_seq_read_post'")
-    return res
+    try:
+        return orig_seq_read(root, mib, config, *args, **kwargs)
+    finally:
+        if idx == runs - 1:
+            finish_async_prof("seq_read", state["sr_prof"])
+            state["sr_prof"] = None
+            run_helper("capture_bowl_snapshot 'd9_cold_seq_read_post'")
 
 
-def hooked_small_write(base, count, config):
+@functools.wraps(orig_small_write)
+def hooked_small_write(root, count, config, *args, **kwargs):
     idx = state["smw"]
     state["smw"] += 1
     if idx == 0:
         run_helper("capture_bowl_snapshot 'd9_cold_small_write_fsync_pre'")
         state["smw_prof"] = start_async_cpu("small_write_fsync", 8)
-    res = orig_small_write(base, count, config)
-    if idx == runs - 1:
-        finish_async_prof("small_write_fsync", state["smw_prof"])
-        state["smw_prof"] = None
-        run_helper("capture_bowl_snapshot 'd9_cold_small_write_fsync_post'")
-        run_helper("capture_bowl_snapshot 'd9_cold_io_post'")
-    return res
+    try:
+        return orig_small_write(root, count, config, *args, **kwargs)
+    finally:
+        if idx == runs - 1:
+            finish_async_prof("small_write_fsync", state["smw_prof"])
+            state["smw_prof"] = None
+            run_helper("capture_bowl_snapshot 'd9_cold_small_write_fsync_post'")
+            run_helper("capture_bowl_snapshot 'd9_cold_io_post'")
 
 
-def hooked_mkdir(base, count, config):
+@functools.wraps(orig_mkdir)
+def hooked_mkdir(root, count, config, *args, **kwargs):
     idx = state["mk"]
     state["mk"] += 1
     if idx == 0:
         run_helper("capture_bowl_snapshot 'd9_cold_meta_macro_pre'")
-    return orig_mkdir(base, count, config)
+    return orig_mkdir(root, count, config, *args, **kwargs)
 
 
-def hooked_run_cmd(cmd, cwd):
+@functools.wraps(orig_run_cmd)
+def hooked_run_cmd(cmd, cwd=None, *args, **kwargs):
     if cmd and cmd[0] == "go" and state["go_prof"] is None:
         state["go_prof"] = start_async_cpu("macro_go_build", 10)
-    return orig_run_cmd(cmd, cwd)
+    return orig_run_cmd(cmd, cwd, *args, **kwargs)
 
 
-def hooked_macro(base, config, hot, errors_out):
+@functools.wraps(orig_macro)
+def hooked_macro(root, config, hot, errors_out, *args, **kwargs):
     idx = state["mc"]
     state["mc"] += 1
-    res = orig_macro(base, config, hot, errors_out)
-    if idx == runs - 1:
-        finish_async_prof("macro_go_build", state["go_prof"])
-        state["go_prof"] = None
-        run_helper("capture_bowl_snapshot 'd9_cold_meta_macro_post'")
-    return res
+    try:
+        return orig_macro(root, config, hot, errors_out, *args, **kwargs)
+    finally:
+        if idx == runs - 1:
+            finish_async_prof("macro_go_build", state["go_prof"])
+            state["go_prof"] = None
+            run_helper("capture_bowl_snapshot 'd9_cold_meta_macro_post'")
 
 
 b.bench_sequential_write = hooked_seq_write
