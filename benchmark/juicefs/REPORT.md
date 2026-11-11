@@ -6,8 +6,8 @@
 
 本次评测采用同规格双机（4 vCPU / 32 GiB 内存）、VPC 私网与 894 GiB `local_ssd_pro` 本地 NVMe SSD 数据盘，服务端按目标隔离运行以下三组存储栈：
 
-1. **Bowl（PostgreSQL 16 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack）**：采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`；文件数据落在本地 NVMe SSD 的 `packs/pack-<id>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、常驻句柄池与 `64 MiB` 分片热块缓存，支持活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及已封口包自动回收。
-   客户端采用无会话 `RawFS` 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。
+1. **Bowl（PostgreSQL 16 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack）**：采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；文件数据落在本地 NVMe SSD 的 `packs/<pack_id_hex16>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、常驻句柄池与尾块分片热缓存（`AppendBlocks` 整块顺序写跳过用户态冗余拷贝），配合服务端 `WriteRequest` 池化零分配解码、活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及已封口包自动回收。
+   客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；配备对称的 `WriteBehindCoordinator`（连续顺序写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发 Write RPC 流水线，`<64 KiB` 小写直通）、`ReadAheadCoordinator` 顺序预读与双端 `8 MiB / 32 MiB` HTTP/2 流控窗口，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。
 2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块本地 NVMe SSD 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。
 3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`，AOF 落本地 NVMe SSD）作为元数据引擎 + Server 节点本地 NVMe SSD rclone S3 存储（`--trash-days 0`）。
 
@@ -15,19 +15,19 @@
 
 | 测试维度 | 指标项 | Bowl (Pebble) | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JuiceFS(PG) | Bowl vs JuiceFS(Redis) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `1,076.63 MiB/s` | `690.66 MiB/s` | `679.95 MiB/s` | **1.56x** | **1.58x** |
-| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,671.20 MiB/s` | `1,649.37 MiB/s` | `1,684.02 MiB/s` | **1.01x** | **0.99x** |
-| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `2,028.10 files/s` | `740.70 files/s` | `1,128.90 files/s` | **2.74x** | **1.80x** |
-| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `4,089.90 files/s` | `3,028.80 files/s` | `3,196.30 files/s` | **1.35x** | **1.28x** |
-| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `103,368.30 files/s` | `13,203.80 files/s` | `46,341.80 files/s` | **7.83x** | **2.23x** |
-| `fio` 吞吐量 (bs=4M) | **单流顺序写 (1 job · 4GiB)** | `429.13 MiB/s` | `678.71 MiB/s` | `671.15 MiB/s` | **0.63x** | **0.64x** |
-| `fio` 吞吐量 (bs=4M) | **单流顺序读 (1 job · 4GiB)** | `738.42 MiB/s` | `1,384.72 MiB/s` | `1,383.32 MiB/s` | **0.53x** | **0.53x** |
-| `fio` 吞吐量 (bs=4M) | **16 并发顺序写 (16 jobs · 16GiB)** | `1,059.29 MiB/s` | `670.46 MiB/s` | `669.06 MiB/s` | **1.58x** | **1.58x** |
-| `fio` 吞吐量 (bs=4M) | **16 并发顺序读 (16 jobs · 16GiB)** | `1,400.58 MiB/s` | `1,606.43 MiB/s` | `1,495.71 MiB/s` | **0.87x** | **0.94x** |
-| `mdtest` (12,440 节点) | **目录创建 (Directory creation)** | `4,274.69 ops/s` | `548.63 ops/s` | `2,357.86 ops/s` | **7.79x** | **1.81x** |
-| `mdtest` (12,440 节点) | **文件创建 (File creation)** | `2,531.41 ops/s` | `1,302.61 ops/s` | `2,274.95 ops/s` | **1.94x** | **1.11x** |
-| `mdtest` (12,440 节点) | **文件 Stat (File stat)** | `102,006.51 ops/s` | `4,870.85 ops/s` | `16,010.14 ops/s` | **20.94x** | **6.37x** |
-| `mdtest` (12,440 节点) | **文件删除 (File removal)** | `2,634.70 ops/s` | `1,064.88 ops/s` | `2,147.08 ops/s` | **2.47x** | **1.23x** |
+| `juicefs bench` (-p 4) | **大文件并发写 (1GiB×4)** | `1,679.99 MiB/s` | `691.35 MiB/s` | `683.86 MiB/s` | **2.43x** | **2.46x** |
+| `juicefs bench` (-p 4) | **大文件并发读 (1GiB×4)** | `1,403.37 MiB/s` | `1,633.01 MiB/s` | `1,645.17 MiB/s` | **0.86x** | **0.85x** |
+| `juicefs bench` (-p 4) | **小文件并发写 (128KiB×400)** | `790.70 files/s` | `737.00 files/s` | `1,143.80 files/s` | **1.07x** | **0.69x** |
+| `juicefs bench` (-p 4) | **小文件并发读 (128KiB×400)** | `967.20 files/s` | `3,042.50 files/s` | `4,798.60 files/s` | **0.32x** | **0.20x** |
+| `juicefs bench` (-p 4) | **小文件并发 Stat (400 files)** | `93,191.40 files/s` | `13,110.80 files/s` | `42,575.90 files/s` | **7.11x** | **2.19x** |
+| `fio` 吞吐量 (bs=4M) | **单流顺序写 (1 job · 4GiB)** | `1,339.44 MiB/s` | `694.71 MiB/s` | `684.03 MiB/s` | **1.93x** | **1.96x** |
+| `fio` 吞吐量 (bs=4M) | **单流顺序读 (1 job · 4GiB)** | `622.02 MiB/s` | `1,326.85 MiB/s` | `1,343.83 MiB/s` | **0.47x** | **0.46x** |
+| `fio` 吞吐量 (bs=4M) | **16 并发顺序写 (16 jobs · 16GiB)** | `1,305.81 MiB/s` | `678.20 MiB/s` | `677.44 MiB/s` | **1.93x** | **1.93x** |
+| `fio` 吞吐量 (bs=4M) | **16 并发顺序读 (16 jobs · 16GiB)** | `1,397.95 MiB/s` | `1,544.93 MiB/s` | `1,574.93 MiB/s` | **0.90x** | **0.89x** |
+| `mdtest` (12,440 节点) | **目录创建 (Directory creation)** | `389.62 ops/s` | `730.13 ops/s` | `2,303.83 ops/s` | **0.53x** | **0.17x** |
+| `mdtest` (12,440 节点) | **文件创建 (File creation)** | `294.99 ops/s` | `1,272.80 ops/s` | `2,250.97 ops/s` | **0.23x** | **0.13x** |
+| `mdtest` (12,440 节点) | **文件 Stat (File stat)** | `78,492.38 ops/s` | `4,688.36 ops/s` | `16,888.08 ops/s` | **16.74x** | **4.65x** |
+| `mdtest` (12,440 节点) | **文件删除 (File removal)** | `296.88 ops/s` | `1,041.59 ops/s` | `2,207.59 ops/s` | **0.29x** | **0.13x** |
 
 ---
 
@@ -37,31 +37,31 @@
 
 | 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 数据盘 (本地 NVMe SSD) | 系统盘 | 操作系统与内核 | VPC 私网 IP |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Server 服务端** (`bowl-bench-server`) | `i-rj9byi6it3dlf5vzetpn` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme1n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.193` |
-| **Client 客户端** (`bowl-bench-client`) | `i-rj9byi6it3dlf5vzetpo` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.192` |
+| **Server 服务端** (`bowl-bench-server`) | `i-rj919a36elzt54mhmlox` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme1n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.192` |
+| **Client 客户端** (`bowl-bench-client`) | `i-rj919a36elzt54mhmloy` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.193` |
 
 ### 2.2 同可用区 VPC 内网与 Server 节点本地 NVMe SSD 物理基线
 
 | 基线指标 | 实测数值 | 采集方式与说明 |
 | :--- | :--- | :--- |
 | **VPC ID / 交换机 ID** | `vpc-rj9gjwyzzh4v0cn576fhu` / `vsw-rj9rsvsgpihtsgxej6me5` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
-| **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `0.032/0.056/0.258/0.049` ms | `ping -c 20 -i 0.05 172.16.1.193` |
-| **内网单流 TCP 吞吐带宽** | `21.22` Gbps | `iperf3 -c 172.16.1.193 -t 5` |
+| **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `0.029/0.061/0.256/0.054` ms | `ping -c 20 -i 0.05 172.16.1.192` |
+| **内网单流 TCP 吞吐带宽** | `21.22` Gbps | `iperf3 -c 172.16.1.192 -t 5` |
 | **Server 本地 NVMe SSD (894 GiB) 顺序写基线** | `1998.05` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |
 | **Server 本地 NVMe SSD (894 GiB) 顺序读基线** | `3494.88` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |
-| **Server 本地 NVMe SSD 4 KiB 随机写 / 读 IOPS** | `69951` / `699877` IOPS | Server 本地 `fio --bs=4k --numjobs=4 --iodepth=32 --direct=1` |
-| **Server 本地 NVMe SSD 4 KiB 单流 `fsync` 写** | `51499` IOPS (P99 `61.8` µs) | Server 本地 `fio --bs=4k --numjobs=1 --direct=1 --fsync=1` |
+| **Server 本地 NVMe SSD 4 KiB 随机写 / 读 IOPS** | `69954` / `695711` IOPS | Server 本地 `fio --bs=4k --numjobs=4 --iodepth=32 --direct=1` |
+| **Server 本地 NVMe SSD 4 KiB 单流 `fsync` 写** | `49885` IOPS (P99 `82.4` µs) | Server 本地 `fio --bs=4k --numjobs=1 --direct=1 --fsync=1` |
 
 ### 2.3 软件版本与三组存储栈配置矩阵
 
 | 组件 / 参数项 | Bowl (`bowl`) | JuiceFS + PG (`jfs_pg`) | JuiceFS + Redis (`jfs_redis`) |
 | :--- | :--- | :--- | :--- |
-| **客户端版本** | Bowl `c6e884e` (`fusermount3` fusermount3 version: 3.14.0) | `juicefs version 1.2.1+2024-08-30.cd871d1` | `juicefs version 1.2.1+2024-08-30.cd871d1` |
+| **客户端版本** | Bowl `9c60a34-dirty` (`fusermount3` fusermount3 version: 3.14.0) | `juicefs version 1.2.1+2024-08-30.cd871d1` | `juicefs version 1.2.1+2024-08-30.cd871d1` |
 | **控制面 / 文件元数据** | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) 控制面 / 单盘 `StoreActor` Pebble | psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) (`jfs_pg` 库) | Redis server v=7.0.15 (`AOF everysec`) |
-| **数据块存储 (Server 节点本地 NVMe SSD)** | 单盘 Pebble + `packs/pack-<id>.pack` `64 MiB` 封包文件 (`/var/lib/bowl/data`) | rclone S3 (`http://172.16.1.193:9001/jfs-pg`) | rclone S3 (`http://172.16.1.193:9001/jfs-redis`) |
+| **数据块存储 (Server 节点本地 NVMe SSD)** | 单盘 Pebble + `packs/<pack_id_hex16>.pack` `64 MiB` 封包文件 (`/var/lib/bowl/data`) | rclone S3 (`http://172.16.1.192:9001/jfs-pg`) | rclone S3 (`http://172.16.1.192:9001/jfs-redis`) |
 | **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |
-| **回写缓存与持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV`；Group Commit `pebble.NoSync` + Fsync 双层并行落盘屏障 | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |
-| **数据分片** | `64 MiB` `.pack` Append-Only 封包 + `256 KiB` 逻辑块网格 + `64 MiB` 分片热块缓存 + `ExtendTail` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |
+| **回写缓存与持久化路径** | `WriteBehindCoordinator`（`4 MiB × 4` 并发顺序写流水线，`writeback_cache=false`）+ 双端 `8M/32M` H2C 窗口 + `WriteRequest` 池化零分配解码；Group Commit `pebble.NoSync` + Fsync 双层并行落盘屏障 | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |
+| **数据分片** | `64 MiB` `.pack` Append-Only 封包 + `256 KiB` 逻辑块网格 + `AppendBlocks` 零冗余拷贝 + 尾块热缓存 + `ExtendTail` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |
 | **访问时间策略 / 回收站** | `STORAGE_ATIME_MODE=noatime` | `--trash-days 0` (关闭回收站) | `--trash-days 0` (关闭回收站) |
 | **评测工具版本** | `juicefs bench` / `fio-3.36` / `mdtest-3.3.0` | 同左 | 同左 |
 
@@ -73,11 +73,11 @@
 
 | 测试项目 (`ITEM`) | Bowl | JuiceFS (PG 16) | JuiceFS (Redis 7) | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Write big file** | `1076.63 MiB/s (3.80 s/file)` | `690.66 MiB/s (5.93 s/file)` | `679.95 MiB/s (6.02 s/file)` | **1.56x** | **1.58x** |
-| **Read big file** | `1671.20 MiB/s (2.45 s/file)` | `1649.37 MiB/s (2.48 s/file)` | `1684.02 MiB/s (2.43 s/file)` | **1.01x** | **0.99x** |
-| **Write small file** | `2028.10 files/s (1.97 ms/file)` | `740.70 files/s (5.40 ms/file)` | `1128.90 files/s (3.54 ms/file)` | **2.74x** | **1.80x** |
-| **Read small file** | `4089.90 files/s (0.98 ms/file)` | `3028.80 files/s (1.32 ms/file)` | `3196.30 files/s (1.25 ms/file)` | **1.35x** | **1.28x** |
-| **Stat file** | `103368.30 files/s (0.04 ms/file)` | `13203.80 files/s (0.30 ms/file)` | `46341.80 files/s (0.09 ms/file)` | **7.83x** | **2.23x** |
+| **Write big file** | `1679.99 MiB/s (2.44 s/file)` | `691.35 MiB/s (5.92 s/file)` | `683.86 MiB/s (5.99 s/file)` | **2.43x** | **2.46x** |
+| **Read big file** | `1403.37 MiB/s (2.92 s/file)` | `1633.01 MiB/s (2.51 s/file)` | `1645.17 MiB/s (2.49 s/file)` | **0.86x** | **0.85x** |
+| **Write small file** | `790.70 files/s (5.06 ms/file)` | `737.00 files/s (5.43 ms/file)` | `1143.80 files/s (3.50 ms/file)` | **1.07x** | **0.69x** |
+| **Read small file** | `967.20 files/s (4.14 ms/file)` | `3042.50 files/s (1.31 ms/file)` | `4798.60 files/s (0.83 ms/file)` | **0.32x** | **0.20x** |
+| **Stat file** | `93191.40 files/s (0.04 ms/file)` | `13110.80 files/s (0.31 ms/file)` | `42575.90 files/s (0.09 ms/file)` | **7.11x** | **2.19x** |
 
 ---
 
@@ -87,27 +87,27 @@
 
 | 测试用例 | 参数说明 | Bowl (Pebble) 带宽 / IOPS | JuiceFS (PG 16) 带宽 / IOPS | JuiceFS (Redis 7) 带宽 / IOPS | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: |
-| **顺序写 (1 并发 · 4M · 4GiB)** | `fio.md: --rw=write --bs=4M --size=4G --numjobs=1 --end_fsync=1` | `429.13 MiB/s (107.3 IOPS)` | `678.71 MiB/s (169.7 IOPS)` | `671.15 MiB/s (167.8 IOPS)` | **0.63x** | **0.64x** |
-| **顺序读 (1 并发 · 4M · 4GiB)** | `fio.md: --rw=read --bs=4M --size=4G --numjobs=1` | `738.42 MiB/s (184.6 IOPS)` | `1384.72 MiB/s (346.2 IOPS)` | `1383.32 MiB/s (345.8 IOPS)` | **0.53x** | **0.53x** |
-| **多并发顺序写 (16 并发 · 4M · 16GiB)** | `fio.md: --rw=write --bs=4M --size=1G --numjobs=16 --end_fsync=1` | `1059.29 MiB/s (264.8 IOPS)` | `670.46 MiB/s (167.6 IOPS)` | `669.06 MiB/s (167.3 IOPS)` | **1.58x** | **1.58x** |
-| **多并发顺序读 (16 并发 · 4M · 16GiB)** | `fio.md: --rw=read --bs=4M --size=1G --numjobs=16` | `1400.58 MiB/s (350.1 IOPS)` | `1606.43 MiB/s (401.6 IOPS)` | `1495.71 MiB/s (373.9 IOPS)` | **0.87x** | **0.94x** |
-| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1` | `1154.78 MiB/s (1154.8 IOPS)` | `735.90 MiB/s (735.9 IOPS)` | `729.09 MiB/s (729.1 IOPS)` | **1.57x** | **1.58x** |
-| **Direct 顺序读 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1` | `1462.33 MiB/s (1462.3 IOPS)` | `1624.11 MiB/s (1624.1 IOPS)` | `1576.60 MiB/s (1576.6 IOPS)` | **0.90x** | **0.93x** |
-| **Direct 随机写 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1` | `1189.66 MiB/s (1189.7 IOPS)` | `344.98 MiB/s (345.0 IOPS)` | `338.96 MiB/s (339.0 IOPS)` | **3.45x** | **3.51x** |
-| **Direct 随机读 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1` | `1280.80 MiB/s (1280.8 IOPS)` | `481.94 MiB/s (481.9 IOPS)` | `499.70 MiB/s (499.7 IOPS)` | **2.66x** | **2.56x** |
+| **顺序写 (1 并发 · 4M · 4GiB)** | `fio.md: --rw=write --bs=4M --size=4G --numjobs=1 --end_fsync=1` | `1339.44 MiB/s (334.9 IOPS)` | `694.71 MiB/s (173.7 IOPS)` | `684.03 MiB/s (171.0 IOPS)` | **1.93x** | **1.96x** |
+| **顺序读 (1 并发 · 4M · 4GiB)** | `fio.md: --rw=read --bs=4M --size=4G --numjobs=1` | `622.02 MiB/s (155.5 IOPS)` | `1326.85 MiB/s (331.7 IOPS)` | `1343.83 MiB/s (336.0 IOPS)` | **0.47x** | **0.46x** |
+| **多并发顺序写 (16 并发 · 4M · 16GiB)** | `fio.md: --rw=write --bs=4M --size=1G --numjobs=16 --end_fsync=1` | `1305.81 MiB/s (326.4 IOPS)` | `678.20 MiB/s (169.6 IOPS)` | `677.44 MiB/s (169.4 IOPS)` | **1.93x** | **1.93x** |
+| **多并发顺序读 (16 并发 · 4M · 16GiB)** | `fio.md: --rw=read --bs=4M --size=1G --numjobs=16` | `1397.95 MiB/s (349.5 IOPS)` | `1544.93 MiB/s (386.2 IOPS)` | `1574.93 MiB/s (393.7 IOPS)` | **0.90x** | **0.89x** |
+| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1` | `1719.56 MiB/s (1719.6 IOPS)` | `741.76 MiB/s (741.8 IOPS)` | `737.89 MiB/s (737.9 IOPS)` | **2.32x** | **2.33x** |
+| **Direct 顺序读 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1` | `1370.36 MiB/s (1370.4 IOPS)` | `1572.36 MiB/s (1572.4 IOPS)` | `1605.02 MiB/s (1605.0 IOPS)` | **0.87x** | **0.85x** |
+| **Direct 随机写 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1` | `748.13 MiB/s (748.1 IOPS)` | `340.43 MiB/s (340.4 IOPS)` | `340.37 MiB/s (340.4 IOPS)` | **2.20x** | **2.20x** |
+| **Direct 随机读 (4 并发 · 1M · 4GiB)** | `perf_guide: --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1` | `1004.41 MiB/s (1004.4 IOPS)` | `456.23 MiB/s (456.2 IOPS)` | `470.80 MiB/s (470.8 IOPS)` | **2.20x** | **2.13x** |
 
 ### 4.2 `fio` 请求完成延迟分位数明细（Mean / P95 / P99 Latency）
 
 | 测试用例 | Bowl Mean / P95 / P99 (ms) | JuiceFS (PG 16) Mean / P95 / P99 (ms) | JuiceFS (Redis 7) Mean / P95 / P99 (ms) |
 | :--- | ---: | ---: | ---: |
-| **顺序写 (1 并发 · 4M · 4GiB)** | `7.56 / 8.36 / 9.11 ms` | `5.06 / 18.74 / 28.18 ms` | `5.12 / 17.70 / 26.34 ms` |
-| **顺序读 (1 并发 · 4M · 4GiB)** | `5.41 / 9.11 / 16.91 ms` | `2.88 / 4.23 / 6.65 ms` | `2.89 / 4.36 / 6.32 ms` |
-| **多并发顺序写 (16 并发 · 4M · 16GiB)** | `58.87 / 76.02 / 92.80 ms` | `91.82 / 183.50 / 227.54 ms` | `91.36 / 183.50 / 223.35 ms` |
-| **多并发顺序读 (16 并发 · 4M · 16GiB)** | `45.41 / 77.07 / 90.70 ms` | `38.90 / 109.58 / 154.14 ms` | `38.52 / 121.11 / 189.79 ms` |
-| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.01 ms` |
-| **Direct 顺序读 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.02 ms` | `0.00 / 0.01 / 0.03 ms` | `0.00 / 0.01 / 0.03 ms` |
-| **Direct 随机写 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.01 ms` |
-| **Direct 随机读 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.02 ms` | `0.01 / 0.01 / 0.02 ms` | `0.01 / 0.01 / 0.02 ms` |
+| **顺序写 (1 并发 · 4M · 4GiB)** | `2.44 / 2.64 / 3.16 ms` | `4.91 / 17.43 / 26.87 ms` | `5.01 / 15.53 / 29.75 ms` |
+| **顺序读 (1 并发 · 4M · 4GiB)** | `6.43 / 11.99 / 15.40 ms` | `3.01 / 4.42 / 6.06 ms` | `2.97 / 4.23 / 5.47 ms` |
+| **多并发顺序写 (16 并发 · 4M · 16GiB)** | `45.44 / 99.09 / 137.36 ms` | `90.71 / 185.60 / 229.64 ms` | `91.06 / 181.40 / 221.25 ms` |
+| **多并发顺序读 (16 并发 · 4M · 16GiB)** | `45.41 / 77.07 / 95.94 ms` | `40.10 / 108.53 / 147.85 ms` | `39.88 / 102.24 / 139.46 ms` |
+| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.02 ms` | `0.00 / 0.01 / 0.02 ms` | `0.00 / 0.01 / 0.02 ms` |
+| **Direct 顺序读 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.03 ms` | `0.00 / 0.01 / 0.04 ms` |
+| **Direct 随机写 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.01 ms` | `0.00 / 0.01 / 0.02 ms` | `0.00 / 0.01 / 0.01 ms` |
+| **Direct 随机读 (4 并发 · 1M · 4GiB)** | `0.00 / 0.01 / 0.01 ms` | `0.01 / 0.01 / 0.03 ms` | `0.01 / 0.01 / 0.02 ms` |
 
 ---
 
@@ -119,15 +119,15 @@
 
 | 元数据操作 (`Operation`) | Bowl 实测 | JuiceFS (PG 16) 实测 | JuiceFS (Redis 7) 实测 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Directory creation** | `4,274.7` | `548.6` | `2,357.9` | **7.79x** | **1.81x** |
-| **Directory stat** | `112,138.1` | `3,198.1` | `16,768.7` | **35.06x** | **6.69x** |
-| **Directory removal** | `2,686.9` | `939.1` | `2,023.9` | **2.86x** | **1.33x** |
-| **File creation** | `2,531.4` | `1,302.6` | `2,275.0` | **1.94x** | **1.11x** |
-| **File stat** | `102,006.5` | `4,870.8` | `16,010.1` | **20.94x** | **6.37x** |
-| **File read** | `39,111.4` | `2,527.1` | `4,855.1` | **15.48x** | **8.06x** |
-| **File removal** | `2,634.7` | `1,064.9` | `2,147.1` | **2.47x** | **1.23x** |
-| **Tree creation** | `4,158.4` | `1,022.8` | `2,528.3` | **4.07x** | **1.64x** |
-| **Tree removal** | `2,667.9` | `808.3` | `2,199.5` | **3.30x** | **1.21x** |
+| **Directory creation** | `389.6` | `730.1` | `2,303.8` | **0.53x** | **0.17x** |
+| **Directory stat** | `79,609.4` | `4,798.9` | `15,799.2` | **16.59x** | **5.04x** |
+| **Directory removal** | `296.8` | `908.0` | `1,982.8` | **0.33x** | **0.15x** |
+| **File creation** | `295.0` | `1,272.8` | `2,251.0` | **0.23x** | **0.13x** |
+| **File stat** | `78,492.4` | `4,688.4` | `16,888.1` | **16.74x** | **4.65x** |
+| **File read** | `35,968.5` | `2,448.6` | `4,964.9` | **14.69x** | **7.24x** |
+| **File removal** | `296.9` | `1,041.6` | `2,207.6` | **0.29x** | **0.13x** |
+| **Tree creation** | `320.5` | `1,162.1` | `2,281.4` | **0.28x** | **0.14x** |
+| **Tree removal** | `305.3` | `793.2` | `2,023.4` | **0.38x** | **0.15x** |
 
 ### 5.2 4 进程 MPI 并发元数据压测（`mpirun -np 4 mdtest -b 3 -z 2 -I 20 -u`）
 
@@ -135,28 +135,28 @@
 
 | 元数据操作 (`Operation`) | Bowl (Pebble) 4 并发 | JuiceFS (PG 16) 4 并发 | JuiceFS (Redis 7) 4 并发 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| **Directory creation** | `8,947.4` | `2,605.0` | `7,560.7` | **3.43x** | **1.18x** |
-| **Directory stat** | `1,257,230.0` | `349,260.8` | `455,356.8` | **3.60x** | **2.76x** |
-| **Directory removal** | `10,281.2` | `3,290.3` | `6,745.6` | **3.12x** | **1.52x** |
-| **File creation** | `9,422.8` | `3,628.6` | `6,816.5` | **2.60x** | **1.38x** |
-| **File stat** | `1,387,122.5` | `296,376.2` | `63,005.8` | **4.68x** | **22.02x** |
-| **File read** | `46,762.9` | `12,908.4` | `17,321.3` | **3.62x** | **2.70x** |
-| **File removal** | `12,127.1` | `3,467.2` | `8,116.7` | **3.50x** | **1.49x** |
-| **Tree creation** | `1,916.1` | `188.1` | `575.5` | **10.19x** | **3.33x** |
-| **Tree removal** | `1,293.9` | `410.2` | `1,716.0` | **3.15x** | **0.75x** |
+| **Directory creation** | `3,573.9` | `3,138.4` | `6,145.8` | **1.14x** | **0.58x** |
+| **Directory stat** | `1,370,926.1` | `373,487.9` | `63,978.5` | **3.67x** | **21.43x** |
+| **Directory removal** | `8,245.2` | `3,114.9` | `6,969.1` | **2.65x** | **1.18x** |
+| **File creation** | `2,804.9` | `3,500.1` | `6,364.5` | **0.80x** | **0.44x** |
+| **File stat** | `1,430,388.2` | `367,278.7` | `433,107.5` | **3.89x** | **3.30x** |
+| **File read** | `34,130.6` | `12,095.9` | `12,599.5` | **2.82x** | **2.71x** |
+| **File removal** | `5,127.2` | `3,383.9` | `7,548.4` | **1.52x** | **0.68x** |
+| **Tree creation** | `519.4` | `617.3` | `354.5` | **0.84x** | **1.47x** |
+| **Tree removal** | `422.1` | `705.0` | `594.5` | **0.60x** | **0.71x** |
 
 ---
 
 ## 6. 本轮观测与比较边界
 
-- Bowl 单流顺序写：`429.13 MiB/s`；同轮 JuiceFS(PG) 为 `678.71 MiB/s`。
-- Bowl 单流顺序读：`738.42 MiB/s`；同轮 JuiceFS(PG) 为 `1384.72 MiB/s`。
-- Bowl 16 并发顺序写：`1059.29 MiB/s`；同轮 JuiceFS(PG) 为 `670.46 MiB/s`。
-- Bowl 16 并发顺序读：`1400.58 MiB/s`；同轮 JuiceFS(PG) 为 `1606.43 MiB/s`。
+- Bowl 单流顺序写：`1339.44 MiB/s`；同轮 JuiceFS(PG) 为 `694.71 MiB/s`。
+- Bowl 单流顺序读：`622.02 MiB/s`；同轮 JuiceFS(PG) 为 `1326.85 MiB/s`。
+- Bowl 16 并发顺序写：`1305.81 MiB/s`；同轮 JuiceFS(PG) 为 `678.20 MiB/s`。
+- Bowl 16 并发顺序读：`1397.95 MiB/s`；同轮 JuiceFS(PG) 为 `1544.93 MiB/s`。
 
 服务端本地 NVMe SSD 顺序读写与 4K IOPS 物理基线、请求大小与并发数见第 2、4 节。每个子测试前均执行 Client 与 Server 双端 `sync && echo 3 > /proc/sys/vm/drop_caches`（及清理 `/var/jfsCache`），且三组存储栈服务端进程按目标隔离启停。
 
-Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `1076.63 MiB/s`，同轮 `fio` 单流 4 GiB 顺序写为 `429.13 MiB/s`。4 并发聚合吞吐高于单流，说明当前写入路径可从并发中获益；该对照只描述本轮实测，仍需结合缓存与持久化条件解读。
+Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `1679.99 MiB/s`，同轮 `fio` 单流 4 GiB 顺序写为 `1339.44 MiB/s`。4 并发聚合吞吐高于单流，说明当前写入路径可从并发中获益；该对照只描述本轮实测，仍需结合缓存与持久化条件解读。
 
 Bowl 的写入和同步路径使用单盘 `StoreActor` Pebble 与 `64 MiB` `.pack` 封包文件；本套件未测试整机断电恢复，吞吐结果不能证明断电后的数据完整性。各存储栈的缓存与持久化路径不同，性能数值应结合各自配置解读。
 
@@ -172,9 +172,9 @@ ADR-0030 / ADR-0031 / ADR-0032 同时改变控制面协议、单盘 Actor 并发
 
 | 审计项 | 记录值 |
 | :--- | :--- |
-| **临时 SSH 密钥对** | `bowl-jfsbench-kp-20261109-044716`（已调用 `DeleteKeyPairs` 销毁） |
-| **Server 节点实例 ID** | `i-rj9byi6it3dlf5vzetpn`（已调用 `DeleteInstances --Force true` 销毁） |
-| **Client 节点实例 ID** | `i-rj9byi6it3dlf5vzetpo`（已调用 `DeleteInstances --Force true` 销毁） |
-| **实例创建时间 (UTC)** | `2026-11-09T04:47:25Z` |
-| **实例销毁时间 (UTC)** | `2026-11-09T04:58:00Z` |
+| **临时 SSH 密钥对** | `bowl-jfsbench-kp-20261110-184512`（已调用 `DeleteKeyPairs` 销毁） |
+| **Server 节点实例 ID** | `i-rj919a36elzt54mhmlox`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Client 节点实例 ID** | `i-rj919a36elzt54mhmloy`（已调用 `DeleteInstances --Force true` 销毁） |
+| **实例创建时间 (UTC)** | `2026-11-10T18:45:20Z` |
+| **实例销毁时间 (UTC)** | `2026-11-10T18:59:51Z` |
 | **销毁后存量实例核验** | `DescribeInstances` 核验目标实例残留数为 `0`（存量 VPC/VSwitch/安全组完整保留） |

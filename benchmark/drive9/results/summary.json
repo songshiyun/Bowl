@@ -15,9 +15,9 @@
       "data_disk_size_gib": 894
     },
     "server_node": {
-      "instance_id": "i-rj90x3rcwcyduv529x01",
-      "public_ip": "47.77.203.99",
-      "private_ip": "172.16.1.199",
+      "instance_id": "i-rj980079ks7kdbsi3ntz",
+      "public_ip": "43.110.150.249",
+      "private_ip": "172.16.1.194",
       "cpu_model": "Intel(R) Xeon(R) 6982P-C",
       "vcpu": 4,
       "memory_gib": "30Gi",
@@ -29,15 +29,15 @@
       "data_disk_size_gib": 894,
       "disk_seq_write_mib_s": 1998.05,
       "disk_seq_read_mib_s": 3494.88,
-      "local_randwrite_4k_iops": 69933,
-      "local_randread_4k_iops": 699362,
-      "local_fsync_4k_iops": 50869,
-      "local_fsync_4k_p99_us": 63.6
+      "local_randwrite_4k_iops": 69953,
+      "local_randread_4k_iops": 699869,
+      "local_fsync_4k_iops": 42099,
+      "local_fsync_4k_p99_us": 228.1
     },
     "client_node": {
-      "instance_id": "i-rj90x3rcwcyduv529x02",
-      "public_ip": "43.110.149.71",
-      "private_ip": "172.16.1.198",
+      "instance_id": "i-rj980079ks7kdbsi3nu0",
+      "public_ip": "43.110.153.205",
+      "private_ip": "172.16.1.195",
       "cpu_model": "Intel(R) Xeon(R) 6982P-C",
       "vcpu": 4,
       "memory_gib": "30Gi",
@@ -49,24 +49,28 @@
       "sqlite_version": "3.45.1"
     },
     "network_baseline": {
-      "ping_rtt_ms": "rtt min/avg/max/mdev = 0.038/0.080/0.276/0.060 ms",
-      "iperf3_gbps": 21.22
+      "ping_rtt_ms": "rtt min/avg/max/mdev = 0.042/0.075/0.211/0.044 ms",
+      "iperf3_gbps": 21.19
     },
     "server_disk_baseline": {
       "local_seq_write_mib_s": 1998.05,
       "local_seq_read_mib_s": 3494.88,
-      "local_randwrite_4k_iops": 69933,
-      "local_randread_4k_iops": 699362,
-      "local_fsync_4k_iops": 50869,
-      "local_fsync_4k_p99_us": 63.6
+      "local_randwrite_4k_iops": 69953,
+      "local_randread_4k_iops": 699869,
+      "local_fsync_4k_iops": 42099,
+      "local_fsync_4k_p99_us": 228.1
     },
     "bowl_config": {
-      "git_commit": "c6e884e",
-      "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef)",
-      "blob_layout": "packs/pack-<id>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 64 MiB 分片热块缓存 + ExtendTail)",
+      "git_commit": "9c60a34-dirty",
+      "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
+      "blob_layout": "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
       "blob_size_bytes": 262144,
       "pack_max_bytes": 67108864,
       "blob_ref_bytes": 16,
+      "write_behind_chunk_bytes": 4194304,
+      "write_behind_max_inflight": 4,
+      "http2_stream_window_bytes": 8388608,
+      "http2_conn_window_bytes": 33554432,
       "kernel_writeback_cache": false,
       "open_keep_cache": true,
       "handle_killpriv": true,
@@ -84,129 +88,129 @@
       "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
     },
     "cleanup_audit": {
-      "key_pair_name": "bowl-d9bench-kp-20261109-052701",
-      "server_instance_ids": "i-rj90x3rcwcyduv529x01",
-      "client_instance_ids": "i-rj90x3rcwcyduv529x02",
-      "instances_created_at": "2026-11-09T05:27:18Z",
-      "instances_deleted_at": "2026-11-09T05:55:16Z",
+      "key_pair_name": "bowl-d9bench-kp-20261110-184517",
+      "server_instance_ids": "i-rj980079ks7kdbsi3ntz",
+      "client_instance_ids": "i-rj980079ks7kdbsi3nu0",
+      "instances_created_at": "2026-11-10T18:45:31Z",
+      "instances_deleted_at": "2026-11-10T19:10:52Z",
       "remaining_benchmark_instances": 0
     }
   },
   "juicefs_bench": {
     "bowl": {
       "Write big file": {
-        "value": 805.15,
+        "value": 1699.27,
         "value_unit": "MiB/s",
-        "cost": 5.09,
+        "cost": 2.41,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 1320.61,
+        "value": 1504.9,
         "value_unit": "MiB/s",
-        "cost": 3.1,
+        "cost": 2.72,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 791.8,
+        "value": 1392.0,
         "value_unit": "files/s",
-        "cost": 5.05,
+        "cost": 2.87,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 1049.3,
+        "value": 3970.5,
         "value_unit": "files/s",
-        "cost": 3.81,
+        "cost": 1.01,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 93674.3,
+        "value": 115646.0,
         "value_unit": "files/s",
-        "cost": 0.04,
+        "cost": 0.03,
         "cost_unit": "ms/file"
       }
     },
     "drive9_default": {
       "Write big file": {
-        "value": 1313.91,
+        "value": 1319.7,
         "value_unit": "MiB/s",
-        "cost": 3.12,
+        "cost": 3.1,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 1309.62,
+        "value": 1849.22,
         "value_unit": "MiB/s",
-        "cost": 3.13,
+        "cost": 2.21,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 2043.7,
+        "value": 1877.6,
         "value_unit": "files/s",
-        "cost": 1.96,
+        "cost": 2.13,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 3447.0,
+        "value": 5916.0,
         "value_unit": "files/s",
-        "cost": 1.16,
+        "cost": 0.68,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 13835.4,
+        "value": 14741.0,
         "value_unit": "files/s",
-        "cost": 0.29,
+        "cost": 0.27,
         "cost_unit": "ms/file"
       }
     },
     "drive9_sync": {
       "Write big file": {
-        "value": 656.1,
+        "value": 675.41,
         "value_unit": "MiB/s",
-        "cost": 6.24,
+        "cost": 6.06,
         "cost_unit": "s/file"
       },
       "Read big file": {
-        "value": 1350.39,
+        "value": 1351.09,
         "value_unit": "MiB/s",
         "cost": 3.03,
         "cost_unit": "s/file"
       },
       "Write small file": {
-        "value": 82.9,
+        "value": 90.7,
         "value_unit": "files/s",
-        "cost": 48.26,
+        "cost": 44.08,
         "cost_unit": "ms/file"
       },
       "Read small file": {
-        "value": 286.4,
+        "value": 772.9,
         "value_unit": "files/s",
-        "cost": 13.97,
+        "cost": 5.18,
         "cost_unit": "ms/file"
       },
       "Stat file": {
-        "value": 448.7,
+        "value": 18735.9,
         "value_unit": "files/s",
-        "cost": 8.91,
+        "cost": 0.21,
         "cost_unit": "ms/file"
       }
     }
   },
   "drive9_fuse_bench_cold": {
     "cache_prepare": {
-      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@172.16.1.199 'sync && echo 3 > /proc/sys/vm/drop_caches'",
+      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@172.16.1.194 'sync && echo 3 > /proc/sys/vm/drop_caches'",
       "method": "command",
       "requested": true
     },
     "cache_state": "cold",
     "environment": "lan",
-    "host": "iZrj90x3rcwcyduv529x02Z",
+    "host": "iZrj980079ks7kdbsi3nu0Z",
     "mount_params": {
-      "client_host": "iZrj90x3rcwcyduv529x02Z",
+      "client_host": "iZrj980079ks7kdbsi3nu0Z",
       "network_note": "",
-      "server_host": "172.16.1.199",
-      "server_url": "http://172.16.1.199:9000",
+      "server_host": "172.16.1.194",
+      "server_url": "http://172.16.1.194:9000",
       "targets": {
         "bowl": {
-          "mount": "bowl:01a1bec9-b3cd-762c-a938-87a9d43b1dfc /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+          "mount": "bowl:01a1c6cb-dd90-7516-908c-cdbea4804326 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
           "path": "/mnt/bowl"
         },
         "drive9_default": {
@@ -221,7 +225,7 @@
     },
     "params": {
       "dir_large_count": 500,
-      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@172.16.1.199 'sync && echo 3 > /proc/sys/vm/drop_caches'",
+      "drop_caches_command": "sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@172.16.1.194 'sync && echo 3 > /proc/sys/vm/drop_caches'",
       "git_clone_mode": "no-local",
       "large_mib": 256,
       "macro_files": 200,
@@ -233,857 +237,857 @@
     },
     "results": {
       "bowl:macro_find_files": {
-        "median": 0.058413699999960045,
+        "median": 0.047194638999997096,
         "metric": "latency",
-        "p95": 0.06184511380000117,
+        "p95": 0.05566670800002953,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.06222638200000574,
-          0.058413699999960045,
-          0.04707908199998201
+          0.056608049000033134,
+          0.047194638999997096,
+          0.044953136000003724
         ],
         "sample_count": 3,
         "seconds": [
-          0.06222638200000574,
-          0.058413699999960045,
-          0.04707908199998201
+          0.056608049000033134,
+          0.047194638999997096,
+          0.044953136000003724
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_clone": {
-        "median": 5.587170966999963,
+        "median": 5.668166358999997,
         "metric": "latency",
-        "p95": 5.630120297199989,
+        "p95": 5.78294265159999,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          5.420741005000025,
-          5.634892444999991,
-          5.587170966999963
+          5.795695572999989,
+          5.668166358999997,
+          5.391259584000011
         ],
         "sample_count": 3,
         "seconds": [
-          5.420741005000025,
-          5.634892444999991,
-          5.587170966999963
+          5.795695572999989,
+          5.668166358999997,
+          5.391259584000011
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_diff_dirty": {
-        "median": 0.06588394400000652,
+        "median": 0.030273426999997355,
         "metric": "latency",
-        "p95": 0.07583187170000656,
+        "p95": 0.037078972299985934,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.04856497399998716,
-          0.07693719700000656,
-          0.06588394400000652
+          0.030273426999997355,
+          0.025705903000016406,
+          0.037835143999984666
         ],
         "sample_count": 3,
         "seconds": [
-          0.04856497399998716,
-          0.07693719700000656,
-          0.06588394400000652
+          0.030273426999997355,
+          0.025705903000016406,
+          0.037835143999984666
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_status_dirty": {
-        "median": 0.1358433449999552,
+        "median": 0.07994120200004318,
         "metric": "latency",
-        "p95": 0.1399193873999934,
+        "p95": 0.08925649089997023,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.14037228099999766,
-          0.13071014100000866,
-          0.1358433449999552
+          0.09029152299996213,
+          0.07994120200004318,
+          0.056032960000038656
         ],
         "sample_count": 3,
         "seconds": [
-          0.14037228099999766,
-          0.13071014100000866,
-          0.1358433449999552
+          0.09029152299996213,
+          0.07994120200004318,
+          0.056032960000038656
         ],
         "unit": "seconds"
       },
       "bowl:macro_go_build": {
-        "median": 0.4758406020000052,
+        "median": 0.42887076599998863,
         "metric": "latency",
-        "p95": 1.9269454599000253,
+        "p95": 1.9542289097999797,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          2.088179333000028,
-          0.4758406020000052,
-          0.40480663300002107
+          2.123713147999979,
+          0.42887076599998863,
+          0.37188474999999244
         ],
         "sample_count": 3,
         "seconds": [
-          2.088179333000028,
-          0.4758406020000052,
-          0.40480663300002107
+          2.123713147999979,
+          0.42887076599998863,
+          0.37188474999999244
         ],
         "unit": "seconds"
       },
       "bowl:mkdir": {
-        "median": 607.8891254975803,
+        "median": 674.7745971801811,
         "metric": "throughput",
-        "p95": 635.9191000095134,
+        "p95": 739.513268366521,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          553.6506472985978,
-          607.8891254975803,
-          639.0335416219503
+          746.706454053892,
+          674.7745971801811,
+          578.6894394109132
         ],
         "sample_count": 3,
         "seconds": [
-          0.903096569000013,
-          0.8225184149999905,
-          0.7824315429999729
+          0.6696071759999995,
+          0.7409881789999986,
+          0.8640212969999652
         ],
         "unit": "ops/s"
       },
       "bowl:random_read_4k": {
-        "median": 1.3039068923243373,
+        "median": 4.974815570071394,
         "metric": "throughput",
-        "p95": 1.3242253619682747,
+        "p95": 5.288802525394309,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          1.2811259948851743,
-          1.32648296970649,
-          1.3039068923243373
+          4.811443403718553,
+          5.3236899648746325,
+          4.974815570071394
         ],
         "sample_count": 3,
         "seconds": [
-          3.049075591000019,
-          2.94481730199999,
-          2.9958043960000396
+          0.8118665589999523,
+          0.7337485889999584,
+          0.7852049879999754
         ],
         "unit": "MiB/s"
       },
       "bowl:readdir_large": {
-        "median": 169272.04556688506,
+        "median": 161788.84097239518,
         "metric": "throughput",
-        "p95": 170669.7070467091,
+        "p95": 176802.1881810003,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          170825.00276668955,
-          169272.04556688506,
-          167067.1265703302
+          160548.84586042387,
+          161788.84097239518,
+          178470.3378708453
         ],
         "sample_count": 3,
         "seconds": [
-          0.002926972000011574,
-          0.0029538250000200605,
-          0.0029928089999771146
+          0.0031143170000405007,
+          0.0030904479999662726,
+          0.00280158600003233
         ],
         "unit": "ops/s"
       },
       "bowl:readdir_small": {
-        "median": 19435.66600239812,
+        "median": 28514.562386570135,
         "metric": "throughput",
-        "p95": 23881.756967705554,
+        "p95": 28708.02696670456,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          19435.66600239812,
-          24375.767074961936,
-          12258.184330074448
+          27883.930351588988,
+          28729.523031163943,
+          28514.562386570135
         ],
         "sample_count": 3,
         "seconds": [
-          0.001029035999977168,
-          0.0008204869999985931,
-          0.0016315629999894554
+          0.0007172589999981938,
+          0.0006961480000313713,
+          0.0007013960000108455
         ],
         "unit": "ops/s"
       },
       "bowl:rename": {
-        "median": 390.3498107025223,
+        "median": 2495.6952875049615,
         "metric": "throughput",
-        "p95": 391.69834068668433,
+        "p95": 2626.5831980526377,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          390.3498107025223,
-          391.84817735159123,
-          328.9144737278239
+          2641.1262992246016,
+          2495.6952875049615,
+          2410.3391439730012
         ],
         "sample_count": 3,
         "seconds": [
-          1.2809023759999718,
-          1.2760044039999912,
-          1.520152014999951
+          0.18931317300001638,
+          0.2003449709999927,
+          0.20743968800002222
         ],
         "unit": "ops/s"
       },
       "bowl:sequential_read": {
-        "median": 487.53116850083944,
+        "median": 653.5235907630803,
         "metric": "throughput",
-        "p95": 492.7278345016668,
+        "p95": 676.7660888763154,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          487.53116850083944,
-          493.30524183509203,
-          479.8671934550922
+          653.5235907630803,
+          653.1030580731464,
+          679.3485886666748
         ],
         "sample_count": 3,
         "seconds": [
-          0.5250946329999806,
-          0.5189484690000086,
-          0.5334809370000357
+          0.39172266100001707,
+          0.39197489100001803,
+          0.37683157700001857
         ],
         "unit": "MiB/s"
       },
       "bowl:sequential_write": {
-        "median": 186.86035883486366,
+        "median": 1142.8673725405922,
         "metric": "throughput",
-        "p95": 202.93676807362166,
+        "p95": 1173.3631454938559,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          186.86035883486366,
-          204.723035766817,
-          185.80999805145308
+          1004.4849546950065,
+          1142.8673725405922,
+          1176.751564710885
         ],
         "sample_count": 3,
         "seconds": [
-          1.3700070020000226,
-          1.250469929000019,
-          1.3777514810000184
+          0.2548569779999639,
+          0.22399799499999062,
+          0.21754804299996522
         ],
         "unit": "MiB/s"
       },
       "bowl:small_write_4k_fsync": {
-        "median": 136.6656699479893,
+        "median": 158.43072604106854,
         "metric": "throughput",
-        "p95": 141.1119433860731,
+        "p95": 160.75094021810386,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          123.44506276629049,
-          136.6656699479893,
-          141.60597376808244
+          158.43072604106854,
+          151.59073408095398,
+          161.00874179333002
         ],
         "sample_count": 3,
         "seconds": [
-          1.6201539010000374,
-          1.4634253070000227,
-          1.4123697940000284
+          1.2623813889999838,
+          1.3193418530000258,
+          1.2421685790000083
         ],
         "unit": "ops/s"
       },
       "bowl:stat": {
-        "median": 55818.404421977095,
+        "median": 54741.15916599668,
         "metric": "throughput",
-        "p95": 59882.14720267198,
+        "p95": 58167.478601968905,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          55818.404421977095,
-          54379.661832658756,
-          60333.67417830474
+          54461.36619614742,
+          54741.15916599668,
+          58548.18076152138
         ],
         "sample_count": 3,
         "seconds": [
-          0.00895761900000025,
-          0.00919461399996635,
-          0.008287246000008963
+          0.009180819999983214,
+          0.009133894999990844,
+          0.00853997500001924
         ],
         "unit": "ops/s"
       },
       "bowl:unlink": {
-        "median": 349.1667507704672,
+        "median": 2596.604354013045,
         "metric": "throughput",
-        "p95": 410.93433365509264,
+        "p95": 2638.208959569933,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          417.797398420051,
-          349.1667507704672,
-          300.4138163068266
+          2324.8549700833837,
+          2642.8316935206985,
+          2596.604354013045
         ],
         "sample_count": 3,
         "seconds": [
-          1.1967523060000076,
-          1.4319805619999784,
-          1.6643708540000262
+          0.21506717900001604,
+          0.18919101099999125,
+          0.19255917800001043
         ],
         "unit": "ops/s"
       },
       "drive9_default:macro_find_files": {
-        "median": 0.010627856000041902,
+        "median": 0.010630850999973518,
         "metric": "latency",
-        "p95": 0.013223699900015618,
+        "p95": 0.01125397589997874,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.013512127000012697,
-          0.010627856000041902,
-          0.009826985000017885
+          0.010630850999973518,
+          0.010375754999927267,
+          0.011323211999979321
         ],
         "sample_count": 3,
         "seconds": [
-          0.013512127000012697,
-          0.010627856000041902,
-          0.009826985000017885
+          0.010630850999973518,
+          0.010375754999927267,
+          0.011323211999979321
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_clone": {
-        "median": 1.9940946760000315,
+        "median": 1.9125985990000345,
         "metric": "latency",
-        "p95": 1.9971905680000077,
+        "p95": 1.9296022351000375,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          1.997534556000005,
-          1.97474481200004,
-          1.9940946760000315
+          1.8939893089999487,
+          1.9314915280000378,
+          1.9125985990000345
         ],
         "sample_count": 3,
         "seconds": [
-          1.997534556000005,
-          1.97474481200004,
-          1.9940946760000315
+          1.8939893089999487,
+          1.9314915280000378,
+          1.9125985990000345
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_diff_dirty": {
-        "median": 0.8603763290000188,
+        "median": 0.7998658039999782,
         "metric": "latency",
-        "p95": 0.8815887710000425,
+        "p95": 0.8568196913000407,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.8839457090000451,
-          0.8550979369999823,
-          0.8603763290000188
+          0.8631479010000476,
+          0.7998658039999782,
+          0.7857230959999697
         ],
         "sample_count": 3,
         "seconds": [
-          0.8839457090000451,
-          0.8550979369999823,
-          0.8603763290000188
+          0.8631479010000476,
+          0.7998658039999782,
+          0.7857230959999697
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_status_dirty": {
-        "median": 1.7223130749999882,
+        "median": 1.6599615570000879,
         "metric": "latency",
-        "p95": 1.7805034264000028,
+        "p95": 1.7524329723000505,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          1.7223130749999882,
-          1.678269620999913,
-          1.7869690210000044
+          1.7627075740000464,
+          1.6599615570000879,
+          1.5516496650000136
         ],
         "sample_count": 3,
         "seconds": [
-          1.7223130749999882,
-          1.678269620999913,
-          1.7869690210000044
+          1.7627075740000464,
+          1.6599615570000879,
+          1.5516496650000136
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_go_build": {
-        "median": 0.4140572219999967,
+        "median": 0.40157741099994837,
         "metric": "latency",
-        "p95": 0.41911029360005614,
+        "p95": 0.416552420100038,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.4069598889999497,
-          0.4140572219999967,
-          0.41967174600006274
+          0.345044047999977,
+          0.40157741099994837,
+          0.418216310000048
         ],
         "sample_count": 3,
         "seconds": [
-          0.4069598889999497,
-          0.4140572219999967,
-          0.41967174600006274
+          0.345044047999977,
+          0.40157741099994837,
+          0.418216310000048
         ],
         "unit": "seconds"
       },
       "drive9_default:mkdir": {
-        "median": 215.21669497540597,
+        "median": 231.62629692317518,
         "metric": "throughput",
-        "p95": 215.74035422678148,
+        "p95": 234.1414046897875,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          215.79853858804543,
-          215.21669497540597,
-          212.7622128318647
+          231.62629692317518,
+          230.74379985607197,
+          234.42086110829996
         ],
         "sample_count": 3,
         "seconds": [
-          2.3169758389999515,
-          2.323239840000042,
-          2.3500413599999774
+          2.158649543000024,
+          2.166905460999942,
+          2.1329159770000388
         ],
         "unit": "ops/s"
       },
       "drive9_default:random_read_4k": {
-        "median": 2.14924703872094,
+        "median": 2.1715669945879936,
         "metric": "throughput",
-        "p95": 2.2679110269617695,
+        "p95": 2.3007719499484103,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          2.14924703872094,
-          2.0930438063499603,
-          2.281095914544084
+          2.1117793594631165,
+          2.1715669945879936,
+          2.3151280560995677
         ],
         "sample_count": 3,
         "seconds": [
-          1.8174969789999977,
-          1.8663011200000028,
-          1.7124444329999733
+          1.8497434319999684,
+          1.7988162509999484,
+          1.6872716780000019
         ],
         "unit": "MiB/s"
       },
       "drive9_default:readdir_large": {
-        "median": 44764.1560155323,
+        "median": 60289.50053504523,
         "metric": "throughput",
-        "p95": 45089.06005070978,
+        "p95": 63733.77525390402,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          45125.16049906283,
-          44764.1560155323,
-          41586.07631655814
+          64116.472444888335,
+          60289.50053504523,
+          46075.165366297435
         ],
         "sample_count": 3,
         "seconds": [
-          0.011080292999963604,
-          0.011169650999931946,
-          0.012023254999917299
+          0.0077983080000194605,
+          0.008293318000028194,
+          0.010851832999946964
         ],
         "unit": "ops/s"
       },
       "drive9_default:readdir_small": {
-        "median": 10022.79182824768,
+        "median": 10846.351667044719,
         "metric": "throughput",
-        "p95": 10713.232652687126,
+        "p95": 10875.417036775583,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          10789.948299847065,
-          9950.966612103628,
-          10022.79182824768
+          10846.351667044719,
+          10878.646522301235,
+          10576.867649725511
         ],
         "sample_count": 3,
         "seconds": [
-          0.0018535770000198681,
-          0.002009854999982963,
-          0.001995452000073783
+          0.0018439379999790617,
+          0.0018384640000022046,
+          0.0018909190000613307
         ],
         "unit": "ops/s"
       },
       "drive9_default:rename": {
-        "median": 85.23551174681126,
+        "median": 91.1521519672751,
         "metric": "throughput",
-        "p95": 86.33700457445406,
+        "p95": 91.63950295424172,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          86.45939266641437,
-          85.23551174681126,
-          84.45557099372247
+          91.69365306390468,
+          91.1521519672751,
+          89.38741895579939
         ],
         "sample_count": 3,
         "seconds": [
-          5.78306167300002,
-          5.86609958400004,
-          5.920272565999994
+          5.452940125000055,
+          5.485334018000003,
+          5.593628340999999
         ],
         "unit": "ops/s"
       },
       "drive9_default:sequential_read": {
-        "median": 61.75230758266266,
+        "median": 575.1525248329937,
         "metric": "throughput",
-        "p95": 539.1987195116913,
+        "p95": 612.1563096261475,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          58.6791436753334,
-          61.75230758266266,
-          592.2483208371389
+          575.1525248329937,
+          572.5514457770854,
+          616.2678412698313
         ],
         "sample_count": 3,
         "seconds": [
-          4.362708518999966,
-          4.145594068000037,
-          0.4322511200000463
+          0.44509932399989793,
+          0.4471213929999749,
+          0.4154037950000884
         ],
         "unit": "MiB/s"
       },
       "drive9_default:sequential_write": {
-        "median": 655.6810751678962,
+        "median": 650.3770900340883,
         "metric": "throughput",
-        "p95": 665.7250735698578,
+        "p95": 661.9826489552443,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          641.8854035770581,
-          655.6810751678962,
-          666.841073392298
+          650.3770900340883,
+          663.2721555020394,
+          642.7246205363273
         ],
         "sample_count": 3,
         "seconds": [
-          0.39882508400000916,
-          0.3904337179999402,
-          0.38389956800006075
+          0.3936178010000049,
+          0.38596524499996576,
+          0.3983043310000767
         ],
         "unit": "MiB/s"
       },
       "drive9_default:small_write_4k_fsync": {
-        "median": 2149.997522664361,
+        "median": 2120.290886947482,
         "metric": "throughput",
-        "p95": 2186.634543551635,
+        "p95": 2187.075084772747,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          2149.997522664361,
-          2190.705323650221,
-          2072.9384753819536
+          2037.3687244374048,
+          2194.4955511977764,
+          2120.290886947482
         ],
         "sample_count": 3,
         "seconds": [
-          0.09302336300004299,
-          0.09129479799992168,
-          0.09648139700004776
+          0.0981658340000422,
+          0.09113711800000601,
+          0.09432667999999467
         ],
         "unit": "ops/s"
       },
       "drive9_default:stat": {
-        "median": 12214.025688172087,
+        "median": 12190.250310932568,
         "metric": "throughput",
-        "p95": 12825.011528425615,
+        "p95": 12614.180221346232,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          11574.946750048783,
-          12892.898844009342,
-          12214.025688172087
+          12190.250310932568,
+          12661.28354472553,
+          12107.049075071487
         ],
         "sample_count": 3,
         "seconds": [
-          0.04319674299995313,
-          0.03878103800002464,
-          0.040936543999919195
+          0.04101638500003446,
+          0.03949046699995051,
+          0.04129825500001516
         ],
         "unit": "ops/s"
       },
       "drive9_default:unlink": {
-        "median": 89.75043654895114,
+        "median": 99.28280137597743,
         "metric": "throughput",
-        "p95": 91.56486593673912,
+        "p95": 99.70010439871787,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          91.7664692020489,
-          89.75043654895114,
-          89.18350794712676
+          99.28280137597743,
+          97.12340471015187,
+          99.74647140124459
         ],
         "sample_count": 3,
         "seconds": [
-          5.448613249999994,
-          5.571003542999961,
-          5.606417727999997
+          5.036118976000012,
+          5.148089705999951,
+          5.012708650000036
         ],
         "unit": "ops/s"
       },
       "drive9_sync:macro_find_files": {
-        "median": 0.06676245900007416,
+        "median": 0.04766691899999387,
         "metric": "latency",
-        "p95": 0.08883764639992933,
+        "p95": 0.048690931800001634,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.09129044499991323,
-          0.04012751000004755,
-          0.06676245900007416
+          0.044474087000025975,
+          0.04766691899999387,
+          0.0488047110000025
         ],
         "sample_count": 3,
         "seconds": [
-          0.09129044499991323,
-          0.04012751000004755,
-          0.06676245900007416
+          0.044474087000025975,
+          0.04766691899999387,
+          0.0488047110000025
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_clone": {
-        "median": 7.152014291000114,
+        "median": 6.534915283999908,
         "metric": "latency",
-        "p95": 7.153402728200104,
+        "p95": 6.557793020299982,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          7.152014291000114,
-          7.153556999000102,
-          6.871618233999925
+          6.516760300000101,
+          6.560334990999991,
+          6.534915283999908
         ],
         "sample_count": 3,
         "seconds": [
-          7.152014291000114,
-          7.153556999000102,
-          6.871618233999925
+          6.516760300000101,
+          6.560334990999991,
+          6.534915283999908
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_diff_dirty": {
-        "median": 0.7151981619999788,
+        "median": 0.13123725100001593,
         "metric": "latency",
-        "p95": 0.7216429819000041,
+        "p95": 0.14403323590006495,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.7223590730000069,
-          0.02948281599992697,
-          0.7151981619999788
+          0.12829092199990555,
+          0.13123725100001593,
+          0.14545501200007038
         ],
         "sample_count": 3,
         "seconds": [
-          0.7223590730000069,
-          0.02948281599992697,
-          0.7151981619999788
+          0.12829092199990555,
+          0.13123725100001593,
+          0.14545501200007038
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_status_dirty": {
-        "median": 0.2662026919999789,
+        "median": 0.7608798640000032,
         "metric": "latency",
-        "p95": 0.35913427730001785,
+        "p95": 0.7649690320000786,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.20956825799999024,
-          0.3694600090000222,
-          0.2662026919999789
+          0.7473684369999773,
+          0.7608798640000032,
+          0.765423384000087
         ],
         "sample_count": 3,
         "seconds": [
-          0.20956825799999024,
-          0.3694600090000222,
-          0.2662026919999789
+          0.7473684369999773,
+          0.7608798640000032,
+          0.765423384000087
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_go_build": {
-        "median": 0.3430855330000213,
+        "median": 0.38120786499996484,
         "metric": "latency",
-        "p95": 0.4481590714000504,
+        "p95": 0.3842001580000215,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.3213085009999759,
-          0.4598339090000536,
-          0.3430855330000213
+          0.38120786499996484,
+          0.38453263500002777,
+          0.37657227099998636
         ],
         "sample_count": 3,
         "seconds": [
-          0.3213085009999759,
-          0.4598339090000536,
-          0.3430855330000213
+          0.38120786499996484,
+          0.38453263500002777,
+          0.37657227099998636
         ],
         "unit": "seconds"
       },
       "drive9_sync:mkdir": {
-        "median": 208.10758706745392,
+        "median": 223.72387586872262,
         "metric": "throughput",
-        "p95": 209.16452410264964,
+        "p95": 223.87245213069284,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          209.2819615510047,
-          208.10758706745392,
-          205.5254011998127
+          223.72387586872262,
+          223.62050303993365,
+          223.88896060424509
         ],
         "sample_count": 3,
         "seconds": [
-          2.3891213379999954,
-          2.4026034180000124,
-          2.4327893150000364
+          2.2348978090000173,
+          2.2359309329999633,
+          2.2332499050000933
         ],
         "unit": "ops/s"
       },
       "drive9_sync:random_read_4k": {
-        "median": 0.6117963365643846,
+        "median": 0.6210119146427852,
         "metric": "throughput",
-        "p95": 0.616561927664614,
+        "p95": 0.6710470429567789,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.6170914377868618,
-          0.595733922334896,
-          0.6117963365643846
+          0.6766065016583337,
+          0.6040699621373702,
+          0.6210119146427852
         ],
         "sample_count": 3,
         "seconds": [
-          6.330099173000008,
-          6.557038055999897,
-          6.384886221999977
+          5.773296576999996,
+          6.466552295000042,
+          6.290136964999988
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:readdir_large": {
-        "median": 21683.793394128203,
+        "median": 157005.3428917553,
         "metric": "throughput",
-        "p95": 21727.863250688304,
+        "p95": 160515.71632693204,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          21732.759901417205,
-          21683.793394128203,
-          20001.93218660842
+          160905.75781972945,
+          154247.86274072682,
+          157005.3428917553
         ],
         "sample_count": 3,
         "seconds": [
-          0.023006742000006852,
-          0.023058695999907286,
-          0.024997585000051004
+          0.003107408999994732,
+          0.003241536000018641,
+          0.0031846050000012838
         ],
         "unit": "ops/s"
       },
       "drive9_sync:readdir_small": {
-        "median": 23651.900786256414,
+        "median": 24925.34857975543,
         "metric": "throughput",
-        "p95": 23763.778009994552,
+        "p95": 25370.798348131724,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          23776.20881263212,
-          22484.31438044265,
-          23651.900786256414
+          23572.535636286575,
+          24925.34857975543,
+          25420.2927668402
         ],
         "sample_count": 3,
         "seconds": [
-          0.0008411769999838725,
-          0.00088950899998963,
-          0.0008455979999553165
+          0.0008484450000878496,
+          0.0008023960000400621,
+          0.0007867729999588846
         ],
         "unit": "ops/s"
       },
       "drive9_sync:rename": {
-        "median": 51.09893506700242,
+        "median": 58.761513333253866,
         "metric": "throughput",
-        "p95": 51.30030633639424,
+        "p95": 58.98264307703636,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          51.09893506700242,
-          51.322680921882224,
-          50.68397121542067
+          59.00721304856775,
+          55.04380271053417,
+          58.761513333253866
         ],
         "sample_count": 3,
         "seconds": [
-          9.784939731999998,
-          9.742281404999972,
-          9.865051771000026
+          8.47354033800002,
+          9.083674734999931,
+          8.508970781000016
         ],
         "unit": "ops/s"
       },
       "drive9_sync:sequential_read": {
-        "median": 53.281377152833386,
+        "median": 53.543995098623576,
         "metric": "throughput",
-        "p95": 53.43375485045466,
+        "p95": 53.55385724060855,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          53.281377152833386,
-          53.1980733196435,
-          53.45068570574592
+          53.169505503427516,
+          53.543995098623576,
+          53.55495303416244
         ],
         "sample_count": 3,
         "seconds": [
-          4.804680615999928,
-          4.81220435299997,
-          4.789461474999939
+          4.814789936000011,
+          4.781115035000084,
+          4.780136765999941
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:sequential_write": {
-        "median": 346.44442235323345,
+        "median": 345.5202785034738,
         "metric": "throughput",
-        "p95": 348.0523960617982,
+        "p95": 348.1350440112775,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          343.3787600272878,
-          346.44442235323345,
-          348.2310598071943
+          337.20364436211287,
+          348.4255735121446,
+          345.5202785034738
         ],
         "sample_count": 3,
         "seconds": [
-          0.7455324259999543,
-          0.7389352619999272,
-          0.7351440740000044
+          0.7591851519999864,
+          0.7347336689999793,
+          0.7409116510000331
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:small_write_4k_fsync": {
-        "median": 112.29378904782074,
+        "median": 138.80838638684136,
         "metric": "throughput",
-        "p95": 114.83014026194368,
+        "p95": 140.41270351461012,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          108.8840709103,
-          115.1119570635129,
-          112.29378904782074
+          140.5909609732511,
+          136.34990936749995,
+          138.80838638684136
         ],
         "sample_count": 3,
         "seconds": [
-          1.8368159670000068,
-          1.7374389689999816,
-          1.7810424040000044
+          1.4225665620000427,
+          1.4668143229999941,
+          1.44083513399994
         ],
         "unit": "ops/s"
       },
       "drive9_sync:stat": {
-        "median": 72.68005359062067,
+        "median": 33755.771055444384,
         "metric": "throughput",
-        "p95": 72.90343351862383,
+        "p95": 35229.76026410368,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          72.68005359062067,
-          72.92825351062417,
-          72.4293828962321
+          33755.771055444384,
+          100.8675970214748,
+          35393.5368428436
         ],
         "sample_count": 3,
         "seconds": [
-          6.8794665839999425,
-          6.8560533939999,
-          6.903275715000063
+          0.01481228199997986,
+          4.9569932740000695,
+          0.014126873000009255
         ],
         "unit": "ops/s"
       },
       "drive9_sync:unlink": {
-        "median": 33.43304335758004,
+        "median": 41.6021539049904,
         "metric": "throughput",
-        "p95": 33.666161615759236,
+        "p95": 41.94748800407018,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          33.69206364444582,
-          33.43304335758004,
-          33.34858554681986
+          41.98585845952349,
+          41.6021539049904,
+          40.94105755991643
         ],
         "sample_count": 3,
         "seconds": [
-          14.840290143000061,
-          14.955264306999993,
-          14.99313964299995
+          11.908771628000068,
+          12.018608487000051,
+          12.212679148999996
         ],
         "unit": "ops/s"
       }
@@ -1092,296 +1096,296 @@
     "targets": {
       "bowl": {
         "errors": {},
-        "mount": "bowl:01a1bec9-b3cd-762c-a938-87a9d43b1dfc /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+        "mount": "bowl:01a1c6cb-dd90-7516-908c-cdbea4804326 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
         "path": "/mnt/bowl",
         "results": {
           "macro_find_files": {
-            "median": 0.058413699999960045,
+            "median": 0.047194638999997096,
             "metric": "latency",
-            "p95": 0.06184511380000117,
+            "p95": 0.05566670800002953,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.06222638200000574,
-              0.058413699999960045,
-              0.04707908199998201
+              0.056608049000033134,
+              0.047194638999997096,
+              0.044953136000003724
             ],
             "sample_count": 3,
             "seconds": [
-              0.06222638200000574,
-              0.058413699999960045,
-              0.04707908199998201
+              0.056608049000033134,
+              0.047194638999997096,
+              0.044953136000003724
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 5.587170966999963,
+            "median": 5.668166358999997,
             "metric": "latency",
-            "p95": 5.630120297199989,
+            "p95": 5.78294265159999,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              5.420741005000025,
-              5.634892444999991,
-              5.587170966999963
+              5.795695572999989,
+              5.668166358999997,
+              5.391259584000011
             ],
             "sample_count": 3,
             "seconds": [
-              5.420741005000025,
-              5.634892444999991,
-              5.587170966999963
+              5.795695572999989,
+              5.668166358999997,
+              5.391259584000011
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.06588394400000652,
+            "median": 0.030273426999997355,
             "metric": "latency",
-            "p95": 0.07583187170000656,
+            "p95": 0.037078972299985934,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.04856497399998716,
-              0.07693719700000656,
-              0.06588394400000652
+              0.030273426999997355,
+              0.025705903000016406,
+              0.037835143999984666
             ],
             "sample_count": 3,
             "seconds": [
-              0.04856497399998716,
-              0.07693719700000656,
-              0.06588394400000652
+              0.030273426999997355,
+              0.025705903000016406,
+              0.037835143999984666
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 0.1358433449999552,
+            "median": 0.07994120200004318,
             "metric": "latency",
-            "p95": 0.1399193873999934,
+            "p95": 0.08925649089997023,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.14037228099999766,
-              0.13071014100000866,
-              0.1358433449999552
+              0.09029152299996213,
+              0.07994120200004318,
+              0.056032960000038656
             ],
             "sample_count": 3,
             "seconds": [
-              0.14037228099999766,
-              0.13071014100000866,
-              0.1358433449999552
+              0.09029152299996213,
+              0.07994120200004318,
+              0.056032960000038656
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.4758406020000052,
+            "median": 0.42887076599998863,
             "metric": "latency",
-            "p95": 1.9269454599000253,
+            "p95": 1.9542289097999797,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              2.088179333000028,
-              0.4758406020000052,
-              0.40480663300002107
+              2.123713147999979,
+              0.42887076599998863,
+              0.37188474999999244
             ],
             "sample_count": 3,
             "seconds": [
-              2.088179333000028,
-              0.4758406020000052,
-              0.40480663300002107
+              2.123713147999979,
+              0.42887076599998863,
+              0.37188474999999244
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 607.8891254975803,
+            "median": 674.7745971801811,
             "metric": "throughput",
-            "p95": 635.9191000095134,
+            "p95": 739.513268366521,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              553.6506472985978,
-              607.8891254975803,
-              639.0335416219503
+              746.706454053892,
+              674.7745971801811,
+              578.6894394109132
             ],
             "sample_count": 3,
             "seconds": [
-              0.903096569000013,
-              0.8225184149999905,
-              0.7824315429999729
+              0.6696071759999995,
+              0.7409881789999986,
+              0.8640212969999652
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 1.3039068923243373,
+            "median": 4.974815570071394,
             "metric": "throughput",
-            "p95": 1.3242253619682747,
+            "p95": 5.288802525394309,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              1.2811259948851743,
-              1.32648296970649,
-              1.3039068923243373
+              4.811443403718553,
+              5.3236899648746325,
+              4.974815570071394
             ],
             "sample_count": 3,
             "seconds": [
-              3.049075591000019,
-              2.94481730199999,
-              2.9958043960000396
+              0.8118665589999523,
+              0.7337485889999584,
+              0.7852049879999754
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 169272.04556688506,
+            "median": 161788.84097239518,
             "metric": "throughput",
-            "p95": 170669.7070467091,
+            "p95": 176802.1881810003,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              170825.00276668955,
-              169272.04556688506,
-              167067.1265703302
+              160548.84586042387,
+              161788.84097239518,
+              178470.3378708453
             ],
             "sample_count": 3,
             "seconds": [
-              0.002926972000011574,
-              0.0029538250000200605,
-              0.0029928089999771146
+              0.0031143170000405007,
+              0.0030904479999662726,
+              0.00280158600003233
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 19435.66600239812,
+            "median": 28514.562386570135,
             "metric": "throughput",
-            "p95": 23881.756967705554,
+            "p95": 28708.02696670456,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              19435.66600239812,
-              24375.767074961936,
-              12258.184330074448
+              27883.930351588988,
+              28729.523031163943,
+              28514.562386570135
             ],
             "sample_count": 3,
             "seconds": [
-              0.001029035999977168,
-              0.0008204869999985931,
-              0.0016315629999894554
+              0.0007172589999981938,
+              0.0006961480000313713,
+              0.0007013960000108455
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 390.3498107025223,
+            "median": 2495.6952875049615,
             "metric": "throughput",
-            "p95": 391.69834068668433,
+            "p95": 2626.5831980526377,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              390.3498107025223,
-              391.84817735159123,
-              328.9144737278239
+              2641.1262992246016,
+              2495.6952875049615,
+              2410.3391439730012
             ],
             "sample_count": 3,
             "seconds": [
-              1.2809023759999718,
-              1.2760044039999912,
-              1.520152014999951
+              0.18931317300001638,
+              0.2003449709999927,
+              0.20743968800002222
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 487.53116850083944,
+            "median": 653.5235907630803,
             "metric": "throughput",
-            "p95": 492.7278345016668,
+            "p95": 676.7660888763154,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              487.53116850083944,
-              493.30524183509203,
-              479.8671934550922
+              653.5235907630803,
+              653.1030580731464,
+              679.3485886666748
             ],
             "sample_count": 3,
             "seconds": [
-              0.5250946329999806,
-              0.5189484690000086,
-              0.5334809370000357
+              0.39172266100001707,
+              0.39197489100001803,
+              0.37683157700001857
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 186.86035883486366,
+            "median": 1142.8673725405922,
             "metric": "throughput",
-            "p95": 202.93676807362166,
+            "p95": 1173.3631454938559,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              186.86035883486366,
-              204.723035766817,
-              185.80999805145308
+              1004.4849546950065,
+              1142.8673725405922,
+              1176.751564710885
             ],
             "sample_count": 3,
             "seconds": [
-              1.3700070020000226,
-              1.250469929000019,
-              1.3777514810000184
+              0.2548569779999639,
+              0.22399799499999062,
+              0.21754804299996522
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 136.6656699479893,
+            "median": 158.43072604106854,
             "metric": "throughput",
-            "p95": 141.1119433860731,
+            "p95": 160.75094021810386,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              123.44506276629049,
-              136.6656699479893,
-              141.60597376808244
+              158.43072604106854,
+              151.59073408095398,
+              161.00874179333002
             ],
             "sample_count": 3,
             "seconds": [
-              1.6201539010000374,
-              1.4634253070000227,
-              1.4123697940000284
+              1.2623813889999838,
+              1.3193418530000258,
+              1.2421685790000083
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 55818.404421977095,
+            "median": 54741.15916599668,
             "metric": "throughput",
-            "p95": 59882.14720267198,
+            "p95": 58167.478601968905,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              55818.404421977095,
-              54379.661832658756,
-              60333.67417830474
+              54461.36619614742,
+              54741.15916599668,
+              58548.18076152138
             ],
             "sample_count": 3,
             "seconds": [
-              0.00895761900000025,
-              0.00919461399996635,
-              0.008287246000008963
+              0.009180819999983214,
+              0.009133894999990844,
+              0.00853997500001924
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 349.1667507704672,
+            "median": 2596.604354013045,
             "metric": "throughput",
-            "p95": 410.93433365509264,
+            "p95": 2638.208959569933,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              417.797398420051,
-              349.1667507704672,
-              300.4138163068266
+              2324.8549700833837,
+              2642.8316935206985,
+              2596.604354013045
             ],
             "sample_count": 3,
             "seconds": [
-              1.1967523060000076,
-              1.4319805619999784,
-              1.6643708540000262
+              0.21506717900001604,
+              0.18919101099999125,
+              0.19255917800001043
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/bowl/drive9-bench-1794202362-8595-bowl"
+        "workdir": "/mnt/bowl/drive9-bench-1794336711-8583-bowl"
       },
       "drive9_default": {
         "errors": {},
@@ -1389,292 +1393,292 @@
         "path": "/mnt/drive9_default",
         "results": {
           "macro_find_files": {
-            "median": 0.010627856000041902,
+            "median": 0.010630850999973518,
             "metric": "latency",
-            "p95": 0.013223699900015618,
+            "p95": 0.01125397589997874,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.013512127000012697,
-              0.010627856000041902,
-              0.009826985000017885
+              0.010630850999973518,
+              0.010375754999927267,
+              0.011323211999979321
             ],
             "sample_count": 3,
             "seconds": [
-              0.013512127000012697,
-              0.010627856000041902,
-              0.009826985000017885
+              0.010630850999973518,
+              0.010375754999927267,
+              0.011323211999979321
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 1.9940946760000315,
+            "median": 1.9125985990000345,
             "metric": "latency",
-            "p95": 1.9971905680000077,
+            "p95": 1.9296022351000375,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              1.997534556000005,
-              1.97474481200004,
-              1.9940946760000315
+              1.8939893089999487,
+              1.9314915280000378,
+              1.9125985990000345
             ],
             "sample_count": 3,
             "seconds": [
-              1.997534556000005,
-              1.97474481200004,
-              1.9940946760000315
+              1.8939893089999487,
+              1.9314915280000378,
+              1.9125985990000345
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.8603763290000188,
+            "median": 0.7998658039999782,
             "metric": "latency",
-            "p95": 0.8815887710000425,
+            "p95": 0.8568196913000407,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.8839457090000451,
-              0.8550979369999823,
-              0.8603763290000188
+              0.8631479010000476,
+              0.7998658039999782,
+              0.7857230959999697
             ],
             "sample_count": 3,
             "seconds": [
-              0.8839457090000451,
-              0.8550979369999823,
-              0.8603763290000188
+              0.8631479010000476,
+              0.7998658039999782,
+              0.7857230959999697
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 1.7223130749999882,
+            "median": 1.6599615570000879,
             "metric": "latency",
-            "p95": 1.7805034264000028,
+            "p95": 1.7524329723000505,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              1.7223130749999882,
-              1.678269620999913,
-              1.7869690210000044
+              1.7627075740000464,
+              1.6599615570000879,
+              1.5516496650000136
             ],
             "sample_count": 3,
             "seconds": [
-              1.7223130749999882,
-              1.678269620999913,
-              1.7869690210000044
+              1.7627075740000464,
+              1.6599615570000879,
+              1.5516496650000136
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.4140572219999967,
+            "median": 0.40157741099994837,
             "metric": "latency",
-            "p95": 0.41911029360005614,
+            "p95": 0.416552420100038,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.4069598889999497,
-              0.4140572219999967,
-              0.41967174600006274
+              0.345044047999977,
+              0.40157741099994837,
+              0.418216310000048
             ],
             "sample_count": 3,
             "seconds": [
-              0.4069598889999497,
-              0.4140572219999967,
-              0.41967174600006274
+              0.345044047999977,
+              0.40157741099994837,
+              0.418216310000048
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 215.21669497540597,
+            "median": 231.62629692317518,
             "metric": "throughput",
-            "p95": 215.74035422678148,
+            "p95": 234.1414046897875,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              215.79853858804543,
-              215.21669497540597,
-              212.7622128318647
+              231.62629692317518,
+              230.74379985607197,
+              234.42086110829996
             ],
             "sample_count": 3,
             "seconds": [
-              2.3169758389999515,
-              2.323239840000042,
-              2.3500413599999774
+              2.158649543000024,
+              2.166905460999942,
+              2.1329159770000388
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 2.14924703872094,
+            "median": 2.1715669945879936,
             "metric": "throughput",
-            "p95": 2.2679110269617695,
+            "p95": 2.3007719499484103,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              2.14924703872094,
-              2.0930438063499603,
-              2.281095914544084
+              2.1117793594631165,
+              2.1715669945879936,
+              2.3151280560995677
             ],
             "sample_count": 3,
             "seconds": [
-              1.8174969789999977,
-              1.8663011200000028,
-              1.7124444329999733
+              1.8497434319999684,
+              1.7988162509999484,
+              1.6872716780000019
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 44764.1560155323,
+            "median": 60289.50053504523,
             "metric": "throughput",
-            "p95": 45089.06005070978,
+            "p95": 63733.77525390402,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              45125.16049906283,
-              44764.1560155323,
-              41586.07631655814
+              64116.472444888335,
+              60289.50053504523,
+              46075.165366297435
             ],
             "sample_count": 3,
             "seconds": [
-              0.011080292999963604,
-              0.011169650999931946,
-              0.012023254999917299
+              0.0077983080000194605,
+              0.008293318000028194,
+              0.010851832999946964
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 10022.79182824768,
+            "median": 10846.351667044719,
             "metric": "throughput",
-            "p95": 10713.232652687126,
+            "p95": 10875.417036775583,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              10789.948299847065,
-              9950.966612103628,
-              10022.79182824768
+              10846.351667044719,
+              10878.646522301235,
+              10576.867649725511
             ],
             "sample_count": 3,
             "seconds": [
-              0.0018535770000198681,
-              0.002009854999982963,
-              0.001995452000073783
+              0.0018439379999790617,
+              0.0018384640000022046,
+              0.0018909190000613307
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 85.23551174681126,
+            "median": 91.1521519672751,
             "metric": "throughput",
-            "p95": 86.33700457445406,
+            "p95": 91.63950295424172,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              86.45939266641437,
-              85.23551174681126,
-              84.45557099372247
+              91.69365306390468,
+              91.1521519672751,
+              89.38741895579939
             ],
             "sample_count": 3,
             "seconds": [
-              5.78306167300002,
-              5.86609958400004,
-              5.920272565999994
+              5.452940125000055,
+              5.485334018000003,
+              5.593628340999999
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 61.75230758266266,
+            "median": 575.1525248329937,
             "metric": "throughput",
-            "p95": 539.1987195116913,
+            "p95": 612.1563096261475,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              58.6791436753334,
-              61.75230758266266,
-              592.2483208371389
+              575.1525248329937,
+              572.5514457770854,
+              616.2678412698313
             ],
             "sample_count": 3,
             "seconds": [
-              4.362708518999966,
-              4.145594068000037,
-              0.4322511200000463
+              0.44509932399989793,
+              0.4471213929999749,
+              0.4154037950000884
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 655.6810751678962,
+            "median": 650.3770900340883,
             "metric": "throughput",
-            "p95": 665.7250735698578,
+            "p95": 661.9826489552443,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              641.8854035770581,
-              655.6810751678962,
-              666.841073392298
+              650.3770900340883,
+              663.2721555020394,
+              642.7246205363273
             ],
             "sample_count": 3,
             "seconds": [
-              0.39882508400000916,
-              0.3904337179999402,
-              0.38389956800006075
+              0.3936178010000049,
+              0.38596524499996576,
+              0.3983043310000767
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 2149.997522664361,
+            "median": 2120.290886947482,
             "metric": "throughput",
-            "p95": 2186.634543551635,
+            "p95": 2187.075084772747,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              2149.997522664361,
-              2190.705323650221,
-              2072.9384753819536
+              2037.3687244374048,
+              2194.4955511977764,
+              2120.290886947482
             ],
             "sample_count": 3,
             "seconds": [
-              0.09302336300004299,
-              0.09129479799992168,
-              0.09648139700004776
+              0.0981658340000422,
+              0.09113711800000601,
+              0.09432667999999467
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 12214.025688172087,
+            "median": 12190.250310932568,
             "metric": "throughput",
-            "p95": 12825.011528425615,
+            "p95": 12614.180221346232,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              11574.946750048783,
-              12892.898844009342,
-              12214.025688172087
+              12190.250310932568,
+              12661.28354472553,
+              12107.049075071487
             ],
             "sample_count": 3,
             "seconds": [
-              0.04319674299995313,
-              0.03878103800002464,
-              0.040936543999919195
+              0.04101638500003446,
+              0.03949046699995051,
+              0.04129825500001516
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 89.75043654895114,
+            "median": 99.28280137597743,
             "metric": "throughput",
-            "p95": 91.56486593673912,
+            "p95": 99.70010439871787,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              91.7664692020489,
-              89.75043654895114,
-              89.18350794712676
+              99.28280137597743,
+              97.12340471015187,
+              99.74647140124459
             ],
             "sample_count": 3,
             "seconds": [
-              5.448613249999994,
-              5.571003542999961,
-              5.606417727999997
+              5.036118976000012,
+              5.148089705999951,
+              5.012708650000036
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/drive9_default/drive9-bench-1794202617-9607-drive9_default"
+        "workdir": "/mnt/drive9_default/drive9-bench-1794336873-9582-drive9_default"
       },
       "drive9_sync": {
         "errors": {},
@@ -1682,295 +1686,295 @@
         "path": "/mnt/drive9_sync",
         "results": {
           "macro_find_files": {
-            "median": 0.06676245900007416,
+            "median": 0.04766691899999387,
             "metric": "latency",
-            "p95": 0.08883764639992933,
+            "p95": 0.048690931800001634,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.09129044499991323,
-              0.04012751000004755,
-              0.06676245900007416
+              0.044474087000025975,
+              0.04766691899999387,
+              0.0488047110000025
             ],
             "sample_count": 3,
             "seconds": [
-              0.09129044499991323,
-              0.04012751000004755,
-              0.06676245900007416
+              0.044474087000025975,
+              0.04766691899999387,
+              0.0488047110000025
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 7.152014291000114,
+            "median": 6.534915283999908,
             "metric": "latency",
-            "p95": 7.153402728200104,
+            "p95": 6.557793020299982,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              7.152014291000114,
-              7.153556999000102,
-              6.871618233999925
+              6.516760300000101,
+              6.560334990999991,
+              6.534915283999908
             ],
             "sample_count": 3,
             "seconds": [
-              7.152014291000114,
-              7.153556999000102,
-              6.871618233999925
+              6.516760300000101,
+              6.560334990999991,
+              6.534915283999908
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.7151981619999788,
+            "median": 0.13123725100001593,
             "metric": "latency",
-            "p95": 0.7216429819000041,
+            "p95": 0.14403323590006495,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.7223590730000069,
-              0.02948281599992697,
-              0.7151981619999788
+              0.12829092199990555,
+              0.13123725100001593,
+              0.14545501200007038
             ],
             "sample_count": 3,
             "seconds": [
-              0.7223590730000069,
-              0.02948281599992697,
-              0.7151981619999788
+              0.12829092199990555,
+              0.13123725100001593,
+              0.14545501200007038
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 0.2662026919999789,
+            "median": 0.7608798640000032,
             "metric": "latency",
-            "p95": 0.35913427730001785,
+            "p95": 0.7649690320000786,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.20956825799999024,
-              0.3694600090000222,
-              0.2662026919999789
+              0.7473684369999773,
+              0.7608798640000032,
+              0.765423384000087
             ],
             "sample_count": 3,
             "seconds": [
-              0.20956825799999024,
-              0.3694600090000222,
-              0.2662026919999789
+              0.7473684369999773,
+              0.7608798640000032,
+              0.765423384000087
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.3430855330000213,
+            "median": 0.38120786499996484,
             "metric": "latency",
-            "p95": 0.4481590714000504,
+            "p95": 0.3842001580000215,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.3213085009999759,
-              0.4598339090000536,
-              0.3430855330000213
+              0.38120786499996484,
+              0.38453263500002777,
+              0.37657227099998636
             ],
             "sample_count": 3,
             "seconds": [
-              0.3213085009999759,
-              0.4598339090000536,
-              0.3430855330000213
+              0.38120786499996484,
+              0.38453263500002777,
+              0.37657227099998636
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 208.10758706745392,
+            "median": 223.72387586872262,
             "metric": "throughput",
-            "p95": 209.16452410264964,
+            "p95": 223.87245213069284,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              209.2819615510047,
-              208.10758706745392,
-              205.5254011998127
+              223.72387586872262,
+              223.62050303993365,
+              223.88896060424509
             ],
             "sample_count": 3,
             "seconds": [
-              2.3891213379999954,
-              2.4026034180000124,
-              2.4327893150000364
+              2.2348978090000173,
+              2.2359309329999633,
+              2.2332499050000933
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 0.6117963365643846,
+            "median": 0.6210119146427852,
             "metric": "throughput",
-            "p95": 0.616561927664614,
+            "p95": 0.6710470429567789,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.6170914377868618,
-              0.595733922334896,
-              0.6117963365643846
+              0.6766065016583337,
+              0.6040699621373702,
+              0.6210119146427852
             ],
             "sample_count": 3,
             "seconds": [
-              6.330099173000008,
-              6.557038055999897,
-              6.384886221999977
+              5.773296576999996,
+              6.466552295000042,
+              6.290136964999988
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 21683.793394128203,
+            "median": 157005.3428917553,
             "metric": "throughput",
-            "p95": 21727.863250688304,
+            "p95": 160515.71632693204,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              21732.759901417205,
-              21683.793394128203,
-              20001.93218660842
+              160905.75781972945,
+              154247.86274072682,
+              157005.3428917553
             ],
             "sample_count": 3,
             "seconds": [
-              0.023006742000006852,
-              0.023058695999907286,
-              0.024997585000051004
+              0.003107408999994732,
+              0.003241536000018641,
+              0.0031846050000012838
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 23651.900786256414,
+            "median": 24925.34857975543,
             "metric": "throughput",
-            "p95": 23763.778009994552,
+            "p95": 25370.798348131724,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              23776.20881263212,
-              22484.31438044265,
-              23651.900786256414
+              23572.535636286575,
+              24925.34857975543,
+              25420.2927668402
             ],
             "sample_count": 3,
             "seconds": [
-              0.0008411769999838725,
-              0.00088950899998963,
-              0.0008455979999553165
+              0.0008484450000878496,
+              0.0008023960000400621,
+              0.0007867729999588846
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 51.09893506700242,
+            "median": 58.761513333253866,
             "metric": "throughput",
-            "p95": 51.30030633639424,
+            "p95": 58.98264307703636,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              51.09893506700242,
-              51.322680921882224,
-              50.68397121542067
+              59.00721304856775,
+              55.04380271053417,
+              58.761513333253866
             ],
             "sample_count": 3,
             "seconds": [
-              9.784939731999998,
-              9.742281404999972,
-              9.865051771000026
+              8.47354033800002,
+              9.083674734999931,
+              8.508970781000016
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 53.281377152833386,
+            "median": 53.543995098623576,
             "metric": "throughput",
-            "p95": 53.43375485045466,
+            "p95": 53.55385724060855,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              53.281377152833386,
-              53.1980733196435,
-              53.45068570574592
+              53.169505503427516,
+              53.543995098623576,
+              53.55495303416244
             ],
             "sample_count": 3,
             "seconds": [
-              4.804680615999928,
-              4.81220435299997,
-              4.789461474999939
+              4.814789936000011,
+              4.781115035000084,
+              4.780136765999941
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 346.44442235323345,
+            "median": 345.5202785034738,
             "metric": "throughput",
-            "p95": 348.0523960617982,
+            "p95": 348.1350440112775,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              343.3787600272878,
-              346.44442235323345,
-              348.2310598071943
+              337.20364436211287,
+              348.4255735121446,
+              345.5202785034738
             ],
             "sample_count": 3,
             "seconds": [
-              0.7455324259999543,
-              0.7389352619999272,
-              0.7351440740000044
+              0.7591851519999864,
+              0.7347336689999793,
+              0.7409116510000331
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 112.29378904782074,
+            "median": 138.80838638684136,
             "metric": "throughput",
-            "p95": 114.83014026194368,
+            "p95": 140.41270351461012,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              108.8840709103,
-              115.1119570635129,
-              112.29378904782074
+              140.5909609732511,
+              136.34990936749995,
+              138.80838638684136
             ],
             "sample_count": 3,
             "seconds": [
-              1.8368159670000068,
-              1.7374389689999816,
-              1.7810424040000044
+              1.4225665620000427,
+              1.4668143229999941,
+              1.44083513399994
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 72.68005359062067,
+            "median": 33755.771055444384,
             "metric": "throughput",
-            "p95": 72.90343351862383,
+            "p95": 35229.76026410368,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              72.68005359062067,
-              72.92825351062417,
-              72.4293828962321
+              33755.771055444384,
+              100.8675970214748,
+              35393.5368428436
             ],
             "sample_count": 3,
             "seconds": [
-              6.8794665839999425,
-              6.8560533939999,
-              6.903275715000063
+              0.01481228199997986,
+              4.9569932740000695,
+              0.014126873000009255
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 33.43304335758004,
+            "median": 41.6021539049904,
             "metric": "throughput",
-            "p95": 33.666161615759236,
+            "p95": 41.94748800407018,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              33.69206364444582,
-              33.43304335758004,
-              33.34858554681986
+              41.98585845952349,
+              41.6021539049904,
+              40.94105755991643
             ],
             "sample_count": 3,
             "seconds": [
-              14.840290143000061,
-              14.955264306999993,
-              14.99313964299995
+              11.908771628000068,
+              12.018608487000051,
+              12.212679148999996
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/drive9_sync/drive9-bench-1794202789-9607-drive9_sync"
+        "workdir": "/mnt/drive9_sync/drive9-bench-1794337027-9582-drive9_sync"
       }
     },
-    "timestamp": "2026-11-09T05:34:59Z",
+    "timestamp": "2026-11-10T18:53:17Z",
     "version": "b529a36f"
   },
   "drive9_fuse_bench_hot": {
@@ -1981,15 +1985,15 @@
     },
     "cache_state": "hot",
     "environment": "lan",
-    "host": "iZrj90x3rcwcyduv529x02Z",
+    "host": "iZrj980079ks7kdbsi3nu0Z",
     "mount_params": {
-      "client_host": "iZrj90x3rcwcyduv529x02Z",
+      "client_host": "iZrj980079ks7kdbsi3nu0Z",
       "network_note": "",
-      "server_host": "172.16.1.199",
-      "server_url": "http://172.16.1.199:9000",
+      "server_host": "172.16.1.194",
+      "server_url": "http://172.16.1.194:9000",
       "targets": {
         "bowl": {
-          "mount": "bowl:01a1bec9-b3cd-762c-a938-87a9d43b1dfc /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+          "mount": "bowl:01a1c6cb-dd90-7516-908c-cdbea4804326 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
           "path": "/mnt/bowl"
         },
         "drive9_default": {
@@ -2016,857 +2020,857 @@
     },
     "results": {
       "bowl:macro_find_files": {
-        "median": 0.005330761000095663,
+        "median": 0.009115653000094426,
         "metric": "latency",
-        "p95": 0.00947971690001168,
+        "p95": 0.010239034800042646,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.005330761000095663,
-          0.004685508999955346,
-          0.00994071200000235
+          0.009115653000094426,
+          0.006306980999966072,
+          0.010363855000036892
         ],
         "sample_count": 3,
         "seconds": [
-          0.005330761000095663,
-          0.004685508999955346,
-          0.00994071200000235
+          0.009115653000094426,
+          0.006306980999966072,
+          0.010363855000036892
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_clone": {
-        "median": 5.542519886000036,
+        "median": 5.7240612090000695,
         "metric": "latency",
-        "p95": 5.64280213580007,
+        "p95": 5.985378098999973,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          5.542519886000036,
-          5.653944608000074,
-          5.419332795000059
+          6.014413308999963,
+          5.5608040749999645,
+          5.7240612090000695
         ],
         "sample_count": 3,
         "seconds": [
-          5.542519886000036,
-          5.653944608000074,
-          5.419332795000059
+          6.014413308999963,
+          5.5608040749999645,
+          5.7240612090000695
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_diff_dirty": {
-        "median": 0.005268898999929661,
+        "median": 0.007686142000011387,
         "metric": "latency",
-        "p95": 0.005539993399952437,
+        "p95": 0.009809951200043087,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.002631201999975019,
-          0.005570114999954967,
-          0.005268898999929661
+          0.0058951469999328765,
+          0.01004593000004661,
+          0.007686142000011387
         ],
         "sample_count": 3,
         "seconds": [
-          0.002631201999975019,
-          0.005570114999954967,
-          0.005268898999929661
+          0.0058951469999328765,
+          0.01004593000004661,
+          0.007686142000011387
         ],
         "unit": "seconds"
       },
       "bowl:macro_git_status_dirty": {
-        "median": 0.0300944849999496,
+        "median": 0.02912000700007411,
         "metric": "latency",
-        "p95": 0.03854163029993742,
+        "p95": 0.03058835430002773,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.028280284999937066,
-          0.03948020199993607,
-          0.0300944849999496
+          0.02912000700007411,
+          0.025270136000017374,
+          0.030751504000022578
         ],
         "sample_count": 3,
         "seconds": [
-          0.028280284999937066,
-          0.03948020199993607,
-          0.0300944849999496
+          0.02912000700007411,
+          0.025270136000017374,
+          0.030751504000022578
         ],
         "unit": "seconds"
       },
       "bowl:macro_go_build": {
-        "median": 0.08554627199998777,
+        "median": 0.07269081300000835,
         "metric": "latency",
-        "p95": 0.091828842599989,
+        "p95": 0.07977387060003593,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.08554627199998777,
-          0.09252690599998914,
-          0.07578996099994129
+          0.07269081300000835,
+          0.0720464250000532,
+          0.080560877000039
         ],
         "sample_count": 3,
         "seconds": [
-          0.08554627199998777,
-          0.09252690599998914,
-          0.07578996099994129
+          0.07269081300000835,
+          0.0720464250000532,
+          0.080560877000039
         ],
         "unit": "seconds"
       },
       "bowl:mkdir": {
-        "median": 434.4450769820073,
+        "median": 484.46537644066836,
         "metric": "throughput",
-        "p95": 674.5794735418065,
+        "p95": 698.533690711455,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          433.40088559350744,
-          434.4450769820073,
-          701.2610731595619
+          448.6338696692526,
+          484.46537644066836,
+          722.3190589637647
         ],
         "sample_count": 3,
         "seconds": [
-          1.153666309000016,
-          1.1508934649999674,
-          0.7130012189999775
+          1.1144945440000242,
+          1.0320654980000086,
+          0.6922148790000051
         ],
         "unit": "ops/s"
       },
       "bowl:random_read_4k": {
-        "median": 394.57058750448886,
+        "median": 540.2477484558715,
         "metric": "throughput",
-        "p95": 402.8557071068666,
+        "p95": 541.3805227410598,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          372.85972551773295,
-          394.57058750448886,
-          403.77627595157526
+          540.2477484558715,
+          533.0525320618381,
+          541.5063865505252
         ],
         "sample_count": 3,
         "seconds": [
-          0.010476460000006682,
-          0.009900002999984281,
-          0.00967429299998912
+          0.00723047899998619,
+          0.007328077000011035,
+          0.007213673000023846
         ],
         "unit": "MiB/s"
       },
       "bowl:readdir_large": {
-        "median": 1155025.167839658,
+        "median": 1063198.6543877563,
         "metric": "throughput",
-        "p95": 1158352.0451877993,
+        "p95": 1077065.8945405383,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          1155025.167839658,
-          1036482.0968462463,
-          1158721.6982264817
+          1063198.6543877563,
+          1078606.6990019586,
+          1028419.3401187697
         ],
         "sample_count": 3,
         "seconds": [
-          0.00043289100005949877,
-          0.00048240099999929953,
-          0.000431509999998525
+          0.00047027900001239686,
+          0.00046356100000366496,
+          0.00048618299996405767
         ],
         "unit": "ops/s"
       },
       "bowl:readdir_small": {
-        "median": 423307.299955025,
+        "median": 376541.4665279291,
         "metric": "throughput",
-        "p95": 436221.05335351365,
+        "p95": 421375.82060524594,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          368059.77270210336,
-          423307.299955025,
-          437655.91484223463
+          376541.4665279291,
+          426357.4155027256,
+          274951.8833926453
         ],
         "sample_count": 3,
         "seconds": [
-          5.4339000030267925e-05,
-          4.724699999769655e-05,
-          4.569800000808755e-05
+          5.311500001425884e-05,
+          4.6908999991046585e-05,
+          7.274000000734304e-05
         ],
         "unit": "ops/s"
       },
       "bowl:rename": {
-        "median": 317.4035056587427,
+        "median": 2526.4035827960815,
         "metric": "throughput",
-        "p95": 368.06978045312354,
+        "p95": 2810.546434992524,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          298.5691886132442,
-          317.4035056587427,
-          373.6993665413881
+          2526.4035827960815,
+          1859.2946842220736,
+          2842.117863014351
         ],
         "sample_count": 3,
         "seconds": [
-          1.6746537120000085,
-          1.5752819080000222,
-          1.3379739029999769
+          0.19790978899999345,
+          0.2689191789999654,
+          0.1759251459999973
         ],
         "unit": "ops/s"
       },
       "bowl:sequential_read": {
-        "median": 6503.594455351797,
+        "median": 7827.433227176918,
         "metric": "throughput",
-        "p95": 6505.187757778596,
+        "p95": 7929.854255123479,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          6503.594455351797,
-          6505.364791381574,
-          6266.533796571266
+          7474.26138823704,
+          7827.433227176918,
+          7941.234369339763
         ],
         "sample_count": 3,
         "seconds": [
-          0.039362848000052963,
-          0.03935213599999088,
-          0.04085192999997389
+          0.03425087599998733,
+          0.03270548500000814,
+          0.0322368019999999
         ],
         "unit": "MiB/s"
       },
       "bowl:sequential_write": {
-        "median": 189.51488720944627,
+        "median": 1120.7196477073057,
         "metric": "throughput",
-        "p95": 197.83382281366974,
+        "p95": 1152.2345049755372,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          189.51488720944627,
-          198.75814899191678,
-          180.789786850481
+          1111.591749102373,
+          1155.7361557831184,
+          1120.7196477073057
         ],
         "sample_count": 3,
         "seconds": [
-          1.3508173620000434,
-          1.2879975049999643,
-          1.41600919199999
+          0.2303003780000381,
+          0.2215038429999936,
+          0.2284246560000156
         ],
         "unit": "MiB/s"
       },
       "bowl:small_write_4k_fsync": {
-        "median": 126.01962454591224,
+        "median": 151.8577265551851,
         "metric": "throughput",
-        "p95": 142.85273027074854,
+        "p95": 153.00585531834972,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          144.7230753512859,
-          126.01962454591224,
-          121.25716053089518
+          137.40298070855766,
+          153.13342518092355,
+          151.8577265551851
         ],
         "sample_count": 3,
         "seconds": [
-          1.3819496269999831,
-          1.5870544030000246,
-          1.6493871299999796
+          1.4555724989999703,
+          1.306050588000005,
+          1.3170222189999663
         ],
         "unit": "ops/s"
       },
       "bowl:stat": {
-        "median": 723083.5754785638,
+        "median": 740831.8355895487,
         "metric": "throughput",
-        "p95": 734005.9206467707,
+        "p95": 748437.4893323949,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          735219.5145543494,
-          723083.5754785638,
-          705109.2214159011
+          749282.561970489,
+          740831.8355895487,
+          728013.9778867472
         ],
         "sample_count": 3,
         "seconds": [
-          0.000680068999940886,
-          0.0006914829999686845,
-          0.0007091100000025108
+          0.0006673049999790237,
+          0.0006749170000261984,
+          0.0006867999999826679
         ],
         "unit": "ops/s"
       },
       "bowl:unlink": {
-        "median": 333.77183542771775,
+        "median": 2726.977876508292,
         "metric": "throughput",
-        "p95": 423.74380218215083,
+        "p95": 2857.8480857321465,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          302.37533002702486,
-          433.74068737708785,
-          333.77183542771775
+          2344.855606746068,
+          2872.3892200903524,
+          2726.977876508292
         ],
         "sample_count": 3,
         "seconds": [
-          1.6535740529999998,
-          1.1527625019999732,
-          1.4980293330000904
+          0.21323274600001696,
+          0.17407111700003952,
+          0.18335315600000968
         ],
         "unit": "ops/s"
       },
       "drive9_default:macro_find_files": {
-        "median": 0.005042013000092993,
+        "median": 0.004343236000067918,
         "metric": "latency",
-        "p95": 0.005058461400085435,
+        "p95": 0.004877332000160095,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.005060289000084595,
-          0.004721194000012474,
-          0.005042013000092993
+          0.00426915299999564,
+          0.004343236000067918,
+          0.004936676000170337
         ],
         "sample_count": 3,
         "seconds": [
-          0.005060289000084595,
-          0.004721194000012474,
-          0.005042013000092993
+          0.00426915299999564,
+          0.004343236000067918,
+          0.004936676000170337
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_clone": {
-        "median": 1.9852788690000125,
+        "median": 1.9658337569999276,
         "metric": "latency",
-        "p95": 2.0107979054999303,
+        "p95": 1.9715449635000368,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          1.9715619920000336,
-          1.9852788690000125,
-          2.0136333539999214
+          1.972179542000049,
+          1.9534823889998734,
+          1.9658337569999276
         ],
         "sample_count": 3,
         "seconds": [
-          1.9715619920000336,
-          1.9852788690000125,
-          2.0136333539999214
+          1.972179542000049,
+          1.9534823889998734,
+          1.9658337569999276
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_diff_dirty": {
-        "median": 0.01626505400008682,
+        "median": 0.013122740000198974,
         "metric": "latency",
-        "p95": 0.02465010200010056,
+        "p95": 0.022849979600186997,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.014161594999904992,
-          0.025581774000102087,
-          0.01626505400008682
+          0.023930784000185668,
+          0.013122740000198974,
+          0.01282164899998861
         ],
         "sample_count": 3,
         "seconds": [
-          0.014161594999904992,
-          0.025581774000102087,
-          0.01626505400008682
+          0.023930784000185668,
+          0.013122740000198974,
+          0.01282164899998861
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_git_status_dirty": {
-        "median": 0.17043602200010355,
+        "median": 0.21857470700001613,
         "metric": "latency",
-        "p95": 0.2314401360999227,
+        "p95": 0.2197716089000778,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.23821837099990262,
-          0.1535734550000143,
-          0.17043602200010355
+          0.1484759899999517,
+          0.21990459800008466,
+          0.21857470700001613
         ],
         "sample_count": 3,
         "seconds": [
-          0.23821837099990262,
-          0.1535734550000143,
-          0.17043602200010355
+          0.1484759899999517,
+          0.21990459800008466,
+          0.21857470700001613
         ],
         "unit": "seconds"
       },
       "drive9_default:macro_go_build": {
-        "median": 0.12557495000010022,
+        "median": 0.11765114800004994,
         "metric": "latency",
-        "p95": 0.12692913139994744,
+        "p95": 0.11876770779990693,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.12707959599993046,
-          0.12557495000010022,
-          0.12228329300000951
+          0.11889176999989104,
+          0.112844116000133,
+          0.11765114800004994
         ],
         "sample_count": 3,
         "seconds": [
-          0.12707959599993046,
-          0.12557495000010022,
-          0.12228329300000951
+          0.11889176999989104,
+          0.112844116000133,
+          0.11765114800004994
         ],
         "unit": "seconds"
       },
       "drive9_default:mkdir": {
-        "median": 212.17345692884476,
+        "median": 229.88097055754787,
         "metric": "throughput",
-        "p95": 212.3675498318335,
+        "p95": 230.67005141921243,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          212.17345692884476,
-          212.38911570994335,
-          205.9946178995292
+          229.16561157864422,
+          229.88097055754787,
+          230.75772707050848
         ],
         "sample_count": 3,
         "seconds": [
-          2.35656244300003,
-          2.3541696019999563,
-          2.427247881999847
+          2.1818282269999827,
+          2.175038667999843,
+          2.1667746790001274
         ],
         "unit": "ops/s"
       },
       "drive9_default:random_read_4k": {
-        "median": 167.5151097016884,
+        "median": 153.25130715253556,
         "metric": "throughput",
-        "p95": 192.62769013785987,
+        "p95": 161.32327713847278,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          167.5151097016884,
-          154.98676487412547,
-          195.41797685299002
+          153.25130715253556,
+          162.2201626924658,
+          140.4409549376247
         ],
         "sample_count": 3,
         "seconds": [
-          0.0233187920000546,
-          0.025203765000014755,
-          0.019989205000001675
+          0.02548917900003289,
+          0.024079928999981348,
+          0.027814179999950284
         ],
         "unit": "MiB/s"
       },
       "drive9_default:readdir_large": {
-        "median": 80105.09788845573,
+        "median": 80094.3319004316,
         "metric": "throughput",
-        "p95": 82089.59563273023,
+        "p95": 85418.16055932274,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          80105.09788845573,
-          82310.09538209406,
-          58795.12099335246
+          86009.69707697732,
+          80094.3319004316,
+          79588.62232873702
         ],
         "sample_count": 3,
         "seconds": [
-          0.006241799999997966,
-          0.006074589000036212,
-          0.00850410699990789
+          0.00581329800002095,
+          0.006242638999992778,
+          0.006282305000013366
         ],
         "unit": "ops/s"
       },
       "drive9_default:readdir_small": {
-        "median": 106125.00468690287,
+        "median": 110909.01014371956,
         "metric": "throughput",
-        "p95": 136280.10964601283,
+        "p95": 133049.55695865207,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          106125.00468690287,
-          102065.29116561795,
-          139630.6768636917
+          110909.01014371956,
+          15986.507387617172,
+          135509.6177158668
         ],
         "sample_count": 3,
         "seconds": [
-          0.00018845699992198206,
-          0.0001959530000021914,
-          0.0001432349999959115
+          0.00018032800016953843,
+          0.0012510550000115472,
+          0.0001475910000863223
         ],
         "unit": "ops/s"
       },
       "drive9_default:rename": {
-        "median": 84.40669072045742,
+        "median": 89.25426353773624,
         "metric": "throughput",
-        "p95": 85.21507144625951,
+        "p95": 89.55048533167495,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          85.30489152690419,
-          84.40669072045742,
-          81.9854783369071
+          89.58339886433481,
+          89.25426353773624,
+          88.34599076061005
         ],
         "sample_count": 3,
         "seconds": [
-          5.861328594999804,
-          5.923701020999943,
-          6.09864100499999
+          5.581391266000082,
+          5.601973285999975,
+          5.659566390000009
         ],
         "unit": "ops/s"
       },
       "drive9_default:sequential_read": {
-        "median": 444.836020619029,
+        "median": 256.2654810439968,
         "metric": "throughput",
-        "p95": 1896.1413971525553,
+        "p95": 1750.757663685034,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          241.03211102375036,
-          444.836020619029,
-          2057.3975501007253
+          1916.8123506451495,
+          129.60314062836073,
+          256.2654810439968
         ],
         "sample_count": 3,
         "seconds": [
-          1.0620991490000051,
-          0.5754929639999773,
-          0.12442903900000601
+          0.13355506599998535,
+          1.9752607749999243,
+          0.9989640390000432
         ],
         "unit": "MiB/s"
       },
       "drive9_default:sequential_write": {
-        "median": 666.5122493169496,
+        "median": 627.2137706038747,
         "metric": "throughput",
-        "p95": 670.716187283791,
+        "p95": 644.8482345848852,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          619.0458759085831,
-          671.183291502329,
-          666.5122493169496
+          646.8076194716641,
+          627.2137706038747,
+          626.0009167783489
         ],
         "sample_count": 3,
         "seconds": [
-          0.41353962599987426,
-          0.38141593099999227,
-          0.3840889650000463
+          0.39579001899994637,
+          0.408154303999936,
+          0.40894508799999585
         ],
         "unit": "MiB/s"
       },
       "drive9_default:small_write_4k_fsync": {
-        "median": 2181.605788611429,
+        "median": 2170.703092683841,
         "metric": "throughput",
-        "p95": 2187.7991043403135,
+        "p95": 2239.720121659488,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          2113.2810127911575,
-          2181.605788611429,
-          2188.487250532412
+          1879.6603829611631,
+          2170.703092683841,
+          2247.38868043456
         ],
         "sample_count": 3,
         "seconds": [
-          0.09463956700005838,
-          0.09167559100001199,
-          0.09138732700012042
+          0.10640220000004774,
+          0.0921360460000642,
+          0.08899217199996201
         ],
         "unit": "ops/s"
       },
       "drive9_default:stat": {
-        "median": 584488.379767476,
+        "median": 587325.2855195125,
         "metric": "throughput",
-        "p95": 591083.9851513332,
+        "p95": 665263.6558603181,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          579884.9507851283,
-          584488.379767476,
-          591816.830193984
+          567253.5851520384,
+          673923.4747870743,
+          587325.2855195125
         ],
         "sample_count": 3,
         "seconds": [
-          0.0008622400000604102,
-          0.0008554490000278747,
-          0.0008448560001852456
+          0.000881439999830036,
+          0.0007419239998398552,
+          0.0008513169998423109
         ],
         "unit": "ops/s"
       },
       "drive9_default:unlink": {
-        "median": 86.37788495564556,
+        "median": 96.04485242359816,
         "metric": "throughput",
-        "p95": 86.76623923662663,
+        "p95": 96.3932222489805,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          86.37788495564556,
-          84.96527450198944,
-          86.80938971229119
+          96.43193000735633,
+          95.83636838965731,
+          96.04485242359816
         ],
         "sample_count": 3,
         "seconds": [
-          5.788518672999999,
-          5.884757071999957,
-          5.759745594999913
+          5.185004593000031,
+          5.217226074000109,
+          5.205901069999982
         ],
         "unit": "ops/s"
       },
       "drive9_sync:macro_find_files": {
-        "median": 0.0038614830000369693,
+        "median": 0.004407829999991009,
         "metric": "latency",
-        "p95": 0.004193626200071776,
+        "p95": 0.0045475937000219345,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.0038614830000369693,
-          0.0037696759998198104,
-          0.0042305310000756435
+          0.004563123000025371,
+          0.004407829999991009,
+          0.004272814999922048
         ],
         "sample_count": 3,
         "seconds": [
-          0.0038614830000369693,
-          0.0037696759998198104,
-          0.0042305310000756435
+          0.004563123000025371,
+          0.004407829999991009,
+          0.004272814999922048
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_clone": {
-        "median": 7.161979774999963,
+        "median": 6.79389903099991,
         "metric": "latency",
-        "p95": 7.3168193579000675,
+        "p95": 6.848342872300009,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          7.334023756000079,
-          7.161979774999963,
-          6.983393597000031
+          6.79389903099991,
+          6.85439218800002,
+          6.763357115999952
         ],
         "sample_count": 3,
         "seconds": [
-          7.334023756000079,
-          7.161979774999963,
-          6.983393597000031
+          6.79389903099991,
+          6.85439218800002,
+          6.763357115999952
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_diff_dirty": {
-        "median": 0.013266936000036367,
+        "median": 0.012679077999791843,
         "metric": "latency",
-        "p95": 0.02035835279996263,
+        "p95": 0.0130212265000182,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.02114628799995444,
-          0.012837271000080364,
-          0.013266936000036367
+          0.012451039000097808,
+          0.012679077999791843,
+          0.013059243000043352
         ],
         "sample_count": 3,
         "seconds": [
-          0.02114628799995444,
-          0.012837271000080364,
-          0.013266936000036367
+          0.012451039000097808,
+          0.012679077999791843,
+          0.013059243000043352
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_git_status_dirty": {
-        "median": 0.04999935500018182,
+        "median": 0.04443285100001049,
         "metric": "latency",
-        "p95": 0.06010678789996291,
+        "p95": 0.06451895110008081,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.06122983599993859,
-          0.04479588200001672,
-          0.04999935500018182
+          0.06675074000008863,
+          0.04443285100001049,
+          0.038743478000014875
         ],
         "sample_count": 3,
         "seconds": [
-          0.06122983599993859,
-          0.04479588200001672,
-          0.04999935500018182
+          0.06675074000008863,
+          0.04443285100001049,
+          0.038743478000014875
         ],
         "unit": "seconds"
       },
       "drive9_sync:macro_go_build": {
-        "median": 0.11141271800011054,
+        "median": 0.11917834200016841,
         "metric": "latency",
-        "p95": 0.17408546540007136,
+        "p95": 0.15868931400002567,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          0.11128354700008458,
-          0.11141271800011054,
-          0.18104910400006702
+          0.11574509000001854,
+          0.11917834200016841,
+          0.1630794220000098
         ],
         "sample_count": 3,
         "seconds": [
-          0.11128354700008458,
-          0.11141271800011054,
-          0.18104910400006702
+          0.11574509000001854,
+          0.11917834200016841,
+          0.1630794220000098
         ],
         "unit": "seconds"
       },
       "drive9_sync:mkdir": {
-        "median": 205.6033291590411,
+        "median": 227.56999109080078,
         "metric": "throughput",
-        "p95": 206.92473448047454,
+        "p95": 230.03643340161344,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          205.6033291590411,
-          207.07155729396715,
-          204.98319534850776
+          230.31048254725928,
+          227.56999109080078,
+          226.00572919009096
         ],
         "sample_count": 3,
         "seconds": [
-          2.431867237000006,
-          2.414624232000051,
-          2.439224342999978
+          2.17098238199992,
+          2.197126244999936,
+          2.2123332969999865
         ],
         "unit": "ops/s"
       },
       "drive9_sync:random_read_4k": {
-        "median": 2.5246205797739227,
+        "median": 2.7210665689870988,
         "metric": "throughput",
-        "p95": 2.5559390354983504,
+        "p95": 2.7950754146175845,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          2.3886992312148467,
-          2.559418863912176,
-          2.5246205797739227
+          2.7210665689870988,
+          2.5770249621567425,
+          2.8032986196876384
         ],
         "sample_count": 3,
         "seconds": [
-          1.6353042480000113,
-          1.5262253690000307,
-          1.5472622029999457
+          1.4355584109998745,
+          1.5157982779999202,
+          1.3934476949998498
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:readdir_large": {
-        "median": 238320.50771785103,
+        "median": 215641.88611568877,
         "metric": "throughput",
-        "p95": 239415.47459547516,
+        "p95": 222904.4886040597,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          202404.8120574475,
-          238320.50771785103,
-          239537.13758187785
+          208271.8063828824,
+          215641.88611568877,
+          223711.44443610092
         ],
         "sample_count": 3,
         "seconds": [
-          0.002470296999945276,
-          0.0020980150000013964,
-          0.0020873590001428965
+          0.0024007089998576703,
+          0.0023186589999113494,
+          0.002235022000149911
         ],
         "unit": "ops/s"
       },
       "drive9_sync:readdir_small": {
-        "median": 217462.21627665867,
+        "median": 198495.40499523885,
         "metric": "throughput",
-        "p95": 218207.73173554262,
+        "p95": 212583.47168883818,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          218290.56678652973,
-          203421.55042200425,
-          217462.21627665867
+          183185.41112752553,
+          198495.40499523885,
+          214148.81243257143
         ],
         "sample_count": 3,
         "seconds": [
-          9.16209999104467e-05,
-          9.831800002757518e-05,
-          9.196999985761067e-05
+          0.00010917899999185465,
+          0.00010075799991682288,
+          9.33929998154781e-05
         ],
         "unit": "ops/s"
       },
       "drive9_sync:rename": {
-        "median": 49.888935047705594,
+        "median": 56.39144653140498,
         "metric": "throughput",
-        "p95": 50.44989677748772,
+        "p95": 57.19535694878657,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          50.512225858574624,
-          49.888935047705594,
-          49.68094030224693
+          57.28468032849563,
+          56.29288182961607,
+          56.39144653140498
         ],
         "sample_count": 3,
         "seconds": [
-          9.898593686999902,
-          10.022262442000056,
-          10.064221750999877
+          8.728337089999968,
+          8.882117662999917,
+          8.866592910000008
         ],
         "unit": "ops/s"
       },
       "drive9_sync:sequential_read": {
-        "median": 606.5678254288489,
+        "median": 606.0102099416965,
         "metric": "throughput",
-        "p95": 617.9082586332605,
+        "p95": 626.4207930694337,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          606.5678254288489,
-          565.4894815431085,
-          619.168306767084
+          606.0102099416965,
+          567.0972861574636,
+          628.6886356391823
         ],
         "sample_count": 3,
         "seconds": [
-          0.42204678399980367,
-          0.4527051490001668,
-          0.41345785500016063
+          0.42243512699997154,
+          0.4514216630000192,
+          0.40719679900007577
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:sequential_write": {
-        "median": 344.39132348784324,
+        "median": 346.9079860160116,
         "metric": "throughput",
-        "p95": 349.8756720610861,
+        "p95": 349.659490467553,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          344.39132348784324,
-          350.4850441247798,
-          343.8551126295038
+          346.9079860160116,
+          332.84645870875045,
+          349.9652131843909
         ],
         "sample_count": 3,
         "seconds": [
-          0.7433404460000475,
-          0.7304163310000149,
-          0.7444996179999634
+          0.737947843000029,
+          0.7691233999998985,
+          0.7315012760000172
         ],
         "unit": "MiB/s"
       },
       "drive9_sync:small_write_4k_fsync": {
-        "median": 104.28609667974457,
+        "median": 137.97686697232433,
         "metric": "throughput",
-        "p95": 106.82934294036811,
+        "p95": 138.12862393395355,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          104.13686307612477,
-          104.28609667974457,
-          107.11192585821517
+          135.7249092034752,
+          137.97686697232433,
+          138.145485818579
         ],
         "sample_count": 3,
         "seconds": [
-          1.9205494969999108,
-          1.9178011869998954,
-          1.8672057139999652
+          1.4735688619998655,
+          1.4495183460001044,
+          1.4477490799999941
         ],
         "unit": "ops/s"
       },
       "drive9_sync:stat": {
-        "median": 471514.84516659286,
+        "median": 504475.7084228991,
         "metric": "throughput",
-        "p95": 526424.0127619242,
+        "p95": 548826.7310788459,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          471514.84516659286,
-          422561.04103695083,
-          532525.0313836277
+          553754.6224850622,
+          465438.83908679424,
+          504475.7084228991
         ],
         "sample_count": 3,
         "seconds": [
-          0.0010604120000152761,
-          0.0011832610000510613,
-          0.0009389229999214876
+          0.0009029269999700773,
+          0.001074254999821278,
+          0.0009911280001233536
         ],
         "unit": "ops/s"
       },
       "drive9_sync:unlink": {
-        "median": 35.448853075978434,
+        "median": 44.797153016927176,
         "metric": "throughput",
-        "p95": 35.47763820671815,
+        "p95": 46.584317495140674,
         "p95_method": "linear_interpolation",
         "p95_reliable": false,
         "runs": [
-          35.448853075978434,
-          35.48083655457812,
-          35.21611235565098
+          44.797153016927176,
+          46.78289132605328,
+          44.64606490681315
         ],
         "sample_count": 3,
         "seconds": [
-          14.104828692999945,
-          14.09211418200016,
-          14.198046477999924
+          11.161423580000019,
+          10.68766777399992,
+          11.199195293999992
         ],
         "unit": "ops/s"
       }
@@ -2875,296 +2879,296 @@
     "targets": {
       "bowl": {
         "errors": {},
-        "mount": "bowl:01a1bec9-b3cd-762c-a938-87a9d43b1dfc /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
+        "mount": "bowl:01a1c6cb-dd90-7516-908c-cdbea4804326 /mnt/bowl fuse.bowl rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other,max_read=1048576 0 0",
         "path": "/mnt/bowl",
         "results": {
           "macro_find_files": {
-            "median": 0.005330761000095663,
+            "median": 0.009115653000094426,
             "metric": "latency",
-            "p95": 0.00947971690001168,
+            "p95": 0.010239034800042646,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.005330761000095663,
-              0.004685508999955346,
-              0.00994071200000235
+              0.009115653000094426,
+              0.006306980999966072,
+              0.010363855000036892
             ],
             "sample_count": 3,
             "seconds": [
-              0.005330761000095663,
-              0.004685508999955346,
-              0.00994071200000235
+              0.009115653000094426,
+              0.006306980999966072,
+              0.010363855000036892
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 5.542519886000036,
+            "median": 5.7240612090000695,
             "metric": "latency",
-            "p95": 5.64280213580007,
+            "p95": 5.985378098999973,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              5.542519886000036,
-              5.653944608000074,
-              5.419332795000059
+              6.014413308999963,
+              5.5608040749999645,
+              5.7240612090000695
             ],
             "sample_count": 3,
             "seconds": [
-              5.542519886000036,
-              5.653944608000074,
-              5.419332795000059
+              6.014413308999963,
+              5.5608040749999645,
+              5.7240612090000695
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.005268898999929661,
+            "median": 0.007686142000011387,
             "metric": "latency",
-            "p95": 0.005539993399952437,
+            "p95": 0.009809951200043087,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.002631201999975019,
-              0.005570114999954967,
-              0.005268898999929661
+              0.0058951469999328765,
+              0.01004593000004661,
+              0.007686142000011387
             ],
             "sample_count": 3,
             "seconds": [
-              0.002631201999975019,
-              0.005570114999954967,
-              0.005268898999929661
+              0.0058951469999328765,
+              0.01004593000004661,
+              0.007686142000011387
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 0.0300944849999496,
+            "median": 0.02912000700007411,
             "metric": "latency",
-            "p95": 0.03854163029993742,
+            "p95": 0.03058835430002773,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.028280284999937066,
-              0.03948020199993607,
-              0.0300944849999496
+              0.02912000700007411,
+              0.025270136000017374,
+              0.030751504000022578
             ],
             "sample_count": 3,
             "seconds": [
-              0.028280284999937066,
-              0.03948020199993607,
-              0.0300944849999496
+              0.02912000700007411,
+              0.025270136000017374,
+              0.030751504000022578
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.08554627199998777,
+            "median": 0.07269081300000835,
             "metric": "latency",
-            "p95": 0.091828842599989,
+            "p95": 0.07977387060003593,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.08554627199998777,
-              0.09252690599998914,
-              0.07578996099994129
+              0.07269081300000835,
+              0.0720464250000532,
+              0.080560877000039
             ],
             "sample_count": 3,
             "seconds": [
-              0.08554627199998777,
-              0.09252690599998914,
-              0.07578996099994129
+              0.07269081300000835,
+              0.0720464250000532,
+              0.080560877000039
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 434.4450769820073,
+            "median": 484.46537644066836,
             "metric": "throughput",
-            "p95": 674.5794735418065,
+            "p95": 698.533690711455,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              433.40088559350744,
-              434.4450769820073,
-              701.2610731595619
+              448.6338696692526,
+              484.46537644066836,
+              722.3190589637647
             ],
             "sample_count": 3,
             "seconds": [
-              1.153666309000016,
-              1.1508934649999674,
-              0.7130012189999775
+              1.1144945440000242,
+              1.0320654980000086,
+              0.6922148790000051
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 394.57058750448886,
+            "median": 540.2477484558715,
             "metric": "throughput",
-            "p95": 402.8557071068666,
+            "p95": 541.3805227410598,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              372.85972551773295,
-              394.57058750448886,
-              403.77627595157526
+              540.2477484558715,
+              533.0525320618381,
+              541.5063865505252
             ],
             "sample_count": 3,
             "seconds": [
-              0.010476460000006682,
-              0.009900002999984281,
-              0.00967429299998912
+              0.00723047899998619,
+              0.007328077000011035,
+              0.007213673000023846
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 1155025.167839658,
+            "median": 1063198.6543877563,
             "metric": "throughput",
-            "p95": 1158352.0451877993,
+            "p95": 1077065.8945405383,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              1155025.167839658,
-              1036482.0968462463,
-              1158721.6982264817
+              1063198.6543877563,
+              1078606.6990019586,
+              1028419.3401187697
             ],
             "sample_count": 3,
             "seconds": [
-              0.00043289100005949877,
-              0.00048240099999929953,
-              0.000431509999998525
+              0.00047027900001239686,
+              0.00046356100000366496,
+              0.00048618299996405767
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 423307.299955025,
+            "median": 376541.4665279291,
             "metric": "throughput",
-            "p95": 436221.05335351365,
+            "p95": 421375.82060524594,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              368059.77270210336,
-              423307.299955025,
-              437655.91484223463
+              376541.4665279291,
+              426357.4155027256,
+              274951.8833926453
             ],
             "sample_count": 3,
             "seconds": [
-              5.4339000030267925e-05,
-              4.724699999769655e-05,
-              4.569800000808755e-05
+              5.311500001425884e-05,
+              4.6908999991046585e-05,
+              7.274000000734304e-05
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 317.4035056587427,
+            "median": 2526.4035827960815,
             "metric": "throughput",
-            "p95": 368.06978045312354,
+            "p95": 2810.546434992524,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              298.5691886132442,
-              317.4035056587427,
-              373.6993665413881
+              2526.4035827960815,
+              1859.2946842220736,
+              2842.117863014351
             ],
             "sample_count": 3,
             "seconds": [
-              1.6746537120000085,
-              1.5752819080000222,
-              1.3379739029999769
+              0.19790978899999345,
+              0.2689191789999654,
+              0.1759251459999973
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 6503.594455351797,
+            "median": 7827.433227176918,
             "metric": "throughput",
-            "p95": 6505.187757778596,
+            "p95": 7929.854255123479,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              6503.594455351797,
-              6505.364791381574,
-              6266.533796571266
+              7474.26138823704,
+              7827.433227176918,
+              7941.234369339763
             ],
             "sample_count": 3,
             "seconds": [
-              0.039362848000052963,
-              0.03935213599999088,
-              0.04085192999997389
+              0.03425087599998733,
+              0.03270548500000814,
+              0.0322368019999999
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 189.51488720944627,
+            "median": 1120.7196477073057,
             "metric": "throughput",
-            "p95": 197.83382281366974,
+            "p95": 1152.2345049755372,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              189.51488720944627,
-              198.75814899191678,
-              180.789786850481
+              1111.591749102373,
+              1155.7361557831184,
+              1120.7196477073057
             ],
             "sample_count": 3,
             "seconds": [
-              1.3508173620000434,
-              1.2879975049999643,
-              1.41600919199999
+              0.2303003780000381,
+              0.2215038429999936,
+              0.2284246560000156
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 126.01962454591224,
+            "median": 151.8577265551851,
             "metric": "throughput",
-            "p95": 142.85273027074854,
+            "p95": 153.00585531834972,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              144.7230753512859,
-              126.01962454591224,
-              121.25716053089518
+              137.40298070855766,
+              153.13342518092355,
+              151.8577265551851
             ],
             "sample_count": 3,
             "seconds": [
-              1.3819496269999831,
-              1.5870544030000246,
-              1.6493871299999796
+              1.4555724989999703,
+              1.306050588000005,
+              1.3170222189999663
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 723083.5754785638,
+            "median": 740831.8355895487,
             "metric": "throughput",
-            "p95": 734005.9206467707,
+            "p95": 748437.4893323949,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              735219.5145543494,
-              723083.5754785638,
-              705109.2214159011
+              749282.561970489,
+              740831.8355895487,
+              728013.9778867472
             ],
             "sample_count": 3,
             "seconds": [
-              0.000680068999940886,
-              0.0006914829999686845,
-              0.0007091100000025108
+              0.0006673049999790237,
+              0.0006749170000261984,
+              0.0006867999999826679
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 333.77183542771775,
+            "median": 2726.977876508292,
             "metric": "throughput",
-            "p95": 423.74380218215083,
+            "p95": 2857.8480857321465,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              302.37533002702486,
-              433.74068737708785,
-              333.77183542771775
+              2344.855606746068,
+              2872.3892200903524,
+              2726.977876508292
             ],
             "sample_count": 3,
             "seconds": [
-              1.6535740529999998,
-              1.1527625019999732,
-              1.4980293330000904
+              0.21323274600001696,
+              0.17407111700003952,
+              0.18335315600000968
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/bowl/drive9-bench-1794202499-9184-bowl"
+        "workdir": "/mnt/bowl/drive9-bench-1794336797-9165-bowl"
       },
       "drive9_default": {
         "errors": {},
@@ -3172,292 +3176,292 @@
         "path": "/mnt/drive9_default",
         "results": {
           "macro_find_files": {
-            "median": 0.005042013000092993,
+            "median": 0.004343236000067918,
             "metric": "latency",
-            "p95": 0.005058461400085435,
+            "p95": 0.004877332000160095,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.005060289000084595,
-              0.004721194000012474,
-              0.005042013000092993
+              0.00426915299999564,
+              0.004343236000067918,
+              0.004936676000170337
             ],
             "sample_count": 3,
             "seconds": [
-              0.005060289000084595,
-              0.004721194000012474,
-              0.005042013000092993
+              0.00426915299999564,
+              0.004343236000067918,
+              0.004936676000170337
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 1.9852788690000125,
+            "median": 1.9658337569999276,
             "metric": "latency",
-            "p95": 2.0107979054999303,
+            "p95": 1.9715449635000368,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              1.9715619920000336,
-              1.9852788690000125,
-              2.0136333539999214
+              1.972179542000049,
+              1.9534823889998734,
+              1.9658337569999276
             ],
             "sample_count": 3,
             "seconds": [
-              1.9715619920000336,
-              1.9852788690000125,
-              2.0136333539999214
+              1.972179542000049,
+              1.9534823889998734,
+              1.9658337569999276
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.01626505400008682,
+            "median": 0.013122740000198974,
             "metric": "latency",
-            "p95": 0.02465010200010056,
+            "p95": 0.022849979600186997,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.014161594999904992,
-              0.025581774000102087,
-              0.01626505400008682
+              0.023930784000185668,
+              0.013122740000198974,
+              0.01282164899998861
             ],
             "sample_count": 3,
             "seconds": [
-              0.014161594999904992,
-              0.025581774000102087,
-              0.01626505400008682
+              0.023930784000185668,
+              0.013122740000198974,
+              0.01282164899998861
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 0.17043602200010355,
+            "median": 0.21857470700001613,
             "metric": "latency",
-            "p95": 0.2314401360999227,
+            "p95": 0.2197716089000778,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.23821837099990262,
-              0.1535734550000143,
-              0.17043602200010355
+              0.1484759899999517,
+              0.21990459800008466,
+              0.21857470700001613
             ],
             "sample_count": 3,
             "seconds": [
-              0.23821837099990262,
-              0.1535734550000143,
-              0.17043602200010355
+              0.1484759899999517,
+              0.21990459800008466,
+              0.21857470700001613
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.12557495000010022,
+            "median": 0.11765114800004994,
             "metric": "latency",
-            "p95": 0.12692913139994744,
+            "p95": 0.11876770779990693,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.12707959599993046,
-              0.12557495000010022,
-              0.12228329300000951
+              0.11889176999989104,
+              0.112844116000133,
+              0.11765114800004994
             ],
             "sample_count": 3,
             "seconds": [
-              0.12707959599993046,
-              0.12557495000010022,
-              0.12228329300000951
+              0.11889176999989104,
+              0.112844116000133,
+              0.11765114800004994
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 212.17345692884476,
+            "median": 229.88097055754787,
             "metric": "throughput",
-            "p95": 212.3675498318335,
+            "p95": 230.67005141921243,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              212.17345692884476,
-              212.38911570994335,
-              205.9946178995292
+              229.16561157864422,
+              229.88097055754787,
+              230.75772707050848
             ],
             "sample_count": 3,
             "seconds": [
-              2.35656244300003,
-              2.3541696019999563,
-              2.427247881999847
+              2.1818282269999827,
+              2.175038667999843,
+              2.1667746790001274
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 167.5151097016884,
+            "median": 153.25130715253556,
             "metric": "throughput",
-            "p95": 192.62769013785987,
+            "p95": 161.32327713847278,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              167.5151097016884,
-              154.98676487412547,
-              195.41797685299002
+              153.25130715253556,
+              162.2201626924658,
+              140.4409549376247
             ],
             "sample_count": 3,
             "seconds": [
-              0.0233187920000546,
-              0.025203765000014755,
-              0.019989205000001675
+              0.02548917900003289,
+              0.024079928999981348,
+              0.027814179999950284
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 80105.09788845573,
+            "median": 80094.3319004316,
             "metric": "throughput",
-            "p95": 82089.59563273023,
+            "p95": 85418.16055932274,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              80105.09788845573,
-              82310.09538209406,
-              58795.12099335246
+              86009.69707697732,
+              80094.3319004316,
+              79588.62232873702
             ],
             "sample_count": 3,
             "seconds": [
-              0.006241799999997966,
-              0.006074589000036212,
-              0.00850410699990789
+              0.00581329800002095,
+              0.006242638999992778,
+              0.006282305000013366
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 106125.00468690287,
+            "median": 110909.01014371956,
             "metric": "throughput",
-            "p95": 136280.10964601283,
+            "p95": 133049.55695865207,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              106125.00468690287,
-              102065.29116561795,
-              139630.6768636917
+              110909.01014371956,
+              15986.507387617172,
+              135509.6177158668
             ],
             "sample_count": 3,
             "seconds": [
-              0.00018845699992198206,
-              0.0001959530000021914,
-              0.0001432349999959115
+              0.00018032800016953843,
+              0.0012510550000115472,
+              0.0001475910000863223
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 84.40669072045742,
+            "median": 89.25426353773624,
             "metric": "throughput",
-            "p95": 85.21507144625951,
+            "p95": 89.55048533167495,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              85.30489152690419,
-              84.40669072045742,
-              81.9854783369071
+              89.58339886433481,
+              89.25426353773624,
+              88.34599076061005
             ],
             "sample_count": 3,
             "seconds": [
-              5.861328594999804,
-              5.923701020999943,
-              6.09864100499999
+              5.581391266000082,
+              5.601973285999975,
+              5.659566390000009
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 444.836020619029,
+            "median": 256.2654810439968,
             "metric": "throughput",
-            "p95": 1896.1413971525553,
+            "p95": 1750.757663685034,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              241.03211102375036,
-              444.836020619029,
-              2057.3975501007253
+              1916.8123506451495,
+              129.60314062836073,
+              256.2654810439968
             ],
             "sample_count": 3,
             "seconds": [
-              1.0620991490000051,
-              0.5754929639999773,
-              0.12442903900000601
+              0.13355506599998535,
+              1.9752607749999243,
+              0.9989640390000432
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 666.5122493169496,
+            "median": 627.2137706038747,
             "metric": "throughput",
-            "p95": 670.716187283791,
+            "p95": 644.8482345848852,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              619.0458759085831,
-              671.183291502329,
-              666.5122493169496
+              646.8076194716641,
+              627.2137706038747,
+              626.0009167783489
             ],
             "sample_count": 3,
             "seconds": [
-              0.41353962599987426,
-              0.38141593099999227,
-              0.3840889650000463
+              0.39579001899994637,
+              0.408154303999936,
+              0.40894508799999585
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 2181.605788611429,
+            "median": 2170.703092683841,
             "metric": "throughput",
-            "p95": 2187.7991043403135,
+            "p95": 2239.720121659488,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              2113.2810127911575,
-              2181.605788611429,
-              2188.487250532412
+              1879.6603829611631,
+              2170.703092683841,
+              2247.38868043456
             ],
             "sample_count": 3,
             "seconds": [
-              0.09463956700005838,
-              0.09167559100001199,
-              0.09138732700012042
+              0.10640220000004774,
+              0.0921360460000642,
+              0.08899217199996201
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 584488.379767476,
+            "median": 587325.2855195125,
             "metric": "throughput",
-            "p95": 591083.9851513332,
+            "p95": 665263.6558603181,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              579884.9507851283,
-              584488.379767476,
-              591816.830193984
+              567253.5851520384,
+              673923.4747870743,
+              587325.2855195125
             ],
             "sample_count": 3,
             "seconds": [
-              0.0008622400000604102,
-              0.0008554490000278747,
-              0.0008448560001852456
+              0.000881439999830036,
+              0.0007419239998398552,
+              0.0008513169998423109
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 86.37788495564556,
+            "median": 96.04485242359816,
             "metric": "throughput",
-            "p95": 86.76623923662663,
+            "p95": 96.3932222489805,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              86.37788495564556,
-              84.96527450198944,
-              86.80938971229119
+              96.43193000735633,
+              95.83636838965731,
+              96.04485242359816
             ],
             "sample_count": 3,
             "seconds": [
-              5.788518672999999,
-              5.884757071999957,
-              5.759745594999913
+              5.185004593000031,
+              5.217226074000109,
+              5.205901069999982
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/drive9_default/drive9-bench-1794203153-10473-drive9_default"
+        "workdir": "/mnt/drive9_default/drive9-bench-1794337344-10431-drive9_default"
       },
       "drive9_sync": {
         "errors": {},
@@ -3465,295 +3469,295 @@
         "path": "/mnt/drive9_sync",
         "results": {
           "macro_find_files": {
-            "median": 0.0038614830000369693,
+            "median": 0.004407829999991009,
             "metric": "latency",
-            "p95": 0.004193626200071776,
+            "p95": 0.0045475937000219345,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.0038614830000369693,
-              0.0037696759998198104,
-              0.0042305310000756435
+              0.004563123000025371,
+              0.004407829999991009,
+              0.004272814999922048
             ],
             "sample_count": 3,
             "seconds": [
-              0.0038614830000369693,
-              0.0037696759998198104,
-              0.0042305310000756435
+              0.004563123000025371,
+              0.004407829999991009,
+              0.004272814999922048
             ],
             "unit": "seconds"
           },
           "macro_git_clone": {
-            "median": 7.161979774999963,
+            "median": 6.79389903099991,
             "metric": "latency",
-            "p95": 7.3168193579000675,
+            "p95": 6.848342872300009,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              7.334023756000079,
-              7.161979774999963,
-              6.983393597000031
+              6.79389903099991,
+              6.85439218800002,
+              6.763357115999952
             ],
             "sample_count": 3,
             "seconds": [
-              7.334023756000079,
-              7.161979774999963,
-              6.983393597000031
+              6.79389903099991,
+              6.85439218800002,
+              6.763357115999952
             ],
             "unit": "seconds"
           },
           "macro_git_diff_dirty": {
-            "median": 0.013266936000036367,
+            "median": 0.012679077999791843,
             "metric": "latency",
-            "p95": 0.02035835279996263,
+            "p95": 0.0130212265000182,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.02114628799995444,
-              0.012837271000080364,
-              0.013266936000036367
+              0.012451039000097808,
+              0.012679077999791843,
+              0.013059243000043352
             ],
             "sample_count": 3,
             "seconds": [
-              0.02114628799995444,
-              0.012837271000080364,
-              0.013266936000036367
+              0.012451039000097808,
+              0.012679077999791843,
+              0.013059243000043352
             ],
             "unit": "seconds"
           },
           "macro_git_status_dirty": {
-            "median": 0.04999935500018182,
+            "median": 0.04443285100001049,
             "metric": "latency",
-            "p95": 0.06010678789996291,
+            "p95": 0.06451895110008081,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.06122983599993859,
-              0.04479588200001672,
-              0.04999935500018182
+              0.06675074000008863,
+              0.04443285100001049,
+              0.038743478000014875
             ],
             "sample_count": 3,
             "seconds": [
-              0.06122983599993859,
-              0.04479588200001672,
-              0.04999935500018182
+              0.06675074000008863,
+              0.04443285100001049,
+              0.038743478000014875
             ],
             "unit": "seconds"
           },
           "macro_go_build": {
-            "median": 0.11141271800011054,
+            "median": 0.11917834200016841,
             "metric": "latency",
-            "p95": 0.17408546540007136,
+            "p95": 0.15868931400002567,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              0.11128354700008458,
-              0.11141271800011054,
-              0.18104910400006702
+              0.11574509000001854,
+              0.11917834200016841,
+              0.1630794220000098
             ],
             "sample_count": 3,
             "seconds": [
-              0.11128354700008458,
-              0.11141271800011054,
-              0.18104910400006702
+              0.11574509000001854,
+              0.11917834200016841,
+              0.1630794220000098
             ],
             "unit": "seconds"
           },
           "mkdir": {
-            "median": 205.6033291590411,
+            "median": 227.56999109080078,
             "metric": "throughput",
-            "p95": 206.92473448047454,
+            "p95": 230.03643340161344,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              205.6033291590411,
-              207.07155729396715,
-              204.98319534850776
+              230.31048254725928,
+              227.56999109080078,
+              226.00572919009096
             ],
             "sample_count": 3,
             "seconds": [
-              2.431867237000006,
-              2.414624232000051,
-              2.439224342999978
+              2.17098238199992,
+              2.197126244999936,
+              2.2123332969999865
             ],
             "unit": "ops/s"
           },
           "random_read_4k": {
-            "median": 2.5246205797739227,
+            "median": 2.7210665689870988,
             "metric": "throughput",
-            "p95": 2.5559390354983504,
+            "p95": 2.7950754146175845,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              2.3886992312148467,
-              2.559418863912176,
-              2.5246205797739227
+              2.7210665689870988,
+              2.5770249621567425,
+              2.8032986196876384
             ],
             "sample_count": 3,
             "seconds": [
-              1.6353042480000113,
-              1.5262253690000307,
-              1.5472622029999457
+              1.4355584109998745,
+              1.5157982779999202,
+              1.3934476949998498
             ],
             "unit": "MiB/s"
           },
           "readdir_large": {
-            "median": 238320.50771785103,
+            "median": 215641.88611568877,
             "metric": "throughput",
-            "p95": 239415.47459547516,
+            "p95": 222904.4886040597,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              202404.8120574475,
-              238320.50771785103,
-              239537.13758187785
+              208271.8063828824,
+              215641.88611568877,
+              223711.44443610092
             ],
             "sample_count": 3,
             "seconds": [
-              0.002470296999945276,
-              0.0020980150000013964,
-              0.0020873590001428965
+              0.0024007089998576703,
+              0.0023186589999113494,
+              0.002235022000149911
             ],
             "unit": "ops/s"
           },
           "readdir_small": {
-            "median": 217462.21627665867,
+            "median": 198495.40499523885,
             "metric": "throughput",
-            "p95": 218207.73173554262,
+            "p95": 212583.47168883818,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              218290.56678652973,
-              203421.55042200425,
-              217462.21627665867
+              183185.41112752553,
+              198495.40499523885,
+              214148.81243257143
             ],
             "sample_count": 3,
             "seconds": [
-              9.16209999104467e-05,
-              9.831800002757518e-05,
-              9.196999985761067e-05
+              0.00010917899999185465,
+              0.00010075799991682288,
+              9.33929998154781e-05
             ],
             "unit": "ops/s"
           },
           "rename": {
-            "median": 49.888935047705594,
+            "median": 56.39144653140498,
             "metric": "throughput",
-            "p95": 50.44989677748772,
+            "p95": 57.19535694878657,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              50.512225858574624,
-              49.888935047705594,
-              49.68094030224693
+              57.28468032849563,
+              56.29288182961607,
+              56.39144653140498
             ],
             "sample_count": 3,
             "seconds": [
-              9.898593686999902,
-              10.022262442000056,
-              10.064221750999877
+              8.728337089999968,
+              8.882117662999917,
+              8.866592910000008
             ],
             "unit": "ops/s"
           },
           "sequential_read": {
-            "median": 606.5678254288489,
+            "median": 606.0102099416965,
             "metric": "throughput",
-            "p95": 617.9082586332605,
+            "p95": 626.4207930694337,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              606.5678254288489,
-              565.4894815431085,
-              619.168306767084
+              606.0102099416965,
+              567.0972861574636,
+              628.6886356391823
             ],
             "sample_count": 3,
             "seconds": [
-              0.42204678399980367,
-              0.4527051490001668,
-              0.41345785500016063
+              0.42243512699997154,
+              0.4514216630000192,
+              0.40719679900007577
             ],
             "unit": "MiB/s"
           },
           "sequential_write": {
-            "median": 344.39132348784324,
+            "median": 346.9079860160116,
             "metric": "throughput",
-            "p95": 349.8756720610861,
+            "p95": 349.659490467553,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              344.39132348784324,
-              350.4850441247798,
-              343.8551126295038
+              346.9079860160116,
+              332.84645870875045,
+              349.9652131843909
             ],
             "sample_count": 3,
             "seconds": [
-              0.7433404460000475,
-              0.7304163310000149,
-              0.7444996179999634
+              0.737947843000029,
+              0.7691233999998985,
+              0.7315012760000172
             ],
             "unit": "MiB/s"
           },
           "small_write_4k_fsync": {
-            "median": 104.28609667974457,
+            "median": 137.97686697232433,
             "metric": "throughput",
-            "p95": 106.82934294036811,
+            "p95": 138.12862393395355,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              104.13686307612477,
-              104.28609667974457,
-              107.11192585821517
+              135.7249092034752,
+              137.97686697232433,
+              138.145485818579
             ],
             "sample_count": 3,
             "seconds": [
-              1.9205494969999108,
-              1.9178011869998954,
-              1.8672057139999652
+              1.4735688619998655,
+              1.4495183460001044,
+              1.4477490799999941
             ],
             "unit": "ops/s"
           },
           "stat": {
-            "median": 471514.84516659286,
+            "median": 504475.7084228991,
             "metric": "throughput",
-            "p95": 526424.0127619242,
+            "p95": 548826.7310788459,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              471514.84516659286,
-              422561.04103695083,
-              532525.0313836277
+              553754.6224850622,
+              465438.83908679424,
+              504475.7084228991
             ],
             "sample_count": 3,
             "seconds": [
-              0.0010604120000152761,
-              0.0011832610000510613,
-              0.0009389229999214876
+              0.0009029269999700773,
+              0.001074254999821278,
+              0.0009911280001233536
             ],
             "unit": "ops/s"
           },
           "unlink": {
-            "median": 35.448853075978434,
+            "median": 44.797153016927176,
             "metric": "throughput",
-            "p95": 35.47763820671815,
+            "p95": 46.584317495140674,
             "p95_method": "linear_interpolation",
             "p95_reliable": false,
             "runs": [
-              35.448853075978434,
-              35.48083655457812,
-              35.21611235565098
+              44.797153016927176,
+              46.78289132605328,
+              44.64606490681315
             ],
             "sample_count": 3,
             "seconds": [
-              14.104828692999945,
-              14.09211418200016,
-              14.198046477999924
+              11.161423580000019,
+              10.68766777399992,
+              11.199195293999992
             ],
             "unit": "ops/s"
           }
         },
-        "workdir": "/mnt/drive9_sync/drive9-bench-1794203326-10473-drive9_sync"
+        "workdir": "/mnt/drive9_sync/drive9-bench-1794337500-10431-drive9_sync"
       }
     },
-    "timestamp": "2026-11-09T05:36:53Z",
+    "timestamp": "2026-11-10T18:54:29Z",
     "version": "b529a36f"
   },
   "fuse_perf_baseline": {
@@ -3764,7 +3768,7 @@
         "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
         "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
       },
-      "generated_at_unix": 1794203680.953592,
+      "generated_at_unix": 1794337817.32528,
       "params": {
         "large_bytes": 16777216,
         "large_mb": 16,
@@ -3778,51 +3782,51 @@
         "large_file_reads": [
           {
             "bytes": 16777216,
-            "bytes_per_second": 1304843311.9201097,
+            "bytes_per_second": 1303753069.5459783,
             "files": 1,
-            "files_per_second": 77.77472209454237,
-            "mib_per_second": 1244.395553512678,
+            "files_per_second": 77.70973858511319,
+            "mib_per_second": 1243.355817361811,
             "pass": 1,
             "rows": 0,
-            "seconds": 0.012857648000135669
+            "seconds": 0.012868399999888425
           },
           {
             "bytes": 16777216,
-            "bytes_per_second": 1310086041.181777,
+            "bytes_per_second": 1301391362.3617156,
             "files": 1,
-            "files_per_second": 78.08721310983759,
-            "mib_per_second": 1249.3954097574015,
+            "files_per_second": 77.56896986733172,
+            "mib_per_second": 1241.1035178773075,
             "pass": 2,
             "rows": 0,
-            "seconds": 0.012806193999949755
+            "seconds": 0.012891753000076278
           }
         ],
         "large_file_write": {
           "bytes": 16777216,
-          "bytes_per_second": 49425252.43126096,
+          "bytes_per_second": 57170194.73592557,
           "files": 1,
-          "files_per_second": 2.9459746140993213,
-          "mib_per_second": 47.13559382558914,
+          "files_per_second": 3.4076091489747506,
+          "mib_per_second": 54.52174638359601,
           "rows": 0,
-          "seconds": 0.33944623800016416
+          "seconds": 0.29346088600004805
         },
         "small_file_read": {
           "bytes": 65536,
-          "bytes_per_second": 342194.4031696889,
+          "bytes_per_second": 473078.8631611079,
           "files": 64,
-          "files_per_second": 334.1742218453993,
-          "mib_per_second": 0.32634201352089776,
+          "files_per_second": 461.9910773057694,
+          "mib_per_second": 0.45116316143141544,
           "rows": 0,
-          "seconds": 0.19151686700001846
+          "seconds": 0.13853081400020528
         },
         "small_file_write": {
           "bytes": 65536,
-          "bytes_per_second": 116767.6597228024,
+          "bytes_per_second": 175798.73204037824,
           "files": 64,
-          "files_per_second": 114.03091769804922,
-          "mib_per_second": 0.1113583180645012,
+          "files_per_second": 171.67844925818187,
+          "mib_per_second": 0.16765473560369323,
           "rows": 0,
-          "seconds": 0.5612512929999411
+          "seconds": 0.3727899470000011
         },
         "sqlite_insert_transaction": {
           "bytes": 0,
@@ -3830,21 +3834,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 1282.9843498961536,
-          "seconds": 0.19953478000002178
+          "rows_per_second": 1342.208420871306,
+          "seconds": 0.19073043799994593
         },
         "sqlite_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 323993761.0050925,
+          "bytes_per_second": 307098273.74776286,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "delete",
           "max_version": 2,
-          "mib_per_second": 308.98452854642153,
+          "mib_per_second": 292.8717362859372,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 632800.3144630713,
-          "seconds": 0.00040455099997416255
+          "rows_per_second": 599801.3159135993,
+          "seconds": 0.000426807999929224
         },
         "sqlite_update_transaction": {
           "bytes": 0,
@@ -3852,8 +3856,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 113.33101860438144,
-          "seconds": 0.7588390280000112
+          "rows_per_second": 126.71296031358767,
+          "seconds": 0.6786993199998506
         },
         "sqlite_wal_checkpoint_truncate": {
           "bytes": 0,
@@ -3865,8 +3869,8 @@
           "integrity_check": "ok",
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 1354.3110829804723,
-          "seconds": 0.18902599500006545
+          "rows_per_second": 2264.134956950888,
+          "seconds": 0.1130674649998582
         },
         "sqlite_wal_insert_transaction": {
           "bytes": 0,
@@ -3874,21 +3878,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 524.9113440630183,
-          "seconds": 0.48770140500005255
+          "rows_per_second": 666.7857174364233,
+          "seconds": 0.38393143899997995
         },
         "sqlite_wal_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 450450202.6930463,
+          "bytes_per_second": 504274359.34517485,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "wal",
           "max_version": 2,
-          "mib_per_second": 429.58278912834766,
+          "mib_per_second": 480.9135049297093,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 879785.552134856,
-          "seconds": 0.00029098000004523783
+          "rows_per_second": 984910.8580960446,
+          "seconds": 0.0002599219999410707
         },
         "sqlite_wal_update_transaction": {
           "bytes": 0,
@@ -3896,8 +3900,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 199.6458890151578,
-          "seconds": 0.43076268900017567
+          "rows_per_second": 274.44494531001834,
+          "seconds": 0.31335975199999666
         }
       }
     },
@@ -3908,7 +3912,7 @@
         "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
         "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
       },
-      "generated_at_unix": 1794203690.3056028,
+      "generated_at_unix": 1794337825.9160936,
       "params": {
         "large_bytes": 16777216,
         "large_mb": 16,
@@ -3922,51 +3926,51 @@
         "large_file_reads": [
           {
             "bytes": 16777216,
-            "bytes_per_second": 773019804.4288616,
+            "bytes_per_second": 717569951.1597027,
             "files": 1,
-            "files_per_second": 46.07557084732423,
-            "mib_per_second": 737.2091335571877,
+            "files_per_second": 42.77050204036848,
+            "mib_per_second": 684.3280326458956,
             "pass": 1,
             "rows": 0,
-            "seconds": 0.02170347500009484
+            "seconds": 0.02338059999988218
           },
           {
             "bytes": 16777216,
-            "bytes_per_second": 625243766.2774758,
+            "bytes_per_second": 665889296.4647137,
             "files": 1,
-            "files_per_second": 37.26743258699631,
-            "mib_per_second": 596.2789213919409,
+            "files_per_second": 39.690094975514036,
+            "mib_per_second": 635.0415196082246,
             "pass": 2,
             "rows": 0,
-            "seconds": 0.02683307999996032
+            "seconds": 0.025195203000066613
           }
         ],
         "large_file_write": {
           "bytes": 16777216,
-          "bytes_per_second": 64671758.69997515,
+          "bytes_per_second": 59482489.36339601,
           "files": 1,
-          "files_per_second": 3.854737204311797,
-          "mib_per_second": 61.67579526898875,
+          "files_per_second": 3.5454326488611705,
+          "mib_per_second": 56.72692238177873,
           "rows": 0,
-          "seconds": 0.25942105700005413
+          "seconds": 0.28205302400010623
         },
         "small_file_read": {
           "bytes": 65536,
-          "bytes_per_second": 58774.73925417516,
+          "bytes_per_second": 55820.814823275454,
           "files": 64,
-          "files_per_second": 57.39720630290543,
-          "mib_per_second": 0.056051959280181085,
+          "files_per_second": 54.512514475854935,
+          "mib_per_second": 0.053234877417827085,
           "rows": 0,
-          "seconds": 1.1150368480000452
+          "seconds": 1.174042338999925
         },
         "small_file_write": {
           "bytes": 65536,
-          "bytes_per_second": 1834823.1892710798,
+          "bytes_per_second": 1474944.3446810157,
           "files": 64,
-          "files_per_second": 1791.819520772539,
-          "mib_per_second": 1.7498237507544325,
+          "files_per_second": 1440.3753366025544,
+          "mib_per_second": 1.406616539650932,
           "rows": 0,
-          "seconds": 0.03571788299996115
+          "seconds": 0.044432863000110956
         },
         "sqlite_insert_transaction": {
           "bytes": 0,
@@ -3974,21 +3978,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 4915.643619134207,
-          "seconds": 0.052078633000064656
+          "rows_per_second": 5090.850199031672,
+          "seconds": 0.05028629599996748
         },
         "sqlite_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 284562394.489297,
+          "bytes_per_second": 324020191.85540885,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "delete",
           "max_version": 2,
-          "mib_per_second": 271.37984703950593,
+          "mib_per_second": 309.009734969529,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 555785.9267369081,
-          "seconds": 0.0004606090001288976
+          "rows_per_second": 632851.9372175954,
+          "seconds": 0.0004045180000957771
         },
         "sqlite_update_transaction": {
           "bytes": 0,
@@ -3996,8 +4000,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 899.8852259160626,
-          "seconds": 0.09556774300017423
+          "rows_per_second": 952.6495615766659,
+          "seconds": 0.09027453900012006
         },
         "sqlite_wal_checkpoint_truncate": {
           "bytes": 0,
@@ -4009,8 +4013,8 @@
           "integrity_check": "ok",
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 26538.469273222156,
-          "seconds": 0.0096463740001127
+          "rows_per_second": 29023.39013142126,
+          "seconds": 0.008820472000024893
         },
         "sqlite_wal_insert_transaction": {
           "bytes": 0,
@@ -4018,21 +4022,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 6323.028040821281,
-          "seconds": 0.0404869310000322
+          "rows_per_second": 6480.924222313137,
+          "seconds": 0.03950053900007333
         },
         "sqlite_wal_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 531609323.42734593,
+          "bytes_per_second": 342996509.0451728,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "wal",
           "max_version": 2,
-          "mib_per_second": 506.9821581147632,
+          "mib_per_second": 327.1069612933853,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 1038299.459819035,
-          "seconds": 0.0002465570000822481
+          "rows_per_second": 669915.0567288531,
+          "seconds": 0.00038213800007724785
         },
         "sqlite_wal_update_transaction": {
           "bytes": 0,
@@ -4040,8 +4044,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 2233.184909627326,
-          "seconds": 0.038510022000082245
+          "rows_per_second": 2564.033838214679,
+          "seconds": 0.03354089899994506
         }
       }
     },
@@ -4052,7 +4056,7 @@
         "sqlite_fingerprint": "d8bd141a2289bfcbed242bd530659d3e99831ff4f472464afb002bef0273c18f",
         "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
       },
-      "generated_at_unix": 1794203695.7297697,
+      "generated_at_unix": 1794337831.442417,
       "params": {
         "large_bytes": 16777216,
         "large_mb": 16,
@@ -4066,51 +4070,51 @@
         "large_file_reads": [
           {
             "bytes": 16777216,
-            "bytes_per_second": 57893262.554627866,
+            "bytes_per_second": 51580503.65197544,
             "files": 1,
-            "files_per_second": 3.4507073494570175,
-            "mib_per_second": 55.21131759131228,
+            "files_per_second": 3.074437597511735,
+            "mib_per_second": 49.19100156018776,
             "pass": 1,
             "rows": 0,
-            "seconds": 0.2897956560000239
+            "seconds": 0.32526274099996044
           },
           {
             "bytes": 16777216,
-            "bytes_per_second": 51779359.487192005,
+            "bytes_per_second": 43921638.09406017,
             "files": 1,
-            "files_per_second": 3.086290328931332,
-            "mib_per_second": 49.38064526290131,
+            "files_per_second": 2.617933636549721,
+            "mib_per_second": 41.88693818479554,
             "pass": 2,
             "rows": 0,
-            "seconds": 0.32401358699985394
+            "seconds": 0.3819806530000278
           }
         ],
         "large_file_write": {
           "bytes": 16777216,
-          "bytes_per_second": 51407884.24022618,
+          "bytes_per_second": 50371281.58513799,
           "files": 1,
-          "files_per_second": 3.0641486787930834,
-          "mib_per_second": 49.026378860689334,
+          "files_per_second": 3.0023623457633253,
+          "mib_per_second": 48.037797532213204,
           "rows": 0,
-          "seconds": 0.3263549210000747
+          "seconds": 0.33307105699987005
         },
         "small_file_read": {
           "bytes": 65536,
-          "bytes_per_second": 61566.6124696463,
+          "bytes_per_second": 65606.53036607943,
           "files": 64,
-          "files_per_second": 60.123644989888966,
-          "mib_per_second": 0.05871449706043844,
+          "files_per_second": 64.06887731062444,
+          "mib_per_second": 0.06256726299865668,
           "rows": 0,
-          "seconds": 1.0644730540000182
+          "seconds": 0.9989249489999565
         },
         "small_file_write": {
           "bytes": 65536,
-          "bytes_per_second": 129155.7339406705,
+          "bytes_per_second": 144910.0476230446,
           "files": 64,
-          "files_per_second": 126.12864642643603,
-          "mib_per_second": 0.12317250627581644,
+          "files_per_second": 141.5137183818795,
+          "mib_per_second": 0.1381969906073042,
           "rows": 0,
-          "seconds": 0.5074184320001223
+          "seconds": 0.45225297399997544
         },
         "sqlite_insert_transaction": {
           "bytes": 0,
@@ -4118,21 +4122,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 3328.55352181051,
-          "seconds": 0.0769102849999399
+          "rows_per_second": 3757.016319692898,
+          "seconds": 0.06813917700014827
         },
         "sqlite_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 30413028.00169578,
+          "bytes_per_second": 28943838.724679947,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "delete",
           "max_version": 2,
-          "mib_per_second": 29.00412368936136,
+          "mib_per_second": 27.602995609931895,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 59400.44531581207,
-          "seconds": 0.004309732000137956
+          "rows_per_second": 56530.93500914052,
+          "seconds": 0.004528493999941929
         },
         "sqlite_update_transaction": {
           "bytes": 0,
@@ -4140,8 +4144,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 760.3123260475546,
-          "seconds": 0.11311141100009081
+          "rows_per_second": 809.2023317180698,
+          "seconds": 0.10627749900004346
         },
         "sqlite_wal_checkpoint_truncate": {
           "bytes": 0,
@@ -4153,8 +4157,8 @@
           "integrity_check": "ok",
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 7103.960580128136,
-          "seconds": 0.03603623599997263
+          "rows_per_second": 7147.219658985965,
+          "seconds": 0.035818123999888485
         },
         "sqlite_wal_insert_transaction": {
           "bytes": 0,
@@ -4162,21 +4166,21 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 256,
-          "rows_per_second": 6889.049675254452,
-          "seconds": 0.03716042299993205
+          "rows_per_second": 7723.179757407533,
+          "seconds": 0.03314696899997216
         },
         "sqlite_wal_read_aggregate": {
           "bytes": 131072,
-          "bytes_per_second": 558582746.2247609,
+          "bytes_per_second": 384894579.16982454,
           "files": 0,
           "integrity_check": "ok",
           "journal_mode": "wal",
           "max_version": 2,
-          "mib_per_second": 532.7060186622247,
+          "mib_per_second": 367.0640746782537,
           "payload_verified_rows": 256,
           "rows": 256,
-          "rows_per_second": 1090981.926220236,
-          "seconds": 0.00023465100002795225
+          "rows_per_second": 751747.2249410636,
+          "seconds": 0.00034054000002470275
         },
         "sqlite_wal_update_transaction": {
           "bytes": 0,
@@ -4184,8 +4188,8 @@
           "files": 0,
           "mib_per_second": 0.0,
           "rows": 86,
-          "rows_per_second": 2608.679008342253,
-          "seconds": 0.03296687699980794
+          "rows_per_second": 2734.140680567682,
+          "seconds": 0.03145412399999259
         }
       }
     }
@@ -4193,58 +4197,58 @@
   "stage_timings": [
     {
       "stage": "cross_compile_binaries",
-      "duration_sec": 14,
-      "timestamp": "2026-11-09T05:27:15Z"
+      "duration_sec": 11,
+      "timestamp": "2026-11-10T18:45:28Z"
     },
     {
       "stage": "provision_ecs_instances",
-      "duration_sec": 31,
-      "timestamp": "2026-11-09T05:27:46Z"
+      "duration_sec": 57,
+      "timestamp": "2026-11-10T18:46:25Z"
     },
     {
       "stage": "deploy_server_node",
-      "duration_sec": 127,
-      "timestamp": "2026-11-09T05:29:53Z"
+      "duration_sec": 171,
+      "timestamp": "2026-11-10T18:49:16Z"
     },
     {
       "stage": "setup_client_and_mounts",
-      "duration_sec": 66,
-      "timestamp": "2026-11-09T05:30:59Z"
+      "duration_sec": 63,
+      "timestamp": "2026-11-10T18:50:19Z"
     },
     {
       "stage": "bowl_juicefs_bench",
-      "duration_sec": 25,
-      "timestamp": "2026-11-09T05:31:40Z"
+      "duration_sec": 19,
+      "timestamp": "2026-11-10T18:50:55Z"
     },
     {
       "stage": "drive9_default_juicefs_bench",
-      "duration_sec": 22,
-      "timestamp": "2026-11-09T05:32:02Z"
+      "duration_sec": 18,
+      "timestamp": "2026-11-10T18:51:13Z"
     },
     {
       "stage": "drive9_sync_juicefs_bench",
-      "duration_sec": 27,
-      "timestamp": "2026-11-09T05:32:29Z"
+      "duration_sec": 25,
+      "timestamp": "2026-11-10T18:51:38Z"
     },
     {
       "stage": "drive9_fuse_bench_cold_and_hot",
-      "duration_sec": 1317,
-      "timestamp": "2026-11-09T05:54:26Z"
+      "duration_sec": 1104,
+      "timestamp": "2026-11-10T19:10:02Z"
     },
     {
       "stage": "bowl_fuse_perf_baseline",
       "duration_sec": 18,
-      "timestamp": "2026-11-09T05:54:44Z"
+      "timestamp": "2026-11-10T19:10:20Z"
     },
     {
       "stage": "drive9_default_fuse_perf_baseline",
       "duration_sec": 8,
-      "timestamp": "2026-11-09T05:54:52Z"
+      "timestamp": "2026-11-10T19:10:28Z"
     },
     {
       "stage": "drive9_sync_fuse_perf_baseline",
       "duration_sec": 7,
-      "timestamp": "2026-11-09T05:54:59Z"
+      "timestamp": "2026-11-10T19:10:35Z"
     }
   ]
 }

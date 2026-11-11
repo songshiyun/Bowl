@@ -1,4 +1,4 @@
--- started at 11/09/2026 12:52:06 --
+-- started at 11/11/2026 02:53:56 --
 
 mdtest-3.3.0 was launched with 4 total task(s) on 1 node(s)
 Command line used: /usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_4p' '-b' '3' '-z' '2' '-I' '20' '-u'
@@ -11,14 +11,14 @@ Nodemap: 1111
 SUMMARY rate: (of 1 iterations)
    Operation                      Max            Min           Mean        Std Dev
    ---------                      ---            ---           ----        -------
-   Directory creation        :       8950.521       8939.854       8947.437          4.392
-   Directory stat            :    1411875.228    1202384.421    1257229.981      89312.889
-   Directory removal         :      10281.490      10280.687      10281.224          0.323
-   File creation             :       9425.524       9414.807       9422.787          4.608
-   File stat                 :    1583425.192    1306171.661    1387122.454     113733.272
-   File read                 :      46791.340      46738.359      46762.950         18.829
-   File removal              :      12127.409      12126.837      12127.145          0.206
-   Tree creation             :       1916.140       1916.140       1916.140          0.000
-   Tree removal              :       1293.860       1293.860       1293.860          0.000
--- finished at 11/09/2026 12:52:06 --
+   Directory creation        :       3573.957       3573.917       3573.939          0.015
+   Directory stat            :    1371742.112    1370007.377    1370926.081        725.108
+   Directory removal         :       8245.223       8245.125       8245.186          0.038
+   File creation             :       2805.069       2804.896       2804.944          0.073
+   File stat                 :    1433496.118    1425462.042    1430388.249       2986.917
+   File read                 :      34134.156      34128.856      34130.558          2.100
+   File removal              :       5127.208       5127.099       5127.159          0.040
+   Tree creation             :        519.441        519.441        519.441          0.000
+   Tree removal              :        422.113        422.113        422.113          0.000
+-- finished at 11/11/2026 02:53:57 --
 
