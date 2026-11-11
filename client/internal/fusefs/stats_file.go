@@ -12,8 +12,9 @@ import (
 const VirtualStatsIno uint64 = (uint64(1) << 63) - 1
 
 const (
-	virtualStatsName    = ".stats"
-	virtualJFSStatsName = ".jfs.stats"
+	virtualStatsName     = ".stats"
+	virtualJFSStatsName  = ".jfs.stats"
+	virtualStatsAttrSize = 64 * 1024
 )
 
 func (fs *RawFS) isVirtualStatsName(parent uint64, name string) bool {
@@ -35,6 +36,7 @@ func (fs *RawFS) fillVirtualStatsAttr(out *fuse.Attr) {
 	nsec := uint32(max(0, now.Nanosecond()))
 	*out = fuse.Attr{
 		Ino:       VirtualStatsIno,
+		Size:      virtualStatsAttrSize,
 		Mode:      syscall.S_IFREG | 0o444,
 		Nlink:     1,
 		Blksize:   4096,

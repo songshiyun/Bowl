@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math"
 	"runtime/pprof"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -25,13 +26,17 @@ const (
 	// SlowStorageRPCThreshold 定义数据面/元数据面单次 RPC 慢操作告警阈值。
 	SlowStorageRPCThreshold = 50 * time.Millisecond
 
-	attrKeyBowlDiskID = "bowl.disk_id"
-	attrKeyBowlEpoch  = "bowl.epoch"
-	attrKeyBowlIno    = "bowl.ino"
+	headerRequestID = "X-Request-Id"
 
-	logKeyDiskID = "disk_id"
-	logKeyEpoch  = "epoch"
-	logKeyIno    = "ino"
+	attrKeyBowlDiskID    = "bowl.disk_id"
+	attrKeyBowlEpoch     = "bowl.epoch"
+	attrKeyBowlIno       = "bowl.ino"
+	attrKeyBowlRequestID = "bowl.request_id"
+
+	logKeyDiskID    = "disk_id"
+	logKeyEpoch     = "epoch"
+	logKeyIno       = "ino"
+	logKeyRequestID = "request_id"
 )
 
 type (
@@ -133,12 +138,20 @@ func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err e
 	return diskID, epoch, ino
 }
 
+func extractRequestID(req connect.AnyRequest) string {
+	if req == nil {
+		return ""
+	}
+	return strings.TrimSpace(req.Header().Get(headerRequestID))
+}
+
 func extractStorageAttrs(_ context.Context, req connect.AnyRequest, res connect.AnyResponse, err error) []slog.Attr {
 	diskID, epoch, ino := extractStorageFields(req, res, err)
-	if diskID == "" && epoch == 0 && ino == 0 {
+	reqID := extractRequestID(req)
+	if diskID == "" && epoch == 0 && ino == 0 && reqID == "" {
 		return nil
 	}
-	attrs := make([]slog.Attr, 0, 3)
+	attrs := make([]slog.Attr, 0, 4)
 	if diskID != "" {
 		attrs = append(attrs, slog.String(logKeyDiskID, diskID))
 	}
@@ -148,12 +161,15 @@ func extractStorageAttrs(_ context.Context, req connect.AnyRequest, res connect.
 	if ino != 0 {
 		attrs = append(attrs, slog.Uint64(logKeyIno, ino))
 	}
+	if reqID != "" {
+		attrs = append(attrs, slog.String(logKeyRequestID, reqID))
+	}
 	return attrs
 }
 
 // NewStorageObservabilityInterceptor 构造 Storage 专属服务端可观测性拦截器：
 // 1. 使用 pprof.Labels("rpc", procedure) 标记协程热点归因；
-// 2. 仅当 Span 处于录制态时注入 bowl.disk_id / bowl.epoch / bowl.ino 属性（未采样时 0 alloc）；
+// 2. 仅当 Span 处于录制态时注入 bowl.disk_id / bowl.epoch / bowl.ino / bowl.request_id 属性（未采样时 0 alloc）；
 // 3. 单次数据面/元数据面 RPC 耗时超过 50ms 时输出慢操作告警日志。
 func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
@@ -175,7 +191,8 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 
 			if span := trace.SpanFromContext(ctx); span.IsRecording() {
 				diskID, epoch, ino := extractStorageFields(req, res, err)
-				var kv [3]attribute.KeyValue
+				reqID := extractRequestID(req)
+				var kv [4]attribute.KeyValue
 				n := 0
 				if diskID != "" {
 					kv[n] = attribute.String(attrKeyBowlDiskID, diskID)
@@ -187,6 +204,10 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 				}
 				if ino != 0 && ino <= math.MaxInt64 {
 					kv[n] = attribute.Int64(attrKeyBowlIno, int64(ino))
+					n++
+				}
+				if reqID != "" {
+					kv[n] = attribute.String(attrKeyBowlRequestID, reqID)
 					n++
 				}
 				if n > 0 {

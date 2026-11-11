@@ -998,12 +998,13 @@ func TestVirtualStatsFile_OptInRootOnlyDirectIOReadOnlyHiddenFromReadDir(t *test
 		ins, _, _ := startObsTestEnv(t, svc, Config{EnableStatsFile: true})
 		t.Cleanup(ins.OnUnmount)
 
-		// 1. 根目录 Lookup .stats 与 .jfs.stats 返回 VirtualStatsIno，AttrValid=0，零 RPC
+		// 1. 根目录 Lookup .stats 与 .jfs.stats 返回 VirtualStatsIno，AttrValid=0，非零 Size（兼容内核 sendfile），零 RPC
 		for _, name := range []string{".stats", ".jfs.stats"} {
 			var out fuse.EntryOut
 			require.Equal(t, fuse.OK, ins.Lookup(nil, &fuse.InHeader{NodeId: fuse.FUSE_ROOT_ID}, name, &out))
 			require.Equal(t, VirtualStatsIno, out.NodeId)
 			require.Equal(t, VirtualStatsIno, out.Ino)
+			require.Positive(t, out.Size)
 			require.Equal(t, uint32(syscall.S_IFREG|0o444), out.Mode)
 			require.Equal(t, uint64(0), out.AttrValid)
 			require.Equal(t, uint32(0), out.AttrValidNsec)
@@ -1018,10 +1019,11 @@ func TestVirtualStatsFile_OptInRootOnlyDirectIOReadOnlyHiddenFromReadDir(t *test
 		var subOut fuse.EntryOut
 		require.Equal(t, fuse.ENOENT, ins.Lookup(nil, &fuse.InHeader{NodeId: 20}, ".stats", &subOut))
 
-		// 3. GetAttr 返回 AttrValid=0 与 0444 权限
+		// 3. GetAttr 返回 AttrValid=0、非零 Size 与 0444 权限
 		var attrOut fuse.AttrOut
 		require.Equal(t, fuse.OK, ins.GetAttr(nil, &fuse.GetAttrIn{InHeader: fuse.InHeader{NodeId: VirtualStatsIno}}, &attrOut))
 		require.Equal(t, uint64(0), attrOut.AttrValid)
+		require.Positive(t, attrOut.Size)
 		require.Equal(t, uint32(syscall.S_IFREG|0o444), attrOut.Mode)
 
 		// 4. Open 拒绝任何写标志并返回 EACCES

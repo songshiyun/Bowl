@@ -249,16 +249,18 @@ func TestObservability_SingleLogAndNotFoundClassification(t *testing.T) {
 	_, hasEpoch := entries[0]["epoch"]
 	require.False(t, hasEpoch, "epoch 为 0 的只读 RPC 不应附加零值 epoch")
 
-	// 单次成功写 RPC (Write) 严格输出 1 条日志，且同时包含 disk_id、epoch、ino
+	// 单次成功写 RPC (Write) 严格输出 1 条日志，且同时包含 disk_id、epoch、ino 与入站 X-Request-Id
 	infoBuf.Reset()
-	_, err = infoClient.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+	writeReq := connect.NewRequest(&storagev1.WriteRequest{
 		DiskId: diskID,
 		Epoch:  epoch,
 		Ino:    fileIno,
 		Fh:     1,
 		Offset: 0,
 		Data:   []byte("abc"),
-	}))
+	})
+	writeReq.Header().Set("X-Request-Id", "42")
+	_, err = infoClient.Write(ctx, writeReq)
 	require.NoError(t, err)
 
 	writeEntries := infoBuf.Entries(t)
@@ -267,6 +269,7 @@ func TestObservability_SingleLogAndNotFoundClassification(t *testing.T) {
 	require.Equal(t, diskID, writeEntries[0]["disk_id"])
 	require.Equal(t, jsonUint64(epoch), writeEntries[0]["epoch"])
 	require.Equal(t, jsonUint64(fileIno), writeEntries[0]["ino"])
+	require.Equal(t, "42", writeEntries[0]["request_id"])
 
 	// ② 实证：Lookup 与 GetXattr 返回 CodeNotFound 在 INFO 级别下输出 0 条 WARN/INFO 日志
 	infoBuf.Reset()
@@ -544,14 +547,16 @@ func TestObservability_SpanAttrsPprofSlowLogAndContextShortCircuit(t *testing.T)
 	fileIno := createResp.Msg.GetInode().GetIno()
 
 	exporter.Reset()
-	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+	tracedWriteReq := connect.NewRequest(&storagev1.WriteRequest{
 		DiskId: diskID,
 		Epoch:  epoch,
 		Ino:    fileIno,
 		Fh:     1,
 		Offset: 0,
 		Data:   []byte("span-payload"),
-	}))
+	})
+	tracedWriteReq.Header().Set("X-Request-Id", "1001")
+	_, err = client.Write(ctx, tracedWriteReq)
 	require.NoError(t, err)
 
 	spans := exporter.Spans()
@@ -565,6 +570,7 @@ func TestObservability_SpanAttrsPprofSlowLogAndContextShortCircuit(t *testing.T)
 	require.Equal(t, diskID, attrMap["bowl.disk_id"].AsString())
 	require.Equal(t, int64(epoch), attrMap["bowl.epoch"].AsInt64())
 	require.Equal(t, int64(fileIno), attrMap["bowl.ino"].AsInt64())
+	require.Equal(t, "1001", attrMap["bowl.request_id"].AsString())
 
 	// 未采样时验证 0 Span 导出（otelconnect 在 server.New 构造拦截器时捕获 TracerProvider）
 	neverTP := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter), sdktrace.WithSampler(sdktrace.NeverSample()))
