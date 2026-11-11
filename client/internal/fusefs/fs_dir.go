@@ -6,11 +6,15 @@ import (
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // OpenDir 在本地检查节点类型并分配目录句柄。
 func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
@@ -47,8 +51,14 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 	defer done()
 	offset := input.Offset
 	var entries []*storagev1.DirEntryPlus
+	firstPage := true
 	for {
-		resp, err := fs.client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
+		reqCtx := ctx
+		if !firstPage {
+			reqCtx = rpc.WithRequestID(ctx, fs.NextRequestID())
+		}
+		firstPage = false
+		resp, err := fs.client.ReadDirPlus(reqCtx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
 			Ino:    ino,
 			Offset: offset,
 			Limit:  512,

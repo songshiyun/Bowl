@@ -44,6 +44,9 @@ const (
 
 // Ioctl 实现 FUSE_IOCTL 请求处理，将 Linux 标准 FS_IOC_GETFLAGS / FS_IOC_SETFLAGS 双向桥接至 StorageService RPC。
 func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) fuse.Status {
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTTY)
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, st := fs.ToServerIno(input.NodeId)

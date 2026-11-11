@@ -13,6 +13,10 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -29,25 +33,39 @@ const DefaultRPCTimeout = 30 * time.Second
 // 严禁置 0：置 0 会使内核在连续 write() 前重新发起 GetAttr RPC 核对文件尺寸。
 const DefaultWriteAttrTimeoutSeconds = 1.0
 
+// DefaultOrphanBacklogThreshold 是触发孤儿回收积压告警的默认队列深度阈值。
+const DefaultOrphanBacklogThreshold = 16
+
+const orphanWarnMinInterval = time.Second
+
+var noopSpanInstance = noop.Span{}
+
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
 
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
-	DiskID              string
-	Epoch               uint64
-	RootIno             uint64
-	RootInode           *storagev1.Inode
-	EntryTimeoutSeconds float64
-	AttrTimeoutSeconds  float64
-	ReadOnly            bool
-	DirectIO            bool
-	AllowOther          bool
-	Debug               bool
+	DiskID                 string
+	Epoch                  uint64
+	RootIno                uint64
+	RootInode              *storagev1.Inode
+	EntryTimeoutSeconds    float64
+	AttrTimeoutSeconds     float64
+	ReadOnly               bool
+	DirectIO               bool
+	AllowOther             bool
+	Debug                  bool
+	EnableStatsFile        bool
+	OrphanBacklogThreshold int
+	Logger                 *slog.Logger
+	Metrics                *Metrics
+	TracerProvider         trace.TracerProvider
 }
 
 type reclaimRetryItem struct {
-	ino uint64
+	ino      uint64
+	spanCtx  trace.SpanContext
+	attempts int
 }
 
 // RawFS 封装底层 FUSE 请求处理，桥接 Linux 内核 VFS 与 StorageService RPC。
@@ -62,13 +80,16 @@ type RawFS struct {
 	// lifecycleMu 保证 OnUnmount 等待所有在途 FUSE 请求排空；常规请求只持读锁。
 	lifecycleMu sync.RWMutex
 	// stateMu 仅保护本地内存态的微秒级读写，绝不包裹跨机 RPC。
-	stateMu      sync.Mutex
-	dirtyInodes  map[uint64]struct{}
-	orphanInodes map[uint64]struct{}
+	stateMu        sync.Mutex
+	dirtyInodes    map[uint64]struct{}
+	orphanInodes   map[uint64]struct{}
+	orphanSpans    map[uint64]trace.SpanContext
+	statsSnapshots map[uint64][]byte
 	// inodeLocks 按 Inode 粒度串行化 O_APPEND 定序与 Unlink/Release 孤儿标记。
 	inodeLocks inodeLocks
 	tmpMgr     *TmpFileManager
 	cfg        Config
+	metrics    *Metrics
 	nextReqID  atomic.Uint64
 
 	releaseMu       sync.Mutex
@@ -79,31 +100,121 @@ type RawFS struct {
 	releaseStarted  bool
 	releaseClosed   bool
 
+	lastOrphanWarnUnixNano atomic.Int64
+
 	readAhead *ReadAheadCoordinator
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
+//
+//nolint:gocritic // Config 按值传入，RawFS 持有独立副本，避免调用方后续突变
 func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 	if cfg.RootIno == 0 && cfg.RootInode != nil {
 		cfg.RootIno = cfg.RootInode.GetIno()
 	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = NewMetrics()
+	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
-		RawFileSystem: fuse.NewDefaultRawFileSystem(),
-		client:        client,
-		locks:         NewLockTable(),
-		cache:         NewNamespaceCache(DefaultNamespaceCacheCapacity),
-		caps:          newCapabilityCache(),
-		dirtyInodes:   make(map[uint64]struct{}),
-		tmpMgr:        NewTmpFileManager(cfg.RootIno),
-		orphanInodes:  make(map[uint64]struct{}),
-		cfg:           cfg,
-		releaseCtx:    releaseCtx,
-		releaseCancel: releaseCancel,
-		readAhead:     NewReadAheadCoordinator(),
+		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
+		client:         client,
+		locks:          NewLockTable(),
+		cache:          NewNamespaceCache(DefaultNamespaceCacheCapacity),
+		caps:           newCapabilityCache(),
+		dirtyInodes:    make(map[uint64]struct{}),
+		orphanInodes:   make(map[uint64]struct{}),
+		orphanSpans:    make(map[uint64]trace.SpanContext),
+		statsSnapshots: make(map[uint64][]byte),
+		tmpMgr:         NewTmpFileManager(cfg.RootIno),
+		cfg:            cfg,
+		metrics:        metrics,
+		releaseCtx:     releaseCtx,
+		releaseCancel:  releaseCancel,
+		readAhead:      NewReadAheadCoordinator(),
 	}
-	fs.handles = NewHandleTable(fs.reclaimOrphan)
+	fs.handles = NewHandleTableWithContext(fs.reclaimOrphan)
+	fs.bindMetrics(metrics)
 	return fs
+}
+
+func (fs *RawFS) bindMetrics(m *Metrics) {
+	if m == nil {
+		return
+	}
+	fs.metrics = m
+	m.bindProvider(fs)
+	fs.locks.bindMetrics(m)
+	fs.cache.bindMetrics(m)
+	fs.caps.bindMetrics(m)
+	fs.tmpMgr.bindMetrics(m)
+	fs.readAhead.bindMetrics(m)
+	fs.inodeLocks.bindMetrics(m)
+}
+
+// Metrics 返回绑定的统一指标数据源。
+func (fs *RawFS) Metrics() *Metrics {
+	return fs.metrics
+}
+
+// Collector 返回可直接注册至自定义 prometheus.Registerer 的指标收集器。
+func (fs *RawFS) Collector() prometheus.Collector {
+	return fs.metrics
+}
+
+// Snapshot 抓取当前时刻客户端 FUSE 与 8 大子系统的结构化一致性快照。
+func (fs *RawFS) Snapshot() Snapshot {
+	return fs.metrics.Snapshot()
+}
+
+func (fs *RawFS) collectSubsystemGauges() subsystemGauges {
+	nsEntries, nsUsed, nsCap := fs.cache.stats()
+	openFiles, openDirs := fs.handles.stats()
+	tmpActive := fs.tmpMgr.activeLocalFiles()
+	pages := max(int64(0), fs.metrics.tmpResidentPages.Load())
+
+	fs.stateMu.Lock()
+	dirtyCount := len(fs.dirtyInodes)
+	orphanCount := len(fs.orphanInodes)
+	fs.stateMu.Unlock()
+
+	return subsystemGauges{
+		nsEntries:       nsEntries,
+		nsUsedWeight:    nsUsed,
+		nsCapacity:      nsCap,
+		capEntries:      fs.caps.count(),
+		tmpActiveFiles:  tmpActive,
+		tmpResidentByte: uint64(pages) * tmpSparsePageSize,
+		openFiles:       openFiles,
+		openDirs:        openDirs,
+		activeLocks:     fs.locks.activeLocks(),
+		inodeLockActive: fs.inodeLocks.activeEntries(),
+		dirtyInodes:     dirtyCount,
+		orphanInodes:    orphanCount,
+		releaseQueue:    fs.releaseQueueDepth(),
+	}
+}
+
+func (fs *RawFS) logger() *slog.Logger {
+	if fs.cfg.Logger != nil {
+		return fs.cfg.Logger
+	}
+	return slog.Default()
+}
+
+func (fs *RawFS) startOpSpan(parent context.Context, opName string) (context.Context, trace.Span) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	tp := fs.cfg.TracerProvider
+	if tp == nil {
+		tp = otel.GetTracerProvider()
+	}
+	if _, isNoop := tp.(noop.TracerProvider); isNoop && !trace.SpanContextFromContext(parent).IsValid() {
+		return parent, noopSpanInstance
+	}
+	return tp.Tracer("bowl/client/fusefs").Start(parent, opName)
 }
 
 // Config 返回当前 RawFS 绑定的静态与握手配置副本。
@@ -131,9 +242,18 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 	return fuse.OK
 }
 
-// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
+// RPCContext 包装内核 cancel 信号通道、单调递增 RequestID 与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
-	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), DefaultRPCTimeout)
+	return fs.RPCContextFrom(context.Background(), cancel)
+}
+
+// RPCContextFrom 基于指定父 Context 注入唯一 RequestID、30s 超时预算与可选 FUSE cancel 通道，确保跨阶段 RPC 不断链。
+func (fs *RawFS) RPCContextFrom(parent context.Context, cancel <-chan struct{}) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	reqCtx := rpc.WithRequestID(parent, fs.NextRequestID())
+	baseCtx, cancelTimeout := context.WithTimeout(reqCtx, DefaultRPCTimeout)
 	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
 	return ctx, func() {
 		cancelChan()
@@ -183,11 +303,14 @@ func (fs *RawFS) NextRequestID() uint64 {
 
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.OnUnmount")
+	defer span.End()
+
 	fs.locks.Close()
 	// 排他锁等待所有在途请求释放读锁，确保卸载前脏节点全部排空。
 	fs.lifecycleMu.Lock()
 	for _, ino := range fs.takeDirtyInodes() {
-		ctx, done := fs.RPCContext(nil)
+		ctx, done := fs.RPCContextFrom(opCtx, nil)
 		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
 			Ino:    ino,
 			DiskId: fs.cfg.DiskID,
@@ -195,7 +318,10 @@ func (fs *RawFS) OnUnmount() {
 		}))
 		done()
 		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
-			slog.Warn("卸载时同步文件失败", "ino", ino, "error", err)
+			fs.metrics.incDirtyFlushError()
+			fs.logger().WarnContext(ctx, "unmount_fsync_failed", "ino", ino, "error", err)
+		} else {
+			fs.metrics.incDirtyFlushOK()
 		}
 	}
 	fs.handles.clear()
@@ -204,6 +330,8 @@ func (fs *RawFS) OnUnmount() {
 	fs.tmpMgr.Clear()
 	fs.stateMu.Lock()
 	clear(fs.orphanInodes)
+	clear(fs.orphanSpans)
+	clear(fs.statsSnapshots)
 	fs.stateMu.Unlock()
 	fs.lifecycleMu.Unlock()
 	fs.readAhead.Clear()
@@ -248,18 +376,57 @@ func (fs *RawFS) takeDirtyInodes() []uint64 {
 	return inodes
 }
 
-// markOrphan 记录待延迟回收的孤儿节点。
-func (fs *RawFS) markOrphan(ino uint64) {
-	fs.stateMu.Lock()
-	fs.orphanInodes[ino] = struct{}{}
-	fs.stateMu.Unlock()
-	fs.handles.MarkOrphan(ino)
+func (fs *RawFS) orphanBacklogThreshold() int {
+	if fs.cfg.OrphanBacklogThreshold > 0 {
+		return fs.cfg.OrphanBacklogThreshold
+	}
+	return DefaultOrphanBacklogThreshold
 }
 
-func (fs *RawFS) reclaimOrphan(ino uint64) {
+func (fs *RawFS) releaseQueueDepth() int {
+	fs.releaseMu.Lock()
+	defer fs.releaseMu.Unlock()
+	return len(fs.releaseQueue)
+}
+
+func (fs *RawFS) warnOrphanBacklog(ctx context.Context, ino uint64, attempts, queueDepth int, err error) {
+	now := time.Now().UnixNano()
+	last := fs.lastOrphanWarnUnixNano.Load()
+	if last != 0 && now-last < int64(orphanWarnMinInterval) {
+		return
+	}
+	if !fs.lastOrphanWarnUnixNano.CompareAndSwap(last, now) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	fs.logger().WarnContext(ctx, "orphan_reclaim_backlogged",
+		"ino", ino,
+		"attempts", attempts,
+		"queue_depth", queueDepth,
+		"error", err,
+	)
+}
+
+// markOrphanWithContext 记录待延迟回收的孤儿节点及其来源 SpanContext。
+func (fs *RawFS) markOrphanWithContext(ctx context.Context, ino uint64) {
+	sc := trace.SpanContextFromContext(ctx)
+	fs.stateMu.Lock()
+	fs.orphanInodes[ino] = struct{}{}
+	if sc.IsValid() {
+		fs.orphanSpans[ino] = sc
+	}
+	fs.stateMu.Unlock()
+	fs.handles.MarkOrphanContext(ctx, ino)
+}
+
+func (fs *RawFS) reclaimOrphan(ctx context.Context, ino uint64) {
 	fs.stateMu.Lock()
 	_, exists := fs.orphanInodes[ino]
+	storedSC := fs.orphanSpans[ino]
 	delete(fs.orphanInodes, ino)
+	delete(fs.orphanSpans, ino)
 	fs.stateMu.Unlock()
 	if !exists {
 		return
@@ -268,27 +435,46 @@ func (fs *RawFS) reclaimOrphan(ino uint64) {
 	if status != fuse.OK || fs.client == nil {
 		return
 	}
-	item := reclaimRetryItem{ino: serverIno}
-	if fs.tryReclaim(context.Background(), item) {
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		sc = storedSC
+	}
+	item := reclaimRetryItem{ino: serverIno, spanCtx: sc}
+	if fs.tryReclaim(ctx, &item, false) {
 		return
 	}
+	item.attempts = 1
 	fs.releaseMu.Lock()
 	if fs.releaseClosed {
 		fs.releaseMu.Unlock()
 		return
 	}
 	fs.releaseQueue = append(fs.releaseQueue, item)
+	qDepth := len(fs.releaseQueue)
 	if !fs.releaseStarted {
 		fs.releaseStarted = true
 		fs.releaseLoopDone = make(chan struct{})
 		go fs.releaseRetryLoop()
 	}
 	fs.releaseMu.Unlock()
+	if qDepth >= fs.orphanBacklogThreshold() {
+		logCtx := ctx
+		if !trace.SpanContextFromContext(logCtx).IsValid() && sc.IsValid() {
+			logCtx = trace.ContextWithSpanContext(context.Background(), sc)
+		}
+		fs.warnOrphanBacklog(logCtx, serverIno, item.attempts, qDepth, nil)
+	}
 }
 
 // tryReclaim 返回 true 表示回收完成或错误不可重试。
-func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool {
-	ctx, cancel := context.WithTimeout(parent, DefaultRPCTimeout)
+func (fs *RawFS) tryReclaim(parent context.Context, item *reclaimRetryItem, fromQueue bool) bool {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if !trace.SpanContextFromContext(parent).IsValid() && item.spanCtx.IsValid() {
+		parent = trace.ContextWithSpanContext(parent, item.spanCtx)
+	}
+	ctx, cancel := fs.RPCContextFrom(parent, nil)
 	defer cancel()
 	req := &storagev1.ReclaimOrphanRequest{
 		DiskId: fs.cfg.DiskID,
@@ -296,6 +482,18 @@ func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool 
 		Ino:    item.ino,
 	}
 	_, err := fs.client.ReclaimOrphan(ctx, connect.NewRequest(req))
+	if err == nil {
+		fs.metrics.incOrphanReclaimOK()
+		if fromQueue {
+			fs.metrics.incAsyncReleaseOK()
+		}
+		return true
+	}
+	fs.metrics.incOrphanReclaimError()
+	if fromQueue {
+		fs.metrics.incAsyncReleaseError()
+	}
+	fs.warnOrphanBacklog(ctx, item.ino, item.attempts+1, fs.releaseQueueDepth(), err)
 	return !shouldRetryReclaim(err)
 }
 
@@ -325,10 +523,19 @@ func (fs *RawFS) drainReleaseQueueOnce(ctx context.Context) {
 			fs.releaseMu.Unlock()
 			continue
 		}
-		if !fs.tryReclaim(ctx, item) {
+		if !fs.tryReclaim(ctx, &item, true) {
+			item.attempts++
 			fs.releaseMu.Lock()
 			fs.releaseQueue = append(fs.releaseQueue, item)
+			qDepth := len(fs.releaseQueue)
 			fs.releaseMu.Unlock()
+			if qDepth >= fs.orphanBacklogThreshold() {
+				logCtx := ctx
+				if !trace.SpanContextFromContext(logCtx).IsValid() && item.spanCtx.IsValid() {
+					logCtx = trace.ContextWithSpanContext(context.Background(), item.spanCtx)
+				}
+				fs.warnOrphanBacklog(logCtx, item.ino, item.attempts, qDepth, nil)
+			}
 		}
 	}
 }
@@ -404,6 +611,8 @@ func (fs *RawFS) FillAttrOut(out *fuse.AttrOut, ino *storagev1.Inode, attrTimeou
 }
 
 // BuildMountOptions 根据 Config 构造标准化的 fuse.MountOptions。
+//
+//nolint:gocritic // 既有公开签名按值接收 Config，本任务不变更对外契约
 func BuildMountOptions(cfg Config) *fuse.MountOptions {
 	options := []string{"default_permissions"}
 	if cfg.ReadOnly {

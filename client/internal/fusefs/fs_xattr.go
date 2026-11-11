@@ -15,6 +15,9 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
+	}
 
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -47,6 +50,9 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 
 // GetXAttr 实现读取扩展属性请求，支持零长度探测与 ERANGE 缓冲区过小语义。
 func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (uint32, fuse.Status) {
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return 0, fuse.Status(syscall.ENODATA)
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
@@ -92,6 +98,9 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 
 // ListXAttr 实现列出扩展属性名称请求，组装以 '\x00' 结尾的连续字节序列。
 func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest []byte) (uint32, fuse.Status) {
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return 0, fuse.OK
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
@@ -140,6 +149,9 @@ func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest [
 func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string) fuse.Status {
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.EACCES
 	}
 
 	ino, status := fs.ToServerIno(header.NodeId)

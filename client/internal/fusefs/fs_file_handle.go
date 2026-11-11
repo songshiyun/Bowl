@@ -1,6 +1,7 @@
 package fusefs
 
 import (
+	"context"
 	"syscall"
 
 	"connectrpc.com/connect"
@@ -44,6 +45,12 @@ func ToProtoOpenFlags(sysFlags uint32) uint32 {
 func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsName(input.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 	if input.Flags&uint32(syscall.O_ACCMODE) == syscall.O_ACCMODE {
 		return fuse.EINVAL
@@ -102,6 +109,11 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 
 // Open 读取缓存中的节点类型并在本地分配句柄。
 func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
+	if fs.isVirtualStatsIno(input.NodeId) {
+		fs.lifecycleMu.RLock()
+		defer fs.lifecycleMu.RUnlock()
+		return fs.openVirtualStats(input, out)
+	}
 	mode := input.Flags & uint32(syscall.O_ACCMODE)
 	if mode == syscall.O_ACCMODE {
 		return fuse.EINVAL
@@ -115,7 +127,9 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	cached, status := fs.getInode(cancel, input.NodeId)
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Open")
+	defer span.End()
+	cached, status := fs.getInodeWithContext(opCtx, cancel, input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
@@ -138,7 +152,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 			if st != fuse.OK {
 				return st
 			}
-			ctx, done := fs.RPCContext(cancel)
+			ctx, done := fs.RPCContextFrom(opCtx, cancel)
 			zero := uint64(0)
 			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
 				Ino:    ino,
@@ -173,6 +187,15 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 // Flush 在 close(fd) 时排空内核页缓存写入并释放本地 POSIX 记录锁。
 // 常规文件不再发起跨机物理 Fsync RPC；显式 Fsync、FsyncDir 与 OnUnmount 才确认物理落盘。
 func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status {
+	if fs.isVirtualStatsIno(input.NodeId) {
+		fs.lifecycleMu.RLock()
+		defer fs.lifecycleMu.RUnlock()
+		if _, status := fs.checkedHandle(VirtualStatsIno, input.Fh, false); status != fuse.OK {
+			return status
+		}
+		fs.locks.ReleasePOSIXByOwner(VirtualStatsIno, input.LockOwner)
+		return fuse.OK
+	}
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
@@ -182,12 +205,23 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status 
 		return status
 	}
 	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
+	if !fs.tmpMgr.HasPendingSync(input.NodeId) {
+		return fuse.OK
+	}
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Flush")
+	defer span.End()
 	// 匿名文件尚未具名，关闭时必须先上云并解链；该路径只写服务端 WAL，不触发物理 fsync。
-	return fs.syncTmpFile(cancel, input.NodeId)
+	return fs.syncTmpFileWithContext(opCtx, cancel, input.NodeId)
 }
 
 // Fsync 等待服务端完成文件持久化。
 func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
+	if fs.isVirtualStatsIno(input.NodeId) {
+		fs.lifecycleMu.RLock()
+		defer fs.lifecycleMu.RUnlock()
+		_, status := fs.checkedHandle(VirtualStatsIno, input.Fh, false)
+		return status
+	}
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return status
 	}
@@ -196,14 +230,16 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return status
 	}
-	if status := fs.syncTmpFile(cancel, input.NodeId); status != fuse.OK {
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Fsync")
+	defer span.End()
+	if status := fs.syncTmpFileWithContext(opCtx, cancel, input.NodeId); status != fuse.OK {
 		return status
 	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 	_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
 		Ino:      ino,
@@ -214,6 +250,9 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	}))
 	if err == nil {
 		fs.clearDirty(ino)
+		fs.metrics.incDirtyFlushOK()
+	} else {
+		fs.metrics.incDirtyFlushError()
 	}
 	return fs.ToStatus(err, cancel)
 }
@@ -226,6 +265,15 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	if !ok || h.Ino != input.NodeId || h.IsDir {
 		return
 	}
+	if input.NodeId == VirtualStatsIno {
+		fs.locks.ReleaseFlockByFH(VirtualStatsIno, input.Fh, input.LockOwner)
+		fs.locks.ForgetHandle(input.Fh)
+		fs.handles.Release(input.Fh)
+		fs.stateMu.Lock()
+		delete(fs.statsSnapshots, input.Fh)
+		fs.stateMu.Unlock()
+		return
+	}
 	// 与在途 Unlink/Rename 的孤儿标记按 Inode 串行，避免最后句柄关闭与解链互相错过。
 	unlock := fs.inodeLocks.lock(h.Ino)
 	defer unlock()
@@ -236,7 +284,13 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	fs.locks.ForgetHandle(input.Fh)
 	fs.readAhead.RemoveHandle(input.Fh)
 	orphan := fs.handles.IsOrphan(input.NodeId)
-	fs.handles.Release(input.Fh)
+	if orphan {
+		opCtx, span := fs.startOpSpan(context.Background(), "fuse.Release")
+		defer span.End()
+		fs.handles.ReleaseContext(opCtx, input.Fh)
+	} else {
+		fs.handles.Release(input.Fh)
+	}
 	if fs.tmpMgr.OnHandleReleased(input.NodeId, orphan, fs.handles.IsOpen) {
 		fs.cache.invalidateInode(input.NodeId)
 	}

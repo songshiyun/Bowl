@@ -1,6 +1,9 @@
 package fusefs
 
 import (
+	"context"
+	"syscall"
+
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -11,6 +14,12 @@ import (
 func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string, out *fuse.EntryOut) fuse.Status {
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(input.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(input.NodeId)
@@ -57,6 +66,12 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
+	if fs.isVirtualStatsName(input.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 
 	parentIno, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -101,6 +116,9 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
+	if fs.isVirtualStatsName(header.NodeId, name) || fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 
 	parentIno, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
@@ -110,19 +128,21 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Rmdir")
+	defer span.End()
 
 	child, _ := fs.cache.entry(header.NodeId, name)
 	var inode *storagev1.Inode
 	if fs.handles.AnyOpen() {
-		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		cached, st := fs.lookupInodeWithContext(opCtx, cancel, header.NodeId, name)
 		if st != fuse.OK {
 			return st
 		}
 		inode = cached.inode
 		child = fs.ToKernelIno(inode.GetIno())
 	}
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 	epoch := fs.cache.version()
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
@@ -151,6 +171,12 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
+	if fs.isVirtualStatsName(header.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 
 	parentIno, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
@@ -160,13 +186,13 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Unlink")
+	defer span.End()
 
 	child, _ := fs.cache.entry(header.NodeId, name)
 	var inode *storagev1.Inode
 	if fs.handles.AnyOpen() {
-		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		cached, st := fs.lookupInodeWithContext(opCtx, cancel, header.NodeId, name)
 		if st != fuse.OK {
 			return st
 		}
@@ -179,6 +205,8 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		defer unlock()
 	}
 	open := child != 0 && fs.handles.IsOpen(child)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 	epoch := fs.cache.version()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
 		ParentIno:    parentIno,
@@ -202,7 +230,7 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		fs.cache.invalidateInode(child)
 	}
 	if open && inode != nil && inode.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(child)
+		fs.markOrphanWithContext(opCtx, child)
 	}
 	return fuse.OK
 }

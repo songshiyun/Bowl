@@ -4,7 +4,9 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -37,11 +39,26 @@ type LockTable struct {
 	nodes   map[uint64]*lockNode
 	handles map[uint64]uint32
 	closed  bool
+	metrics atomic.Pointer[Metrics]
 }
 
 // NewLockTable 创建本地文件锁表。
 func NewLockTable() *LockTable {
 	return &LockTable{nodes: make(map[uint64]*lockNode), handles: make(map[uint64]uint32)}
+}
+
+func (t *LockTable) bindMetrics(m *Metrics) {
+	t.metrics.Store(m)
+}
+
+func (t *LockTable) activeLocks() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var total int
+	for _, node := range t.nodes {
+		total += len(node.posix) + len(node.flock)
+	}
+	return total
 }
 
 // RegisterHandle 记录已知的打开模式。
@@ -304,11 +321,15 @@ func (t *LockTable) set(ctx context.Context, cancel <-chan struct{}, in *fuse.Lk
 		t.nodes[in.NodeId] = node
 	}
 	var waiter *lockWaiter
+	var waitStart time.Time
 	for {
 		if t.closed || (waiter != nil && waiter.canceled) || lockInterrupted(ctx, cancel) {
 			node.removeWaiter(waiter)
 			t.prune(in.NodeId, node)
 			t.mu.Unlock()
+			if waiter != nil {
+				t.metrics.Load().observeLockWait(time.Since(waitStart))
+			}
 			return fuse.EINTR
 		}
 		locks := node.locks(in)
@@ -321,6 +342,9 @@ func (t *LockTable) set(ctx context.Context, cancel <-chan struct{}, in *fuse.Lk
 			node.notify()
 			t.prune(in.NodeId, node)
 			t.mu.Unlock()
+			if waiter != nil {
+				t.metrics.Load().observeLockWait(time.Since(waitStart))
+			}
 			return fuse.OK
 		}
 		if in.LkFlags&fuse.FUSE_LK_FLOCK != 0 {
@@ -335,6 +359,7 @@ func (t *LockTable) set(ctx context.Context, cancel <-chan struct{}, in *fuse.Lk
 		if !wait {
 			t.prune(in.NodeId, node)
 			t.mu.Unlock()
+			t.metrics.Load().incLockConflict()
 			return fuse.EAGAIN
 		}
 		if waiter == nil {
@@ -344,8 +369,11 @@ func (t *LockTable) set(ctx context.Context, cancel <-chan struct{}, in *fuse.Lk
 				node.removeWaiter(waiter)
 				t.prune(in.NodeId, node)
 				t.mu.Unlock()
+				t.metrics.Load().incLockConflict()
 				return fuse.Status(syscall.EDEADLK)
 			}
+			waitStart = time.Now()
+			t.metrics.Load().incLockConflict()
 		}
 		changed := node.changed
 		t.mu.Unlock()

@@ -21,6 +21,9 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
+	}
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
@@ -147,6 +150,9 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 	defer fs.lifecycleMu.RUnlock()
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
 	}
 
 	ino, status := fs.ToServerIno(input.NodeId)

@@ -1,6 +1,7 @@
 package fusefs
 
 import (
+	"context"
 	"syscall"
 
 	"connectrpc.com/connect"
@@ -23,6 +24,12 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
+	if fs.isVirtualStatsName(input.NodeId, oldName) || fs.isVirtualStatsName(input.Newdir, newName) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) || fs.isVirtualStatsIno(input.Newdir) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 
 	oldParentIno, st := fs.ToServerIno(input.NodeId)
 	if st != fuse.OK {
@@ -36,15 +43,19 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Rename")
+	defer span.End()
+
 	var source, target uint64
 	var targetAttr *storagev1.Inode
 	if fs.handles.AnyOpen() {
-		old, oldStatus := fs.lookupInode(cancel, input.NodeId, oldName)
+		old, oldStatus := fs.lookupInodeWithContext(opCtx, cancel, input.NodeId, oldName)
 		if oldStatus != fuse.OK {
 			return oldStatus
 		}
 		source = fs.ToKernelIno(old.inode.GetIno())
-		cached, targetStatus := fs.lookupInode(cancel, input.Newdir, newName)
+		cached, targetStatus := fs.lookupInodeWithContext(opCtx, cancel, input.Newdir, newName)
 		if targetStatus != fuse.OK && targetStatus != fuse.ENOENT {
 			return targetStatus
 		}
@@ -78,7 +89,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		protoFlags |= unknown
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	epoch := fs.cache.version()
@@ -151,7 +162,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		fs.cache.invalidateInode(target)
 	}
 	if targetOpen && target != source && input.Flags&renameExchange == 0 && targetAttr != nil && targetAttr.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(target)
+		fs.markOrphanWithContext(opCtx, target)
 	}
 	return fuse.OK
 }

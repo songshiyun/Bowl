@@ -3,6 +3,7 @@ package fusefs
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -17,12 +18,21 @@ const defaultPrefetchTimeout = 30 * time.Second
 // 保持既有契约：非连续随机读严格按请求尺寸直通，绝不放大成 4 MiB。
 const readAheadMinWant = 128 * 1024
 
+const (
+	pfStateRunning uint32 = iota
+	pfStateReady
+	pfStatePromoted
+	pfStateDiscarded
+)
+
 type prefetchFuture struct {
-	offset uint64
-	done   chan struct{}
-	data   []byte
-	err    error
-	cancel context.CancelFunc
+	offset       uint64
+	done         chan struct{}
+	data         []byte
+	err          error
+	cancel       context.CancelFunc
+	state        atomic.Uint32
+	fetchedBytes atomic.Uint64
 }
 
 // windowFetch 是一次单飞的对齐窗口拉取；同窗口内的并发读共享同一个 future。
@@ -45,48 +55,15 @@ type handleReadAhead struct {
 	// 单靠 lastReadEnd 无法判定“是否同一股顺序流”，必须用单调高水位。
 	streamEnd uint64
 	// reads 是该句柄已收到的读请求数；首个请求一律直通，避免一次性大读被放大。
-	reads     int
-	winOffset uint64
-	winData   []byte
-	winValid  bool
-	winEOF    bool
-	prefetch  *prefetchFuture
+	reads       int
+	winOffset   uint64
+	winData     []byte
+	winValid    bool
+	winEOF      bool
+	winConsumed int
+	prefetch    *prefetchFuture
 	// fetch 是当前在途的 4 MiB 对齐窗口拉取，用于把并发读合并成一次 RPC。
 	fetch *windowFetch
-}
-
-func (hra *handleReadAhead) resetLocked() {
-	hra.gen++
-	hra.lastReadEnd = 0
-	hra.hasLastRead = false
-	hra.seqCount = 0
-	hra.streamEnd = 0
-	hra.fetch = nil
-	hra.winOffset = 0
-	hra.winData = nil
-	hra.winValid = false
-	hra.winEOF = false
-	if hra.prefetch != nil {
-		if hra.prefetch.cancel != nil {
-			hra.prefetch.cancel()
-		}
-		hra.prefetch = nil
-	}
-}
-
-func (hra *handleReadAhead) clearWindowAndPrefetchLocked() {
-	hra.gen++
-	hra.fetch = nil
-	hra.winOffset = 0
-	hra.winData = nil
-	hra.winValid = false
-	hra.winEOF = false
-	if hra.prefetch != nil {
-		if hra.prefetch.cancel != nil {
-			hra.prefetch.cancel()
-		}
-		hra.prefetch = nil
-	}
 }
 
 // requestInWindowLocked 报告请求区间是否与当前活跃窗口、在途窗口拉取或异步预取窗口相交。
@@ -113,12 +90,88 @@ type ChunkFetcher func(ctx context.Context, offset uint64, length uint32) ([]byt
 type ReadAheadCoordinator struct {
 	mu      sync.Mutex
 	handles map[uint64]*handleReadAhead
+	metrics atomic.Pointer[Metrics]
 }
 
 // NewReadAheadCoordinator 创建并初始化 ReadAheadCoordinator。
 func NewReadAheadCoordinator() *ReadAheadCoordinator {
 	return &ReadAheadCoordinator{
 		handles: make(map[uint64]*handleReadAhead),
+	}
+}
+
+func (c *ReadAheadCoordinator) bindMetrics(m *Metrics) {
+	c.metrics.Store(m)
+}
+
+func (c *ReadAheadCoordinator) discardPrefetch(pf *prefetchFuture) {
+	if pf == nil {
+		return
+	}
+	if pf.cancel != nil {
+		pf.cancel()
+	}
+	for {
+		st := pf.state.Load()
+		if st == pfStatePromoted || st == pfStateDiscarded {
+			return
+		}
+		if pf.state.CompareAndSwap(st, pfStateDiscarded) {
+			if st == pfStateReady {
+				c.metrics.Load().addReadAheadDiscardedBytes(pf.fetchedBytes.Load())
+			}
+			return
+		}
+	}
+}
+
+func (c *ReadAheadCoordinator) promotePrefetch(pf *prefetchFuture) bool {
+	return pf != nil && pf.state.CompareAndSwap(pfStateReady, pfStatePromoted)
+}
+
+func (c *ReadAheadCoordinator) discardWindowLocked(hra *handleReadAhead) {
+	if hra.winValid && len(hra.winData) > hra.winConsumed {
+		c.metrics.Load().addReadAheadDiscardedBytes(uint64(len(hra.winData) - hra.winConsumed))
+	}
+	hra.winOffset = 0
+	hra.winData = nil
+	hra.winValid = false
+	hra.winEOF = false
+	hra.winConsumed = 0
+}
+
+func (c *ReadAheadCoordinator) installWindowLocked(hra *handleReadAhead, offset uint64, data []byte, eof bool, consumed int) {
+	c.discardWindowLocked(hra)
+	hra.winOffset = offset
+	hra.winData = data
+	hra.winValid = len(data) > 0
+	hra.winEOF = eof
+	hra.winConsumed = min(len(data), max(0, consumed))
+}
+
+func (c *ReadAheadCoordinator) resetHandleLocked(hra *handleReadAhead) {
+	hra.gen++
+	hra.lastReadEnd = 0
+	hra.hasLastRead = false
+	hra.seqCount = 0
+	hra.streamEnd = 0
+	hra.fetch = nil
+	c.discardWindowLocked(hra)
+	if hra.prefetch != nil {
+		pf := hra.prefetch
+		hra.prefetch = nil
+		c.discardPrefetch(pf)
+	}
+}
+
+func (c *ReadAheadCoordinator) clearWindowAndPrefetchLocked(hra *handleReadAhead) {
+	hra.gen++
+	hra.fetch = nil
+	c.discardWindowLocked(hra)
+	if hra.prefetch != nil {
+		pf := hra.prefetch
+		hra.prefetch = nil
+		c.discardPrefetch(pf)
 	}
 }
 
@@ -138,7 +191,7 @@ func (c *ReadAheadCoordinator) getOrCreateHandle(fh, ino uint64) *handleReadAhea
 	}
 	hra.mu.Lock()
 	if hra.ino != ino {
-		hra.resetLocked()
+		c.resetHandleLocked(hra)
 		hra.ino = ino
 	}
 	hra.mu.Unlock()
@@ -169,6 +222,7 @@ func (c *ReadAheadCoordinator) fetchAlignedWindow(ctx context.Context, hra *hand
 		f.err = err
 	} else {
 		f.data = data
+		c.metrics.Load().addReadAheadPrefetchedBytes(uint64(len(data)))
 	}
 	close(f.done)
 	hra.mu.Lock()
@@ -178,7 +232,7 @@ func (c *ReadAheadCoordinator) fetchAlignedWindow(ctx context.Context, hra *hand
 	return f.data, f.err
 }
 
-func (c *ReadAheadCoordinator) startPrefetchLocked(hra *handleReadAhead, nextOffset uint64, fetch ChunkFetcher) {
+func (c *ReadAheadCoordinator) startPrefetchLocked(triggerCtx context.Context, hra *handleReadAhead, nextOffset uint64, fetch ChunkFetcher) {
 	if fetch == nil {
 		return
 	}
@@ -186,42 +240,56 @@ func (c *ReadAheadCoordinator) startPrefetchLocked(hra *handleReadAhead, nextOff
 		if hra.prefetch.offset == nextOffset {
 			return
 		}
-		if hra.prefetch.cancel != nil {
-			hra.prefetch.cancel()
-		}
+		pf := hra.prefetch
 		hra.prefetch = nil
+		c.discardPrefetch(pf)
 	}
 
-	pfCtx, pfCancel := context.WithTimeout(context.Background(), defaultPrefetchTimeout)
+	baseCtx := context.Background()
+	if triggerCtx != nil {
+		baseCtx = context.WithoutCancel(triggerCtx)
+	}
+	pfCtx, pfCancel := context.WithTimeout(baseCtx, defaultPrefetchTimeout)
 	pf := &prefetchFuture{
 		offset: nextOffset,
 		done:   make(chan struct{}),
 		cancel: pfCancel,
 	}
 	hra.prefetch = pf
+	m := c.metrics.Load()
+	m.incReadAheadTrigger()
+	m.addReadAheadInflight(1)
 
 	go func() {
 		defer close(pf.done)
 		defer pfCancel()
+		defer c.metrics.Load().addReadAheadInflight(-1)
 		data, err := fetch(pfCtx, nextOffset, MaxRPCChunkSize)
 		if err != nil {
 			pf.err = err
+			pf.state.Store(pfStateDiscarded)
 			return
 		}
 		pf.data = data
+		n := uint64(len(data))
+		pf.fetchedBytes.Store(n)
+		m := c.metrics.Load()
+		m.addReadAheadPrefetchedBytes(n)
+		if !pf.state.CompareAndSwap(pfStateRunning, pfStateReady) {
+			m.addReadAheadDiscardedBytes(n)
+		}
 	}()
 }
 
-func (c *ReadAheadCoordinator) fetchReadWindow(ctx context.Context, hra *handleReadAhead, offset uint64, fetch ChunkFetcher) ([]byte, error) {
+func (c *ReadAheadCoordinator) fetchReadWindow(ctx context.Context, hra *handleReadAhead, offset uint64, fetch ChunkFetcher) (data []byte, hit bool, err error) {
 	var pf *prefetchFuture
 	if hra.prefetch != nil && hra.prefetch.offset == offset {
 		pf = hra.prefetch
 		hra.prefetch = nil
 	} else if hra.prefetch != nil {
-		if hra.prefetch.cancel != nil {
-			hra.prefetch.cancel()
-		}
+		old := hra.prefetch
 		hra.prefetch = nil
+		c.discardPrefetch(old)
 	}
 
 	startGen := hra.gen
@@ -231,21 +299,24 @@ func (c *ReadAheadCoordinator) fetchReadWindow(ctx context.Context, hra *handleR
 		case <-pf.done:
 		case <-ctx.Done():
 			hra.mu.Lock()
-			return nil, ctx.Err()
+			c.discardPrefetch(pf)
+			return nil, false, ctx.Err()
 		}
 		hra.mu.Lock()
-		if pf.err == nil && hra.gen == startGen {
-			return pf.data, nil
+		if pf.err == nil && hra.gen == startGen && c.promotePrefetch(pf) {
+			return pf.data, true, nil
 		}
+		c.discardPrefetch(pf)
 	}
 
 	hra.mu.Unlock()
-	data, err := fetch(ctx, offset, MaxRPCChunkSize)
+	data, err = fetch(ctx, offset, MaxRPCChunkSize)
 	hra.mu.Lock()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return data, nil
+	c.metrics.Load().addReadAheadPrefetchedBytes(uint64(len(data)))
+	return data, false, nil
 }
 
 // Read 在指定文件句柄上执行带预读缓存与单飞窗口协调的读取，将结果写入 dest 并返回实际读取字节数。
@@ -275,19 +346,19 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 				return 0, ctx.Err()
 			}
 			hra.mu.Lock()
-			if hra.gen == startGen && pf.err == nil {
+			if hra.gen == startGen && pf.err == nil && c.promotePrefetch(pf) {
 				if hra.prefetch == pf {
 					hra.prefetch = nil
 				}
-				hra.winOffset = pf.offset
-				hra.winData = pf.data
-				hra.winValid = len(pf.data) > 0
-				hra.winEOF = len(pf.data) < MaxRPCChunkSize
+				c.installWindowLocked(hra, pf.offset, pf.data, len(pf.data) < MaxRPCChunkSize, 0)
 				if !hra.winEOF {
-					c.startPrefetchLocked(hra, hra.winOffset+MaxRPCChunkSize, fetch)
+					c.startPrefetchLocked(ctx, hra, hra.winOffset+MaxRPCChunkSize, fetch)
 				}
-			} else if hra.prefetch == pf {
-				hra.prefetch = nil
+			} else {
+				if hra.prefetch == pf {
+					hra.prefetch = nil
+				}
+				c.discardPrefetch(pf)
 			}
 		}
 
@@ -298,37 +369,39 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 			if avail >= want || hra.winEOF {
 				n := min(want, avail)
 				copy(dest[:n], hra.winData[relOff:relOff+n])
+				hra.winConsumed = min(len(hra.winData), hra.winConsumed+n)
 				hra.lastReadEnd = offset + uint64(n)
 				hra.hasLastRead = true
 				hra.seqCount++
 				hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 				hra.mu.Unlock()
+				c.metrics.Load().addReadAheadHit(uint64(n))
 				return n, nil
 			}
 
 			// 跨窗口边界读取：前缀取自当前窗口尾部，后缀从下一 4 MiB 窗口补齐
 			prefix := make([]byte, avail)
 			copy(prefix, hra.winData[relOff:])
+			hra.winConsumed = min(len(hra.winData), hra.winConsumed+avail)
 			nextWinOffset := hra.winOffset + uint64(len(hra.winData))
 			startGen := hra.gen
 
-			nextData, err := c.fetchReadWindow(ctx, hra, nextWinOffset, fetch)
+			nextData, fromPrefetch, err := c.fetchReadWindow(ctx, hra, nextWinOffset, fetch)
 			if err != nil {
 				hra.mu.Unlock()
 				return 0, err
 			}
 
+			rem := min(want-avail, len(nextData))
 			if hra.gen == startGen {
-				hra.winOffset = nextWinOffset
-				hra.winData = nextData
-				hra.winValid = len(nextData) > 0
-				hra.winEOF = len(nextData) < MaxRPCChunkSize
+				c.installWindowLocked(hra, nextWinOffset, nextData, len(nextData) < MaxRPCChunkSize, rem)
 				if !hra.winEOF {
-					c.startPrefetchLocked(hra, nextWinOffset+MaxRPCChunkSize, fetch)
+					c.startPrefetchLocked(ctx, hra, nextWinOffset+MaxRPCChunkSize, fetch)
 				}
+			} else if len(nextData) > rem {
+				c.metrics.Load().addReadAheadDiscardedBytes(uint64(len(nextData) - rem))
 			}
 
-			rem := min(want-avail, len(nextData))
 			copy(dest[:avail], prefix)
 			copy(dest[avail:avail+rem], nextData[:rem])
 			total := avail + rem
@@ -337,6 +410,11 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 			hra.seqCount++
 			hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 			hra.mu.Unlock()
+			hitBytes := uint64(avail)
+			if fromPrefetch {
+				hitBytes += uint64(rem)
+			}
+			c.metrics.Load().addReadAheadHit(hitBytes)
 			return total, nil
 		}
 
@@ -361,47 +439,48 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 					avail := len(data) - int(rel)
 					n := min(want, avail)
 					copy(dest[:n], data[rel:rel+uint64(n)])
+					if len(data) > n {
+						c.metrics.Load().addReadAheadDiscardedBytes(uint64(len(data) - n))
+					}
 					hra.mu.Unlock()
 					return n, nil
 				}
+				c.metrics.Load().addReadAheadDiscardedBytes(uint64(len(data)))
 			} else {
-				hra.winOffset = winOffset
-				hra.winData = data
-				hra.winValid = len(data) > 0
-				hra.winEOF = winEOF
 				if covers {
 					avail := len(data) - int(rel)
 					n := min(want, avail)
+					c.installWindowLocked(hra, winOffset, data, winEOF, n)
 					copy(dest[:n], data[rel:rel+uint64(n)])
 					hra.lastReadEnd = offset + uint64(n)
 					hra.hasLastRead = true
 					hra.seqCount++
 					hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 					if !hra.winEOF {
-						c.startPrefetchLocked(hra, winOffset+MaxRPCChunkSize, fetch)
+						c.startPrefetchLocked(ctx, hra, winOffset+MaxRPCChunkSize, fetch)
 					}
 					hra.mu.Unlock()
 					return n, nil
 				}
 				if avail := len(data) - int(rel); avail > 0 {
+					c.installWindowLocked(hra, winOffset, data, winEOF, avail)
 					prefix := make([]byte, avail)
 					copy(prefix, data[rel:])
 					nextWinOffset := winOffset + uint64(len(data))
-					nextData, err := c.fetchReadWindow(ctx, hra, nextWinOffset, fetch)
+					nextData, fromPrefetch, err := c.fetchReadWindow(ctx, hra, nextWinOffset, fetch)
 					if err != nil {
 						hra.mu.Unlock()
 						return 0, err
 					}
-					if hra.gen == startGen {
-						hra.winOffset = nextWinOffset
-						hra.winData = nextData
-						hra.winValid = len(nextData) > 0
-						hra.winEOF = len(nextData) < MaxRPCChunkSize
-						if !hra.winEOF {
-							c.startPrefetchLocked(hra, nextWinOffset+MaxRPCChunkSize, fetch)
-						}
-					}
 					rem := min(want-avail, len(nextData))
+					if hra.gen == startGen {
+						c.installWindowLocked(hra, nextWinOffset, nextData, len(nextData) < MaxRPCChunkSize, rem)
+						if !hra.winEOF {
+							c.startPrefetchLocked(ctx, hra, nextWinOffset+MaxRPCChunkSize, fetch)
+						}
+					} else if len(nextData) > rem {
+						c.metrics.Load().addReadAheadDiscardedBytes(uint64(len(nextData) - rem))
+					}
 					copy(dest[:avail], prefix)
 					copy(dest[avail:avail+rem], nextData[:rem])
 					total := avail + rem
@@ -410,14 +489,18 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 					hra.seqCount++
 					hra.streamEnd = max(hra.streamEnd, hra.lastReadEnd)
 					hra.mu.Unlock()
+					if fromPrefetch && rem > 0 {
+						c.metrics.Load().addReadAheadHit(uint64(rem))
+					}
 					return total, nil
 				}
+				c.installWindowLocked(hra, winOffset, data, winEOF, 0)
 			}
 		}
 
 		// 4. 首次读取或非连续随机读取：按请求尺寸直通，不产生多余读放大。
 		if !hra.requestInWindowLocked(offset, want) {
-			hra.clearWindowAndPrefetchLocked()
+			c.clearWindowAndPrefetchLocked(hra)
 		}
 		startGen := hra.gen
 		hra.mu.Unlock()
@@ -442,7 +525,7 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 	}
 
 	hra.mu.Lock()
-	hra.clearWindowAndPrefetchLocked()
+	c.clearWindowAndPrefetchLocked(hra)
 	startGen := hra.gen
 	hra.mu.Unlock()
 
@@ -494,7 +577,7 @@ func (c *ReadAheadCoordinator) InvalidateInode(ino uint64) {
 	for _, hra := range targets {
 		hra.mu.Lock()
 		if hra.ino == ino {
-			hra.resetLocked()
+			c.resetHandleLocked(hra)
 		}
 		hra.mu.Unlock()
 	}
@@ -511,7 +594,7 @@ func (c *ReadAheadCoordinator) RemoveHandle(fh uint64) {
 
 	if ok && hra != nil {
 		hra.mu.Lock()
-		hra.resetLocked()
+		c.resetHandleLocked(hra)
 		hra.mu.Unlock()
 	}
 }
@@ -525,7 +608,7 @@ func (c *ReadAheadCoordinator) Clear() {
 
 	for _, hra := range handles {
 		hra.mu.Lock()
-		hra.resetLocked()
+		c.resetHandleLocked(hra)
 		hra.mu.Unlock()
 	}
 }

@@ -1,6 +1,9 @@
 package fusefs
 
 import (
+	"context"
+	"syscall"
+
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -13,6 +16,12 @@ import (
 func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo, linkName string, out *fuse.EntryOut) fuse.Status {
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(header.NodeId, linkName) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(header.NodeId)
@@ -53,6 +62,9 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 // Readlink 实现读取符号链接目标路径操作。
 // 将 Inode 映射为服务端 Inode 后调用 StorageService，原样返回目标字节切片，不进行有损字符集过滤。
 func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte, fuse.Status) {
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return nil, fuse.EINVAL
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
@@ -80,10 +92,18 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
+	if fs.isVirtualStatsIno(input.Oldnodeid) || fs.isVirtualStatsName(input.NodeId, filename) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	if status, local := fs.linkTmp(cancel, input, filename, out); local {
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Link")
+	defer span.End()
+	if status, local := fs.linkTmp(opCtx, cancel, input, filename, out); local {
 		return status
 	}
 	srcIno, status := fs.ToServerIno(input.Oldnodeid)
@@ -97,7 +117,7 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 	}
 
 	epoch := fs.cache.version()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Link(ctx, connect.NewRequest(&storagev1.LinkRequest{

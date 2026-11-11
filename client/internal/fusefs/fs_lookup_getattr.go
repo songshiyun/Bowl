@@ -1,6 +1,7 @@
 package fusefs
 
 import (
+	"context"
 	"syscall"
 
 	"connectrpc.com/connect"
@@ -11,6 +12,10 @@ import (
 
 // lookupInode 查找目录项；跨机 RPC 在锁外并发执行。
 func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string) (cachedInode, fuse.Status) {
+	return fs.lookupInodeWithContext(context.Background(), cancel, parent, name)
+}
+
+func (fs *RawFS) lookupInodeWithContext(parentCtx context.Context, cancel <-chan struct{}, parent uint64, name string) (cachedInode, fuse.Status) {
 	if ino, ok := fs.cache.entry(parent, name); ok {
 		if ino == 0 {
 			return cachedInode{}, fuse.ENOENT
@@ -24,7 +29,7 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 		return cachedInode{}, status
 	}
 	epoch, generation := fs.cache.snapshot()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(parentCtx, cancel)
 	defer cancelFunc()
 	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
 		ParentIno: parentIno,
@@ -37,6 +42,7 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 	if err != nil {
 		status := fs.ToStatus(err, cancel)
 		if status == fuse.ENOENT {
+			fs.metrics.incNSCacheMiss(nsCacheNegativeEntry)
 			fs.cache.putEntryAtIf(generation, epoch, parent, name, 0)
 		}
 		return cachedInode{}, status
@@ -53,6 +59,10 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 }
 
 func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse.Status) {
+	return fs.getInodeWithContext(context.Background(), cancel, ino)
+}
+
+func (fs *RawFS) getInodeWithContext(parentCtx context.Context, cancel <-chan struct{}, ino uint64) (cachedInode, fuse.Status) {
 	if inode, ok := fs.tmpMgr.LocalInode(ino); ok {
 		return cachedInode{inode: inode}, fuse.OK
 	}
@@ -64,7 +74,7 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 		return cachedInode{}, status
 	}
 	epoch, generation := fs.cache.snapshot()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(parentCtx, cancel)
 	defer cancelFunc()
 	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
 		Ino:    serverIno,
@@ -87,6 +97,10 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 
 // Lookup 在缓存命中时直接返回目录项。
 func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) fuse.Status {
+	if fs.isVirtualStatsName(header.NodeId, name) {
+		fs.fillVirtualStatsEntryOut(out)
+		return fuse.OK
+	}
 	if _, status := fs.ToServerIno(header.NodeId); status != fuse.OK {
 		return status
 	}
@@ -103,6 +117,11 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 
 // GetAttr 在缓存命中时直接返回节点属性。
 func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut) fuse.Status {
+	if fs.isVirtualStatsIno(in.NodeId) {
+		out.SetTimeout(0)
+		fs.fillVirtualStatsAttr(&out.Attr)
+		return fuse.OK
+	}
 	if _, status := fs.ToServerIno(in.NodeId); status != fuse.OK {
 		return status
 	}
@@ -127,6 +146,11 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.StatfsOut) fuse.Status {
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	if fs.isVirtualStatsIno(in.NodeId) {
+		inCopy := *in
+		inCopy.NodeId = fuse.FUSE_ROOT_ID
+		in = &inCopy
+	}
 	ino, status := fs.ToServerIno(in.NodeId)
 	if status != fuse.OK {
 		return status

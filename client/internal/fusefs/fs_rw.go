@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
@@ -23,6 +24,9 @@ import (
 func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fs.readVirtualStats(input, buf)
+	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return nil, status
@@ -55,11 +59,18 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		return fuse.ReadResultData(dest[:n]), st
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Read")
+	defer span.End()
+	baseCtx, cancelTimeout := context.WithTimeout(opCtx, DefaultRPCTimeout)
+	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
+	defer func() {
+		cancelChan()
+		cancelTimeout()
+	}()
 
 	n, err := fs.readAhead.Read(ctx, input.Fh, ino, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) ([]byte, error) {
-		resp, rpcErr := fs.client.Read(fetchCtx, connect.NewRequest(&storagev1.ReadRequest{
+		reqCtx := rpc.WithRequestID(fetchCtx, fs.NextRequestID())
+		resp, rpcErr := fs.client.Read(reqCtx, connect.NewRequest(&storagev1.ReadRequest{
 			Ino:    ino,
 			Fh:     0,
 			Offset: offset,
@@ -91,6 +102,9 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	if status := fs.CheckWritable(); status != fuse.OK {
 		return 0, status
 	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return 0, fuse.EACCES
+	}
 
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -117,12 +131,16 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	if n, local, st := fs.tmpMgr.Write(input.NodeId, input.Offset, data, appendMode); local {
 		return n, st
 	}
+
+	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Write")
+	defer span.End()
+
 	if appendMode {
 		// 同一 Inode 的 O_APPEND 必须在“读取当前大小 -> 提交 Write”之间保持定序，
 		// 否则并发追加会读到相同旧大小而互相覆盖。
 		unlock := fs.inodeLocks.lock(input.NodeId)
 		defer unlock()
-		cached, st := fs.getInode(cancel, input.NodeId)
+		cached, st := fs.getInodeWithContext(opCtx, cancel, input.NodeId)
 		if st != fuse.OK {
 			return 0, st
 		}
@@ -135,11 +153,13 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 
 	// Write 为非幂等变更（尤其在 O_APPEND 下），一旦在途发出 RPC 则忽略中途 FUSE_INTERRUPT（如 Go SIGURG 抢占信号），
 	// 避免服务端已提交追加但客户端因中断返回 EINTR 触发调用方重试造成重复追加。
-	ctx, cancelFunc := fs.RPCContext(nil)
-	defer cancelFunc()
+	// 使用 context.WithoutCancel(opCtx) 保留调用链 SpanContext，同时屏蔽上游取消对非幂等落盘的半途中断。
+	detachedCtx := context.WithoutCancel(opCtx)
 
 	dataLen := len(data)
 	if dataLen <= MaxRPCChunkSize {
+		ctx, cancelFunc := fs.RPCContextFrom(detachedCtx, nil)
+		defer cancelFunc()
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
 			Ino:    ino,
 			Fh:     0,
@@ -175,7 +195,8 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		chunk := data[totalWritten : totalWritten+chunkSize]
 		curOffset := input.Offset + uint64(totalWritten)
 
-		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		chunkCtx, chunkCancel := fs.RPCContextFrom(detachedCtx, nil)
+		resp, err := fs.client.Write(chunkCtx, connect.NewRequest(&storagev1.WriteRequest{
 			Ino:    ino,
 			Fh:     0,
 			Offset: curOffset,
@@ -183,6 +204,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 			DiskId: fs.cfg.DiskID,
 			Epoch:  fs.cfg.Epoch,
 		}))
+		chunkCancel()
 		if err != nil {
 			fs.cache.invalidateInode(input.NodeId)
 			if totalWritten > 0 {
