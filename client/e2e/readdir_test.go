@@ -47,7 +47,7 @@ func TestE2E_ReadDir(t *testing.T) {
 	endpoint := getStorageEndpoint()
 	cmd, stdout, stderr := startBowlMount(t, endpoint, disk.GetDiskId(), mountpoint, "--debug")
 	waitForMount(t, mountpoint, "等待挂载就绪失败: %s %s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint)
+	t.Cleanup(func() { stopBowlMountGracefully(t, cmd, mountpoint) })
 
 	createReadDirTree(t, mountpoint)
 
@@ -144,7 +144,7 @@ func TestE2E_OpenDirectoryAfterRemoval(t *testing.T) {
 	mountpoint := t.TempDir()
 	cmd, stdout, stderr := startBowlMount(t, getStorageEndpoint(), disk.GetDiskId(), mountpoint)
 	waitForMount(t, mountpoint, "等待挂载就绪失败: %s %s", stdout.String(), stderr.String())
-	defer stopBowlMountGracefully(t, cmd, mountpoint)
+	t.Cleanup(func() { stopBowlMountGracefully(t, cmd, mountpoint) })
 	path := filepath.Join(mountpoint, "open_then_rmdir")
 	require.NoError(t, os.Mkdir(path, 0o755))
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY, 0)

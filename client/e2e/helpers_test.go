@@ -74,16 +74,6 @@ func createTestDisk(t *testing.T, client storagev1connect.StorageServiceClient) 
 	return disk
 }
 
-// prepareDiskFiles 通过可写挂载准备初始文件并优雅卸载，供后续只读挂载读取。
-func prepareDiskFiles(t *testing.T, diskID string, prepare func(string)) {
-	t.Helper()
-	mp := t.TempDir()
-	cmd, _, stderr := startBowlMount(t, getStorageEndpoint(), diskID, mp)
-	waitForMount(t, mp, "准备数据时挂载失败: %s", stderr.String())
-	prepare(mp)
-	stopBowlMountGracefully(t, cmd, mp)
-}
-
 // isMounted 通过读取 /proc/self/mountinfo 确认目标路径是否为已生效的挂载点。
 func isMounted(mountpoint string) bool {
 	data, err := os.ReadFile("/proc/self/mountinfo")

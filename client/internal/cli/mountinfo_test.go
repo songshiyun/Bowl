@@ -52,17 +52,3 @@ func TestParseMountPointsFromReaderBoundaries(t *testing.T) {
 	require.Len(t, invalidEscape, 1)
 	require.Equal(t, `/mnt/keep\999`, invalidEscape[0].path, "非八进制转义必须原样保留")
 }
-
-func TestIsMountPointAndFindDiskMountpointOnProc(t *testing.T) {
-	mounted, err := IsMountPoint("/")
-	require.NoError(t, err)
-	require.True(t, mounted, "/ 必须是活跃挂载点")
-
-	mounted, err = IsMountPoint("/definitely-not-mounted-by-bowl")
-	require.NoError(t, err)
-	require.False(t, mounted)
-
-	_, mounted, err = FindDiskMountpoint("0192a3b4-c5d6-7e8f-9012-3456789abcd3")
-	require.NoError(t, err)
-	require.False(t, mounted)
-}

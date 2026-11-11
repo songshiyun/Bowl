@@ -206,7 +206,7 @@ func TestE2E_Lock(t *testing.T) {
 	mp := t.TempDir()
 	cmd, _, _ := startBowlMount(t, getStorageEndpoint(), disk.GetDiskId(), mp)
 	waitForMount(t, mp)
-	defer stopBowlMountGracefully(t, cmd, mp)
+	t.Cleanup(func() { stopBowlMountGracefully(t, cmd, mp) })
 
 	t.Run("进程锁冲突分裂和关闭释放", func(t *testing.T) {
 		path := filepath.Join(mp, "posix.txt")

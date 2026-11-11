@@ -204,7 +204,13 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	})
 
 	mountpoint2 := t.TempDir()
-	mountCmd2 := exec.Command(bowlBin, "mount", "--endpoint", endpoint, disk2ID, mountpoint2)
+	metaPath2 := mountMetaPath(t, mountpoint2)
+	fallbackMetaPath2 := filepath.Join(os.TempDir(), "bowl-mounts", filepath.Base(metaPath2))
+	t.Cleanup(func() {
+		_ = os.Remove(metaPath2)
+		_ = os.Remove(fallbackMetaPath2)
+	})
+	mountCmd2 := exec.Command(bowlBin, "mount", "--endpoint", endpoint, "--admin-addr", "off", disk2ID, mountpoint2)
 	mountOut2, err := mountCmd2.CombinedOutput()
 	require.NoError(t, err, "挂载第二块测试盘失败: %s", string(mountOut2))
 
@@ -214,9 +220,11 @@ func TestE2E_DiskCLI_FullLifecycleAndSafeDelete(t *testing.T) {
 	require.NoError(t, syscall.Kill(daemonPID2, syscall.SIGKILL))
 	waitForProcessExit(t, daemonPID2)
 
-	// 解除本机残留挂载点
+	// 解除本机残留挂载点并清理强杀遗留的发现元数据文件
 	_ = unix.Unmount(mountpoint2, unix.MNT_DETACH)
 	waitForUnmount(t, mountpoint2)
+	_ = os.Remove(metaPath2)
+	_ = os.Remove(fallbackMetaPath2)
 
 	// 无需等待任何会话租约 TTL 超时，单次调用立即执行 bowl disk delete 销毁磁盘
 	kill9DelStart := time.Now()
