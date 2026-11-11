@@ -14,9 +14,9 @@
     "data_disk_size_gib": 894
   },
   "server_node": {
-    "instance_id": "i-rj90x3rcwcyduv529x01",
-    "public_ip": "47.77.203.99",
-    "private_ip": "172.16.1.199",
+    "instance_id": "i-rj980079ks7kdbsi3ntz",
+    "public_ip": "43.110.150.249",
+    "private_ip": "172.16.1.194",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
@@ -28,15 +28,15 @@
     "data_disk_size_gib": 894,
     "disk_seq_write_mib_s": 1998.05,
     "disk_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69933,
-    "local_randread_4k_iops": 699362,
-    "local_fsync_4k_iops": 50869,
-    "local_fsync_4k_p99_us": 63.6
+    "local_randwrite_4k_iops": 69953,
+    "local_randread_4k_iops": 699869,
+    "local_fsync_4k_iops": 42099,
+    "local_fsync_4k_p99_us": 228.1
   },
   "client_node": {
-    "instance_id": "i-rj90x3rcwcyduv529x02",
-    "public_ip": "43.110.149.71",
-    "private_ip": "172.16.1.198",
+    "instance_id": "i-rj980079ks7kdbsi3nu0",
+    "public_ip": "43.110.153.205",
+    "private_ip": "172.16.1.195",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
@@ -48,24 +48,28 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.038/0.080/0.276/0.060 ms",
-    "iperf3_gbps": 21.22
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.042/0.075/0.211/0.044 ms",
+    "iperf3_gbps": 21.19
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69933,
-    "local_randread_4k_iops": 699362,
-    "local_fsync_4k_iops": 50869,
-    "local_fsync_4k_p99_us": 63.6
+    "local_randwrite_4k_iops": 69953,
+    "local_randread_4k_iops": 699869,
+    "local_fsync_4k_iops": 42099,
+    "local_fsync_4k_p99_us": 228.1
   },
   "bowl_config": {
-    "git_commit": "c6e884e",
-    "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef)",
-    "blob_layout": "packs/pack-<id>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 64 MiB 分片热块缓存 + ExtendTail)",
+    "git_commit": "9c60a34-dirty",
+    "storage_engine": "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
+    "blob_layout": "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
     "blob_size_bytes": 262144,
     "pack_max_bytes": 67108864,
     "blob_ref_bytes": 16,
+    "write_behind_chunk_bytes": 4194304,
+    "write_behind_max_inflight": 4,
+    "http2_stream_window_bytes": 8388608,
+    "http2_conn_window_bytes": 33554432,
     "kernel_writeback_cache": false,
     "open_keep_cache": true,
     "handle_killpriv": true,
@@ -83,11 +87,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9bench-kp-20261109-052701",
-    "server_instance_ids": "i-rj90x3rcwcyduv529x01",
-    "client_instance_ids": "i-rj90x3rcwcyduv529x02",
-    "instances_created_at": "2026-11-09T05:27:18Z",
-    "instances_deleted_at": "2026-11-09T05:55:16Z",
+    "key_pair_name": "bowl-d9bench-kp-20261110-184517",
+    "server_instance_ids": "i-rj980079ks7kdbsi3ntz",
+    "client_instance_ids": "i-rj980079ks7kdbsi3nu0",
+    "instances_created_at": "2026-11-10T18:45:31Z",
+    "instances_deleted_at": "2026-11-10T19:10:52Z",
     "remaining_benchmark_instances": 0
   }
 }

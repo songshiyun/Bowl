@@ -18,21 +18,21 @@ class ParseFioLatencyTest(unittest.TestCase):
     def test_legacy_direct_io_uses_total_mean_and_masks_bogus_clat_percentiles(self) -> None:
         json_path = RESULTS_DIR / "fio_bowl_direct_write_4jobs.json"
         parsed = parse_results.parse_fio_json(json_path, "write")
-        self.assertEqual(parsed["lat_mean_ms"], 3.43)
+        self.assertEqual(parsed["lat_mean_ms"], 2.299)
         self.assertIsNone(parsed["lat_p95_ms"])
         self.assertIsNone(parsed["lat_p99_ms"])
 
         summary = parse_results.build_summary(RESULTS_DIR)
         report_md = parse_results.render_report(summary)
-        self.assertIn("| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `3.43 / N/A / N/A ms` |", report_md)
+        self.assertIn("| **Direct 顺序写 (4 并发 · 1M · 4GiB)** | `2.30 / N/A / N/A ms` |", report_md)
         self.assertNotIn("0.00 / 0.00 / 0.01 ms", report_md)
 
     def test_legacy_psync_seq_io_preserves_clat_percentiles_when_slat_negligible(self) -> None:
         json_path = RESULTS_DIR / "fio_bowl_seq_write_1job.json"
         parsed = parse_results.parse_fio_json(json_path, "write")
-        self.assertEqual(parsed["lat_mean_ms"], 7.557)
-        self.assertEqual(parsed["lat_p95_ms"], 8.356)
-        self.assertEqual(parsed["lat_p99_ms"], 9.11)
+        self.assertEqual(parsed["lat_mean_ms"], 2.443)
+        self.assertEqual(parsed["lat_p95_ms"], 2.638)
+        self.assertEqual(parsed["lat_p99_ms"], 3.162)
 
     def test_lat_percentiles_enabled_prefers_lat_ns_percentile(self) -> None:
         payload = {

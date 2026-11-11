@@ -6,13 +6,14 @@
 # - 控制面：PostgreSQL 16 仅维护单张 disks 表；MountDisk 握手原子递增 WriterEpoch。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
 #   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
-#   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + BlockIdx + Length + Flags）。
+#   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
 # - 数据层：BlobStore 采用扁平 64 MiB Append-Only .pack 封包文件、256 KiB 逻辑块网格、
-#   常驻句柄池与 64 MiB 分片热块缓存，支持活跃包末尾同块 ExtendTail 顺延扩展、无锁并发 Read、
+#   常驻句柄池与尾块分片热缓存（AppendBlocks 整块顺序写跳过用户态冗余缓存拷贝），
+#   支持活跃包末尾同块 ExtendTail 顺延扩展、无锁并发 Read、WriteRequest 池化零分配解码、
 #   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及已封口包自动回收。
-# - 客户端：无会话 RawFS FUSE 客户端，1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
-#   保留 FOPEN_KEEP_CACHE，声明 CAP_HANDLE_KILLPRIV）+ NamespaceCache（含 completeDirs）+
-#   ReadAheadCoordinator 顺序预读 + TmpFileManager；Flush 不触发跨机 Fsync RPC。
+# - 客户端：无会话 RawFS FUSE 客户端，禁用 CAP_WRITEBACK_CACHE（保留 FOPEN_KEEP_CACHE 与 CAP_HANDLE_KILLPRIV），
+#   配备 WriteBehindCoordinator 顺序写 4 MiB 聚批与 W*=4 并发流水线（2 MiB 同步探测 + <64 KiB 直通写）+
+#   ReadAheadCoordinator 顺序预读 + 双端 8 MiB / 32 MiB HTTP/2 流控窗口；Flush 不触发跨机 Fsync RPC。
 set -euo pipefail
 export GOWORK=off
 
@@ -768,6 +769,9 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
 fi
 
 BOWL_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain -- services client 2>/dev/null)" ]]; then
+  BOWL_GIT_COMMIT="${BOWL_GIT_COMMIT}-dirty"
+fi
 
 jq -n \
   --arg test_started_at "${TEST_STARTED_AT}" \
@@ -817,11 +821,15 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
-      storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef)",
-      blob_layout: "packs/pack-<id>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 64 MiB 分片热块缓存 + ExtendTail)",
+      storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
+      blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
       blob_size_bytes: 262144,
       pack_max_bytes: 67108864,
       blob_ref_bytes: 16,
+      write_behind_chunk_bytes: 4194304,
+      write_behind_max_inflight: 4,
+      http2_stream_window_bytes: 8388608,
+      http2_conn_window_bytes: 33554432,
       kernel_writeback_cache: false,
       open_keep_cache: true,
       handle_killpriv: true,

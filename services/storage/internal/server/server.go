@@ -26,11 +26,13 @@ const (
 	// HTTP2MaxReadFrameSize 为服务端 HTTP/2 接收帧大小上限 (1 MiB)。
 	HTTP2MaxReadFrameSize = 1 << 20
 
-	// HTTP2MaxReceiveBufferPerStream 为服务端单流 HTTP/2 接收流控窗口上限 (< 4 MiB)。
-	HTTP2MaxReceiveBufferPerStream = (4 << 20) - 1
+	// HTTP2MaxReceiveBufferPerStream 为服务端单流 HTTP/2 接收流控窗口上限 (8 MiB)，
+	// 确保单次 4 MiB + Protobuf 信封载荷无需流级 WINDOW_UPDATE 停顿即可完整接收。
+	HTTP2MaxReceiveBufferPerStream = 8 << 20
 
-	// HTTP2MaxReceiveBufferPerConnection 为服务端单连接 HTTP/2 接收流控窗口上限 (< 4 MiB)。
-	HTTP2MaxReceiveBufferPerConnection = (4 << 20) - 1
+	// HTTP2MaxReceiveBufferPerConnection 为服务端单连接 HTTP/2 接收流控窗口上限 (32 MiB)，
+	// 支撑客户端 W*=4 并发 4 MiB Write 请求在单条连接上无连接级流控阻塞地流水线接收。
+	HTTP2MaxReceiveBufferPerConnection = 32 << 20
 )
 
 // Server 封装并管理底层公网 RPC HTTP 服务与内网管理面 HTTP 服务。
@@ -149,8 +151,14 @@ func New(p Params) (*Server, error) {
 	}
 
 	mux := http.NewServeMux()
-	var handlerOpts []connect.HandlerOption
-	handlerOpts = append(handlerOpts, connect.WithInterceptors(interceptors...))
+	allInterceptors := make([]connect.Interceptor, 0, len(interceptors)+1)
+	allInterceptors = append(allInterceptors, newWritePayloadReleaseInterceptor())
+	allInterceptors = append(allInterceptors, interceptors...)
+
+	handlerOpts := []connect.HandlerOption{
+		connect.WithCodec(newProtoBinaryCodec()),
+		connect.WithInterceptors(allInterceptors...),
+	}
 	if p.Config.ReadMaxBytes() > 0 {
 		handlerOpts = append(handlerOpts, connect.WithReadMaxBytes(int(p.Config.ReadMaxBytes())))
 	}

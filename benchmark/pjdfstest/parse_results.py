@@ -259,16 +259,19 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
         "PostgreSQL 16 仅保存单张 `disks` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
         "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
         "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），"
-        "DataKey 保存 16 字节 `BlobRef`（`PackID + BlockIdx + Length + Flags`）；"
-        "文件数据落在 `packs/pack-<id>.pack` 的 `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、"
-        "常驻句柄池与 `64 MiB` 分片热块缓存，支持活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、"
+        "DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；"
+        "文件数据落在 `packs/<pack_id_hex16>.pack` 的 `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、"
+        "常驻句柄池与尾块分片热缓存（`AppendBlocks` 整块顺序写跳过用户态冗余拷贝），配合服务端 `WriteRequest` 池化零分配解码、"
+        "活跃包末尾同块 `ExtendTail` 顺延扩展、无锁并发 `Read`、"
         "`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及已封口包自动回收。"
     )
     lines.append("")
     lines.append(
-        "客户端采用无会话 `RawFS` 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，"
-        "保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，"
-        "并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
+        "客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，"
+        "保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；"
+        "配备对称的 `WriteBehindCoordinator`（连续顺序写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发流水线，`<64 KiB` 小写直通）、"
+        "`ReadAheadCoordinator` 顺序预读与双端 `8 MiB / 32 MiB` HTTP/2 流控窗口，"
+        "并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
         "测试挂载保持 `strictatime` 与 0 秒属性/目录项超时，数据目录全程挂载于本地 NVMe SSD（`local_ssd_pro` 894 GiB）。"
     )
     lines.append("")
@@ -342,7 +345,7 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '-')}` |")
     lines.append(f"| **服务端 `STORAGE_ATIME_MODE`** | `{bowl_cfg.get('atime_mode', 'strictatime')}` | 开启严格访问时间更新，验证 `atime` 刷新语义 |")
     lines.append(f"| **FUSE 缓存超时配置** | `entry={bowl_cfg.get('entry_timeout', '0')}s, attr={bowl_cfg.get('attr_timeout', '0')}s, direntry={bowl_cfg.get('dir_entry_timeout', '0')}s` | 内核属性与目录项缓存超时；客户端 NamespaceCache 仍可命中 |")
-    lines.append(f"| **内核回写缓存与数据分片** | `writeback_cache={bowl_cfg.get('kernel_writeback_cache')}`, `keep_cache={bowl_cfg.get('open_keep_cache')}`, `max_background={bowl_cfg.get('max_background')}`, `block_grid={bowl_cfg.get('blob_size_bytes')}` 字节, `pack={bowl_cfg.get('pack_max_bytes', 67108864)}` 字节 | 1 MiB 直通写（无内核 writeback 聚合）；服务端写 64 MiB `.pack` 封包文件 |")
+    lines.append(f"| **内核回写缓存与数据分片** | `writeback_cache={bowl_cfg.get('kernel_writeback_cache')}`, `keep_cache={bowl_cfg.get('open_keep_cache')}`, `max_background={bowl_cfg.get('max_background')}`, `block_grid={bowl_cfg.get('blob_size_bytes')}` 字节, `pack={bowl_cfg.get('pack_max_bytes', 67108864)}` 字节 | `WriteBehindCoordinator`（`4 MiB × 4` 并发顺序写流水线，`<64 KiB` 直通）+ 服务端 64 MiB `.pack` 封包文件 |")
     lines.append(f"| **服务端 WAL 与落盘策略** | `{bowl_cfg.get('wal_sync_mode', '-')}` | 常规写批次 Group Commit 异步提交，显式 Fsync/Sync 执行双层并行落盘屏障 |")
     lines.append(f"| **客户端挂载命令** | `bowl mount <disk_id> /mnt/bowl --endpoint http://{server.get('private_ip', '<server_ip>')}:9000 --allow-other` | 启用 `default_permissions` 与 `--allow-other` 支持多 UID/GID 权限切换测试 |")
     lines.append("")

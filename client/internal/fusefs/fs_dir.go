@@ -39,6 +39,9 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 	if _, status := fs.checkedHandle(input.NodeId, input.Fh, true); status != fuse.OK {
 		return nil, status
 	}
+	if fs.writeBehind.HasAnyPending() {
+		fs.writeBehind.BarrierAll()
+	}
 	if entries, ok := fs.cache.dir(input.NodeId); ok {
 		return entries, fuse.OK
 	}

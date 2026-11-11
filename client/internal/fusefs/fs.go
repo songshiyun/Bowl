@@ -102,7 +102,8 @@ type RawFS struct {
 
 	lastOrphanWarnUnixNano atomic.Int64
 
-	readAhead *ReadAheadCoordinator
+	readAhead   *ReadAheadCoordinator
+	writeBehind *WriteBehindCoordinator
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
@@ -134,6 +135,38 @@ func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 		releaseCancel:  releaseCancel,
 		readAhead:      NewReadAheadCoordinator(),
 	}
+	fs.writeBehind = NewWriteBehindCoordinator(
+		func(ctx context.Context, ino, offset uint64, data []byte) (uint32, *storagev1.Inode, error) {
+			if fs.client == nil {
+				return 0, nil, syscall.EIO
+			}
+			reqCtx := rpc.WithRequestID(ctx, fs.NextRequestID())
+			resp, err := fs.client.Write(reqCtx, connect.NewRequest(&storagev1.WriteRequest{
+				Ino:    ino,
+				Fh:     0,
+				Offset: offset,
+				Data:   data,
+				DiskId: fs.cfg.DiskID,
+				Epoch:  fs.cfg.Epoch,
+			}))
+			if err != nil {
+				return 0, nil, err
+			}
+			return resp.Msg.GetSize(), resp.Msg.GetInode(), nil
+		},
+		WriteBehindHooks{
+			OnCommit: func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, refreshAttr bool) {
+				fs.markDirty(ino)
+				if refreshAttr && inode != nil {
+					fs.cache.refreshInodeAt(cacheEpoch, nodeID, inode, DefaultWriteAttrTimeoutSeconds)
+				}
+				fs.caps.markAbsent(nodeID)
+			},
+			OnError: func(nodeID uint64) {
+				fs.cache.invalidateInode(nodeID)
+			},
+		},
+	)
 	fs.handles = NewHandleTableWithContext(fs.reclaimOrphan)
 	fs.bindMetrics(metrics)
 	return fs
@@ -287,6 +320,9 @@ func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.St
 		return 0, fuse.EIO
 	}
 	fs.locks.RegisterHandle(fh, flags)
+	if !dir && ino != VirtualStatsIno {
+		fs.writeBehind.RegisterHandle(fh)
+	}
 	return fh, fuse.OK
 }
 
@@ -307,8 +343,9 @@ func (fs *RawFS) OnUnmount() {
 	defer span.End()
 
 	fs.locks.Close()
-	// 排他锁等待所有在途请求释放读锁，确保卸载前脏节点全部排空。
+	// 排他锁等待所有在途请求释放读锁，先排空异步写缓冲确保 dirtyInodes 完整，再逐一同步落盘。
 	fs.lifecycleMu.Lock()
+	fs.writeBehind.Clear()
 	for _, ino := range fs.takeDirtyInodes() {
 		ctx, done := fs.RPCContextFrom(opCtx, nil)
 		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{

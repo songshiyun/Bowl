@@ -152,6 +152,7 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 			if st != fuse.OK {
 				return st
 			}
+			fs.writeBehind.ResetInodeStream(ino)
 			ctx, done := fs.RPCContextFrom(opCtx, cancel)
 			zero := uint64(0)
 			resp, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
@@ -201,17 +202,33 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) fuse.Status 
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
+	handle, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	if status != fuse.OK {
 		return status
 	}
 	fs.locks.ReleasePOSIXByOwner(input.NodeId, input.LockOwner)
-	if !fs.tmpMgr.HasPendingSync(input.NodeId) {
+	if fs.tmpMgr.HasPendingSync(input.NodeId) {
+		opCtx, span := fs.startOpSpan(context.Background(), "fuse.Flush")
+		// 匿名文件尚未具名，关闭时必须先上云并解链；该路径只写服务端 WAL，不触发物理 fsync。
+		status = fs.syncTmpFileWithContext(opCtx, cancel, input.NodeId)
+		span.End()
+		if status != fuse.OK {
+			return status
+		}
+	}
+	ino, status := fs.ToServerIno(input.NodeId)
+	if status != fuse.OK {
+		return status
+	}
+	if !handle.CanWrite() {
+		fs.writeBehind.BarrierInode(ino)
 		return fuse.OK
 	}
-	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Flush")
-	defer span.End()
-	// 匿名文件尚未具名，关闭时必须先上云并解链；该路径只写服务端 WAL，不触发物理 fsync。
-	return fs.syncTmpFileWithContext(opCtx, cancel, input.NodeId)
+	if err := fs.writeBehind.FlushInodeForHandle(input.Fh, ino); err != nil {
+		fs.cache.invalidateInode(input.NodeId)
+		return fs.ToStatus(err, nil)
+	}
+	return fuse.OK
 }
 
 // Fsync 等待服务端完成文件持久化。
@@ -238,6 +255,10 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status 
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
 		return status
+	}
+	if err := fs.writeBehind.FlushInodeForHandle(input.Fh, ino); err != nil {
+		fs.cache.invalidateInode(input.NodeId)
+		return fs.ToStatus(err, nil)
 	}
 	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
@@ -274,6 +295,10 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 		fs.stateMu.Unlock()
 		return
 	}
+	serverIno, serverStatus := fs.ToServerIno(input.NodeId)
+	if serverStatus == fuse.OK {
+		fs.writeBehind.BarrierInode(serverIno)
+	}
 	// 与在途 Unlink/Rename 的孤儿标记按 Inode 串行，避免最后句柄关闭与解链互相错过。
 	unlock := fs.inodeLocks.lock(h.Ino)
 	defer unlock()
@@ -283,6 +308,7 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 	fs.locks.ReleaseFlockByFH(input.NodeId, input.Fh, input.LockOwner)
 	fs.locks.ForgetHandle(input.Fh)
 	fs.readAhead.RemoveHandle(input.Fh)
+	fs.writeBehind.ForgetHandle(input.Fh)
 	orphan := fs.handles.IsOrphan(input.NodeId)
 	if orphan {
 		opCtx, span := fs.startOpSpan(context.Background(), "fuse.Release")
@@ -290,6 +316,10 @@ func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
 		fs.handles.ReleaseContext(opCtx, input.Fh)
 	} else {
 		fs.handles.Release(input.Fh)
+	}
+	stillOpen := fs.handles.IsOpen(input.NodeId)
+	if serverStatus == fuse.OK && !stillOpen {
+		fs.writeBehind.RemoveInode(serverIno)
 	}
 	if fs.tmpMgr.OnHandleReleased(input.NodeId, orphan, fs.handles.IsOpen) {
 		fs.cache.invalidateInode(input.NodeId)

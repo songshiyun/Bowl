@@ -1,39 +1,39 @@
 {
-  "bowl_commit": "c6e884e",
-  "previous_bowl_commit": "a253128",
-  "previous_run_commit": "a253128",
-  "date_local": "2026-11-09",
-  "started_at_local": "2026-11-09T12:40:07+08:00",
-  "completed_at_local": "2026-11-09T13:55:18+08:00",
+  "bowl_commit": "9c60a34-dirty",
+  "previous_bowl_commit": "c6e884e",
+  "previous_run_commit": "c6e884e",
+  "date_local": "2026-11-11",
+  "started_at_local": "2026-11-11T02:45:12+08:00",
+  "completed_at_local": "2026-11-11T03:14:41+08:00",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
   "zone": "us-west-1a",
   "instance_type": "ecs.i5.xlarge",
   "data_disk_category": "local_ssd_pro (NVMe)",
   "data_disk_size_gib": 894,
-  "production_code_modified": false,
+  "production_code_modified": true,
   "code_commits": {
-    "juicefs": "c6e884e",
-    "drive9": "c6e884e",
-    "pjdfstest": "c6e884e",
-    "control": "a253128",
-    "note": "基于 labs/actor-architecture 分支 HEAD (c6e884e) 在阿里云硅谷 (us-west-1a) 开通 ecs.i5.xlarge (4 vCPU / 32 GiB / 894 GiB local_ssd_pro 本地 NVMe SSD) 双机按量 ECS，执行双端 drop_caches 与服务端进程级隔离，全量重跑 pjdfstest、juicefs (bowl + jfs_pg + jfs_redis) 和 drive9 (bowl + drive9_default + drive9_sync) 三套基准。"
+    "juicefs": "9c60a34-dirty",
+    "drive9": "9c60a34-dirty",
+    "pjdfstest": "9c60a34-dirty",
+    "control": "c6e884e",
+    "note": "基于 9c60a34 叠加顺序写数学全局最优解（WriteBehindCoordinator 4 MiB 聚批 + W*=4 并发 Write RPC + 双端 8M/32M H2C 流控窗口 + WriteRequest 池化零分配解码 + AppendBlocks 零冗余热块拷贝），在阿里云硅谷 (us-west-1a) 开通 ecs.i5.xlarge (4 vCPU / 32 GiB / 894 GiB local_ssd_pro 本地 NVMe SSD) 双机按量 ECS，执行双端 drop_caches 与服务端进程级隔离，全量重跑 pjdfstest、juicefs (bowl + jfs_pg + jfs_redis) 和 drive9 (bowl + drive9_default + drive9_sync) 三套基准。"
   },
   "architecture": {
-    "control_plane": "PostgreSQL 16 仅维护 disks 与 commits 控制面表 (ADR-0032)，客户端 MountDisk 单次握手原子递增 WriterEpoch",
-    "data_plane": "每个 Disk 独立常驻 StoreActor (单盘 Pebble + 共享 128 MiB Block Cache, ADR-0030/0031)，sys:stat (41B) 持久化统计与 WriterEpoch，DataKey 保存 16 字节 BlobRef (PackID + BlockIdx + Length + Flags)",
-    "blob_layout": "packs/pack-<id>.pack 64 MiB Append-Only 封包文件 (256 KiB 逻辑块网格 + 常驻句柄池 + 64 MiB 分片热块缓存)，支持活跃包末尾同块 ExtendTail 顺延扩展、无锁并发 Read 及已封口包自动回收",
-    "wal": "双缓冲 MPSC Group Commit 循环 (Phase A 内存校验、WriterEpoch 栅栏与零拷贝 SetDeferred 编码，Phase B pebble.NoSync 批量提交 WAL) + Fsync/FsyncDir 双层并行落盘屏障 (脏 .pack fdatasync + Pebble LogData 并发同步)",
-    "server_concurrency": "单盘 StoreActor 串行化元数据变更与无锁并发快照读，消除跨分支锁竞争与高频小块文件创建/unlink 开销",
-    "client": "无会话 RawFS 1 MiB Write-Through 直通写 (kernel_writeback_cache=false) + FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV 负缓存 + completeDirs 权威完整目录本地 ENOENT 判定 + 写后 AttrTimeout=1.0s + MaxBackground=64 / CongestionThreshold=48；Flush 不触发 Fsync RPC"
+    "control_plane": "PostgreSQL 16 仅维护单张 disks 控制面表 (ADR-0032)，客户端 MountDisk 单次握手原子递增 WriterEpoch",
+    "data_plane": "每个 Disk 独立常驻 StoreActor (单盘 Pebble + 共享 128 MiB Block Cache, ADR-0030/0031)，sys:stat (41B) 持久化统计与 WriterEpoch，DataKey 保存 16 字节 BlobRef (PackID + Offset + Length)",
+    "blob_layout": "packs/<pack_id_hex16>.pack 64 MiB Append-Only 封包文件 (256 KiB 逻辑块网格 + 常驻句柄池 + 尾块分片热缓存 + AppendBlocks 整块顺序写跳过用户态冗余拷贝)，支持活跃包末尾同块 ExtendTail 顺延扩展、封口包后台异步预刷盘、无锁并发 Read 及已封口包自动回收",
+    "wal": "双缓冲 MPSC Group Commit 循环 (Phase A 内存校验、WriterEpoch 栅栏与零拷贝 SetDeferred 编码，Phase B pebble.NoSync 批量提交 WAL) + Fsync/FsyncDir 多包并发双层并行落盘屏障 (脏 .pack fdatasync + Pebble LogData 并发同步)",
+    "server_concurrency": "单盘 StoreActor 串行化元数据变更与无锁并发快照读，配合 WriteRequest 池化零分配解码 (noscan 8x4 MiB 缓冲池) 与热路径零反射参数校验",
+    "client": "无会话 RawFS (kernel_writeback_cache=false) + WriteBehindCoordinator (连续顺序写经 2 MiB 同步探测后激活 4 MiB 聚批与 W*=4 并发 Write RPC 流水线，<64 KiB 小写直通) + 双端 8 MiB / 32 MiB HTTP/2 流控窗口 + ReadAheadCoordinator 顺序预读 + FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV 负缓存 + completeDirs 权威完整目录本地 ENOENT 判定 + 写后 AttrTimeout=1.0s + MaxBackground=64 / CongestionThreshold=48；Flush 排空异步写缓冲但不触发 Fsync RPC"
   },
   "hardware_baseline_nvme": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69945,
-    "local_randread_4k_iops": 699873,
-    "local_fsync_4k_iops": 49942,
-    "local_fsync_4k_p99_us": 63.6
+    "local_randwrite_4k_iops": 69954,
+    "local_randread_4k_iops": 695711,
+    "local_fsync_4k_iops": 49885,
+    "local_fsync_4k_p99_us": 82.4
   },
   "suites": {
     "pjdfstest": {
@@ -46,9 +46,9 @@
       "pass_rate": 0.998977,
       "todo_tests": 28,
       "todo_expected_failures": 9,
-      "duration_sec": 171.496,
-      "throughput_tests_per_sec": 51.3,
-      "executed_at_utc": "2026-11-09T04:43:46Z/2026-11-09T04:46:40Z",
+      "duration_sec": 191.935,
+      "throughput_tests_per_sec": 45.84,
+      "executed_at_utc": "2026-11-10T18:49:47Z/2026-11-10T18:53:01Z",
       "failed_cases": [
         {
           "case": "chmod/02.t",
@@ -100,7 +100,7 @@
           ]
         }
       ],
-      "failure_root_cause": "9 项失败均为 256 字节超长文件名边界断言（预期 ENAMETOOLONG，实测返回 ENOENT）：29c2bc3 引入 completeDirs 权威完整目录缓存后，NamespaceCache.entry 在未命中时未先校验 len(name) > 255 即直接返回 ENOENT。",
+      "failure_root_cause": "9 项失败均为存量 256 字节超长文件名边界断言（预期 ENAMETOOLONG，实测返回 ENOENT）：completeDirs 权威完整目录缓存未命中时未先校验 len(name) > 255；顺序写流水线改造未引入任何新增失败。",
       "report": "pjdfstest/REPORT.md"
     },
     "juicefs": {
@@ -117,92 +117,92 @@
       "attempts": 1,
       "sample_policy": "同机按目标隔离服务端进程依次测量 bowl、jfs_pg、jfs_redis 三组目标，每项前执行双端 drop_caches",
       "bench_bowl": {
-        "Write big file": 1076.63,
-        "Read big file": 1671.2,
-        "Write small file": 2028.1,
-        "Read small file": 4089.9,
-        "Stat file": 103368.3
+        "Write big file": 1679.99,
+        "Read big file": 1403.37,
+        "Write small file": 790.7,
+        "Read small file": 967.2,
+        "Stat file": 93191.4
       },
       "bench_jfs_pg": {
-        "Write big file": 690.66,
-        "Read big file": 1649.37,
-        "Write small file": 740.7,
-        "Read small file": 3028.8,
-        "Stat file": 13203.8
+        "Write big file": 691.35,
+        "Read big file": 1633.01,
+        "Write small file": 737.0,
+        "Read small file": 3042.5,
+        "Stat file": 13110.8
       },
       "bench_jfs_redis": {
-        "Write big file": 679.95,
-        "Read big file": 1684.02,
-        "Write small file": 1128.9,
-        "Read small file": 3196.3,
-        "Stat file": 46341.8
+        "Write big file": 683.86,
+        "Read big file": 1645.17,
+        "Write small file": 1143.8,
+        "Read small file": 4798.6,
+        "Stat file": 42575.9
       },
       "fio_bowl_mib_s": {
-        "seq_write_1job": 429.13,
-        "seq_read_1job": 738.42,
-        "seq_write_16jobs": 1059.29,
-        "seq_read_16jobs": 1400.58,
-        "direct_write_4jobs": 1154.78,
-        "direct_read_4jobs": 1462.33,
-        "direct_randwrite_4jobs": 1189.66,
-        "direct_randread_4jobs": 1280.8
+        "seq_write_1job": 1339.44,
+        "seq_read_1job": 622.02,
+        "seq_write_16jobs": 1305.81,
+        "seq_read_16jobs": 1397.95,
+        "direct_write_4jobs": 1719.56,
+        "direct_read_4jobs": 1370.36,
+        "direct_randwrite_4jobs": 748.13,
+        "direct_randread_4jobs": 1004.41
       },
       "mdtest_1proc_bowl_ops_s": {
         "command": "/usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'",
         "scale": "1 tasks, 12440 files/directories",
         "operations": {
           "Directory creation": {
-            "max": 4274.693,
-            "min": 4274.693,
-            "mean": 4274.693,
+            "max": 389.618,
+            "min": 389.618,
+            "mean": 389.618,
             "stddev": 0.0
           },
           "Directory stat": {
-            "max": 112138.119,
-            "min": 112138.119,
-            "mean": 112138.119,
+            "max": 79609.418,
+            "min": 79609.418,
+            "mean": 79609.418,
             "stddev": 0.0
           },
           "Directory removal": {
-            "max": 2686.907,
-            "min": 2686.907,
-            "mean": 2686.907,
+            "max": 296.763,
+            "min": 296.763,
+            "mean": 296.763,
             "stddev": 0.0
           },
           "File creation": {
-            "max": 2531.407,
-            "min": 2531.407,
-            "mean": 2531.407,
+            "max": 294.99,
+            "min": 294.99,
+            "mean": 294.99,
             "stddev": 0.0
           },
           "File stat": {
-            "max": 102006.506,
-            "min": 102006.506,
-            "mean": 102006.506,
+            "max": 78492.377,
+            "min": 78492.377,
+            "mean": 78492.377,
             "stddev": 0.0
           },
           "File read": {
-            "max": 39111.358,
-            "min": 39111.358,
-            "mean": 39111.358,
+            "max": 35968.514,
+            "min": 35968.514,
+            "mean": 35968.514,
             "stddev": 0.0
           },
           "File removal": {
-            "max": 2634.696,
-            "min": 2634.696,
-            "mean": 2634.696,
+            "max": 296.876,
+            "min": 296.876,
+            "mean": 296.876,
             "stddev": 0.0
           },
           "Tree creation": {
-            "max": 4158.414,
-            "min": 4158.414,
-            "mean": 4158.414,
+            "max": 320.475,
+            "min": 320.475,
+            "mean": 320.475,
             "stddev": 0.0
           },
           "Tree removal": {
-            "max": 2667.931,
-            "min": 2667.931,
-            "mean": 2667.931,
+            "max": 305.313,
+            "min": 305.313,
+            "mean": 305.313,
             "stddev": 0.0
           }
         }
@@ -212,57 +212,57 @@
         "scale": "4 tasks, 1040 files/directories",
         "operations": {
           "Directory creation": {
-            "max": 8950.521,
-            "min": 8939.854,
-            "mean": 8947.437,
-            "stddev": 4.392
+            "max": 3573.957,
+            "min": 3573.917,
+            "mean": 3573.939,
+            "stddev": 0.015
           },
           "Directory stat": {
-            "max": 1411875.228,
-            "min": 1202384.421,
-            "mean": 1257229.981,
-            "stddev": 89312.889
+            "max": 1371742.112,
+            "min": 1370007.377,
+            "mean": 1370926.081,
+            "stddev": 725.108
           },
           "Directory removal": {
-            "max": 10281.49,
-            "min": 10280.687,
-            "mean": 10281.224,
-            "stddev": 0.323
+            "max": 8245.223,
+            "min": 8245.125,
+            "mean": 8245.186,
+            "stddev": 0.038
           },
           "File creation": {
-            "max": 9425.524,
-            "min": 9414.807,
-            "mean": 9422.787,
-            "stddev": 4.608
+            "max": 2805.069,
+            "min": 2804.896,
+            "mean": 2804.944,
+            "stddev": 0.073
           },
           "File stat": {
-            "max": 1583425.192,
-            "min": 1306171.661,
-            "mean": 1387122.454,
-            "stddev": 113733.272
+            "max": 1433496.118,
+            "min": 1425462.042,
+            "mean": 1430388.249,
+            "stddev": 2986.917
           },
           "File read": {
-            "max": 46791.34,
-            "min": 46738.359,
-            "mean": 46762.95,
-            "stddev": 18.829
+            "max": 34134.156,
+            "min": 34128.856,
+            "mean": 34130.558,
+            "stddev": 2.1
           },
           "File removal": {
-            "max": 12127.409,
-            "min": 12126.837,
-            "mean": 12127.145,
-            "stddev": 0.206
+            "max": 5127.208,
+            "min": 5127.099,
+            "mean": 5127.159,
+            "stddev": 0.04
           },
           "Tree creation": {
-            "max": 1916.14,
-            "min": 1916.14,
-            "mean": 1916.14,
+            "max": 519.441,
+            "min": 519.441,
+            "mean": 519.441,
             "stddev": 0.0
           },
           "Tree removal": {
-            "max": 1293.86,
-            "min": 1293.86,
-            "mean": 1293.86,
+            "max": 422.113,
+            "min": 422.113,
+            "mean": 422.113,
             "stddev": 0.0
           }
         }
@@ -283,69 +283,69 @@
         "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
       },
       "bench_bowl": {
-        "Write big file": 805.15,
-        "Read big file": 1320.61,
-        "Write small file": 791.8,
-        "Read small file": 1049.3,
-        "Stat file": 93674.3
+        "Write big file": 1699.27,
+        "Read big file": 1504.9,
+        "Write small file": 1392.0,
+        "Read small file": 3970.5,
+        "Stat file": 115646.0
       },
       "cold_bowl_median": {
-        "sequential_write": 186.86,
-        "sequential_read": 487.53,
-        "random_read_4k": 1.3,
-        "small_write_4k_fsync": 136.67,
-        "mkdir": 607.89,
-        "rename": 390.35,
-        "unlink": 349.17,
-        "readdir_small": 19435.67,
-        "readdir_large": 169272.05,
-        "stat": 55818.4
+        "sequential_write": 1142.87,
+        "sequential_read": 653.52,
+        "random_read_4k": 4.97,
+        "small_write_4k_fsync": 158.43,
+        "mkdir": 674.77,
+        "rename": 2495.7,
+        "unlink": 2596.6,
+        "readdir_small": 28514.56,
+        "readdir_large": 161788.84,
+        "stat": 54741.16
       },
       "cold_bowl_macro_median_sec": {
-        "macro_git_clone": 5.5872,
-        "macro_git_status_dirty": 0.1358,
-        "macro_git_diff_dirty": 0.0659,
-        "macro_find_files": 0.0584,
-        "macro_go_build": 0.4758
+        "macro_git_clone": 5.6682,
+        "macro_git_status_dirty": 0.0799,
+        "macro_git_diff_dirty": 0.0303,
+        "macro_find_files": 0.0472,
+        "macro_go_build": 0.4289
       },
       "hot_bowl_median": {
-        "sequential_write": 189.51,
-        "sequential_read": 6503.59,
-        "random_read_4k": 394.57,
-        "small_write_4k_fsync": 126.02,
-        "mkdir": 434.45,
-        "rename": 317.4,
-        "unlink": 333.77,
-        "readdir_small": 423307.3,
-        "readdir_large": 1155025.17,
-        "stat": 723083.58
+        "sequential_write": 1120.72,
+        "sequential_read": 7827.43,
+        "random_read_4k": 540.25,
+        "small_write_4k_fsync": 151.86,
+        "mkdir": 484.47,
+        "rename": 2526.4,
+        "unlink": 2726.98,
+        "readdir_small": 376541.47,
+        "readdir_large": 1063198.65,
+        "stat": 740831.84
       },
       "hot_bowl_macro_median_sec": {
-        "macro_git_clone": 5.5425,
-        "macro_git_status_dirty": 0.0301,
-        "macro_git_diff_dirty": 0.0053,
-        "macro_find_files": 0.0053,
-        "macro_go_build": 0.0855
+        "macro_git_clone": 5.7241,
+        "macro_git_status_dirty": 0.0291,
+        "macro_git_diff_dirty": 0.0077,
+        "macro_find_files": 0.0091,
+        "macro_go_build": 0.0727
       },
       "fuse_perf_baseline_bowl": {
-        "small_write_64x1k_fsync_files_s": 114.03,
-        "small_read_64x1k_sha256_files_s": 334.17,
-        "large_write_16mib_fsync_mib_s": 47.14,
-        "large_read_16mib_pass1_mib_s": 1244.4,
-        "large_read_16mib_pass2_mib_s": 1249.4,
-        "sqlite_delete_insert_rows_s": 1282.98,
-        "sqlite_delete_update_rows_s": 113.33,
-        "sqlite_delete_read_rows_s": 632800.31,
-        "sqlite_wal_insert_rows_s": 524.91,
-        "sqlite_wal_update_rows_s": 199.65,
-        "sqlite_wal_read_rows_s": 879785.55,
-        "sqlite_wal_checkpoint_sec": 0.189
+        "small_write_64x1k_fsync_files_s": 171.68,
+        "small_read_64x1k_sha256_files_s": 461.99,
+        "large_write_16mib_fsync_mib_s": 54.52,
+        "large_read_16mib_pass1_mib_s": 1243.36,
+        "large_read_16mib_pass2_mib_s": 1241.1,
+        "sqlite_delete_insert_rows_s": 1342.21,
+        "sqlite_delete_update_rows_s": 126.71,
+        "sqlite_delete_read_rows_s": 599801.32,
+        "sqlite_wal_insert_rows_s": 666.79,
+        "sqlite_wal_update_rows_s": 274.44,
+        "sqlite_wal_read_rows_s": 984910.86,
+        "sqlite_wal_checkpoint_sec": 0.113
       },
       "report": "drive9/REPORT.md"
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-09T05:56:00Z",
+    "verified_at_utc": "2026-11-10T19:14:41Z",
     "remaining_instances_in_region": 0,
     "remaining_keypairs_in_region": 0,
     "created_instances_total": 6,
@@ -353,45 +353,45 @@
     "created_instances": [
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj9avlamolsy1dvo7aof",
+        "instance_id": "i-rj92ajzkmzal3sdknoyr",
         "role": "server",
         "private_ip": "172.16.1.191"
       },
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj9avlamolsy1dvo7aog",
+        "instance_id": "i-rj92ajzkmzal3sdknoys",
         "role": "client",
         "private_ip": "172.16.1.190"
       },
       {
         "suite": "juicefs",
-        "instance_id": "i-rj9byi6it3dlf5vzetpn",
+        "instance_id": "i-rj919a36elzt54mhmlox",
         "role": "server",
-        "private_ip": "172.16.1.193"
-      },
-      {
-        "suite": "juicefs",
-        "instance_id": "i-rj9byi6it3dlf5vzetpo",
-        "role": "client",
         "private_ip": "172.16.1.192"
       },
       {
-        "suite": "drive9",
-        "instance_id": "i-rj90x3rcwcyduv529x01",
-        "role": "server",
-        "private_ip": "172.16.1.199"
+        "suite": "juicefs",
+        "instance_id": "i-rj919a36elzt54mhmloy",
+        "role": "client",
+        "private_ip": "172.16.1.193"
       },
       {
         "suite": "drive9",
-        "instance_id": "i-rj90x3rcwcyduv529x02",
+        "instance_id": "i-rj980079ks7kdbsi3ntz",
+        "role": "server",
+        "private_ip": "172.16.1.194"
+      },
+      {
+        "suite": "drive9",
+        "instance_id": "i-rj980079ks7kdbsi3nu0",
         "role": "client",
-        "private_ip": "172.16.1.198"
+        "private_ip": "172.16.1.195"
       }
     ],
     "created_keypairs": [
-      "bowl-pjdfstest-kp-20261109-044007",
-      "bowl-jfsbench-kp-20261109-044716",
-      "bowl-d9bench-kp-20261109-052701"
+      "bowl-pjdfstest-kp-20261110-184514",
+      "bowl-jfsbench-kp-20261110-184512",
+      "bowl-d9bench-kp-20261110-184517"
     ]
   }
 }

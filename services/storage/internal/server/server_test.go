@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -667,8 +668,8 @@ func TestServerHTTP2ConfigAndH2CLargeReadWrite(t *testing.T) {
 	require.NotNil(t, httpSrv)
 	require.NotNil(t, httpSrv.HTTP2)
 	require.Equal(t, 1<<20, httpSrv.HTTP2.MaxReadFrameSize)
-	require.Equal(t, (4<<20)-1, httpSrv.HTTP2.MaxReceiveBufferPerStream)
-	require.Equal(t, (4<<20)-1, httpSrv.HTTP2.MaxReceiveBufferPerConnection)
+	require.Equal(t, 8<<20, httpSrv.HTTP2.MaxReceiveBufferPerStream)
+	require.Equal(t, 32<<20, httpSrv.HTTP2.MaxReceiveBufferPerConnection)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -693,8 +694,8 @@ func TestServerHTTP2ConfigAndH2CLargeReadWrite(t *testing.T) {
 			Protocols: &protocols,
 			HTTP2: &http.HTTP2Config{
 				MaxReadFrameSize:              1 << 20,
-				MaxReceiveBufferPerStream:     (4 << 20) - 1,
-				MaxReceiveBufferPerConnection: (4 << 20) - 1,
+				MaxReceiveBufferPerStream:     8 << 20,
+				MaxReceiveBufferPerConnection: 32 << 20,
 			},
 		},
 	}
@@ -703,7 +704,7 @@ func TestServerHTTP2ConfigAndH2CLargeReadWrite(t *testing.T) {
 
 	createDiskResp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
 		Name:     "h2c-large-disk",
-		MaxBytes: 16 << 20,
+		MaxBytes: 32 << 20,
 	}))
 	require.NoError(t, err)
 	diskID := createDiskResp.Msg.GetDisk().GetDiskId()
@@ -725,25 +726,48 @@ func TestServerHTTP2ConfigAndH2CLargeReadWrite(t *testing.T) {
 	require.NoError(t, err)
 	fileIno := createResp.Msg.GetInode().GetIno()
 
-	payload := bytes.Repeat([]byte{0x5a, 0xa5, 0x3c, 0xc3}, (1<<20)/4) // 1 MiB
-	writeResp, err := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-		Ino:    fileIno,
-		Fh:     1,
-		Offset: 0,
-		Data:   payload,
-		DiskId: diskID,
-		Epoch:  epoch,
-	}))
-	require.NoError(t, err)
-	require.Equal(t, uint32(len(payload)), writeResp.Msg.GetSize())
+	const chunkSize = 4 << 20
+	const concurrency = 4
+	expected := make([][]byte, concurrency)
+	var wg sync.WaitGroup
+	errCh := make(chan error, concurrency)
+	for i := range concurrency {
+		expected[i] = bytes.Repeat([]byte{byte(0x10 + i), byte(0xa0 + i), 0x3c, 0xc3}, chunkSize/4)
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			wResp, wErr := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+				Ino:    fileIno,
+				Fh:     0,
+				Offset: uint64(idx * chunkSize),
+				Data:   expected[idx],
+				DiskId: diskID,
+				Epoch:  epoch,
+			}))
+			if wErr != nil {
+				errCh <- wErr
+				return
+			}
+			if wResp.Msg.GetSize() != chunkSize {
+				errCh <- errors.New("unexpected write size")
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for wErr := range errCh {
+		require.NoError(t, wErr)
+	}
 
-	readResp, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
-		Ino:    fileIno,
-		Fh:     1,
-		Offset: 0,
-		Size:   uint32(len(payload)),
-		DiskId: diskID,
-	}))
-	require.NoError(t, err)
-	require.Equal(t, payload, readResp.Msg.GetData())
+	for i := range concurrency {
+		readResp, rErr := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+			Ino:    fileIno,
+			Fh:     0,
+			Offset: uint64(i * chunkSize),
+			Size:   chunkSize,
+			DiskId: diskID,
+		}))
+		require.NoError(t, rErr)
+		require.Equal(t, expected[i], readResp.Msg.GetData())
+	}
 }
