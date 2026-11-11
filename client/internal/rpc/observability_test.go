@@ -21,14 +21,15 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/starsrc/Aether/pkg/observability"
 	"github.com/starsrc/Aether/pkg/observability/telemetry"
-	v1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+
+	v1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 var validW3CTraceparentRe = regexp.MustCompile(`^00-([0-9a-f]{32})-([0-9a-f]{16})-(00|01)$`)
@@ -249,7 +250,7 @@ func (okStorageHandler) ReclaimOrphan(context.Context, *connect.Request[v1.Recla
 }
 
 func TestRequestIDContextHelpers(t *testing.T) {
-	id, ok := RequestIDFromContext(nil)
+	id, ok := RequestIDFromContext(nil) //nolint:staticcheck // SA1012: 显式验证 nil Context 防御分支
 	require.False(t, ok)
 	require.Zero(t, id)
 
@@ -565,7 +566,7 @@ func TestObservabilitySetup_PropagatesHeadersOnAll31RPCsAndRecordsDurationErrorR
 
 		parsedReqID, parseErr := strconv.ParseUint(got.requestID, 10, 64)
 		require.NoError(t, parseErr, "X-Request-Id %q must be valid uint64", got.requestID)
-		require.Greater(t, parsedReqID, uint64(0))
+		require.Positive(t, parsedReqID)
 		if idx < 15 {
 			require.Equal(t, uint64(1000+idx), parsedReqID)
 		} else {
@@ -765,8 +766,12 @@ func TestRetryAndExhaustion_MetricsSpansAndStructuredLogs(t *testing.T) {
 	for i, entry := range gotExhausted {
 		assert.Equal(t, "ERROR", entry["level"])
 		assert.Equal(t, storagev1connect.StorageServiceReadProcedure, entry["procedure"])
-		assert.GreaterOrEqual(t, entry["attempts"].(float64), 1.0)
-		assert.GreaterOrEqual(t, entry["elapsed_ms"].(float64), 0.0)
+		attempts, ok := entry["attempts"].(float64)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, attempts, 1.0)
+		elapsedMs, ok := entry["elapsed_ms"].(float64)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, elapsedMs, 0.0)
 		assert.InDelta(t, expectedReqIDs[i], entry["req_id"], 1e-9)
 		assert.Len(t, entry["trace_id"], 32)
 		assert.Contains(t, entry["err"], "upstream transient reset")
@@ -881,7 +886,9 @@ func TestStaleEpochAndSlowRPC_MetricsRateLimitAndStructuredLogs(t *testing.T) {
 	assert.Equal(t, "WARN", slowEntries[0]["level"])
 	assert.Equal(t, "slow_rpc", slowEntries[0]["msg"])
 	assert.Equal(t, storagev1connect.StorageServiceFsyncProcedure, slowEntries[0]["procedure"])
-	assert.GreaterOrEqual(t, slowEntries[0]["duration_ms"].(float64), 1000.0)
+	durationMs, ok := slowEntries[0]["duration_ms"].(float64)
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, durationMs, 1000.0)
 	assert.Equal(t, "ok", slowEntries[0]["code"])
 	assert.InDelta(t, 901.0, slowEntries[0]["req_id"], 1e-9)
 	assert.Len(t, slowEntries[0]["trace_id"], 32)

@@ -147,9 +147,9 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		tr, err := newHTTPTransport(endpoint, cfg.TLSConfig)
-		if err != nil {
-			return nil, err
+		tr, trErr := newHTTPTransport(endpoint, cfg.TLSConfig)
+		if trErr != nil {
+			return nil, trErr
 		}
 		httpClient = &http.Client{
 			Transport: tr,
@@ -171,14 +171,12 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 	interceptors = append(interceptors, newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold))
 
 	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并采集客户端 RPC 指标）
+	// 4. 错误原因标注拦截器（提取服务端 ErrorInfo.Reason 同步写入客户端 Span rpc.error_reason 与 otelconnect.Labeler）
 	otelInterceptor, err := otelconnect.NewInterceptor()
 	if err != nil {
 		return nil, fmt.Errorf("create otelconnect interceptor: %w", err)
 	}
-	interceptors = append(interceptors, otelInterceptor)
-
-	// 4. 错误原因标注拦截器（提取服务端 ErrorInfo.Reason 同步写入客户端 Span rpc.error_reason 与 otelconnect.Labeler）
-	interceptors = append(interceptors, serverx.NewErrorReasonInterceptor())
+	interceptors = append(interceptors, otelInterceptor, serverx.NewErrorReasonInterceptor())
 
 	// 5. Bearer 令牌鉴权拦截器与 Accept-Encoding: identity 拦截器
 	if token != "" {

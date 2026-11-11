@@ -7,15 +7,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strings"
 	"syscall"
 
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"golang.org/x/sys/unix"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 // readDaemonHandshake 阻塞读取守护进程回传的挂载就绪状态。
@@ -27,8 +24,7 @@ func readDaemonHandshake(r io.Reader, stderr io.Writer) int {
 			return 0
 		}
 		if after, ok := strings.CutPrefix(line, "ERR:"); ok {
-			errMsg := after
-			fmt.Fprintf(stderr, "错误: 后台守护进程初始化失败: %s\n", errMsg)
+			fmt.Fprintf(stderr, "错误: 后台守护进程初始化失败: %s\n", after)
 			return 1
 		}
 	}
@@ -63,9 +59,9 @@ func spawnDaemonProcess(args []string, stderr io.Writer) int {
 		cmd.Stdin = devNull
 		defer devNull.Close()
 	}
-	if err := cmd.Start(); err != nil {
+	if startErr := cmd.Start(); startErr != nil {
 		_ = w.Close()
-		fmt.Fprintf(stderr, "错误: 启动后台守护进程失败: %v\n", err)
+		fmt.Fprintf(stderr, "错误: 启动后台守护进程失败: %v\n", startErr)
 		return 1
 	}
 
@@ -76,7 +72,8 @@ func spawnDaemonProcess(args []string, stderr io.Writer) int {
 }
 
 // runDaemonWorker 是子进程内部的后台挂载执行器（单次 MountDisk 握手，无后台心跳续期协程）。
-func runDaemonWorker(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg fusefs.Config, mountpoint, explicitLogFile string) int {
+// 日志文件重定向标准输出/错误后，复用前台同一条挂载链路；挂载就绪时经 fd 3 管道回传 OK。
+func runDaemonWorker(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, mountpoint string) int {
 	pipeWriter := os.NewFile(3, "readiness-pipe")
 	notifyErr := func(err error) {
 		if pipeWriter != nil {
@@ -94,7 +91,7 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	}
 
 	// 1. 准备日志文件并重定向标准输出/错误
-	logF, _, err := ResolveLogFile(explicitLogFile, baseCfg.DiskID)
+	logF, _, err := ResolveLogFile(opts.logFile, baseCfg.DiskID)
 	if err != nil {
 		notifyErr(err)
 		return 1
@@ -105,58 +102,13 @@ func runDaemonWorker(ctx context.Context, client storagev1connect.StorageService
 	_ = unix.Dup2(logFd, int(os.Stdout.Fd()))
 	_ = unix.Dup2(logFd, int(os.Stderr.Fd()))
 
-	// 2. 执行单次 MountDisk 握手
-	cfg, err := mountHandshake(ctx, client, baseCfg)
-	if err != nil {
-		notifyErr(err)
+	// 2. 执行挂载；就绪回调通知父进程退出 0
+	if mountErr := runMount(ctx, opts, baseCfg, mountpoint, logF, notifyOK); mountErr != nil {
+		notifyErr(mountErr)
+		fmt.Fprintf(logF, "错误: 挂载执行失败: %v\n", mountErr)
+		_ = logF.Sync()
 		return 1
 	}
-
-	// 3. 构建 FUSE 服务
-	rawFS := fusefs.NewRawFS(client, cfg)
-	opts := fusefs.BuildMountOptions(cfg)
-
-	server, err := fuse.NewServer(rawFS, mountpoint, opts)
-	if err != nil {
-		notifyErr(fmt.Errorf("创建 FUSE 服务失败: %w", err))
-		return 1
-	}
-
-	serveDone := make(chan struct{})
-	go func() {
-		defer close(serveDone)
-		server.Serve()
-	}()
-
-	// 4. 等待内核挂载彻底就绪
-	if err := server.WaitMount(); err != nil {
-		_ = server.Unmount()
-		<-serveDone
-		notifyErr(fmt.Errorf("等待挂载就绪失败: %w", err))
-		return 1
-	}
-
-	// 5. 挂载已彻底就绪，通知父进程退出 0
-	notifyOK()
-
-	// 6. 优雅卸载信号与阻塞等待
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	stopWait := make(chan struct{})
-	go func() {
-		select {
-		case <-sigCh:
-			_ = server.Unmount()
-		case <-ctx.Done():
-			_ = server.Unmount()
-		case <-stopWait:
-		}
-	}()
-
-	<-serveDone
-	close(stopWait)
 	_ = logF.Sync()
 	return 0
 }

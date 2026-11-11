@@ -262,19 +262,25 @@ func TestCLI_MountSingleHandshakeRWAndRO(t *testing.T) {
 
 	origServe := serveFUSE
 	t.Cleanup(func() { serveFUSE = origServe })
+	metaDir := t.TempDir()
+	origMetaDirs := mountMetaDirs
+	mountMetaDirs = func() []string { return []string{metaDir} }
+	t.Cleanup(func() { mountMetaDirs = origMetaDirs })
 
 	// 1. 可写挂载 (read_only = false)：执行单次 MountDisk 握手，注入 Epoch > 0 并透传到数据面写 RPC
 	var capturedRWConfig fusefs.Config
-	serveFUSE = func(_ context.Context, rawFS *fusefs.RawFS, cfg fusefs.Config, _ string) error {
-		defer rawFS.OnUnmount()
+	serveFUSE = func(_ context.Context, instFS *fusefs.InstrumentedRawFS, cfg *fusefs.Config, _ string, ready func()) error {
+		ready()
+		defer instFS.OnUnmount()
+		rawFS := instFS.Raw()
 		capturedRWConfig = rawFS.Config()
 		require.Equal(t, cfg.Epoch, capturedRWConfig.Epoch)
 
 		var entryOut fuse.EntryOut
-		st := rawFS.Mkdir(nil, &fuse.MkdirIn{InHeader: fuse.InHeader{NodeId: 1}, Mode: 0o755}, "subdir", &entryOut)
+		st := instFS.Mkdir(nil, &fuse.MkdirIn{InHeader: fuse.InHeader{NodeId: 1}, Mode: 0o755}, "subdir", &entryOut)
 		require.Equal(t, fuse.OK, st)
 
-		st = rawFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.txt", &entryOut)
+		st = instFS.Lookup(nil, &fuse.InHeader{NodeId: 1}, "file.txt", &entryOut)
 		require.Equal(t, fuse.OK, st)
 		return nil
 	}
@@ -308,8 +314,10 @@ func TestCLI_MountSingleHandshakeRWAndRO(t *testing.T) {
 
 	// 2. 只读挂载 (--ro, read_only = true)：执行单次 MountDisk 握手，注入 Epoch = 0 且本地拦截写操作
 	var capturedROConfig fusefs.Config
-	serveFUSE = func(_ context.Context, rawFS *fusefs.RawFS, _ fusefs.Config, _ string) error {
-		defer rawFS.OnUnmount()
+	serveFUSE = func(_ context.Context, instFS *fusefs.InstrumentedRawFS, _ *fusefs.Config, _ string, ready func()) error {
+		ready()
+		defer instFS.OnUnmount()
+		rawFS := instFS.Raw()
 		capturedROConfig = rawFS.Config()
 		require.Equal(t, fuse.Status(syscall.EROFS), rawFS.CheckWritable())
 		return nil

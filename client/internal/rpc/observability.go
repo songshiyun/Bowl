@@ -71,11 +71,11 @@ func nextFallbackRequestID() uint64 {
 	}
 }
 
-func ensureRequestID(ctx context.Context) (context.Context, uint64) {
-	if reqID, ok := RequestIDFromContext(ctx); ok {
-		return ctx, reqID
+func ensureRequestID(ctx context.Context) (outCtx context.Context, reqID uint64) {
+	if existingID, ok := RequestIDFromContext(ctx); ok {
+		return ctx, existingID
 	}
-	reqID := nextFallbackRequestID()
+	reqID = nextFallbackRequestID()
 	return WithRequestID(ctx, reqID), reqID
 }
 
@@ -230,8 +230,7 @@ func extractTraceID(ctx context.Context, req connect.AnyRequest, err error) stri
 		}
 	}
 	if err != nil {
-		var connectErr *connect.Error
-		if errors.As(err, &connectErr) {
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			extracted := w3cTracePropagator.Extract(context.Background(), propagation.HeaderCarrier(connectErr.Meta()))
 			if sc := trace.SpanContextFromContext(extracted); sc.IsValid() {
 				return sc.TraceID().String()
