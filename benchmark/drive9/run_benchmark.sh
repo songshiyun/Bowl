@@ -187,10 +187,10 @@ record_stage() {
 STAGE_START=$(date +%s)
 log "Cross-compiling Bowl binaries (storage-service, bowl, goose) for linux/amd64..."
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/services/storage" build -trimpath -o "${WORK_DIR}/storage-service" ./cmd
+  go -C "${REPO_ROOT}/services/storage" build -mod=mod -trimpath -o "${WORK_DIR}/storage-service" ./cmd
 
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/client" build -trimpath -o "${WORK_DIR}/bowl" ./cmd/bowl
+  go -C "${REPO_ROOT}/client" build -mod=mod -trimpath -o "${WORK_DIR}/bowl" ./cmd/bowl
 
 GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
 if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then

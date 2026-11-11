@@ -122,6 +122,13 @@ scrape_configs:
           service: "bowl-client"
           env: "production"
 
+  - job_name: "bowl-alloy"
+    static_configs:
+      - targets: ["alloy:12345"]
+        labels:
+          service: "alloy"
+          env: "production"
+
   - job_name: "prometheus"
     static_configs:
       - targets: ["localhost:9090"]
