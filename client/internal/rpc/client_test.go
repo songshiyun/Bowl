@@ -97,8 +97,8 @@ func TestNewHTTPTransportConfiguresHTTP2ForH2CAndTLS(t *testing.T) {
 		require.True(t, tr.Protocols.UnencryptedHTTP2())
 		require.NotNil(t, tr.HTTP2)
 		require.Equal(t, 1<<20, tr.HTTP2.MaxReadFrameSize)
-		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerStream)
-		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerConnection)
+		require.Equal(t, 8<<20, tr.HTTP2.MaxReceiveBufferPerStream)
+		require.Equal(t, 32<<20, tr.HTTP2.MaxReceiveBufferPerConnection)
 	})
 
 	t.Run("https_tls", func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestNewHTTPTransportConfiguresHTTP2ForH2CAndTLS(t *testing.T) {
 		require.Same(t, tlsCfg, tr.TLSClientConfig)
 		require.NotNil(t, tr.HTTP2)
 		require.Equal(t, 1<<20, tr.HTTP2.MaxReadFrameSize)
-		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerStream)
-		require.Equal(t, (4<<20)-1, tr.HTTP2.MaxReceiveBufferPerConnection)
+		require.Equal(t, 8<<20, tr.HTTP2.MaxReceiveBufferPerStream)
+		require.Equal(t, 32<<20, tr.HTTP2.MaxReceiveBufferPerConnection)
 	})
 }

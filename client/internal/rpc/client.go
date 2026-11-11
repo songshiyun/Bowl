@@ -28,11 +28,13 @@ const (
 	// HTTP2MaxReadFrameSize 为客户端 HTTP/2 接收帧大小上限 (1 MiB)。
 	HTTP2MaxReadFrameSize = 1 << 20
 
-	// HTTP2MaxReceiveBufferPerStream 为客户端单流 HTTP/2 接收流控窗口上限 (< 4 MiB)。
-	HTTP2MaxReceiveBufferPerStream = (4 << 20) - 1
+	// HTTP2MaxReceiveBufferPerStream 为客户端单流 HTTP/2 接收流控窗口上限 (8 MiB)，
+	// 确保单次 4 MiB + Protobuf 信封载荷无需流级 WINDOW_UPDATE 停顿即可完整接收。
+	HTTP2MaxReceiveBufferPerStream = 8 << 20
 
-	// HTTP2MaxReceiveBufferPerConnection 为客户端单连接 HTTP/2 接收流控窗口上限 (< 4 MiB)。
-	HTTP2MaxReceiveBufferPerConnection = (4 << 20) - 1
+	// HTTP2MaxReceiveBufferPerConnection 为客户端单连接 HTTP/2 接收流控窗口上限 (32 MiB)，
+	// 支撑多路 4 MiB 请求/响应在单条 h2c/TLS 连接上无连接级流控阻塞地并发流水线传输。
+	HTTP2MaxReceiveBufferPerConnection = 32 << 20
 )
 
 // ClientConfig 定义 StorageServiceClient 的连接配置。

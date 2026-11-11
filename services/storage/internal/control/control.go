@@ -724,6 +724,16 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 }
 
 func (m *manager) Actor(ctx context.Context, diskID string) (*store.StoreActor, error) {
+	// 热路径零分配快查：m.actors 仅登记规范化小写非零 UUID 键，已打开的磁盘可直接命中返回。
+	m.poolMu.RLock()
+	if !m.closed {
+		if actor := m.actors[diskID]; actor != nil {
+			m.poolMu.RUnlock()
+			return actor, nil
+		}
+	}
+	m.poolMu.RUnlock()
+
 	pgID, err := parseDiskID(diskID)
 	if err != nil {
 		return nil, err

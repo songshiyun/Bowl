@@ -113,12 +113,35 @@ type ChunkFetcher func(ctx context.Context, offset uint64, length uint32) ([]byt
 type ReadAheadCoordinator struct {
 	mu      sync.Mutex
 	handles map[uint64]*handleReadAhead
+	byInode map[uint64]map[uint64]*handleReadAhead
 }
 
 // NewReadAheadCoordinator 创建并初始化 ReadAheadCoordinator。
 func NewReadAheadCoordinator() *ReadAheadCoordinator {
 	return &ReadAheadCoordinator{
 		handles: make(map[uint64]*handleReadAhead),
+		byInode: make(map[uint64]map[uint64]*handleReadAhead),
+	}
+}
+
+func (c *ReadAheadCoordinator) bindInodeLocked(fh, ino uint64, hra *handleReadAhead) {
+	if c.byInode == nil {
+		c.byInode = make(map[uint64]map[uint64]*handleReadAhead)
+	}
+	set := c.byInode[ino]
+	if set == nil {
+		set = make(map[uint64]*handleReadAhead)
+		c.byInode[ino] = set
+	}
+	set[fh] = hra
+}
+
+func (c *ReadAheadCoordinator) unbindInodeLocked(fh, ino uint64) {
+	if set := c.byInode[ino]; set != nil {
+		delete(set, fh)
+		if len(set) == 0 {
+			delete(c.byInode, ino)
+		}
 	}
 }
 
@@ -134,12 +157,16 @@ func (c *ReadAheadCoordinator) getOrCreateHandle(fh, ino uint64) *handleReadAhea
 			ino: ino,
 		}
 		c.handles[fh] = hra
+		c.bindInodeLocked(fh, ino, hra)
 		return hra
 	}
 	hra.mu.Lock()
 	if hra.ino != ino {
+		oldIno := hra.ino
 		hra.resetLocked()
 		hra.ino = ino
+		c.unbindInodeLocked(fh, oldIno)
+		c.bindInodeLocked(fh, ino, hra)
 	}
 	hra.mu.Unlock()
 	return hra
@@ -485,8 +512,13 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 // InvalidateInode 递增目标 Inode 下所有打开句柄的代数（gen），取消在途预取并清空缓存窗口。
 func (c *ReadAheadCoordinator) InvalidateInode(ino uint64) {
 	c.mu.Lock()
-	var targets []*handleReadAhead
-	for _, hra := range c.handles {
+	set := c.byInode[ino]
+	if len(set) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	targets := make([]*handleReadAhead, 0, len(set))
+	for _, hra := range set {
 		targets = append(targets, hra)
 	}
 	c.mu.Unlock()
@@ -506,6 +538,9 @@ func (c *ReadAheadCoordinator) RemoveHandle(fh uint64) {
 	hra, ok := c.handles[fh]
 	if ok {
 		delete(c.handles, fh)
+		if hra != nil {
+			c.unbindInodeLocked(fh, hra.ino)
+		}
 	}
 	c.mu.Unlock()
 
@@ -521,6 +556,7 @@ func (c *ReadAheadCoordinator) Clear() {
 	c.mu.Lock()
 	handles := c.handles
 	c.handles = make(map[uint64]*handleReadAhead)
+	c.byInode = make(map[uint64]map[uint64]*handleReadAhead)
 	c.mu.Unlock()
 
 	for _, hra := range handles {

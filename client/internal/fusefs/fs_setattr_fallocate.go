@@ -124,6 +124,8 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return st
 	}
 
+	fs.writeBehind.ResetInodeStream(ino)
+
 	fs.readAhead.InvalidateInode(ino)
 	defer fs.readAhead.InvalidateInode(ino)
 
@@ -176,6 +178,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		}
 		return status
 	}
+	fs.writeBehind.ResetInodeStream(ino)
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 

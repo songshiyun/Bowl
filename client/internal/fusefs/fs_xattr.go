@@ -23,6 +23,7 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	fs.writeBehind.BarrierInode(ino)
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -149,6 +150,7 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	fs.writeBehind.BarrierInode(ino)
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 

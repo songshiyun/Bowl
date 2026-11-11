@@ -298,7 +298,7 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 
 // AppendBlocks 将一个或多个连续的 256 KiB（BlobSize）满块批量追加写入活跃 .pack：
 //   - 当当前活跃 .pack 剩余容量可容纳连续多个满块时，在单次锁与单次 WriteAt 系统调用内合并写入整段数据；
-//   - 跨 MaxPackSize（64 MiB）封口边界时自动分段切入新 .pack，按块顺序返回对应的 BlobRef 序列并写入分片热块缓存。
+//   - 跨 MaxPackSize（64 MiB）封口边界时自动分段切入新 .pack，按块顺序返回对应的 BlobRef 序列（满块批量写已落入内核页缓存，跳过用户态分片热缓存二次拷贝）。
 func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 	if len(data) == 0 || len(data)%BlobSize != 0 {
 		return nil, ErrInvalidValue
@@ -353,10 +353,6 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 	}
 	s.mu.Unlock()
 
-	for i, ref := range refs {
-		chunk := data[i*BlobSize : (i+1)*BlobSize]
-		s.cacheHotCopy(ref.PackID, ref.Offset, chunk)
-	}
 	return refs, nil
 }
 

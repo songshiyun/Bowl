@@ -55,6 +55,8 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		return fuse.ReadResultData(dest[:n]), st
 	}
 
+	fs.writeBehind.BarrierInode(ino)
+
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
 
@@ -117,11 +119,27 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	if n, local, st := fs.tmpMgr.Write(input.NodeId, input.Offset, data, appendMode); local {
 		return n, st
 	}
-	if appendMode {
-		// 同一 Inode 的 O_APPEND 必须在“读取当前大小 -> 提交 Write”之间保持定序，
+
+	dataLen := len(data)
+	syncMode := handle.Flags&(syscall.O_SYNC|syscall.O_DSYNC) != 0
+	// 属性未缓存（例如刚经 Ioctl/错误失效）或携带 Immutable/Append/SUID/SGID 时必须走同步直通校验。
+	specialInode := true
+	if cached, ok := fs.cache.inode(input.NodeId); ok && cached.inode != nil && cached.inode.GetAttr() != nil {
+		attr := cached.inode.GetAttr()
+		specialInode = attr.GetFlags()&(ProtoFlagImmutable|ProtoFlagAppend) != 0 ||
+			attr.GetMode()&(syscall.S_ISUID|syscall.S_ISGID) != 0
+	}
+
+	switch {
+	case appendMode:
+		// 同一 Inode 的 O_APPEND 必须在“排空异步写 -> 读取当前大小 -> 提交 Write”之间保持定序，
 		// 否则并发追加会读到相同旧大小而互相覆盖。
 		unlock := fs.inodeLocks.lock(input.NodeId)
 		defer unlock()
+		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(input.Fh, ino); flushErr != nil {
+			fs.cache.invalidateInode(input.NodeId)
+			return 0, fs.ToStatus(flushErr, nil)
+		}
 		cached, st := fs.getInode(cancel, input.NodeId)
 		if st != fuse.OK {
 			return 0, st
@@ -129,7 +147,23 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		copyInput := *input
 		copyInput.Offset = cached.inode.GetAttr().GetSize()
 		input = &copyInput
+	case syncMode || specialInode || !fs.caps.knownAbsent(input.NodeId) || dataLen == 0 || dataLen > MaxRPCChunkSize:
+		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(input.Fh, ino); flushErr != nil {
+			fs.cache.invalidateInode(input.NodeId)
+			return 0, fs.ToStatus(flushErr, nil)
+		}
+	default:
+		fs.readAhead.InvalidateInode(ino)
+		if written, handled, wbErr := fs.writeBehind.WriteForHandle(input.Fh, ino, input.NodeId, input.Offset, data, epoch); handled {
+			if wbErr != nil {
+				fs.cache.invalidateInode(input.NodeId)
+				return 0, fs.ToStatus(wbErr, nil)
+			}
+			fs.readAhead.InvalidateInode(ino)
+			return written, fuse.OK
+		}
 	}
+
 	fs.readAhead.InvalidateInode(ino)
 	defer fs.readAhead.InvalidateInode(ino)
 
@@ -138,7 +172,6 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	ctx, cancelFunc := fs.RPCContext(nil)
 	defer cancelFunc()
 
-	dataLen := len(data)
 	if dataLen <= MaxRPCChunkSize {
 		resp, err := fs.client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
 			Ino:    ino,
@@ -155,7 +188,11 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.markDirty(ino)
 		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)
 		fs.caps.markAbsent(input.NodeId)
-		return resp.Msg.GetSize(), fuse.OK
+		written := resp.Msg.GetSize()
+		if !appendMode && !syncMode && dataLen > 0 {
+			fs.writeBehind.ObserveSyncWrite(ino, input.Offset, written)
+		}
+		return written, fuse.OK
 	}
 
 	var totalWritten uint32

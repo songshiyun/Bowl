@@ -38,7 +38,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 	defer fs.lifecycleMu.RUnlock()
 	var source, target uint64
 	var targetAttr *storagev1.Inode
-	if fs.handles.AnyOpen() {
+	if fs.handles.AnyOpen() || fs.writeBehind.HasAnyPending() {
 		old, oldStatus := fs.lookupInode(cancel, input.NodeId, oldName)
 		if oldStatus != fuse.OK {
 			return oldStatus
@@ -56,7 +56,15 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, n
 		source, _ = fs.cache.entry(input.NodeId, oldName)
 		target, _ = fs.cache.entry(input.Newdir, newName)
 	}
+	if source != 0 {
+		if sourceServerIno, st := fs.ToServerIno(source); st == fuse.OK {
+			fs.writeBehind.BarrierInode(sourceServerIno)
+		}
+	}
 	if target != 0 {
+		if targetServerIno, st := fs.ToServerIno(target); st == fuse.OK && target != source {
+			fs.writeBehind.BarrierInode(targetServerIno)
+		}
 		// 与并发 Release 按 Inode 串行，避免目标节点孤儿标记与最后句柄关闭互相错过。
 		unlock := fs.inodeLocks.lock(target)
 		defer unlock()

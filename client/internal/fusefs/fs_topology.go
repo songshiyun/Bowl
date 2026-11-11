@@ -165,7 +165,7 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 
 	child, _ := fs.cache.entry(header.NodeId, name)
 	var inode *storagev1.Inode
-	if fs.handles.AnyOpen() {
+	if fs.handles.AnyOpen() || fs.writeBehind.HasAnyPending() {
 		cached, st := fs.lookupInode(cancel, header.NodeId, name)
 		if st != fuse.OK {
 			return st
@@ -174,6 +174,9 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 		child = fs.ToKernelIno(inode.GetIno())
 	}
 	if child != 0 {
+		if childServerIno, st := fs.ToServerIno(child); st == fuse.OK {
+			fs.writeBehind.BarrierInode(childServerIno)
+		}
 		// 与并发 Release 的最后一个句柄关闭按 Inode 串行，保证孤儿标记不会互相错过。
 		unlock := fs.inodeLocks.lock(child)
 		defer unlock()

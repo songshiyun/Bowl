@@ -15,6 +15,9 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 		if ino == 0 {
 			return cachedInode{}, fuse.ENOENT
 		}
+		if serverIno, st := fs.ToServerIno(ino); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
+			fs.writeBehind.BarrierInode(serverIno)
+		}
 		if cached, ok := fs.cache.inode(ino); ok {
 			return cached, fuse.OK
 		}
@@ -46,6 +49,13 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 		return cachedInode{}, fuse.EIO
 	}
 	ino := fs.ToKernelIno(inode.GetIno())
+	if fs.writeBehind.HasPending(inode.GetIno()) {
+		fs.writeBehind.BarrierInode(inode.GetIno())
+		if fresh, ok := fs.cache.inode(ino); ok {
+			fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
+			return fresh, fuse.OK
+		}
+	}
 	cached := cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
 	fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
 	fs.cache.putInodeAtIf(generation, epoch, ino, inode, cached.entryTimeout, cached.attrTimeout)
@@ -56,12 +66,15 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 	if inode, ok := fs.tmpMgr.LocalInode(ino); ok {
 		return cachedInode{inode: inode}, fuse.OK
 	}
-	if cached, ok := fs.cache.inode(ino); ok {
-		return cached, fuse.OK
-	}
 	serverIno, status := fs.ToServerIno(ino)
 	if status != fuse.OK {
 		return cachedInode{}, status
+	}
+	if fs.writeBehind.HasPending(serverIno) {
+		fs.writeBehind.BarrierInode(serverIno)
+	}
+	if cached, ok := fs.cache.inode(ino); ok {
+		return cached, fuse.OK
 	}
 	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContext(cancel)
@@ -131,6 +144,7 @@ func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.Sta
 	if status != fuse.OK {
 		return status
 	}
+	fs.writeBehind.BarrierAll()
 
 	ctx, cancelFunc := fs.RPCContext(cancel)
 	defer cancelFunc()
