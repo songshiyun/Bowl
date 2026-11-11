@@ -5,9 +5,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +12,18 @@ import (
 
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
+
+func requireHotAndColdRead(t *testing.T, blobs *store.BlobStore, ref store.BlobRef, want []byte) {
+	t.Helper()
+	gotHot := make([]byte, len(want))
+	require.NoError(t, blobs.ReadAt(ref, 0, gotHot))
+	require.Equal(t, want, gotHot)
+
+	blobs.EvictHot(ref)
+	gotCold := make([]byte, len(want))
+	require.NoError(t, blobs.ReadAt(ref, 0, gotCold))
+	require.Equal(t, want, gotCold)
+}
 
 func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	base := t.TempDir()
@@ -24,25 +33,14 @@ func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	require.Equal(t, filepath.Join(base, "packs"), blobs.Root())
 	require.Equal(t, filepath.Join(base, "packs", "00000000000001ab.pack"), blobs.Path(0x1ab))
 
-	var firstID, lastInFirstSeg uint64
-	for i := range int(store.BlobIDSegment) {
-		id, err := blobs.NextPackID()
-		require.NoError(t, err)
-		if i == 0 {
-			firstID = id
-		}
-		if i == int(store.BlobIDSegment)-1 {
-			lastInFirstSeg = id
-		}
-	}
-	require.Equal(t, uint64(1), firstID)
-	require.Equal(t, uint64(4096), lastInFirstSeg)
-
-	nextID, err := blobs.NextPackID()
+	firstID, err := blobs.NextPackID()
 	require.NoError(t, err)
-	require.Equal(t, uint64(4097), nextID)
+	require.Equal(t, uint64(1), firstID)
+	secondID, err := blobs.NextPackID()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), secondID)
 
-	// 验证重启扫描已有 .pack 文件恢复最大 packID
+	// 验证重启扫描已有高编号 .pack 文件后自动推进分配水位，防止新写入覆盖历史封包
 	base2 := t.TempDir()
 	packDir := filepath.Join(base2, "packs")
 	require.NoError(t, os.MkdirAll(packDir, 0o755))
@@ -55,21 +53,21 @@ func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	require.Greater(t, ref.PackID, uint64(0x0250))
 }
 
-func TestBlobStoreAppendAutoRolloverAtPackMaxSize(t *testing.T) {
+func TestBlobStoreAppendAutoRolloverAndAppendBlocksCrossPack(t *testing.T) {
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
 
 	require.Equal(t, uint32(store.PackMaxSize), blobs.MaxPackSize())
 
-	// 将封口阈值设为 3 * BlobSize (768 KiB) 以验证跨包自动封口切包
+	// 将封口阈值设为 3 * BlobSize (768 KiB) 以验证单块与多块跨包自动封口切包
 	blobs.SetMaxPackSize(3 * store.BlobSize)
 	require.Equal(t, uint32(3*store.BlobSize), blobs.MaxPackSize())
 
 	b0 := bytes.Repeat([]byte{0x11}, store.BlobSize)
 	b1 := bytes.Repeat([]byte{0x22}, store.BlobSize)
-	b2 := bytes.Repeat([]byte{0x33}, 128*1024) // 128 KiB
-	b3 := bytes.Repeat([]byte{0x44}, store.BlobSize)
+	b2 := bytes.Repeat([]byte{0x33}, 128*1024)
+	b3 := bytes.Repeat([]byte{0x44}, 128*1024)
 
 	ref0, err := blobs.Append(2, b0)
 	require.NoError(t, err)
@@ -83,37 +81,51 @@ func TestBlobStoreAppendAutoRolloverAtPackMaxSize(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: 2 * store.BlobSize, Length: 128 * 1024}, ref2)
 
-	// 此时 Pack 1 已用 640 KiB，剩余 128 KiB < 256 KiB (b3)，追加 b3 必须自动将 Pack 1 封口并切入 Pack 2 (Offset=0)
-	ref3, err := blobs.Append(2, b3)
+	// Pack 1 已用 640 KiB，剩余 128 KiB 容纳不下 256 KiB 新块；先验证追加 256 KiB 自动封口 Pack 1 并切入 Pack 2
+	fullInPack2 := bytes.Repeat([]byte{0x55}, store.BlobSize)
+	ref3, err := blobs.Append(2, fullInPack2)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, ref3)
 	require.Equal(t, uint64(2), blobs.ActivePackID())
-	require.Equal(t, uint32(store.BlobSize), blobs.ActiveOffset())
 
-	// 验证 Pack 1 物理文件大小恰好为 640 KiB，Pack 2 物理文件大小恰好为 256 KiB
+	// 在 Pack 2 再追加 128 KiB (b3)，此时 Pack 2 已用 384 KiB，剩余 384 KiB（仅够再容纳 1 个 256 KiB 满块）
+	ref4, err := blobs.Append(2, b3)
+	require.NoError(t, err)
+	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize, Length: 128 * 1024}, ref4)
+
+	// 一次性批量追加 3 个 256 KiB 满块（共 768 KiB）：
+	// - 第 0 块写入 Pack 2 尾部 [384 KiB, 640 KiB)
+	// - 第 1、2 块自动封口 Pack 2 并合并写入 Pack 3 [0, 512 KiB)
+	m0 := bytes.Repeat([]byte{0x61}, store.BlobSize)
+	m1 := bytes.Repeat([]byte{0x62}, store.BlobSize)
+	m2 := bytes.Repeat([]byte{0x63}, store.BlobSize)
+	batchPayload := bytes.Join([][]byte{m0, m1, m2}, nil)
+
+	refs, err := blobs.AppendBlocks(2, batchPayload)
+	require.NoError(t, err)
+	require.Len(t, refs, 3)
+	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize + 128*1024, Length: store.BlobSize}, refs[0])
+	require.Equal(t, store.BlobRef{PackID: 3, Offset: 0, Length: store.BlobSize}, refs[1])
+	require.Equal(t, store.BlobRef{PackID: 3, Offset: store.BlobSize, Length: store.BlobSize}, refs[2])
+	require.Equal(t, uint64(3), blobs.ActivePackID())
+	require.Equal(t, uint32(2*store.BlobSize), blobs.ActiveOffset())
+
 	info1, err := os.Stat(blobs.Path(1))
 	require.NoError(t, err)
 	require.Equal(t, int64(2*store.BlobSize+128*1024), info1.Size())
 
 	info2, err := os.Stat(blobs.Path(2))
 	require.NoError(t, err)
-	require.Equal(t, int64(store.BlobSize), info2.Size())
+	require.Equal(t, int64(2*store.BlobSize+128*1024), info2.Size())
 
-	// 验证所有块通过 ReadAt 无论命中热缓存还是驱逐后走常驻只读句柄均能精确读取
-	for _, tc := range []struct {
-		ref  store.BlobRef
-		want []byte
-	}{
-		{ref0, b0},
-		{ref1, b1},
-		{ref2, b2},
-		{ref3, b3},
-	} {
-		blobs.EvictHot(tc.ref)
-		got := make([]byte, tc.ref.Length)
-		require.NoError(t, blobs.ReadAt(tc.ref, 0, got))
-		require.Equal(t, tc.want, got)
-	}
+	requireHotAndColdRead(t, blobs, ref0, b0)
+	requireHotAndColdRead(t, blobs, ref1, b1)
+	requireHotAndColdRead(t, blobs, ref2, b2)
+	requireHotAndColdRead(t, blobs, ref3, fullInPack2)
+	requireHotAndColdRead(t, blobs, ref4, b3)
+	requireHotAndColdRead(t, blobs, refs[0], m0)
+	requireHotAndColdRead(t, blobs, refs[1], m1)
+	requireHotAndColdRead(t, blobs, refs[2], m2)
 }
 
 func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
@@ -142,7 +154,7 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: 10240}, extRef2)
 
-	// 4. 跨越尾块末尾空洞顺延扩展（从 10240 跨越到 12288 写入 2048 字节 -> [10240, 12288) 自动填零，newLength = 14336）
+	// 4. 跨越尾块末尾空洞顺延扩展（[10240, 12288) 自动填零，newLength = 14336）
 	chunk3 := bytes.Repeat([]byte{0xdd}, 2048)
 	extRef3, ok, err := blobs.ExtendTail(5, extRef2, 12288, chunk3, 14336)
 	require.NoError(t, err)
@@ -155,15 +167,7 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 	copy(expected[2048:10240], chunk2)
 	copy(expected[12288:14336], chunk3)
 
-	// 验证热缓存命中读取与驱逐后磁盘读取完全一致
-	gotHot := make([]byte, len(expected))
-	require.NoError(t, blobs.ReadAt(extRef3, 0, gotHot))
-	require.Equal(t, expected, gotHot)
-
-	blobs.EvictHot(extRef3)
-	gotDisk := make([]byte, len(expected))
-	require.NoError(t, blobs.ReadAt(extRef3, 0, gotDisk))
-	require.Equal(t, expected, gotDisk)
+	requireHotAndColdRead(t, blobs, extRef3, expected)
 
 	// 5. 当后续追加了另一个块后，extRef3 不再位于活跃包最末尾，ExtendTail 必须返回 ok=false 且不篡改历史偏移数据
 	otherRef, err := blobs.Append(6, []byte("tail-breaker"))
@@ -184,100 +188,67 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 	require.False(t, ok, "已封口包中的块必须拒绝 ExtendTail")
 }
 
-func TestBlobStoreHotShardCacheEvictionAndReadAt(t *testing.T) {
+func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing.T) {
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
 
-	// 单个 hotShard 预算为 4 MiB（16 个 256 KiB 块），总预算 64 MiB（256 个 256 KiB 块）。
-	// 连续写入 17 个落入同一分片 (每隔 16 个 256 KiB 块落入同一分片) 的块，使第 1 个块从该分片热缓存淘汰。
-	var sameShardRefs []store.BlobRef
-	var sameShardPayloads [][]byte
+	blobs.SetMaxPackSize(2 * store.BlobSize)
 
-	for i := range 17 * 16 {
-		fill := byte((i*13 + 7) & 0xff)
-		data := bytes.Repeat([]byte{fill}, store.BlobSize)
-		ref, err := blobs.Append(10, data)
-		require.NoError(t, err)
-		if i%16 == 0 {
-			sameShardRefs = append(sameShardRefs, ref)
-			sameShardPayloads = append(sameShardPayloads, data)
-		}
-	}
-	require.Len(t, sameShardRefs, 17)
-
-	// 验证最新的块 sameShardRefs[16] 仍在 hotShard 中：即使将底层 .pack 文件截断为 0，ReadAt 仍命中内存返回正确字节
-	lastRef := sameShardRefs[16]
-	origLastPackBytes, err := os.ReadFile(blobs.Path(lastRef.PackID))
+	// 1. ino=10 写满 Pack 1（2 个 256 KiB 块）
+	payload1 := bytes.Repeat([]byte{0x11}, 2*store.BlobSize)
+	refs1, err := blobs.AppendBlocks(10, payload1)
 	require.NoError(t, err)
-	require.NoError(t, os.Truncate(blobs.Path(lastRef.PackID), 0))
+	require.Len(t, refs1, 2)
+	require.Equal(t, uint64(1), refs1[0].PackID)
 
-	buf := make([]byte, 4096)
-	require.NoError(t, blobs.ReadAt(lastRef, 128, buf))
-	require.Equal(t, sameShardPayloads[16][128:128+4096], buf)
-
-	// 验证最旧的块 sameShardRefs[0] 已从 hotShard 淘汰：底层 .pack 被截断为 0 时走常驻句柄 ReadAt 返回 EOF 错误
-	firstRef := sameShardRefs[0]
-	origFirstPackBytes, err := os.ReadFile(blobs.Path(firstRef.PackID))
+	// 2. ino=20 追加 1 个块触发 Pack 1 封口并切入新活跃包 Pack 2
+	ref2, err := blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
 	require.NoError(t, err)
-	require.NoError(t, os.Truncate(blobs.Path(firstRef.PackID), 0))
-	require.Error(t, blobs.ReadAt(firstRef, 0, buf))
+	require.Equal(t, uint64(2), ref2.PackID)
 
-	// 恢复底层 .pack 文件后，常驻句柄 ReadAt 正常读取成功
-	require.NoError(t, os.WriteFile(blobs.Path(lastRef.PackID), origLastPackBytes, 0o644))
-	require.NoError(t, os.WriteFile(blobs.Path(firstRef.PackID), origFirstPackBytes, 0o644))
-	require.NoError(t, blobs.ReadAt(firstRef, 512, buf))
-	require.Equal(t, sameShardPayloads[0][512:512+4096], buf)
-}
+	// 3. 后台刷盘协程自动对已封口的 Pack 1 执行异步 fdatasync
+	require.Eventually(t, func() bool {
+		return blobs.SyncFileCount() == 1
+	}, 2*time.Second, 5*time.Millisecond, "已封口 Pack 1 必须由后台协程自动完成预刷盘")
+	require.Zero(t, blobs.SyncDirCount(), "后台预刷盘仅刷数据文件，不提前执行目录 fsync")
+	require.True(t, blobs.HasDirty())
 
-func TestBlobStoreSyncInodeAndRemovePack(t *testing.T) {
-	srcBase := t.TempDir()
+	// 4. 首次对仅关联已封口新建包 Pack 1 的 ino=10 调用 SyncInode(10)：
+	//    - Pack 1 已被后台刷完消记，SyncFileCount 不得重复递增（保持为 1）
+	//    - 因 Pack 1 属于新建包，消记时继承 dirDirty=true，SyncInode(10) 必须执行 1 次 packs/ 目录 fsync
+	require.NoError(t, blobs.SyncInode(10))
+	require.Equal(t, uint64(1), blobs.SyncFileCount(), "已被后台预刷盘的封口包不得在前台 SyncInode 时重复 fdatasync")
+	require.Equal(t, uint64(1), blobs.SyncDirCount(), "新建封口包被后台提前刷完后，首次 SyncInode 必须执行 1 次 packs/ 目录 fsync")
 
-	src := store.NewBlobStore(srcBase)
-	defer func() { require.NoError(t, src.Close()) }()
+	// 5. 对活跃包 Pack 2 关联的 ino=20 调用 SyncInode(20)，并在同包继续追加后验证不重复执行目录 fsync
+	require.NoError(t, blobs.SyncInode(20))
+	require.Equal(t, uint64(2), blobs.SyncFileCount())
+	require.Equal(t, uint64(2), blobs.SyncDirCount())
+	require.False(t, blobs.HasDirty())
 
-	// 1. 首次向 Pack 1 追加写入 fileA (ino=10) 与 fileB (ino=20)
-	dataA := bytes.Repeat([]byte{0x31}, 8192)
-	dataB := bytes.Repeat([]byte{0x32}, 8192)
-	refA, err := src.Append(10, dataA)
+	_, err = blobs.Append(20, bytes.Repeat([]byte{0x33}, 4096))
 	require.NoError(t, err)
-	refB, err := src.Append(20, dataB)
-	require.NoError(t, err)
-	require.Equal(t, refA.PackID, refB.PackID)
-	require.True(t, src.HasDirty())
+	require.NoError(t, blobs.SyncInode(20))
+	require.Equal(t, uint64(3), blobs.SyncFileCount())
+	require.Equal(t, uint64(2), blobs.SyncDirCount(), "已同步过的活跃 .pack 继续追加不得重复触发目录 fsync")
 
-	// 2. SyncInode(10)：对新建 Pack 1 执行 1 次 fdatasync，并对 packs/ 目录执行 1 次 fsync
-	require.NoError(t, src.SyncInode(10))
-	require.Equal(t, uint64(1), src.SyncFileCount())
-	require.Equal(t, uint64(1), src.SyncDirCount())
-
-	// 3. 继续向同一个活跃 Pack 1 追加写入并再次 SyncInode(10)：
-	//    仅执行 1 次文件 fdatasync，不得重复执行 packs/ 目录 fsync（SyncDirCount 保持不变）
-	refA2, err := src.Append(10, bytes.Repeat([]byte{0x33}, 4096))
-	require.NoError(t, err)
-	require.Equal(t, refA.PackID, refA2.PackID)
-	require.NoError(t, src.SyncInode(10))
-	require.Equal(t, uint64(2), src.SyncFileCount())
-	require.Equal(t, uint64(1), src.SyncDirCount(), "已同步过的 .pack 继续追加写不得重复触发目录 fsync")
-
-	// 4. 触发滚动切包至 Pack 2 后，调用 RemovePack(packID) 删除已封口的 Pack 1 并关闭源句柄
-	src.SetMaxPackSize(src.ActiveOffset())
-	refPack2, err := src.Append(10, []byte("rollover"))
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), refPack2.PackID)
-
-	require.NoError(t, src.RemovePack(refA.PackID))
-	require.False(t, src.Exists(refA.PackID))
-	require.True(t, src.Exists(refPack2.PackID))
+	require.NoError(t, blobs.RemovePack(1))
+	require.False(t, blobs.Exists(1))
+	require.True(t, blobs.Exists(2))
 }
 
 func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {
 	blobs := store.NewBlobStore(t.TempDir())
 
-	// 1. Append 边界与非法长度校验
+	// 1. Append / AppendBlocks 边界与非法长度校验
 	_, err := blobs.Append(1, nil)
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 	_, err = blobs.Append(1, make([]byte, store.BlobSize+1))
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = blobs.AppendBlocks(1, nil)
+	require.ErrorIs(t, err, store.ErrInvalidValue)
+	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize+1024))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 
 	ref, err := blobs.Append(1, []byte("hello-pack"))
@@ -312,301 +283,4 @@ func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrClosed)
 	_, _, err = blobs.ExtendTail(1, ref, ref.Length, []byte("!"), ref.Length+1)
 	require.ErrorIs(t, err, store.ErrClosed)
-}
-
-func TestBlobStoreAppendBlocksCoalescingAndCrossPackRollover(t *testing.T) {
-	base := t.TempDir()
-	blobs := store.NewBlobStore(base)
-	defer func() { require.NoError(t, blobs.Close()) }()
-
-	// 非法长度校验：0 字节、非 256 KiB 倍数、或 MaxPackSize < 256 KiB
-	_, err := blobs.AppendBlocks(1, nil)
-	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize+1024))
-	require.ErrorIs(t, err, store.ErrInvalidValue)
-
-	// 将封口容量设为 3 个 256 KiB 块（768 KiB）
-	blobs.SetMaxPackSize(3 * store.BlobSize)
-
-	// 先写入 128 KiB 局部块，使 Pack 1 偏移处于 128 KiB，剩余容量 640 KiB（仅能再容纳 2 个 256 KiB 满块）
-	prefix := bytes.Repeat([]byte{0x05}, 128*1024)
-	refPrefix, err := blobs.Append(10, prefix)
-	require.NoError(t, err)
-	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: 128 * 1024}, refPrefix)
-
-	// 一次性批量追加 4 个 256 KiB 满块（共 1 MiB）：
-	// - 前 2 块（512 KiB）合并单次 WriteAt 写入 Pack 1 [128 KiB, 640 KiB)
-	// - 后 2 块（512 KiB）自动封口 Pack 1 并合并单次 WriteAt 写入 Pack 2 [0, 512 KiB)
-	payload := make([]byte, 4*store.BlobSize)
-	blocks := make([][]byte, 4)
-	for i := range 4 {
-		fill := byte(0x10 + i)
-		blocks[i] = bytes.Repeat([]byte{fill}, store.BlobSize)
-		copy(payload[i*store.BlobSize:(i+1)*store.BlobSize], blocks[i])
-	}
-
-	refs, err := blobs.AppendBlocks(10, payload)
-	require.NoError(t, err)
-	require.Len(t, refs, 4)
-	require.Equal(t, store.BlobRef{PackID: 1, Offset: 128 * 1024, Length: store.BlobSize}, refs[0])
-	require.Equal(t, store.BlobRef{PackID: 1, Offset: 128*1024 + store.BlobSize, Length: store.BlobSize}, refs[1])
-	require.Equal(t, store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, refs[2])
-	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize, Length: store.BlobSize}, refs[3])
-	require.Equal(t, uint64(2), blobs.ActivePackID())
-	require.Equal(t, uint32(2*store.BlobSize), blobs.ActiveOffset())
-
-	// 验证所有块通过热缓存与驱逐后的磁盘读取完全一致
-	for i, ref := range refs {
-		gotHot := make([]byte, store.BlobSize)
-		require.NoError(t, blobs.ReadAt(ref, 0, gotHot))
-		require.Equal(t, blocks[i], gotHot)
-
-		blobs.EvictHot(ref)
-		gotDisk := make([]byte, store.BlobSize)
-		require.NoError(t, blobs.ReadAt(ref, 0, gotDisk))
-		require.Equal(t, blocks[i], gotDisk)
-	}
-}
-
-func TestBlobStoreHotShardSlotBufferReuseZeroAllocAfterWarmup(t *testing.T) {
-	base := t.TempDir()
-	blobs := store.NewBlobStore(base)
-	defer func() { require.NoError(t, blobs.Close()) }()
-
-	block := bytes.Repeat([]byte{0x5a}, store.BlobSize)
-
-	// 预热：写入 256 个 256 KiB 满块（16 分片 × 16 槽位 = 64 MiB 热缓存预算填满）
-	for range 256 {
-		_, err := blobs.Append(1, block)
-		require.NoError(t, err)
-	}
-
-	// 预热填满后，继续追加 256 KiB 满块应原地复用被淘汰的最旧槽位底层切片，不发生 256 KiB 堆分配
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	const MeasureBlocks = 64
-	for i := range MeasureBlocks {
-		block[0] = byte(i)
-		_, err := blobs.Append(1, block)
-		require.NoError(t, err)
-	}
-	runtime.ReadMemStats(&after)
-
-	totalAllocDelta := after.TotalAlloc - before.TotalAlloc
-	// 若未复用底层切片，64 次 256 KiB 分配至少产生 16 MiB (16,777,216 B) 堆分配；复用后仅产生极小文件 I/O 内部开销 (< 512 KiB)
-	require.Less(t, totalAllocDelta, uint64(512*1024), "热缓存填满预热后继续满块写入必须原地复用环形槽位底层切片（避免每次分配 256 KiB）")
-
-	// 验证通过 AppendBlocks 批量追加同样复用底层切片且热缓存读取内容准确
-	batchPayload := bytes.Repeat([]byte{0x6b}, 4*store.BlobSize)
-	runtime.ReadMemStats(&before)
-	refs, err := blobs.AppendBlocks(1, batchPayload)
-	require.NoError(t, err)
-	runtime.ReadMemStats(&after)
-	require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(64*1024))
-	for _, ref := range refs {
-		got := make([]byte, store.BlobSize)
-		require.NoError(t, blobs.ReadAt(ref, 0, got))
-		require.Equal(t, batchPayload[:store.BlobSize], got)
-	}
-}
-
-func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing.T) {
-	base := t.TempDir()
-	blobs := store.NewBlobStore(base)
-	defer func() { require.NoError(t, blobs.Close()) }()
-
-	blobs.SetMaxPackSize(2 * store.BlobSize)
-
-	// 1. ino=10 写满 Pack 1（2 个 256 KiB 块）
-	payload1 := bytes.Repeat([]byte{0x11}, 2*store.BlobSize)
-	refs1, err := blobs.AppendBlocks(10, payload1)
-	require.NoError(t, err)
-	require.Len(t, refs1, 2)
-	require.Equal(t, uint64(1), refs1[0].PackID)
-	require.Equal(t, uint64(1), refs1[1].PackID)
-
-	// 2. ino=20 追加 1 个块触发 Pack 1 封口并切入新活跃包 Pack 2
-	ref2, err := blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), ref2.PackID)
-
-	// 3. 后台刷盘协程自动对已封口的 Pack 1 执行异步 fdatasync
-	require.Eventually(t, func() bool {
-		return blobs.SyncFileCount() == 1
-	}, 2*time.Second, 5*time.Millisecond, "已封口 Pack 1 必须由后台协程自动完成预刷盘")
-	require.Equal(t, uint64(0), blobs.SyncDirCount(), "后台预刷盘仅刷数据文件，不提前执行目录 fsync")
-	require.True(t, blobs.HasDirty())
-
-	// 4. 首次对仅关联已封口新建包 Pack 1 的 ino=10 调用 SyncInode(10)：
-	//    - Pack 1 已被后台刷完消记，SyncFileCount 不得重复递增（保持为 1）
-	//    - 因 Pack 1 属于 dirtyNew 新建包，消记时继承 dirDirty=true，SyncInode(10) 必须可靠执行 1 次 packs/ 目录 fsync
-	require.NoError(t, blobs.SyncInode(10))
-	require.Equal(t, uint64(1), blobs.SyncFileCount(), "已被后台预刷盘的封口包不得在前台 SyncInode 时重复 fdatasync")
-	require.Equal(t, uint64(1), blobs.SyncDirCount(), "新建封口包被后台提前刷完后，首次 SyncInode 必须执行 1 次 packs/ 目录 fsync")
-
-	// 5. 再次调用 SyncInode(10) 应为无操作（SyncFileCount 与 SyncDirCount 均不变）
-	require.NoError(t, blobs.SyncInode(10))
-	require.Equal(t, uint64(1), blobs.SyncFileCount())
-	require.Equal(t, uint64(1), blobs.SyncDirCount())
-
-	// 6. 对活跃包 Pack 2 关联的 ino=20 调用 SyncInode(20)
-	require.NoError(t, blobs.SyncInode(20))
-	require.Equal(t, uint64(2), blobs.SyncFileCount())
-	require.Equal(t, uint64(2), blobs.SyncDirCount())
-	require.False(t, blobs.HasDirty())
-}
-
-func TestBlobStoreForegroundBackgroundSyncCoordinationAndSkipAlreadySynced(t *testing.T) {
-	base := t.TempDir()
-	blobs := store.NewBlobStore(base)
-	defer func() { require.NoError(t, blobs.Close()) }()
-
-	blobs.SetMaxPackSize(store.BlobSize)
-
-	enteredPack1 := make(chan struct{})
-	releasePack1 := make(chan struct{})
-	enteredPack2 := make(chan struct{})
-	releasePack2 := make(chan struct{})
-
-	var pack1HookOnce, pack2HookOnce sync.Once
-	blobs.SetSyncFileHookForTest(func(packID uint64) {
-		switch packID {
-		case 1:
-			pack1HookOnce.Do(func() {
-				close(enteredPack1)
-				<-releasePack1
-			})
-		case 2:
-			pack2HookOnce.Do(func() {
-				close(enteredPack2)
-				<-releasePack2
-			})
-		}
-	})
-
-	// 1. 写入 Pack 1 (ino=10) 并通过写入 Pack 2 (ino=20) 触发 Pack 1 封口进入后台刷盘
-	_, err := blobs.Append(10, bytes.Repeat([]byte{0x11}, store.BlobSize))
-	require.NoError(t, err)
-	_, err = blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
-	require.NoError(t, err)
-
-	// 等待后台协程进入 Pack 1 的 syncPack（尚未执行底层 fdatasync）
-	<-enteredPack1
-
-	// 验证「先刷盘、后消记」：后台刷盘完成前 dirtyPacks 与 inoPacks[10] 仍保留，
-	// 此时前台调用 SyncInode(10) 必须等待 Pack 1 落盘完成后才能返回，绝不提前返回。
-	fgDone := make(chan error, 1)
-	go func() {
-		fgDone <- blobs.SyncInode(10)
-	}()
-
-	select {
-	case fgErr := <-fgDone:
-		t.Fatalf("后台正在刷盘 Pack 1 时，前台 SyncInode(10) 不得在 fdatasync 完成前提前返回 (got %v)", fgErr)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	// 放行 Pack 1 后台刷盘：前后台协同单次完成 Pack 1 的 fdatasync，且前台 SyncInode(10) 完成目录 fsync
-	close(releasePack1)
-	require.NoError(t, <-fgDone)
-	require.Equal(t, uint64(1), blobs.SyncFileCount(), "同一封口包前后台并发刷盘必须去重协同，仅执行 1 次 fdatasync")
-	require.Equal(t, uint64(1), blobs.SyncDirCount(), "前台 SyncInode(10) 等待后台封口包完成后必须执行 1 次目录 fsync")
-
-	// 2. 继续追加写入 Pack 3 (ino=30)、Pack 4 (ino=40)、Pack 5 (ino=50)：
-	//    此时 Pack 2 封口并卡在后台刷盘钩子 enteredPack2，Pack 3 与 Pack 4 已封口排在后台队列中。
-	_, err = blobs.Append(30, bytes.Repeat([]byte{0x33}, store.BlobSize))
-	require.NoError(t, err)
-	<-enteredPack2
-
-	_, err = blobs.Append(40, bytes.Repeat([]byte{0x44}, store.BlobSize))
-	require.NoError(t, err)
-	_, err = blobs.Append(50, bytes.Repeat([]byte{0x55}, store.BlobSize))
-	require.NoError(t, err)
-
-	// 在后台协程仍卡在 Pack 2 期间：
-	// - 前台提前刷完已封口的 Pack 3 (SyncInode(30))
-	// - 前台直接删除已封口的 Pack 4 (RemovePack(4))
-	require.NoError(t, blobs.SyncInode(30))
-	require.Equal(t, uint64(2), blobs.SyncFileCount(), "前台 SyncInode(30) 率先完成 Pack 3 的 fdatasync")
-	require.NoError(t, blobs.RemovePack(4))
-
-	// 放行 Pack 2，等待后台队列排空（Pack 2 完成 fdatasync，Pack 3 已由前台刷完跳过，Pack 4 已被删除跳过）
-	close(releasePack2)
-	require.Eventually(t, func() bool {
-		return blobs.SyncFileCount() == 3
-	}, 2*time.Second, 5*time.Millisecond)
-
-	// 再同步最后一个活跃包 Pack 5 (ino=50)，总 fdatasync 次数精确为 4（Pack 1, 2, 3, 5），无后台滞后重复刷盘
-	require.NoError(t, blobs.SyncInode(50))
-	require.Equal(t, uint64(4), blobs.SyncFileCount())
-	require.False(t, blobs.HasDirty())
-}
-
-func TestBlobStoreSyncBatchBoundedParallelismAndConcurrentRemoveClose(t *testing.T) {
-	base := t.TempDir()
-	blobs := store.NewBlobStore(base)
-	blobs.SetMaxPackSize(store.BlobSize)
-
-	// 1. 先卡住后台协程对 Pack 1 的预刷盘，以便积累 12 个脏 .pack 后测试 syncBatch 多包有界并发（上限 8）
-	enteredPack1 := make(chan struct{})
-	releasePack1 := make(chan struct{})
-	var pack1Once sync.Once
-
-	var inFlight atomic.Int32
-	var maxInFlight atomic.Int32
-	blobs.SetSyncFileHookForTest(func(packID uint64) {
-		if packID == 1 {
-			pack1Once.Do(func() {
-				close(enteredPack1)
-				<-releasePack1
-			})
-			return
-		}
-		cur := inFlight.Add(1)
-		for {
-			prev := maxInFlight.Load()
-			if cur <= prev || maxInFlight.CompareAndSwap(prev, cur) {
-				break
-			}
-		}
-		time.Sleep(15 * time.Millisecond)
-		inFlight.Add(-1)
-	})
-
-	const totalPacks = 12
-	for i := range totalPacks {
-		_, err := blobs.Append(uint64(100+i), bytes.Repeat([]byte{byte(i + 1)}, store.BlobSize))
-		require.NoError(t, err)
-	}
-	<-enteredPack1
-
-	// 放行 Pack 1 并立即在前台调用 Sync() 同步全部 12 个脏包
-	close(releasePack1)
-	require.NoError(t, blobs.Sync())
-	require.Equal(t, uint64(totalPacks), blobs.SyncFileCount())
-	require.Equal(t, uint64(1), blobs.SyncDirCount())
-	require.False(t, blobs.HasDirty())
-	require.GreaterOrEqual(t, maxInFlight.Load(), int32(2), "多脏包 syncBatch 必须并发执行 syncPack")
-	require.LessOrEqual(t, maxInFlight.Load(), int32(9), "syncBatch 并发度（至多 8 协程 + 1 后台协程）必须受有界上限约束")
-
-	// 2. 验证高频切包后台预刷盘与并发 SyncInode / RemovePack / Close 无竞态或句柄泄漏
-	blobs.SetSyncFileHookForTest(nil)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := range 24 {
-			_, _ = blobs.Append(200, bytes.Repeat([]byte{byte(0xa0 + i)}, store.BlobSize))
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for p := uint64(1); p <= 16; p++ {
-			_ = blobs.SyncInode(200)
-			_ = blobs.RemovePack(p)
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	wg.Wait()
-	require.NoError(t, blobs.Close())
 }

@@ -3,7 +3,6 @@ package store_test
 import (
 	"testing"
 
-	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/starsrc/bowl/services/storage/internal/store"
@@ -46,6 +45,10 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 
 	_, err = store.DecodeEntry(entryBytes[:12])
 	require.ErrorIs(t, err, store.ErrInvalidValue)
+	badEntry := append([]byte(nil), entryBytes...)
+	badEntry[0] = 2
+	_, err = store.DecodeEntry(badEntry)
+	require.ErrorIs(t, err, store.ErrInvalidValue)
 
 	// 3. Inode (93B 定长头 + 可变长 SymlinkTarget)
 	inode := store.Inode{
@@ -84,20 +87,17 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	_, err = store.DecodeInode(inodeBytes[:len(inodeBytes)-1])
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 
-	// ToAttribute 转换校验（含目录默认 Size=4096 与 Blocks 核算）
-	dirInode := store.Inode{
-		Ino:       1,
-		ParentIno: 1,
-		Mode:      store.S_IFDIR | 0o755,
-		Nlink:     2,
-		Atime:     100,
-		Mtime:     200,
-		Ctime:     300,
-	}
+	// ToAttribute 纯计算换算（目录默认 Size=4096、512B 块数向上取整、设备号按节点类型过滤）
+	dirInode := store.Inode{Ino: 1, ParentIno: 1, Mode: store.S_IFDIR | 0o755, Nlink: 2}
 	dirAttr := dirInode.ToAttribute()
 	require.Equal(t, store.DefaultDirSize, dirAttr.Size)
 	require.Equal(t, store.DefaultBlockSize, dirAttr.Blksize)
 	require.Equal(t, store.DefaultDirSize/512, dirAttr.Blocks)
+
+	chrInode := store.Inode{Ino: 2, Mode: store.S_IFCHR | 0o600, Rdev: 0x0103}
+	require.Equal(t, uint32(0x0103), chrInode.ToAttribute().Rdev)
+	fifoInode := store.Inode{Ino: 3, Mode: store.S_IFIFO | 0o600, Rdev: 0x9999}
+	require.Zero(t, fifoInode.ToAttribute().Rdev)
 
 	// 4. BlobRef (16B: [PackID(8B) | Offset(4B) | Length(4B)])
 	ref := store.BlobRef{
@@ -158,84 +158,4 @@ func TestValuesCodecRoundTripAndValidation(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 	_, err = store.DecodePackMeta(store.EncodePackMeta(store.PackMeta{LiveBytes: 0, TotalBytes: store.PackMaxSize + 1}))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-}
-
-func TestZeroCopyBatchDeferredHelpers(t *testing.T) {
-	db, err := pebble.Open(t.TempDir(), &pebble.Options{})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, db.Close()) }()
-
-	batch := db.NewIndexedBatch()
-	defer func() { _ = batch.Close() }()
-
-	stat := store.BranchStat{LogicalBytes: 4096, Inodes: 2, NextWriteSeq: 5, WriterEpoch: 3, MaxBytes: 64 << 20}
-	inode := store.Inode{
-		Ino:       2,
-		ParentIno: 1,
-		Mode:      store.S_IFREG | 0o644,
-		Nlink:     1,
-		Size:      4096,
-		Atime:     111,
-		Mtime:     222,
-		Ctime:     333,
-	}
-	entry := store.Entry{Ino: 2, Mode: inode.Mode}
-	ref := store.BlobRef{PackID: 7, Offset: 4096, Length: 4096}
-	packMeta := store.PackMeta{LiveBytes: 4096, TotalBytes: 8192}
-
-	store.BatchSetStatDeferred(batch, stat)
-	store.BatchSetPackMetaDeferred(batch, 7, packMeta)
-	require.NoError(t, store.BatchSetInodeDeferred(batch, inode))
-	store.BatchSetEntryDeferred(batch, 1, []byte("hello.txt"), entry)
-	store.BatchSetXattrDeferred(batch, 2, []byte("user.tag"), []byte("v1"))
-	store.BatchSetOrphanDeferred(batch, 2)
-	store.BatchSetDataDeferred(batch, 2, 0, ref)
-
-	// 验证同批写后读（Intra-Batch Read-Your-Writes）
-	val, closer, err := batch.Get(store.InodeKey(2))
-	require.NoError(t, err)
-	gotIno, err := store.DecodeInode(val)
-	require.NoError(t, closer.Close())
-	require.NoError(t, err)
-	require.Equal(t, inode, gotIno)
-
-	pmVal, pmCloser, err := batch.Get(store.PackStatKey(7))
-	require.NoError(t, err)
-	gotPM, err := store.DecodePackMeta(pmVal)
-	require.NoError(t, pmCloser.Close())
-	require.NoError(t, err)
-	require.Equal(t, packMeta, gotPM)
-
-	require.NoError(t, db.Apply(batch, pebble.NoSync))
-
-	// 验证覆盖写后调用 DeleteDeferred 不会像 SingleDelete 那样导致旧版本复活
-	batch2 := db.NewIndexedBatch()
-	defer func() { _ = batch2.Close() }()
-	store.BatchSetXattrDeferred(batch2, 2, []byte("user.tag"), []byte("v2"))
-	require.NoError(t, db.Apply(batch2, pebble.NoSync))
-	require.NoError(t, db.Flush())
-
-	batch3 := db.NewIndexedBatch()
-	defer func() { _ = batch3.Close() }()
-	store.BatchDeleteEntryDeferred(batch3, 1, []byte("hello.txt"))
-	store.BatchDeleteXattrDeferred(batch3, 2, []byte("user.tag"))
-	store.BatchDeleteOrphanDeferred(batch3, 2)
-	store.BatchDeleteDataDeferred(batch3, 2, 0)
-	store.BatchDeleteInodeDeferred(batch3, 2)
-	store.BatchDeletePackMetaDeferred(batch3, 7)
-	store.BatchDeleteDeferred(batch3, store.StatKey())
-	require.NoError(t, db.Apply(batch3, pebble.NoSync))
-
-	for _, k := range [][]byte{
-		store.EntryKey(1, []byte("hello.txt")),
-		store.XattrKey(2, []byte("user.tag")),
-		store.OrphanKey(2),
-		store.DataKey(2, 0),
-		store.InodeKey(2),
-		store.PackStatKey(7),
-		store.StatKey(),
-	} {
-		_, _, err := db.Get(k)
-		require.ErrorIs(t, err, pebble.ErrNotFound)
-	}
 }

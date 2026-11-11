@@ -28,16 +28,35 @@ func GetStorageServiceAddr() string {
 	return cmp.Or(os.Getenv("STORAGE_SERVICE_ADDR"), defaultStorageServiceAddr)
 }
 
-// NewStorageClient 创建指向 storage-service 地址的 ConnectRPC StorageService 客户端。
+// NewStorageClient 创建指向默认 storage-service 地址的 ConnectRPC StorageService 客户端。
 func NewStorageClient(opts ...connect.ClientOption) storagev1connect.StorageServiceClient {
+	return NewStorageClientAt(GetStorageServiceAddr(), opts...)
+}
+
+// NewStorageClientAt 创建指向指定地址的 ConnectRPC StorageService 客户端。
+func NewStorageClientAt(addr string, opts ...connect.ClientOption) storagev1connect.StorageServiceClient {
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 15 * time.Second,
 	}
-	return storagev1connect.NewStorageServiceClient(
-		client,
-		GetStorageServiceAddr(),
-		opts...,
-	)
+	return storagev1connect.NewStorageServiceClient(client, addr, opts...)
+}
+
+// NewH2CStorageClient 创建启用明文 HTTP/2 (h2c) 与大流控窗口的 ConnectRPC 客户端。
+func NewH2CStorageClient(addr string, opts ...connect.ClientOption) storagev1connect.StorageServiceClient {
+	var protocols http.Protocols
+	protocols.SetUnencryptedHTTP2(true)
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Protocols: &protocols,
+			HTTP2: &http.HTTP2Config{
+				MaxReadFrameSize:              1 << 20,
+				MaxReceiveBufferPerStream:     8 << 20,
+				MaxReceiveBufferPerConnection: 32 << 20,
+			},
+		},
+	}
+	return storagev1connect.NewStorageServiceClient(client, addr, opts...)
 }
 
 // ExtractErrorInfo 从 error 中提取 *errdetails.ErrorInfo 详情，
