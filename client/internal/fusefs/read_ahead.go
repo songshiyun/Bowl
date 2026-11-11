@@ -17,8 +17,13 @@ import (
 // MaxRPCChunkSize 定义客户端单次读写 RPC 的最大载荷切片大小 (4 MiB = 4,194,304 字节)。
 const MaxRPCChunkSize = 4 * 1024 * 1024
 
-// ReadAheadMaxPrefetch 定义确认连续顺序流后最多并发维持的 4 MiB 异步预读窗口数（W_read = 4，对齐 WriteBehind W* = 4）。
+// ReadAheadMaxPrefetch 定义确认连续顺序流后单句柄最多并发维持的 4 MiB 异步预读窗口数（W_read = 4，对齐 WriteBehind W* = 4）。
 const ReadAheadMaxPrefetch = 4
+
+// ReadAheadMaxGlobalInflight 定义单个客户端实例跨所有活跃句柄允许并发在途的最大异步预读 RPC 数（12 * 4 MiB = 48 MiB）。
+// 单流（1~3 并发）仍可享满 W_read = 4 流水线深度；16 路高并发顺序读（如 fio seq_read_16jobs）自动按活跃流数公平收敛至单流深度 1 且全局不超过 12 路，
+// 避免 16 * 4 = 64 路（256 MiB）并发流冲刷 32 MiB HTTP/2 连接窗口与缓冲池。
+const ReadAheadMaxGlobalInflight = 12
 
 const defaultPrefetchTimeout = 30 * time.Second
 
@@ -168,11 +173,13 @@ type ChunkFetcher func(ctx context.Context, offset uint64, length uint32) (rpc.R
 // ReadAheadCoordinator 协调单个客户端实例中所有打开句柄的 4 MiB 对齐预读窗口、
 // W_read=4 并发流水线预取、跨窗口边界拼接、单飞（Singleflight）窗口合并及并发写代数（gen）失效。
 type ReadAheadCoordinator struct {
-	mu             sync.Mutex
-	handles        map[uint64]*handleReadAhead
-	byInode        map[uint64]map[uint64]*handleReadAhead
-	metrics        atomic.Pointer[Metrics]
-	tracerProvider atomic.Pointer[trace.TracerProvider]
+	mu                 sync.Mutex
+	handles            map[uint64]*handleReadAhead
+	byInode            map[uint64]map[uint64]*handleReadAhead
+	inflightPrefetches atomic.Int32
+	activePipelined    atomic.Int32
+	metrics            atomic.Pointer[Metrics]
+	tracerProvider     atomic.Pointer[trace.TracerProvider]
 }
 
 // NewReadAheadCoordinator 创建并初始化 ReadAheadCoordinator。
@@ -358,12 +365,36 @@ func (c *ReadAheadCoordinator) discardAllPrefetchesLocked(hra *handleReadAhead) 
 	hra.prefetches = hra.prefetches[:0]
 }
 
+func (c *ReadAheadCoordinator) setPipelinedLocked(hra *handleReadAhead, v bool) {
+	if hra.pipelined == v {
+		return
+	}
+	hra.pipelined = v
+	if v {
+		c.activePipelined.Add(1)
+	} else {
+		c.activePipelined.Add(-1)
+	}
+}
+
+func (c *ReadAheadCoordinator) tryAcquirePrefetchSlot() bool {
+	for {
+		cur := c.inflightPrefetches.Load()
+		if cur >= ReadAheadMaxGlobalInflight {
+			return false
+		}
+		if c.inflightPrefetches.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
 func (c *ReadAheadCoordinator) resetHandleLocked(hra *handleReadAhead) {
 	hra.gen++
 	hra.lastReadEnd = 0
 	hra.hasLastRead = false
 	hra.seqCount = 0
-	hra.pipelined = false
+	c.setPipelinedLocked(hra, false)
 	hra.streamEnd = 0
 	hra.fetch = nil
 	c.discardAllWindowsLocked(hra)
@@ -372,7 +403,7 @@ func (c *ReadAheadCoordinator) resetHandleLocked(hra *handleReadAhead) {
 
 func (c *ReadAheadCoordinator) clearWindowAndPrefetchLocked(hra *handleReadAhead) {
 	hra.gen++
-	hra.pipelined = false
+	c.setPipelinedLocked(hra, false)
 	hra.fetch = nil
 	c.discardAllWindowsLocked(hra)
 	c.discardAllPrefetchesLocked(hra)
@@ -500,6 +531,7 @@ func (c *ReadAheadCoordinator) launchPrefetchLocked(triggerCtx context.Context, 
 		defer close(pf.done)
 		defer pfSpan.End()
 		defer pfCancel()
+		defer c.inflightPrefetches.Add(-1)
 		defer c.metrics.Load().addReadAheadInflight(-1)
 
 		payload, err := fetch(pfCtx, nextOffset, MaxRPCChunkSize)
@@ -538,8 +570,10 @@ func (c *ReadAheadCoordinator) ensurePrefetchPipelineLocked(triggerCtx context.C
 
 	targetDepth := 1
 	if hra.pipelined || hra.seqCount >= 3 || hra.winConsumed >= 1<<20 {
-		hra.pipelined = true
-		targetDepth = ReadAheadMaxPrefetch
+		c.setPipelinedLocked(hra, true)
+		streams := max(1, int(c.activePipelined.Load()))
+		perStreamCap := max(1, ReadAheadMaxGlobalInflight/streams)
+		targetDepth = min(ReadAheadMaxPrefetch, perStreamCap)
 	}
 
 	keep := 0
@@ -564,6 +598,9 @@ func (c *ReadAheadCoordinator) ensurePrefetchPipelineLocked(triggerCtx context.C
 	}
 
 	for len(hra.prefetches) < targetDepth {
+		if !c.tryAcquirePrefetchSlot() {
+			break
+		}
 		nextOff := hra.winOffset + uint64(len(hra.prefetches)+1)*MaxRPCChunkSize
 		pf := c.launchPrefetchLocked(triggerCtx, hra, nextOff, fetch)
 		hra.prefetches = append(hra.prefetches, pf)
@@ -610,7 +647,7 @@ func (c *ReadAheadCoordinator) fetchReadWindow(ctx context.Context, hra *handleR
 		}
 		if pf.err == nil && hra.gen == startGen {
 			if promotedBuf, ok := c.promotePrefetch(pf); ok {
-				hra.pipelined = true
+				c.setPipelinedLocked(hra, true)
 				return promotedBuf, true, nil
 			}
 		}
@@ -668,7 +705,7 @@ func (c *ReadAheadCoordinator) Read(ctx context.Context, fh, ino, offset uint64,
 				hra.mu.Lock()
 				if hra.gen == startGen && pf.err == nil {
 					if pfBuf, ok := c.promotePrefetch(pf); ok {
-						hra.pipelined = true
+						c.setPipelinedLocked(hra, true)
 						pfData := pfBuf.bytes()
 						if len(pfData) == 0 && offset >= pf.offset {
 							// 预取已精确命中对齐边界上的 EOF，释放缓冲并清空更高偏移的无用预取，免发重复 RPC。

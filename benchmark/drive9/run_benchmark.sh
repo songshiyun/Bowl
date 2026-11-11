@@ -780,9 +780,10 @@ sync
 EOF_JBENCH
   local s_end
   s_end=$(date +%s)
-  record_stage "${target_key}_juicefs_bench" "$((s_end - s_start))"
   if [[ "${target_key}" == "bowl" ]]; then
     record_stage "jfs_bench" "$((s_end - s_start))"
+  else
+    record_stage "${target_key}_juicefs_bench" "$((s_end - s_start))"
   fi
 }
 
@@ -821,9 +822,10 @@ sync
 EOF_PBASE
   local s_end
   s_end=$(date +%s)
-  record_stage "${target_key}_fuse_perf_baseline" "$((s_end - s_start))"
   if [[ "${target_key}" == "bowl" ]]; then
     record_stage "fuse_perf_baseline" "$((s_end - s_start))"
+  else
+    record_stage "${target_key}_fuse_perf_baseline" "$((s_end - s_start))"
   fi
 }
 

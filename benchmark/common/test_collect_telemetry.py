@@ -858,6 +858,82 @@ class CollectTelemetryTest(unittest.TestCase):
                     self.assertIn("## 8. 阿里云按量资源生命周期与销毁审计", prod_md)
                     self.assertIn("1122334455667788", prod_md)
 
+    def test_async_pipeline_share_cap_hierarchy_and_stage_dedup(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            res_dir = root / "results"
+            out_dir = res_dir / "telemetry"
+            res_dir.mkdir(parents=True, exist_ok=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            # 1. Stage timings alias deduplication (bowl_juicefs_bench + jfs_bench -> single jfs_bench)
+            (res_dir / "stage_timings.jsonl").write_text(
+                "\n".join([
+                    json.dumps({"stage": "bowl_juicefs_bench", "duration_sec": 12.5}),
+                    json.dumps({"stage": "jfs_bench", "duration_sec": 12.5}),
+                    json.dumps({"stage": "bowl_fuse_perf_baseline", "duration_sec": 4.2}),
+                    json.dumps({"stage": "fuse_perf_baseline", "duration_sec": 4.2}),
+                    json.dumps({"directory": "mkdir", "duration_sec": 1.1}),
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            stages = collect_telemetry.load_stage_timings(res_dir)
+            labels = [s.get("stage") or s.get("directory") for s in stages]
+            self.assertEqual(labels, ["jfs_bench", "fuse_perf_baseline", "mkdir"])
+
+            # 2. Async RPC pipeline (407.5% raw ratio) bounded <= 100% + parent/child phase hierarchy
+            cli_summary = {
+                "phase_deltas": {
+                    "d9_cold_io": {
+                        "pre_epoch": 100.0,
+                        "post_epoch": 130.0,
+                        "window_sec": 30.0,
+                        "fuse_active_ms": 5000.0,
+                        "fuse_aggregate": {"calls": 1000, "total_ms": 5000.0, "mean_ms": 5.0, "p50_ms": 3.0, "p99_ms": 12.0, "errors": 0},
+                    },
+                    "d9_cold_seq_read": {
+                        "pre_epoch": 105.0,
+                        "post_epoch": 115.0,
+                        "window_sec": 10.0,
+                        "fuse_active_ms": 1000.0,
+                        "fuse_aggregate": {"calls": 256, "total_ms": 1000.0, "mean_ms": 3.9, "p50_ms": 0.1, "p99_ms": 8.0, "errors": 0},
+                    },
+                }
+            }
+            prom_summary = {
+                "client_engine": {
+                    "phase_deltas": {
+                        "d9_cold_io": {
+                            "rpc_client_latency_ms": [{"group": "Read", "count": 300, "total": 4500.0, "mean": 15.0, "p50": 12.0, "p99": 25.0}],
+                        },
+                        "d9_cold_seq_read": {
+                            "rpc_client_latency_ms": [{"group": "Read", "count": 256, "total": 4075.0, "mean": 15.9, "p50": 14.0, "p99": 28.0}],
+                        },
+                    }
+                },
+                "server_engine": {
+                    "phase_deltas": {
+                        "d9_cold_seq_read": {
+                            "http_request_latency_ms": [{"group": "/storage.v1.StorageService/Read", "count": 256, "total": 3200.0, "mean": 12.5, "p50": 10.0, "p99": 22.0}],
+                            "rpc_server_latency_ms": [{"group": "Read", "count": 256, "total": 500.0, "mean": 1.95, "p50": 1.5, "p99": 4.0}],
+                        }
+                    }
+                },
+            }
+            bds = collect_telemetry.build_phase_hop_breakdowns(cli_summary, prom_summary, stages, out_dir)
+            seq_bd = bds["d9_cold_seq_read"]
+            self.assertEqual(seq_bd["parent_phase"], "d9_cold_io")
+            self.assertEqual(bds["d9_cold_io"]["child_phases"], ["d9_cold_seq_read"])
+            self.assertAlmostEqual(seq_bd["async_rpc_to_fuse_ratio"], 4.08, places=2)
+            for h in seq_bd["hops"]:
+                if h["share_pct"] is not None:
+                    self.assertLessEqual(h["share_pct"], 100.0, f"hop {h['component']} exceeded 100%: {h['share_pct']}")
+
+            md = "\n".join(collect_telemetry.render_phase_deltas_markdown(bds))
+            self.assertIn("父汇总阶段 · 含子阶段 `d9_cold_seq_read`", md)
+            self.assertIn("子阶段 · 隶属 `d9_cold_io`", md)
+            self.assertIn("异步并发流水线 (累计为 FUSE 活跃 4.08x)", md)
+
 
 if __name__ == "__main__":
     unittest.main()

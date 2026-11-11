@@ -6,10 +6,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
@@ -115,11 +117,27 @@ func newHTTPTransport(endpoint string, tlsConfig *tls.Config) (*http.Transport, 
 		MaxReceiveBufferPerConnection: HTTP2MaxReceiveBufferPerConnection,
 	}
 
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
 	if strings.EqualFold(u.Scheme, "http") {
-		// 明文 HTTP/2 (h2c) 并发多路复用传输
+		// 明文 HTTP/2 (h2c) 并发多路复用传输：显式开启 TCP_NODELAY 并合并单次 Unary 请求的 HEADERS+DATA 帧，
+		// 消除 Go h2 双次 Flush 在 Linux tcp_autocorking + virtio-net + Delayed ACK 下触发的 ~10ms 死锁。
 		var protocols http.Protocols
 		protocols.SetUnencryptedHTTP2(true)
 		return &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, dialErr := dialer.DialContext(ctx, network, addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				if tc, ok := conn.(*net.TCPConn); ok {
+					_ = tc.SetNoDelay(true)
+				}
+				return newH2CoalesceConn(conn), nil
+			},
 			Protocols: &protocols,
 			HTTP2:     h2Cfg,
 		}, nil
@@ -127,7 +145,17 @@ func newHTTPTransport(endpoint string, tlsConfig *tls.Config) (*http.Transport, 
 
 	// 标准 TLS HTTP/2 传输
 	tlsTransport := &http.Transport{
-		Proxy:             http.ProxyFromEnvironment,
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, dialErr := dialer.DialContext(ctx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetNoDelay(true)
+			}
+			return conn, nil
+		},
 		ForceAttemptHTTP2: true,
 		HTTP2:             h2Cfg,
 	}

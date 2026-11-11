@@ -203,6 +203,13 @@ def diff_client_snapshots(
         b = float((post.get(section) or {}).get(key, 0) or 0)
         return max(0.0, b - a)
 
+    eff_pre_epoch = pre_epoch
+    if eff_pre_epoch is None and int(pre.get("timestamp_unix_nano", 0)) > 0:
+        eff_pre_epoch = int(pre.get("timestamp_unix_nano", 0)) / 1e9
+    eff_post_epoch = post_epoch
+    if eff_post_epoch is None and int(post.get("timestamp_unix_nano", 0)) > 0:
+        eff_post_epoch = int(post.get("timestamp_unix_nano", 0)) / 1e9
+
     if pre_epoch is not None and post_epoch is not None and post_epoch >= pre_epoch:
         window_sec = round(post_epoch - pre_epoch, 3)
     else:
@@ -246,6 +253,8 @@ def diff_client_snapshots(
     fuse_active_ms = round(total_delta_ns / 1e6, 3)
 
     return {
+        "pre_epoch": eff_pre_epoch,
+        "post_epoch": eff_post_epoch,
         "window_sec": window_sec,
         "fuse_active_ms": fuse_active_ms,
         "fuse_active_concurrency": round((fuse_active_ms / 1000.0) / window_sec, 3) if window_sec > 0 else None,
@@ -1328,23 +1337,36 @@ def build_single_phase_breakdown(
     srv_http_agg = _aggregate_hist_rows(srv_http_rows)
     srv_rpc_agg = _aggregate_hist_rows(srv_rpc_rows)
 
+    rpc_totals = [
+        float(agg["total"])
+        for agg in (cli_logical_agg, cli_rpc_agg, srv_http_agg, srv_rpc_agg)
+        if agg and float(agg.get("total") or 0.0) > 0.0
+    ]
+    max_rpc_total_ms = max(rpc_totals) if rpc_totals else 0.0
+    async_rpc_pipeline = fuse_active_ms > 0.0 and max_rpc_total_ms > fuse_active_ms * 1.02
+    async_rpc_ratio = round(max_rpc_total_ms / fuse_active_ms, 2) if async_rpc_pipeline else None
+
     if fuse_active_ms > 0:
-        ref_basis = "FUSE 活跃总耗时"
+        if async_rpc_pipeline:
+            ref_basis = "FUSE 活跃总耗时 (Hop 1-2) / 异步 RPC 流水线总耗时 (Hop 3-8)"
+        else:
+            ref_basis = "FUSE 活跃总耗时"
         ref_total_ms = fuse_active_ms
-    elif cli_rpc_agg and cli_rpc_agg["total"] > 0:
-        ref_basis = "Client ConnectRPC 总耗时"
-        ref_total_ms = float(cli_rpc_agg["total"])
-    elif srv_rpc_agg and srv_rpc_agg["total"] > 0:
-        ref_basis = "Server ConnectRPC 总耗时"
-        ref_total_ms = float(srv_rpc_agg["total"])
+        rpc_ref_total_ms = max(fuse_active_ms, max_rpc_total_ms)
+    elif max_rpc_total_ms > 0:
+        ref_basis = "Client ConnectRPC 总耗时" if (cli_rpc_agg and cli_rpc_agg["total"] > 0) else "Server ConnectRPC 总耗时"
+        ref_total_ms = max_rpc_total_ms
+        rpc_ref_total_ms = max_rpc_total_ms
     else:
         ref_basis = "阶段基准耗时"
         ref_total_ms = wall_ms if wall_ms > 0 else 0.0
+        rpc_ref_total_ms = ref_total_ms
 
-    def pct_of_ref(ms_val: float) -> float | None:
-        if ref_total_ms <= 0:
+    def pct_of_ref(ms_val: float, hop_stage: str) -> float | None:
+        denom = ref_total_ms if hop_stage.startswith(("1.", "2.")) else rpc_ref_total_ms
+        if denom <= 0:
             return None
-        return round((ms_val / ref_total_ms) * 100.0, 1)
+        return round(min(100.0, (ms_val / denom) * 100.0), 1)
 
     hops: list[dict[str, Any]] = []
 
@@ -1366,7 +1388,7 @@ def build_single_phase_breakdown(
             "mean_ms": round(float(mean_ms), 3) if mean_ms is not None else None,
             "p50_ms": round(float(p50_ms), 3) if p50_ms is not None else None,
             "p99_ms": round(float(p99_ms), 3) if p99_ms is not None else None,
-            "share_pct": pct_of_ref(float(total_ms)),
+            "share_pct": pct_of_ref(float(total_ms), hop_stage),
             "note": note,
         })
 
@@ -1438,6 +1460,9 @@ def build_single_phase_breakdown(
         )
     if cli_rpc_agg and cli_rpc_agg["count"] > 0:
         cli_err = (cp.get("rpc_client_status") or {}).get("error_calls", 0)
+        cli_note = f"非 OK 状态 {cli_err} 次"
+        if async_rpc_ratio is not None:
+            cli_note += f" · 异步并发流水线 (累计为 FUSE 活跃 {async_rpc_ratio:.2f}x)"
         add_hop(
             "3. 客户端 ConnectRPC",
             "rpc_client_call (总计)",
@@ -1446,7 +1471,7 @@ def build_single_phase_breakdown(
             cli_rpc_agg["mean"],
             cli_rpc_agg["p50"],
             cli_rpc_agg["p99"],
-            f"非 OK 状态 {cli_err} 次",
+            cli_note,
         )
 
     rpc_hop_delta = compute_same_hop_rpc_deltas(cli_rpc_rows, srv_rpc_rows, srv_http_rows)
@@ -1594,12 +1619,16 @@ def build_single_phase_breakdown(
     srv_cg = sp.get("counters_and_gauges") or {}
     return {
         "phase": phase_name,
+        "parent_phase": None,
+        "child_phases": [],
         "wall_clock_sec": round(wall_sec, 3),
         "wall_clock_ms": wall_ms,
         "fuse_active_ms": round(fuse_active_ms, 3),
         "fuse_active_concurrency": fuse_concurrency,
         "reference_basis": ref_basis,
         "reference_total_ms": round(ref_total_ms, 3),
+        "rpc_reference_total_ms": round(rpc_ref_total_ms, 3),
+        "async_rpc_to_fuse_ratio": async_rpc_ratio,
         "cache_and_pipeline": {
             "nscache_attr_hit_rate_pct": cs.get("nscache_attr_hit_rate_pct"),
             "nscache_entry_hit_rate_pct": cs.get("nscache_entry_hit_rate_pct"),
@@ -1614,6 +1643,67 @@ def build_single_phase_breakdown(
         "rpc_hop_deltas": rpc_hop_delta,
         "hops": hops,
     }
+
+
+STAGE_NAME_ALIASES: dict[str, str] = {
+    "bowl_juicefs_bench": "jfs_bench",
+    "bowl_fuse_perf_baseline": "fuse_perf_baseline",
+}
+
+KNOWN_PHASE_CHILDREN: dict[str, tuple[str, ...]] = {
+    "d9_cold_io": ("d9_cold_seq_read", "d9_cold_small_write_fsync"),
+}
+
+
+def _annotate_phase_hierarchy(
+    breakdowns: dict[str, Any],
+    cli_phases: dict[str, Any],
+) -> None:
+    intervals: dict[str, tuple[float, float]] = {}
+    for pname in breakdowns:
+        cs = cli_phases.get(pname) or {}
+        pre_e = cs.get("pre_epoch")
+        post_e = cs.get("post_epoch")
+        if pre_e is not None and post_e is not None and float(post_e) >= float(pre_e):
+            intervals[pname] = (float(pre_e), float(post_e))
+
+    children_map: dict[str, set[str]] = {p: set() for p in breakdowns}
+    parent_map: dict[str, str | None] = {p: None for p in breakdowns}
+
+    # 1. 基于精确采样时间窗 [pre_epoch, post_epoch] 自动识别最紧邻父子包含关系
+    for child, (c_start, c_end) in intervals.items():
+        c_span = c_end - c_start
+        best_parent: str | None = None
+        best_span = float("inf")
+        for cand, (p_start, p_end) in intervals.items():
+            if cand == child:
+                continue
+            p_span = p_end - p_start
+            if p_start <= c_start + 1e-3 and c_end <= p_end + 1e-3 and p_span > c_span + 1e-3:
+                if p_span < best_span:
+                    best_span = p_span
+                    best_parent = cand
+        if best_parent is not None:
+            parent_map[child] = best_parent
+            children_map[best_parent].add(child)
+
+    # 2. 对缺少 epoch 的合成快照补齐已知拓扑关系（如 d9_cold_io 及全量汇总 suite）
+    for parent, known_kids in KNOWN_PHASE_CHILDREN.items():
+        if parent in breakdowns:
+            for kid in known_kids:
+                if kid in breakdowns and parent_map[kid] is None:
+                    parent_map[kid] = parent
+                    children_map[parent].add(kid)
+    if "suite" in breakdowns and len(breakdowns) > 1:
+        for pname in breakdowns:
+            if pname != "suite" and parent_map[pname] is None and not children_map[pname]:
+                if pname not in intervals or "suite" not in intervals:
+                    parent_map[pname] = "suite"
+                    children_map["suite"].add(pname)
+
+    for pname, bd in breakdowns.items():
+        bd["parent_phase"] = parent_map[pname]
+        bd["child_phases"] = sorted(children_map[pname])
 
 
 def build_phase_hop_breakdowns(
@@ -1631,7 +1721,10 @@ def build_phase_hop_breakdowns(
         dur = float(r.get("duration_sec", 0.0) or 0.0)
         for k in (r.get("stage"), r.get("directory"), r.get("suite")):
             if k and dur > 0:
-                stage_sec_lookup[str(k)] = dur
+                raw_k = str(k)
+                stage_sec_lookup[raw_k] = dur
+                canon_k = STAGE_NAME_ALIASES.get(raw_k, raw_k)
+                stage_sec_lookup[canon_k] = dur
 
     all_phase_names = sorted(set(cli_phases.keys()) | set(cli_prom_phases.keys()) | set(srv_prom_phases.keys()))
     breakdowns: dict[str, Any] = {}
@@ -1647,6 +1740,7 @@ def build_phase_hop_breakdowns(
             breakdowns[pname] = bd
 
     if breakdowns:
+        _annotate_phase_hierarchy(breakdowns, cli_phases)
         (out_dir / "phase_deltas.json").write_text(
             json.dumps(breakdowns, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -1888,7 +1982,7 @@ def load_stage_timings(results_dir: Path) -> list[dict[str, Any]]:
     timings_file = results_dir / "stage_timings.jsonl"
     if not timings_file.exists():
         return []
-    rows: list[dict[str, Any]] = []
+    dedup_by_label: dict[str, dict[str, Any]] = {}
     for line in timings_file.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
@@ -1901,12 +1995,22 @@ def load_stage_timings(results_dir: Path) -> list[dict[str, Any]]:
         target = str(row.get("target") or "")
         if target and target != "bowl":
             continue
-        stage = str(row.get("stage") or row.get("suite") or "")
-        if stage in IGNORED_STAGE_NAMES or stage.startswith(("drive9_default_", "drive9_sync_", "jfs_")):
+        raw_stage = str(row.get("stage") or row.get("directory") or row.get("suite") or "")
+        if raw_stage in IGNORED_STAGE_NAMES or raw_stage.startswith(("drive9_default_", "drive9_sync_")):
             continue
-        if stage == "drive9_fuse_bench_cold_and_hot":
+        if raw_stage.startswith("jfs_") and raw_stage != "jfs_bench":
             continue
-        rows.append(row)
+        if raw_stage == "drive9_fuse_bench_cold_and_hot":
+            continue
+        canon_stage = STAGE_NAME_ALIASES.get(raw_stage, raw_stage)
+        norm_row = dict(row)
+        if "stage" in norm_row and norm_row["stage"]:
+            norm_row["stage"] = canon_stage
+        dur = float(norm_row.get("duration_sec", 0.0) or 0.0)
+        prev = dedup_by_label.get(canon_stage)
+        if prev is None or dur > float(prev.get("duration_sec", 0.0) or 0.0):
+            dedup_by_label[canon_stage] = norm_row
+    rows = list(dedup_by_label.values())
     rows.sort(key=lambda r: float(r.get("duration_sec", 0.0)), reverse=True)
     return rows
 
@@ -1927,10 +2031,25 @@ def render_phase_deltas_markdown(phase_deltas: dict[str, Any], heading_prefix: s
         cp = bd.get("cache_and_pipeline") or {}
         bc_str = "N/A (0 reads)" if cp.get("pebble_block_cache_hit_rate_pct") is None else f"{cp['pebble_block_cache_hit_rate_pct']:.2f}%"
 
+        child_phases = bd.get("child_phases") or []
+        parent_phase = bd.get("parent_phase")
+        scope_tag = ""
+        if child_phases:
+            kids_str = ", ".join(f"`{k}`" for k in child_phases)
+            scope_tag = f"（父汇总阶段 · 含子阶段 {kids_str}）"
+        elif parent_phase:
+            scope_tag = f"（子阶段 · 隶属 `{parent_phase}`）"
+
+        ref_note = f"`{bd.get('reference_basis', 'FUSE 活跃总耗时')}` (`{bd.get('reference_total_ms', 0.0):.2f} ms`"
+        rpc_ref_ms = float(bd.get("rpc_reference_total_ms") or 0.0)
+        if bd.get("async_rpc_to_fuse_ratio") is not None and rpc_ref_ms > 0:
+            ref_note += f" / RPC `{rpc_ref_ms:.2f} ms`"
+        ref_note += ")"
+
         lines.extend([
-            f"{heading_prefix} 工作负载 `{phase_name}` 全链路逐跳拆解",
+            f"{heading_prefix} 工作负载 `{phase_name}` 全链路逐跳拆解{scope_tag}",
             "",
-            f"- **墙钟耗时 vs FUSE 活跃耗时**：墙钟 `{wall_s:.3f} s` (`{wall_ms:.1f} ms`) vs FUSE 累计活跃 `{fuse_ms:.2f} ms`{conc_str}；占比基准：`{bd.get('reference_basis', 'FUSE 活跃总耗时')}` (`{bd.get('reference_total_ms', 0.0):.2f} ms`)",
+            f"- **墙钟耗时 vs FUSE 活跃耗时**：墙钟 `{wall_s:.3f} s` (`{wall_ms:.1f} ms`) vs FUSE 累计活跃 `{fuse_ms:.2f} ms`{conc_str}；占比基准：{ref_note}",
             f"- **缓存与流水线命中**：NSCache Attr `{fmt_pct(cp.get('nscache_attr_hit_rate_pct'))}` / Entry `{fmt_pct(cp.get('nscache_entry_hit_rate_pct'))}` / Readlink `{fmt_pct(cp.get('nscache_readlink_hit_rate_pct'))}` · "
             f"WriteBehind 聚批 `{cp.get('write_behind_staged_mib', 0.0):.2f} MiB` / 直通 `{cp.get('write_behind_passthrough_mib', 0.0):.2f} MiB` (Flush RPC `{cp.get('write_behind_flush_rpcs', 0)}`) · "
             f"ReadAhead 预读 `{cp.get('readahead_prefetched_mib', 0.0):.2f} MiB` / 命中 `{cp.get('readahead_hit_mib', 0.0):.2f} MiB` · Pebble BlockCache `{bc_str}`",

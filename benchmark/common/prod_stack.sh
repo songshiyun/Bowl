@@ -49,6 +49,9 @@ remote_setup_prod_stack() {
   cat <<EOF_PROD_SETUP
 set -euo pipefail
 
+# 0. 关闭宿主机 TCP autocorking 防御双次小写与 Delayed ACK 交互延迟
+sysctl -qw net.ipv4.tcp_autocorking=0 2>/dev/null || true
+
 # 1. 将 /var/lib/docker 绑定至本地 NVMe SSD，确保 PG18 / Storage / Prometheus / Loki 命名卷全落 NVMe
 mkdir -p /mnt/nvme/docker /var/lib/docker
 if ! mountpoint -q /var/lib/docker; then
@@ -611,6 +614,7 @@ EOF_PROD_SETUP
 # 输出安装到 Client 节点 /opt/bowl/client_telemetry.sh 的遥测快照与 pprof 助手脚本内容。
 emit_client_telemetry_helper() {
   cat <<'EOF_CLI_HELPER'
+sysctl -qw net.ipv4.tcp_autocorking=0 2>/dev/null || true
 mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/stats /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
 BOWL_PROFILE_PIDS=()
 
@@ -709,6 +713,7 @@ collect_and_process_bench_telemetry() {
 
   local stage_dir="${work_dir}/telemetry-stage"
   local raw_archive="${results_dir}/telemetry-raw.tar.gz"
+  rm -rf "${stage_dir}" "${raw_archive}" "${results_dir}/telemetry"
   mkdir -p "${stage_dir}"
 
   if [[ ${#CLIENT_SSH_CMD_ARR[@]} -gt 0 ]]; then
@@ -744,7 +749,7 @@ EOF_SRV_FINAL
     "${SERVER_SSH_CMD_ARR[@]}" "tar -czf - -C /tmp/bowl-telemetry server" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null || true
   fi
 
-  if find "${stage_dir}" -type f 2>/dev/null | grep -q .; then
+  if [[ -n "$(find "${stage_dir}" -type f -print -quit 2>/dev/null)" ]]; then
     COPYFILE_DISABLE=1 tar -czf "${raw_archive}" -C "${stage_dir}" . 2>/dev/null || true
     PYTHONDONTWRITEBYTECODE=1 python3 "${repo_root}/benchmark/common/collect_telemetry.py" \
       --suite "${suite_name}" \
