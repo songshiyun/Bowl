@@ -17,7 +17,7 @@ func WithMetrics(m *Metrics) InstrumentedOption {
 	}
 }
 
-// InstrumentedRawFS 为 RawFS 的全部 36 个 FUSE 操作提供零分配（0 B/op, 0 allocs/op）、零互斥锁的可观测性装饰器。
+// InstrumentedRawFS 为 RawFS 的全部 41 个 FUSE 操作提供零分配（0 B/op, 0 allocs/op）、零互斥锁的可观测性装饰器。
 type InstrumentedRawFS struct {
 	raw     *RawFS
 	metrics *Metrics
@@ -64,12 +64,19 @@ func (f *InstrumentedRawFS) Collector() prometheus.Collector {
 	return f.metrics
 }
 
-// Snapshot 抓取当前时刻 FUSE 36 操作与 8 大子系统的结构化一致性快照。
+// Snapshot 抓取当前时刻 FUSE 41 操作与 9 大子系统的结构化一致性快照。
 func (f *InstrumentedRawFS) Snapshot() Snapshot {
 	return f.metrics.Snapshot()
 }
 
-// --- 8 个非统计/未实现透传方法（满足 fuse.RawFileSystem 接口） ---
+// BindMountpoint 在 FUSE 挂载就绪后绑定挂载点路径，用于解析 Linux /sys/fs/fuse/connections/<dev> 队列指标。
+func (f *InstrumentedRawFS) BindMountpoint(mountpoint string) {
+	if f != nil && f.raw != nil {
+		f.raw.BindMountpoint(mountpoint)
+	}
+}
+
+// --- 3 个非请求级生命周期透传方法（满足 fuse.RawFileSystem 接口） ---
 
 // String 直接透传至底层 RawFS，不计入操作统计。
 func (f *InstrumentedRawFS) String() string {
@@ -86,32 +93,55 @@ func (f *InstrumentedRawFS) Init(server *fuse.Server) {
 	f.raw.Init(server)
 }
 
-// Access 直接透传至底层 RawFS，不计入操作统计。
+// --- 41 个 FUSE 操作零分配埋点入口 ---
+
+// Access 记录调用次数、在途数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) Access(cancel <-chan struct{}, input *fuse.AccessIn) fuse.Status {
-	return f.raw.Access(cancel, input)
+	start := f.metrics.beginOp(OpAccess)
+	status := f.raw.Access(cancel, input)
+	f.metrics.endOp(OpAccess, start, status, 0)
+	return status
 }
 
-// Lseek 直接透传至底层 RawFS，不计入操作统计。
+// Lseek 记录调用次数、在途数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) Lseek(cancel <-chan struct{}, in *fuse.LseekIn, out *fuse.LseekOut) fuse.Status {
-	return f.raw.Lseek(cancel, in, out)
+	start := f.metrics.beginOp(OpLseek)
+	status := f.raw.Lseek(cancel, in, out)
+	f.metrics.endOp(OpLseek, start, status, 0)
+	return status
 }
 
-// Writev 直接透传至底层 RawFS，不计入操作统计。
+// Writev 记录调用次数、在途数、字节数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) Writev(cancel <-chan struct{}, input *fuse.WriteIn, data [][]byte) (uint32, fuse.Status) {
-	return f.raw.Writev(cancel, input, data)
+	start := f.metrics.beginOp(OpWritev)
+	written, status := f.raw.Writev(cancel, input, data)
+	var n uint64
+	if status == fuse.OK {
+		n = uint64(written)
+	}
+	f.metrics.endOp(OpWritev, start, status, n)
+	return written, status
 }
 
-// CopyFileRange 直接透传至底层 RawFS，不计入操作统计。
+// CopyFileRange 记录调用次数、在途数、字节数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) CopyFileRange(cancel <-chan struct{}, input *fuse.CopyFileRangeIn) (uint32, fuse.Status) {
-	return f.raw.CopyFileRange(cancel, input)
+	start := f.metrics.beginOp(OpCopyFileRange)
+	written, status := f.raw.CopyFileRange(cancel, input)
+	var n uint64
+	if status == fuse.OK {
+		n = uint64(written)
+	}
+	f.metrics.endOp(OpCopyFileRange, start, status, n)
+	return written, status
 }
 
-// Statx 直接透传至底层 RawFS，不计入操作统计。
+// Statx 记录调用次数、在途数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) Statx(cancel <-chan struct{}, input *fuse.StatxIn, out *fuse.StatxOut) fuse.Status {
-	return f.raw.Statx(cancel, input, out)
+	start := f.metrics.beginOp(OpStatx)
+	status := f.raw.Statx(cancel, input, out)
+	f.metrics.endOp(OpStatx, start, status, 0)
+	return status
 }
-
-// --- 36 个 FUSE 操作零分配埋点入口 ---
 
 // Lookup 记录调用次数、在途数、耗时直方图与 errno 后委托底层 RawFS 执行。
 func (f *InstrumentedRawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) fuse.Status {

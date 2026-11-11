@@ -43,7 +43,10 @@ const (
 )
 
 // Ioctl 实现 FUSE_IOCTL 请求处理，将 Linux 标准 FS_IOC_GETFLAGS / FS_IOC_SETFLAGS 双向桥接至 StorageService RPC。
-func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) fuse.Status {
+func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpIoctl)
+	defer func() { endSpan(status) }()
+
 	if fs.isVirtualStatsIno(input.NodeId) {
 		return fuse.Status(syscall.ENOTTY)
 	}
@@ -53,7 +56,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 	if st != fuse.OK {
 		return st
 	}
-	fs.writeBehind.BarrierInode(ino)
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
 	switch input.Cmd {
 	case FS_IOC_GETFLAGS, FS_IOC32_GETFLAGS:
@@ -61,7 +64,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			return fuse.Status(syscall.EINVAL)
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
@@ -98,7 +101,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			return fuse.Status(syscall.EINVAL)
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
@@ -156,8 +159,8 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			protoFlags |= ProtoFlagAppend
 		}
 
-		fs.writeBehind.ResetInodeStream(ino)
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
@@ -169,7 +172,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
-		fs.writeBehind.ResetInodeStream(ino)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
 		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {
@@ -200,8 +203,8 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			protoFlags |= ProtoFlagAppend
 		}
 
-		fs.writeBehind.ResetInodeStream(ino)
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
@@ -213,7 +216,7 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
-		fs.writeBehind.ResetInodeStream(ino)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
 		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {

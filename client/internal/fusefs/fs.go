@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -15,6 +16,8 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
@@ -38,7 +41,17 @@ const DefaultOrphanBacklogThreshold = 16
 
 const orphanWarnMinInterval = time.Second
 
-var noopSpanInstance = noop.Span{}
+var (
+	noopSpanInstance = noop.Span{}
+	noopEndFuseOp    = func(fuse.Status) {}
+	fuseSpanNames    = func() [OpCount]string {
+		var out [OpCount]string
+		for op := range FuseOp(OpCount) {
+			out[op] = "fuse." + op.String()
+		}
+		return out
+	}()
+)
 
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
@@ -101,6 +114,7 @@ type RawFS struct {
 	releaseClosed   bool
 
 	lastOrphanWarnUnixNano atomic.Int64
+	fuseSysfsDir           atomic.Pointer[string]
 
 	readAhead   *ReadAheadCoordinator
 	writeBehind *WriteBehindCoordinator
@@ -112,6 +126,11 @@ type RawFS struct {
 func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 	if cfg.RootIno == 0 && cfg.RootInode != nil {
 		cfg.RootIno = cfg.RootInode.GetIno()
+	}
+	if cfg.TracerProvider != nil {
+		if rv := reflect.ValueOf(cfg.TracerProvider); rv.Kind() == reflect.Pointer && rv.IsNil() {
+			cfg.TracerProvider = nil
+		}
 	}
 	metrics := cfg.Metrics
 	if metrics == nil {
@@ -169,6 +188,7 @@ func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 	)
 	fs.handles = NewHandleTableWithContext(fs.reclaimOrphan)
 	fs.bindMetrics(metrics)
+	fs.bindTracerProvider(fs.tracerProvider())
 	return fs
 }
 
@@ -183,7 +203,39 @@ func (fs *RawFS) bindMetrics(m *Metrics) {
 	fs.caps.bindMetrics(m)
 	fs.tmpMgr.bindMetrics(m)
 	fs.readAhead.bindMetrics(m)
+	fs.writeBehind.bindMetrics(m)
 	fs.inodeLocks.bindMetrics(m)
+}
+
+func (fs *RawFS) tracerProvider() trace.TracerProvider {
+	if fs.cfg.TracerProvider != nil {
+		return fs.cfg.TracerProvider
+	}
+	return otel.GetTracerProvider()
+}
+
+func (fs *RawFS) bindTracerProvider(tp trace.TracerProvider) {
+	fs.readAhead.bindTracerProvider(tp)
+	fs.writeBehind.bindTracerProvider(tp)
+}
+
+// BindMountpoint 在 FUSE 挂载完成后解析并绑定对应的 /sys/fs/fuse/connections/<dev> 目录。
+func (fs *RawFS) BindMountpoint(mountpoint string) {
+	if fs == nil || mountpoint == "" {
+		return
+	}
+	if sysfsDir := resolveFuseSysfsConnectionDir(mountpoint); sysfsDir != "" {
+		fs.setFuseSysfsDir(sysfsDir)
+	}
+}
+
+func (fs *RawFS) setFuseSysfsDir(dir string) {
+	if dir == "" {
+		fs.fuseSysfsDir.Store(nil)
+		return
+	}
+	copied := dir
+	fs.fuseSysfsDir.Store(&copied)
 }
 
 // Metrics 返回绑定的统一指标数据源。
@@ -196,7 +248,7 @@ func (fs *RawFS) Collector() prometheus.Collector {
 	return fs.metrics
 }
 
-// Snapshot 抓取当前时刻客户端 FUSE 与 8 大子系统的结构化一致性快照。
+// Snapshot 抓取当前时刻客户端 FUSE 41 操作与 9 大子系统的结构化一致性快照。
 func (fs *RawFS) Snapshot() Snapshot {
 	return fs.metrics.Snapshot()
 }
@@ -212,20 +264,28 @@ func (fs *RawFS) collectSubsystemGauges() subsystemGauges {
 	orphanCount := len(fs.orphanInodes)
 	fs.stateMu.Unlock()
 
+	var fuseWaiting, fuseCongestion int
+	if dirPtr := fs.fuseSysfsDir.Load(); dirPtr != nil && *dirPtr != "" {
+		fuseWaiting, fuseCongestion = readFuseConnectionGauges(*dirPtr)
+	}
+
 	return subsystemGauges{
-		nsEntries:       nsEntries,
-		nsUsedWeight:    nsUsed,
-		nsCapacity:      nsCap,
-		capEntries:      fs.caps.count(),
-		tmpActiveFiles:  tmpActive,
-		tmpResidentByte: uint64(pages) * tmpSparsePageSize,
-		openFiles:       openFiles,
-		openDirs:        openDirs,
-		activeLocks:     fs.locks.activeLocks(),
-		inodeLockActive: fs.inodeLocks.activeEntries(),
-		dirtyInodes:     dirtyCount,
-		orphanInodes:    orphanCount,
-		releaseQueue:    fs.releaseQueueDepth(),
+		nsEntries:               nsEntries,
+		nsUsedWeight:            nsUsed,
+		nsCapacity:              nsCap,
+		capEntries:              fs.caps.count(),
+		wbPendingSlots:          fs.writeBehind.PendingSlots(),
+		tmpActiveFiles:          tmpActive,
+		tmpResidentByte:         uint64(pages) * tmpSparsePageSize,
+		openFiles:               openFiles,
+		openDirs:                openDirs,
+		activeLocks:             fs.locks.activeLocks(),
+		inodeLockActive:         fs.inodeLocks.activeEntries(),
+		dirtyInodes:             dirtyCount,
+		orphanInodes:            orphanCount,
+		releaseQueue:            fs.releaseQueueDepth(),
+		fuseWaiting:             fuseWaiting,
+		fuseCongestionThreshold: fuseCongestion,
 	}
 }
 
@@ -236,18 +296,29 @@ func (fs *RawFS) logger() *slog.Logger {
 	return slog.Default()
 }
 
-func (fs *RawFS) startOpSpan(parent context.Context, opName string) (context.Context, trace.Span) {
-	if parent == nil {
-		parent = context.Background()
+func (fs *RawFS) startFuseOp(op FuseOp) (opCtx context.Context, endSpan func(fuse.Status)) {
+	tp := fs.tracerProvider()
+	if _, isNoop := tp.(noop.TracerProvider); isNoop {
+		return context.Background(), noopEndFuseOp
 	}
-	tp := fs.cfg.TracerProvider
-	if tp == nil {
-		tp = otel.GetTracerProvider()
+	ctx, span := tp.Tracer("bowl/client/fusefs").Start(context.Background(), fuseSpanNames[op])
+	if !span.IsRecording() {
+		return ctx, noopEndFuseOp
 	}
-	if _, isNoop := tp.(noop.TracerProvider); isNoop && !trace.SpanContextFromContext(parent).IsValid() {
-		return parent, noopSpanInstance
+	return ctx, func(st fuse.Status) {
+		span.SetAttributes(attribute.String("fuse.op", op.String()))
+		if st != fuse.OK {
+			errStr := errnoName(st)
+			span.SetAttributes(
+				attribute.Int("fuse.status_code", int(st)),
+				attribute.String("fuse.errno", errStr),
+			)
+			if st != fuse.ENOENT && st != fuse.Status(syscall.ENODATA) {
+				span.SetStatus(codes.Error, errStr)
+			}
+		}
+		span.End()
 	}
-	return tp.Tracer("bowl/client/fusefs").Start(parent, opName)
 }
 
 // Config 返回当前 RawFS 绑定的静态与握手配置副本。
@@ -339,13 +410,13 @@ func (fs *RawFS) NextRequestID() uint64 {
 
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
-	opCtx, span := fs.startOpSpan(context.Background(), "fuse.OnUnmount")
-	defer span.End()
+	opCtx, endSpan := fs.startFuseOp(OpOnUnmount)
+	defer endSpan(fuse.OK)
 
 	fs.locks.Close()
 	// 排他锁等待所有在途请求释放读锁，先排空异步写缓冲确保 dirtyInodes 完整，再逐一同步落盘。
 	fs.lifecycleMu.Lock()
-	fs.writeBehind.Clear()
+	fs.writeBehind.Clear(opCtx)
 	for _, ino := range fs.takeDirtyInodes() {
 		ctx, done := fs.RPCContextFrom(opCtx, nil)
 		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
@@ -394,11 +465,18 @@ func (fs *RawFS) markDirty(ino uint64) {
 	fs.stateMu.Unlock()
 }
 
-// clearDirty 在服务端确认落盘后清除脏标记。
+// clearDirty 在服务端确认落盘或节点已彻底删除后清除脏标记。
 func (fs *RawFS) clearDirty(ino uint64) {
 	fs.stateMu.Lock()
 	delete(fs.dirtyInodes, ino)
 	fs.stateMu.Unlock()
+}
+
+func (fs *RawFS) hasDirtyInodes() bool {
+	fs.stateMu.Lock()
+	has := len(fs.dirtyInodes) > 0
+	fs.stateMu.Unlock()
+	return has
 }
 
 // takeDirtyInodes 原子取走并清空全部脏节点，供卸载时排空。
@@ -469,7 +547,11 @@ func (fs *RawFS) reclaimOrphan(ctx context.Context, ino uint64) {
 		return
 	}
 	serverIno, status := fs.ToServerIno(ino)
-	if status != fuse.OK || fs.client == nil {
+	if status != fuse.OK {
+		return
+	}
+	fs.clearDirty(serverIno)
+	if fs.client == nil {
 		return
 	}
 	sc := trace.SpanContextFromContext(ctx)

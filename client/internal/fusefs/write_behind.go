@@ -5,7 +5,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -33,6 +38,9 @@ const (
 
 	// writeBehindRetainedBufs 为常驻有界 noscan 4 MiB 缓冲槽数（8 x 4 MiB = 32 MiB，免受 GC 周期驱逐）。
 	writeBehindRetainedBufs = 8
+
+	// maxStageSpanLinks 限制单个 4 MiB 聚合槽最多挂载的采样写入者 SpanLink 数。
+	maxStageSpanLinks = 32
 )
 
 var (
@@ -96,6 +104,7 @@ type inodeWriteBehind struct {
 	stageOffset    uint64
 	stageLen       int
 	stageGen       uint64
+	stageLinks     []trace.Link
 	inflight       int
 	lastCommitted  *storagev1.Inode
 	errGen         uint64
@@ -164,6 +173,22 @@ func (st *inodeWriteBehind) resetStreamLocked() {
 	st.lastCommitted = nil
 }
 
+func (st *inodeWriteBehind) recordStageLinkLocked(ctx context.Context) {
+	if ctx == nil || len(st.stageLinks) >= maxStageSpanLinks {
+		return
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() || !sc.IsSampled() {
+		return
+	}
+	for i := range st.stageLinks {
+		if st.stageLinks[i].SpanContext.SpanID() == sc.SpanID() {
+			return
+		}
+	}
+	st.stageLinks = append(st.stageLinks, trace.Link{SpanContext: sc})
+}
+
 func (st *inodeWriteBehind) discardStageLocked(pendingCount *atomic.Int64) {
 	if st.stageBuf != nil {
 		releaseWriteBehindBuf(st.stageBuf)
@@ -173,12 +198,31 @@ func (st *inodeWriteBehind) discardStageLocked(pendingCount *atomic.Int64) {
 	st.stageOffset = 0
 	st.stageLen = 0
 	st.stageGen = 0
+	st.stageLinks = nil
 }
 
-func (st *inodeWriteBehind) waitInflightLocked() {
+func (st *inodeWriteBehind) waitInflightObservedLocked(ctx context.Context, c *WriteBehindCoordinator) {
+	if st.inflight <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitStart := time.Now()
+	var waitSpan trace.Span = noopSpanInstance
+	if tracer, ok := c.activeTracer(); ok {
+		_, waitSpan = tracer.Start(ctx, "write_behind.BarrierWait",
+			trace.WithAttributes(
+				attribute.Int64("write_behind.ino", int64(st.ino)),
+				attribute.Int("write_behind.inflight", st.inflight),
+			),
+		)
+	}
 	for st.inflight > 0 {
 		st.cond.Wait()
 	}
+	waitSpan.End()
+	c.metrics.Load().observeWriteBehindBarrierWait(time.Since(waitStart))
 }
 
 func (st *inodeWriteBehind) hasUnseenErrLocked(c *WriteBehindCoordinator, fh uint64) bool {
@@ -210,18 +254,48 @@ func (st *inodeWriteBehind) consumeErrLocked(c *WriteBehindCoordinator, fh uint6
 	return st.lastErr
 }
 
-func (st *inodeWriteBehind) dispatchLocked(c *WriteBehindCoordinator) bool {
+func (st *inodeWriteBehind) dispatchLocked(ctx context.Context, c *WriteBehindCoordinator) bool {
+	var bpStart time.Time
+	var bpSpan trace.Span = noopSpanInstance
+	bpWaiting := false
+	finishBP := func() {
+		if bpWaiting {
+			bpSpan.End()
+			c.metrics.Load().observeWriteBehindBackpressureWait(time.Since(bpStart))
+			bpWaiting = false
+		}
+	}
+
 	for {
 		if st.stageBuf == nil || st.stageLen == 0 {
+			finishBP()
 			st.discardStageLocked(&c.pendingCount)
 			return true
 		}
 		if st.stageGen != st.streamGen {
+			finishBP()
 			st.discardStageLocked(&c.pendingCount)
 			return false
 		}
 		if st.inflight < WriteBehindMaxInFlight {
+			finishBP()
 			break
+		}
+		if !bpWaiting {
+			bpWaiting = true
+			bpStart = time.Now()
+			if tracer, ok := c.activeTracer(); ok {
+				parent := ctx
+				if parent == nil {
+					parent = context.Background()
+				}
+				_, bpSpan = tracer.Start(parent, "write_behind.BackpressureWait",
+					trace.WithAttributes(
+						attribute.Int64("write_behind.ino", int64(st.ino)),
+						attribute.Int("write_behind.inflight", st.inflight),
+					),
+				)
+			}
 		}
 		st.cond.Wait()
 	}
@@ -229,6 +303,7 @@ func (st *inodeWriteBehind) dispatchLocked(c *WriteBehindCoordinator) bool {
 	buf := st.stageBuf
 	chunkOff := st.stageOffset
 	chunkLen := st.stageLen
+	links := st.stageLinks
 	ino := st.ino
 	nodeID := st.nodeID
 	cacheEpoch := st.cacheEpoch
@@ -241,17 +316,48 @@ func (st *inodeWriteBehind) dispatchLocked(c *WriteBehindCoordinator) bool {
 	st.stageOffset = 0
 	st.stageLen = 0
 	st.stageGen = 0
+	st.stageLinks = nil
 	st.inflight++
+	c.metrics.Load().addWriteBehindInflight(1)
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), DefaultRPCTimeout)
-		written, respInode, err := writer(ctx, ino, chunkOff, buf[:chunkLen:chunkLen])
+		flushBaseCtx := context.Background()
+		var flushSpan trace.Span = noopSpanInstance
+		if tracer, ok := c.activeTracer(); ok {
+			opts := make([]trace.SpanStartOption, 0, 3)
+			opts = append(opts,
+				trace.WithNewRoot(),
+				trace.WithAttributes(
+					attribute.Int64("write_behind.ino", int64(ino)),
+					attribute.Int64("write_behind.offset", int64(chunkOff)),
+					attribute.Int("write_behind.length", chunkLen),
+				),
+			)
+			if len(links) > 0 {
+				opts = append(opts, trace.WithLinks(links...))
+			}
+			flushBaseCtx, flushSpan = tracer.Start(flushBaseCtx, "write_behind.FlushChunk", opts...)
+		}
+
+		rpcCtx, cancel := context.WithTimeout(flushBaseCtx, DefaultRPCTimeout)
+		written, respInode, err := writer(rpcCtx, ino, chunkOff, buf[:chunkLen:chunkLen])
 		cancel()
 		releaseWriteBehindBuf(buf)
 
 		if err == nil && written < uint32(chunkLen) {
 			err = syscall.EIO
 		}
+		if err != nil {
+			flushSpan.RecordError(err)
+			flushSpan.SetStatus(codes.Error, err.Error())
+		} else {
+			flushSpan.SetAttributes(attribute.Int("write_behind.written_bytes", int(written)))
+		}
+		flushSpan.End()
+
+		m := c.metrics.Load()
+		m.incWriteBehindFlushRPC(err != nil)
+		m.addWriteBehindInflight(-1)
 
 		// 在同一临界区内串行完成水位比较、本地缓存/脏集回填与 inflight 递减唤醒，
 		// 彻底杜绝锁外并发 OnCommit 超车导致文件尺寸或时间戳倒退。
@@ -287,24 +393,26 @@ func (st *inodeWriteBehind) dispatchLocked(c *WriteBehindCoordinator) bool {
 	return true
 }
 
-func (st *inodeWriteBehind) barrierLocked(c *WriteBehindCoordinator) {
+func (st *inodeWriteBehind) barrierLocked(ctx context.Context, c *WriteBehindCoordinator) {
 	if st.stageBuf != nil || st.stageLen > 0 {
-		st.dispatchLocked(c)
+		st.dispatchLocked(ctx, c)
 	}
-	st.waitInflightLocked()
+	st.waitInflightObservedLocked(ctx, c)
 }
 
 // WriteBehindCoordinator 与 ReadAheadCoordinator 对称，负责将 Linux FUSE 拆碎的连续小块写（<= 1 MiB）
 // 聚合成 B*=4 MiB 分片并以有界并发度 W*=4 流水线提交至服务端，同时在 Flush/Fsync/Read/GetAttr 等屏障处排空。
 type WriteBehindCoordinator struct {
-	mu           sync.RWMutex
-	inodes       map[uint64]*inodeWriteBehind
-	pendingCount atomic.Int64
-	errSeqGen    atomic.Uint64
-	seqMu        sync.Mutex
-	handleSeq    map[uint64]uint64
-	writer       ChunkWriter
-	hooks        WriteBehindHooks
+	mu             sync.RWMutex
+	inodes         map[uint64]*inodeWriteBehind
+	pendingCount   atomic.Int64
+	errSeqGen      atomic.Uint64
+	seqMu          sync.Mutex
+	handleSeq      map[uint64]uint64
+	writer         ChunkWriter
+	hooks          WriteBehindHooks
+	metrics        atomic.Pointer[Metrics]
+	tracerProvider atomic.Pointer[trace.TracerProvider]
 }
 
 // NewWriteBehindCoordinator 创建并初始化 WriteBehindCoordinator。
@@ -315,6 +423,35 @@ func NewWriteBehindCoordinator(writer ChunkWriter, hooks WriteBehindHooks) *Writ
 		writer:    writer,
 		hooks:     hooks,
 	}
+}
+
+func (c *WriteBehindCoordinator) bindMetrics(m *Metrics) {
+	c.metrics.Store(m)
+}
+
+func (c *WriteBehindCoordinator) bindTracerProvider(tp trace.TracerProvider) {
+	if tp == nil {
+		c.tracerProvider.Store(nil)
+		return
+	}
+	c.tracerProvider.Store(&tp)
+}
+
+func (c *WriteBehindCoordinator) activeTracer() (trace.Tracer, bool) {
+	ptr := c.tracerProvider.Load()
+	if ptr == nil || *ptr == nil {
+		return nil, false
+	}
+	tp := *ptr
+	if _, isNoop := tp.(noop.TracerProvider); isNoop {
+		return nil, false
+	}
+	return tp.Tracer("bowl/client/fusefs"), true
+}
+
+// PendingSlots 返回当前挂起（含聚合槽与在途提交）的 4 MiB 槽位总数。
+func (c *WriteBehindCoordinator) PendingSlots() int64 {
+	return max(int64(0), c.pendingCount.Load())
 }
 
 // RegisterHandle 在打开文件句柄时按 Linux errseq_t 语义采样当前全局错误水位，
@@ -435,16 +572,16 @@ func (c *WriteBehindCoordinator) HasPending(ino uint64) bool {
 }
 
 // Write 尝试将顺序写入纳入 4 MiB 聚合槽与 W*=4 异步流水线（默认无句柄游标模式）。
-func (c *WriteBehindCoordinator) Write(ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
-	return c.WriteForHandle(0, ino, nodeID, offset, data, cacheEpoch)
+func (c *WriteBehindCoordinator) Write(ctx context.Context, ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
+	return c.WriteForHandle(ctx, 0, ino, nodeID, offset, data, cacheEpoch)
 }
 
 // WriteForHandle 尝试将指定句柄 fh 的顺序写入纳入 4 MiB 聚合槽与 W*=4 异步流水线：
 //   - 若 handled == true，说明本次请求已由流水线接管（或捕获到该句柄尚未观测的异步写错误 err）；
 //   - 若 handled == false，说明当前处于首段探针期、小块直通或非连续跳转（已自动排空旧缓冲），调用方应走同步 RPC。
-func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
+func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
 	if len(data) == 0 || len(data) > WriteBehindChunkSize || c.writer == nil {
-		if flushErr := c.FlushAndResetInodeForHandle(fh, ino); flushErr != nil {
+		if flushErr := c.FlushAndResetInodeForHandle(ctx, fh, ino); flushErr != nil {
 			return 0, true, flushErr
 		}
 		return 0, false, nil
@@ -458,7 +595,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 
 	st.mu.Lock()
 	if st.hasUnseenErrLocked(c, fh) {
-		st.barrierLocked(c)
+		st.barrierLocked(ctx, c)
 		err = st.consumeErrLocked(c, fh)
 		st.mu.Unlock()
 		return 0, true, err
@@ -466,7 +603,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 
 	// 非连续写入：先排空已缓冲数据与在途分片，再回退至同步写入重新探测。
 	if !st.hasStream || offset != st.expectedOffset {
-		st.barrierLocked(c)
+		st.barrierLocked(ctx, c)
 		if err = st.consumeErrLocked(c, fh); err != nil {
 			st.mu.Unlock()
 			return 0, true, err
@@ -479,7 +616,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 	// 尚未达到激活阈值，或当前无活跃槽且尚未对齐到 256 KiB 块边界 / 写入过小：保持同步直通。
 	if st.probedBytes < WriteBehindActivateBytes ||
 		(st.stageBuf == nil && (len(data) < WriteBehindMinStageWrite || offset%WriteBehindBlockAlign != 0)) {
-		st.barrierLocked(c)
+		st.barrierLocked(ctx, c)
 		if err = st.consumeErrLocked(c, fh); err != nil {
 			st.mu.Unlock()
 			return 0, true, err
@@ -499,7 +636,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 	curOff := offset
 	for len(rem) > 0 {
 		if st.streamGen != activeGen || st.hasUnseenErrLocked(c, fh) {
-			st.barrierLocked(c)
+			st.barrierLocked(ctx, c)
 			err = st.consumeErrLocked(c, fh)
 			if err == nil {
 				err = st.lastErr
@@ -515,6 +652,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 			st.stageLen = 0
 			st.stageGen = activeGen
 		}
+		st.recordStageLinkLocked(ctx)
 		space := WriteBehindChunkSize - st.stageLen
 		n := min(len(rem), space)
 		copy(st.stageBuf[st.stageLen:st.stageLen+n], rem[:n])
@@ -524,8 +662,8 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 		st.expectedOffset = curOff
 
 		if st.stageLen == WriteBehindChunkSize {
-			if !st.dispatchLocked(c) {
-				st.waitInflightLocked()
+			if !st.dispatchLocked(ctx, c) {
+				st.waitInflightObservedLocked(ctx, c)
 				err = st.consumeErrLocked(c, fh)
 				if err == nil {
 					err = st.lastErr
@@ -538,6 +676,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(fh, ino, nodeID, offset uint64, 
 	}
 
 	st.mu.Unlock()
+	c.metrics.Load().addWriteBehindStaged(uint64(len(data)))
 	return uint32(len(data)), true, nil
 }
 
@@ -576,32 +715,32 @@ func (c *WriteBehindCoordinator) ObserveSyncWrite(ino, offset uint64, written ui
 
 // ResetInodeStream 原子排空目标 Inode 的挂起写入并重置顺序流探测进度与属性提交世代（不消费句柄级写错误游标）。
 // 供 Open(O_TRUNC)、SetAttr、Fallocate 与 Ioctl 调用。
-func (c *WriteBehindCoordinator) ResetInodeStream(ino uint64) {
+func (c *WriteBehindCoordinator) ResetInodeStream(ctx context.Context, ino uint64) {
 	st := c.lockExistingInode(ino)
 	if st == nil {
 		return
 	}
 	st.mu.Lock()
-	st.barrierLocked(c)
+	st.barrierLocked(ctx, c)
 	st.resetStreamLocked()
 	st.mu.Unlock()
 	st.opMu.Unlock()
 }
 
 // FlushInode 刷出目标 Inode 的尾部分片缓冲，等待全部在途异步 Write RPC 完成，并按默认游标消费粘性错误。
-func (c *WriteBehindCoordinator) FlushInode(ino uint64) error {
-	return c.FlushInodeForHandle(0, ino)
+func (c *WriteBehindCoordinator) FlushInode(ctx context.Context, ino uint64) error {
+	return c.FlushInodeForHandle(ctx, 0, ino)
 }
 
 // FlushInodeForHandle 刷出目标 Inode 的尾部分片缓冲，等待全部在途异步 Write RPC 完成，并按句柄 fh 的 errseq 游标消费未观测错误。
 // 供可写句柄 Flush 与 Fsync 调用。
-func (c *WriteBehindCoordinator) FlushInodeForHandle(fh, ino uint64) error {
+func (c *WriteBehindCoordinator) FlushInodeForHandle(ctx context.Context, fh, ino uint64) error {
 	st := c.lockExistingInode(ino)
 	if st == nil {
 		return nil
 	}
 	st.mu.Lock()
-	st.barrierLocked(c)
+	st.barrierLocked(ctx, c)
 	err := st.consumeErrLocked(c, fh)
 	st.mu.Unlock()
 	st.opMu.Unlock()
@@ -609,19 +748,19 @@ func (c *WriteBehindCoordinator) FlushInodeForHandle(fh, ino uint64) error {
 }
 
 // FlushAndResetInode 在同一原子临界区内刷出尾部分片、等待全部在途 RPC 收口、按默认游标消费错误并重置顺序流状态。
-func (c *WriteBehindCoordinator) FlushAndResetInode(ino uint64) error {
-	return c.FlushAndResetInodeForHandle(0, ino)
+func (c *WriteBehindCoordinator) FlushAndResetInode(ctx context.Context, ino uint64) error {
+	return c.FlushAndResetInodeForHandle(ctx, 0, ino)
 }
 
 // FlushAndResetInodeForHandle 在同一原子临界区内刷出尾部分片、等待全部在途 RPC 收口、按句柄 fh 的 errseq 游标消费未观测错误并重置顺序流状态。
 // 供同步旁路 Write（如 O_APPEND、O_SYNC、特殊标志校验）调用。
-func (c *WriteBehindCoordinator) FlushAndResetInodeForHandle(fh, ino uint64) error {
+func (c *WriteBehindCoordinator) FlushAndResetInodeForHandle(ctx context.Context, fh, ino uint64) error {
 	st := c.lockExistingInode(ino)
 	if st == nil {
 		return nil
 	}
 	st.mu.Lock()
-	st.barrierLocked(c)
+	st.barrierLocked(ctx, c)
 	err := st.consumeErrLocked(c, fh)
 	st.resetStreamLocked()
 	st.mu.Unlock()
@@ -632,7 +771,7 @@ func (c *WriteBehindCoordinator) FlushAndResetInodeForHandle(fh, ino uint64) err
 // BarrierInode 刷出目标 Inode 的尾部分片缓冲并等待全部在途异步 Write RPC 完成，
 // 但保留未消费的 stickyErr 留待后续可写句柄 Write / Flush / Fsync 报告。
 // 供 Read、GetAttr、Lookup、只读句柄 Flush、Link、Unlink、Rename、Release 等只读观测或拓扑屏障调用。
-func (c *WriteBehindCoordinator) BarrierInode(ino uint64) {
+func (c *WriteBehindCoordinator) BarrierInode(ctx context.Context, ino uint64) {
 	if c.pendingCount.Load() == 0 {
 		return
 	}
@@ -641,13 +780,13 @@ func (c *WriteBehindCoordinator) BarrierInode(ino uint64) {
 		return
 	}
 	st.mu.Lock()
-	st.barrierLocked(c)
+	st.barrierLocked(ctx, c)
 	st.mu.Unlock()
 	st.opMu.Unlock()
 }
 
 // BarrierAll 刷出所有活跃 Inode 的未落盘聚合缓冲并等待在途 RPC 全部收口。
-func (c *WriteBehindCoordinator) BarrierAll() {
+func (c *WriteBehindCoordinator) BarrierAll(ctx context.Context) {
 	if c.pendingCount.Load() == 0 {
 		return
 	}
@@ -661,14 +800,14 @@ func (c *WriteBehindCoordinator) BarrierAll() {
 	for _, st := range targets {
 		st.opMu.Lock()
 		st.mu.Lock()
-		st.barrierLocked(c)
+		st.barrierLocked(ctx, c)
 		st.mu.Unlock()
 		st.opMu.Unlock()
 	}
 }
 
-// RemoveInode 在文件的最后一个本地句柄关闭后排空在途写入并回收其内存状态。
-func (c *WriteBehindCoordinator) RemoveInode(ino uint64) {
+// RemoveInode 在文件的最后一个本地句柄关闭或文件被彻底解链后排空在途写入并回收其内存状态。
+func (c *WriteBehindCoordinator) RemoveInode(ctx context.Context, ino uint64) {
 	st := c.lockExistingInode(ino)
 	if st == nil {
 		return
@@ -676,7 +815,7 @@ func (c *WriteBehindCoordinator) RemoveInode(ino uint64) {
 	defer st.opMu.Unlock()
 
 	st.mu.Lock()
-	st.barrierLocked(c)
+	st.barrierLocked(ctx, c)
 	canDelete := st.stageBuf == nil && st.stageLen == 0 && st.inflight == 0
 	if canDelete {
 		st.removed = true
@@ -693,7 +832,7 @@ func (c *WriteBehindCoordinator) RemoveInode(ino uint64) {
 }
 
 // Clear 排空所有在途写入并清空全部状态（供卸载时调用）。
-func (c *WriteBehindCoordinator) Clear() {
+func (c *WriteBehindCoordinator) Clear(ctx context.Context) {
 	c.mu.Lock()
 	targets := make([]*inodeWriteBehind, 0, len(c.inodes))
 	for _, st := range c.inodes {
@@ -705,7 +844,7 @@ func (c *WriteBehindCoordinator) Clear() {
 	for _, st := range targets {
 		st.opMu.Lock()
 		st.mu.Lock()
-		st.barrierLocked(c)
+		st.barrierLocked(ctx, c)
 		st.discardStageLocked(&c.pendingCount)
 		st.removed = true
 		st.mu.Unlock()

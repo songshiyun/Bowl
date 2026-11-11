@@ -131,6 +131,7 @@ func defaultServeFUSE(ctx context.Context, fs *fusefs.InstrumentedRawFS, cfg *fu
 		<-serveDone
 		return fmt.Errorf("等待挂载就绪失败: %w", waitErr)
 	}
+	fs.BindMountpoint(mountpoint)
 	ready()
 
 	sigCh := make(chan os.Signal, 2)
@@ -476,7 +477,10 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		EnableStatsFile: statsFile,
 	}
 
-	// 4. 模式选择：检测是否为内部后台工作子进程
+	// 4. 归一化 OTLP 环境变量（对缺 http:///https:// 的裸 host:port 自动补齐 http://，确保守护子进程同享）
+	normalizeOTLPEnv()
+
+	// 5. 模式选择：检测是否为内部后台工作子进程
 	if os.Getenv("BOWL_DAEMON_WORKER") == "1" {
 		return runDaemonWorker(context.Background(), &opts, &baseCfg, absMountpoint)
 	}

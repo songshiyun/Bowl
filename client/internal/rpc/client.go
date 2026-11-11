@@ -14,6 +14,7 @@ import (
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
 	"github.com/starsrc/Aether/pkg/serverx"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -160,21 +161,24 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	var interceptors []connect.Interceptor
 
-	// 1. 最外层装配重试拦截器（包裹在 otelconnect 外层，使每次网络重试独立计入单次尝试 Span 与客户端延迟分布）
+	// 1. 最外层装配重试与逻辑总耗时拦截器（包裹在 otelconnect 外层，使每次网络重试独立计入单次尝试 Span 与客户端延迟分布，
+	// 同时在最外层记录含退避睡眠的逻辑调用总耗时 bowl_client_rpc_logical_duration_seconds）
 	retryCfg := RetryConfig{}
 	if cfg.RetryConfig != nil {
 		retryCfg = *cfg.RetryConfig
 	}
-	if !retryCfg.Disable {
-		interceptors = append(interceptors, newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics))
-	}
+	interceptors = append(interceptors,
+		newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics),
+		newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold),
+	)
 
-	// 2. 请求关联 X-Request-Id 注入、旧 Epoch 围栏拦截检测与慢调用结构化日志拦截器
-	interceptors = append(interceptors, newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold))
-
-	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并采集客户端 RPC 指标）
+	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并以亚毫秒桶采集客户端 RPC 指标）
 	// 4. 错误原因标注拦截器（提取服务端 ErrorInfo.Reason 同步写入客户端 Span rpc.error_reason 与 otelconnect.Labeler）
-	otelInterceptor, err := otelconnect.NewInterceptor()
+	otelInterceptor, err := otelconnect.NewInterceptor(
+		otelconnect.WithDurationHistogramOptions(
+			metric.WithExplicitBucketBoundaries(SubMillisecondDurationBuckets...),
+		),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create otelconnect interceptor: %w", err)
 	}
@@ -200,7 +204,9 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 		}
 	}))
 
-	var clientOpts []connect.ClientOption
+	clientOpts := []connect.ClientOption{
+		connect.WithCodec(newProtoBinaryCodec()),
+	}
 	if len(interceptors) > 0 {
 		clientOpts = append(clientOpts, connect.WithInterceptors(interceptors...))
 	}

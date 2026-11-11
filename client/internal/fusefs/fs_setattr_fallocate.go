@@ -17,8 +17,11 @@ const (
 )
 
 // SetAttr 实现按需部分更新 Inode 属性或截断文件空间，对应 Linux FUSE FUSE_SETATTR 协议。
-func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) fuse.Status {
-	if status := fs.CheckWritable(); status != fuse.OK {
+func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpSetAttr)
+	defer func() { endSpan(status) }()
+
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
 	if fs.isVirtualStatsIno(input.NodeId) {
@@ -28,7 +31,7 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
+	if _, local, localSt := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
 		h, st := fs.checkedHandle(input.NodeId, fh, false)
 		if st != fuse.OK {
 			return st
@@ -39,7 +42,7 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return fuse.OK
 	}, &out.Attr); local {
 		out.SetTimeout(0)
-		return status
+		return localSt
 	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -116,18 +119,17 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		}
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
 	if !hasUpdate {
-		cached, st := fs.getInode(cancel, input.NodeId)
+		cached, st := fs.getInodeWithContext(opCtx, cancel, input.NodeId)
 		if st == fuse.OK {
 			fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
 		}
 		return st
 	}
 
-	fs.writeBehind.ResetInodeStream(ino)
+	fs.writeBehind.ResetInodeStream(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 
 	fs.readAhead.InvalidateInode(ino)
 	defer fs.readAhead.InvalidateInode(ino)
@@ -147,10 +149,13 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 }
 
 // Fallocate 实现文件空间预分配与稀疏空洞打洞，对应 Linux FUSE FUSE_FALLOCATE 协议。
-func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse.Status {
+func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpFallocate)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	if status := fs.CheckWritable(); status != fuse.OK {
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
 	}
 	if fs.isVirtualStatsIno(input.NodeId) {
@@ -178,14 +183,14 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return fuse.Status(syscall.EOPNOTSUPP)
 	}
 
-	if local, status := fs.tmpMgr.Allocate(input.NodeId, input.Offset, input.Length, input.Mode); local {
-		if status == fuse.OK {
+	if local, localSt := fs.tmpMgr.Allocate(input.NodeId, input.Offset, input.Length, input.Mode); local {
+		if localSt == fuse.OK {
 			fs.caps.markAbsent(input.NodeId)
 		}
-		return status
+		return localSt
 	}
-	fs.writeBehind.ResetInodeStream(ino)
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	fs.writeBehind.ResetInodeStream(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	req := &storagev1.FallocateRequest{

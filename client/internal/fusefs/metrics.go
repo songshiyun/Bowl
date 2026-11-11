@@ -16,10 +16,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// FuseOp 标识 RawFS 实现的全部 36 个 FUSE 操作枚举。
+// FuseOp 标识 RawFS 实现的全部 41 个受观测 FUSE 操作枚举。
 type FuseOp uint8
 
-// 36 个受观测 FUSE 操作的枚举索引常量。
+// 41 个受观测 FUSE 操作的枚举索引常量。
 const (
 	OpLookup FuseOp = iota
 	OpGetAttr
@@ -57,55 +57,67 @@ const (
 	OpGetLk
 	OpSetLk
 	OpSetLkw
+	OpAccess
+	OpLseek
+	OpWritev
+	OpCopyFileRange
+	OpStatx
 
-	// OpCount 是受观测的 FUSE 操作总数（30 个跨机/生命周期入口 + 6 个纯本地入口）。
-	OpCount = 36
+	// OpCount 是受观测的 FUSE 操作总数（36 个已实现核心入口 + 5 个内核协商探测/透传入口）。
+	OpCount = 41
 )
 
 const (
-	// opHistBuckets 是 opSlot 对数微秒直方图的有限桶数量（1µs .. 524,288µs）。
-	opHistBuckets = 20
+	// opHistBuckets 是 opSlot 对数微秒直方图的有限桶数量（1µs .. 33,554,432µs，即 ~33.55s）。
+	opHistBuckets = 26
 	// errnoBucketCount 是单操作 POSIX errno 映射桶数量。
 	errnoBucketCount = 24
+	// waitHistBuckets 是阻塞等待亚毫秒直方图的桶数量（25µs .. 10s）。
+	waitHistBuckets = 18
 )
 
 var fuseOpNames = [OpCount]string{
-	OpLookup:      "Lookup",
-	OpGetAttr:     "GetAttr",
-	OpStatFs:      "StatFs",
-	OpMkdir:       "Mkdir",
-	OpMknod:       "Mknod",
-	OpRmdir:       "Rmdir",
-	OpUnlink:      "Unlink",
-	OpRename:      "Rename",
-	OpSymlink:     "Symlink",
-	OpReadlink:    "Readlink",
-	OpLink:        "Link",
-	OpCreate:      "Create",
-	OpOpen:        "Open",
-	OpFlush:       "Flush",
-	OpFsync:       "Fsync",
-	OpRelease:     "Release",
-	OpOpenDir:     "OpenDir",
-	OpReadDir:     "ReadDir",
-	OpReadDirPlus: "ReadDirPlus",
-	OpFsyncDir:    "FsyncDir",
-	OpRead:        "Read",
-	OpWrite:       "Write",
-	OpSetAttr:     "SetAttr",
-	OpFallocate:   "Fallocate",
-	OpSetXAttr:    "SetXAttr",
-	OpGetXAttr:    "GetXAttr",
-	OpListXAttr:   "ListXAttr",
-	OpRemoveXAttr: "RemoveXAttr",
-	OpIoctl:       "Ioctl",
-	OpOnUnmount:   "OnUnmount",
-	OpReleaseDir:  "ReleaseDir",
-	OpTmpfile:     "Tmpfile",
-	OpForget:      "Forget",
-	OpGetLk:       "GetLk",
-	OpSetLk:       "SetLk",
-	OpSetLkw:      "SetLkw",
+	OpLookup:        "Lookup",
+	OpGetAttr:       "GetAttr",
+	OpStatFs:        "StatFs",
+	OpMkdir:         "Mkdir",
+	OpMknod:         "Mknod",
+	OpRmdir:         "Rmdir",
+	OpUnlink:        "Unlink",
+	OpRename:        "Rename",
+	OpSymlink:       "Symlink",
+	OpReadlink:      "Readlink",
+	OpLink:          "Link",
+	OpCreate:        "Create",
+	OpOpen:          "Open",
+	OpFlush:         "Flush",
+	OpFsync:         "Fsync",
+	OpRelease:       "Release",
+	OpOpenDir:       "OpenDir",
+	OpReadDir:       "ReadDir",
+	OpReadDirPlus:   "ReadDirPlus",
+	OpFsyncDir:      "FsyncDir",
+	OpRead:          "Read",
+	OpWrite:         "Write",
+	OpSetAttr:       "SetAttr",
+	OpFallocate:     "Fallocate",
+	OpSetXAttr:      "SetXAttr",
+	OpGetXAttr:      "GetXAttr",
+	OpListXAttr:     "ListXAttr",
+	OpRemoveXAttr:   "RemoveXAttr",
+	OpIoctl:         "Ioctl",
+	OpOnUnmount:     "OnUnmount",
+	OpReleaseDir:    "ReleaseDir",
+	OpTmpfile:       "Tmpfile",
+	OpForget:        "Forget",
+	OpGetLk:         "GetLk",
+	OpSetLk:         "SetLk",
+	OpSetLkw:        "SetLkw",
+	OpAccess:        "Access",
+	OpLseek:         "Lseek",
+	OpWritev:        "Writev",
+	OpCopyFileRange: "CopyFileRange",
+	OpStatx:         "Statx",
 }
 
 // String 返回 FUSE 操作的规范名称。
@@ -173,6 +185,17 @@ var errnoBucketNames = [errnoBucketCount]string{
 var (
 	errnoLookupTable [256]uint8
 	opHistUpperSec   [opHistBuckets]float64
+
+	waitHistUpperSec = [waitHistBuckets]float64{
+		0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
+		0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
+		0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+	}
+	waitHistUpperNanos = [waitHistBuckets]int64{
+		25_000, 50_000, 100_000, 250_000, 500_000,
+		1_000_000, 2_500_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000,
+		100_000_000, 250_000_000, 500_000_000, 1_000_000_000, 2_500_000_000, 5_000_000_000, 10_000_000_000,
+	}
 )
 
 func init() {
@@ -224,6 +247,11 @@ func errnoIndex(status fuse.Status) uint8 {
 	return errnoLookupTable[code]
 }
 
+// errnoName 返回非零 fuse.Status 对应的规范 POSIX 错误名。
+func errnoName(status fuse.Status) string {
+	return errnoBucketNames[errnoIndex(status)]
+}
+
 // opSlot 承载单个 FUSE 操作的零锁原子统计槽位，严格按 64B Cache-Line 整数倍（256B）对齐，消除多核伪共享。
 type opSlot struct {
 	inflight atomic.Int64
@@ -232,11 +260,44 @@ type opSlot struct {
 	bytes    atomic.Uint64
 	latNanos atomic.Uint64
 	buckets  [opHistBuckets]atomic.Uint64
-	_        [56]byte
+	_        [8]byte
 }
 
 // 编译期断言 opSlot 严格对齐至 64 字节缓存行边界（256 bytes = 4 * 64 bytes）。
 var _ [0]struct{} = [unsafe.Sizeof(opSlot{}) % 64]struct{}{}
+
+// waitHist 封装无锁原子亚毫秒延迟直方图（18 桶：25µs ~ 10s）。
+type waitHist struct {
+	count    atomic.Uint64
+	sumNanos atomic.Uint64
+	buckets  [waitHistBuckets]atomic.Uint64
+}
+
+func (h *waitHist) observe(d time.Duration) {
+	ns := max(int64(0), d.Nanoseconds())
+	for i, bound := range waitHistUpperNanos {
+		if ns <= bound {
+			h.buckets[i].Add(1)
+			break
+		}
+	}
+	if ns > 0 {
+		h.sumNanos.Add(uint64(ns))
+	}
+	h.count.Add(1)
+}
+
+func (h *waitHist) constHistogram(desc *prometheus.Desc) prometheus.Metric {
+	buckets := make(map[float64]uint64, waitHistBuckets)
+	var cum uint64
+	for i := range waitHistBuckets {
+		cum += h.buckets[i].Load()
+		buckets[waitHistUpperSec[i]] = cum
+	}
+	cnt := max(h.count.Load(), cum)
+	sumSec := float64(h.sumNanos.Load()) * 1e-9
+	return prometheus.MustNewConstHistogram(desc, cnt, sumSec, buckets)
+}
 
 type nsCacheKind uint8
 
@@ -245,6 +306,7 @@ const (
 	nsCacheEntry
 	nsCacheNegativeEntry
 	nsCacheReadDir
+	nsCacheReadlink
 	nsCacheKindCount
 )
 
@@ -253,6 +315,7 @@ var nsCacheKindNames = [nsCacheKindCount]string{
 	nsCacheEntry:         "entry",
 	nsCacheNegativeEntry: "negative_entry",
 	nsCacheReadDir:       "readdir",
+	nsCacheReadlink:      "readlink",
 }
 
 // stateSnapshotProvider 提供抓取时刻客户端各子系统的即时 Gauge 快照，避免热路径维护冗余锁。
@@ -261,22 +324,25 @@ type stateSnapshotProvider interface {
 }
 
 type subsystemGauges struct {
-	nsEntries       int
-	nsUsedWeight    int
-	nsCapacity      int
-	capEntries      int
-	tmpActiveFiles  int
-	tmpResidentByte uint64
-	openFiles       int
-	openDirs        int
-	activeLocks     int
-	inodeLockActive int
-	dirtyInodes     int
-	orphanInodes    int
-	releaseQueue    int
+	nsEntries               int
+	nsUsedWeight            int
+	nsCapacity              int
+	capEntries              int
+	tmpActiveFiles          int
+	tmpResidentByte         uint64
+	openFiles               int
+	openDirs                int
+	activeLocks             int
+	inodeLockActive         int
+	dirtyInodes             int
+	orphanInodes            int
+	releaseQueue            int
+	wbPendingSlots          int64
+	fuseWaiting             int
+	fuseCongestionThreshold int
 }
 
-// Metrics 汇聚客户端 FUSE 36 个操作入口与 8 大有状态核心子系统的统一可观测性数据源。
+// Metrics 汇聚客户端 FUSE 41 个操作入口与 9 大有状态核心子系统的统一可观测性数据源。
 // 实例级隔离（不触碰全局 DefaultRegisterer），实现 prometheus.Collector，且全部方法对 nil 接收者安全。
 type Metrics struct {
 	// ops 置于结构体首位，配合 256B 对齐确保任意两个操作槽位不共享缓存行。
@@ -302,24 +368,38 @@ type Metrics struct {
 	readAheadHitBytes        atomic.Uint64
 	readAheadDiscardedBytes  atomic.Uint64
 	readAheadInflight        atomic.Int64
+	readAheadWaitHist        waitHist
 
-	// 4. TmpFileManager
+	// 4. WriteBehindCoordinator
+	wbStagedCalls          atomic.Uint64
+	wbStagedBytes          atomic.Uint64
+	wbPassthroughCalls     atomic.Uint64
+	wbPassthroughBytes     atomic.Uint64
+	wbFlushRPCOK           atomic.Uint64
+	wbFlushRPCErrors       atomic.Uint64
+	wbInflight             atomic.Int64
+	wbBackpressureWaitHist waitHist
+	wbBarrierWaitHist      waitHist
+
+	// 5. TmpFileManager
 	tmpPromotes       atomic.Uint64
 	tmpRollbacks      atomic.Uint64
 	tmpRollbackErrors atomic.Uint64
 	tmpResidentPages  atomic.Int64
 
-	// 6. LockTable
+	// 7. LockTable
 	lockConflicts atomic.Uint64
 	lockWaits     atomic.Uint64
 	lockWaitNanos atomic.Uint64
+	lockWaitHist  waitHist
 
-	// 7. inodeLocks
+	// 8. inodeLocks
 	inodeLockFast      atomic.Uint64
 	inodeLockContended atomic.Uint64
 	inodeLockWaitNanos atomic.Uint64
+	inodeLockWaitHist  waitHist
 
-	// 8. Async Queues (dirtyInodes / orphanInodes / releaseQueue)
+	// 9. Async Queues (dirtyInodes / orphanInodes / releaseQueue)
 	dirtyFlushOK        atomic.Uint64
 	dirtyFlushErrors    atomic.Uint64
 	orphanReclaimOK     atomic.Uint64
@@ -350,11 +430,20 @@ type Metrics struct {
 	capEpochInvalidationsDesc *prometheus.Desc
 	capEntriesDesc            *prometheus.Desc
 
-	raTriggersDesc   *prometheus.Desc
-	raPrefetchedDesc *prometheus.Desc
-	raHitBytesDesc   *prometheus.Desc
-	raDiscardedDesc  *prometheus.Desc
-	raInflightDesc   *prometheus.Desc
+	raTriggersDesc     *prometheus.Desc
+	raPrefetchedDesc   *prometheus.Desc
+	raHitBytesDesc     *prometheus.Desc
+	raDiscardedDesc    *prometheus.Desc
+	raInflightDesc     *prometheus.Desc
+	raWaitDurationDesc *prometheus.Desc
+
+	wbWritesTotalDesc      *prometheus.Desc
+	wbBytesTotalDesc       *prometheus.Desc
+	wbFlushRPCsTotalDesc   *prometheus.Desc
+	wbInflightDesc         *prometheus.Desc
+	wbPendingSlotsDesc     *prometheus.Desc
+	wbBackpressureWaitDesc *prometheus.Desc
+	wbBarrierWaitDesc      *prometheus.Desc
 
 	tmpActiveFilesDesc    *prometheus.Desc
 	tmpResidentBytesDesc  *prometheus.Desc
@@ -364,16 +453,21 @@ type Metrics struct {
 
 	openHandlesDesc *prometheus.Desc
 
-	locksActiveDesc   *prometheus.Desc
-	lockConflictsDesc *prometheus.Desc
-	lockWaitsDesc     *prometheus.Desc
+	locksActiveDesc      *prometheus.Desc
+	lockConflictsDesc    *prometheus.Desc
+	lockWaitsDesc        *prometheus.Desc
+	lockWaitSecDesc      *prometheus.Desc
+	lockWaitDurationDesc *prometheus.Desc
 
-	inodeLockAcqDesc     *prometheus.Desc
-	inodeLockWaitSecDesc *prometheus.Desc
-	inodeLockActiveDesc  *prometheus.Desc
+	inodeLockAcqDesc          *prometheus.Desc
+	inodeLockWaitSecDesc      *prometheus.Desc
+	inodeLockWaitDurationDesc *prometheus.Desc
+	inodeLockActiveDesc       *prometheus.Desc
 
-	queueDepthDesc *prometheus.Desc
-	queueOpsDesc   *prometheus.Desc
+	queueDepthDesc             *prometheus.Desc
+	queueOpsDesc               *prometheus.Desc
+	fuseConnWaitingDesc        *prometheus.Desc
+	fuseConnCongestionThrsDesc *prometheus.Desc
 }
 
 var _ prometheus.Collector = (*Metrics)(nil)
@@ -512,6 +606,55 @@ func NewMetrics() *Metrics {
 			nil,
 			nil,
 		),
+		raWaitDurationDesc: prometheus.NewDesc(
+			"bowl_client_read_ahead_wait_duration_seconds",
+			"Blocking wait duration in seconds when foreground Read waits for an in-flight read-ahead window.",
+			nil,
+			nil,
+		),
+
+		wbWritesTotalDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_writes_total",
+			"Total number of client write calls routed through write-behind staging vs synchronous passthrough.",
+			[]string{"mode"},
+			nil,
+		),
+		wbBytesTotalDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_bytes_total",
+			"Total payload bytes routed through write-behind staging vs synchronous passthrough.",
+			[]string{"mode"},
+			nil,
+		),
+		wbFlushRPCsTotalDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_flush_rpcs_total",
+			"Total number of asynchronous write-behind Write RPC flushes by result.",
+			[]string{"result"},
+			nil,
+		),
+		wbInflightDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_inflight",
+			"Current number of in-flight asynchronous write-behind Write RPCs.",
+			nil,
+			nil,
+		),
+		wbPendingSlotsDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_pending_slots",
+			"Current number of active write-behind inode slots holding staged or in-flight data.",
+			nil,
+			nil,
+		),
+		wbBackpressureWaitDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_backpressure_wait_duration_seconds",
+			"Blocking wait duration in seconds when write-behind pipeline reaches max in-flight concurrency.",
+			nil,
+			nil,
+		),
+		wbBarrierWaitDesc: prometheus.NewDesc(
+			"bowl_client_write_behind_barrier_wait_duration_seconds",
+			"Blocking drain duration in seconds when FUSE barrier operations wait for in-flight write-behind RPCs.",
+			nil,
+			nil,
+		),
 
 		tmpActiveFilesDesc: prometheus.NewDesc(
 			"bowl_client_tmpfile_active_files",
@@ -569,6 +712,18 @@ func NewMetrics() *Metrics {
 			nil,
 			nil,
 		),
+		lockWaitSecDesc: prometheus.NewDesc(
+			"bowl_client_lock_wait_seconds_total",
+			"Total contended wait time in seconds spent waiting on blocking local file locks.",
+			nil,
+			nil,
+		),
+		lockWaitDurationDesc: prometheus.NewDesc(
+			"bowl_client_lock_wait_duration_seconds",
+			"Contended wait duration distribution in seconds for blocking local file locks.",
+			nil,
+			nil,
+		),
 
 		inodeLockAcqDesc: prometheus.NewDesc(
 			"bowl_client_inodelock_acquisitions_total",
@@ -579,6 +734,12 @@ func NewMetrics() *Metrics {
 		inodeLockWaitSecDesc: prometheus.NewDesc(
 			"bowl_client_inodelock_wait_seconds_total",
 			"Total contended wait time in seconds spent acquiring per-inode serialization locks.",
+			nil,
+			nil,
+		),
+		inodeLockWaitDurationDesc: prometheus.NewDesc(
+			"bowl_client_inodelock_wait_duration_seconds",
+			"Contended wait duration distribution in seconds for per-inode serialization locks.",
 			nil,
 			nil,
 		),
@@ -599,6 +760,18 @@ func NewMetrics() *Metrics {
 			"bowl_client_queue_ops_total",
 			"Total number of client asynchronous flush, orphan reclaim, and release queue operations.",
 			[]string{"queue", "result"},
+			nil,
+		),
+		fuseConnWaitingDesc: prometheus.NewDesc(
+			"bowl_client_fuse_connection_waiting",
+			"Current number of waiting requests reported by Linux /sys/fs/fuse/connections/<dev>/waiting.",
+			nil,
+			nil,
+		),
+		fuseConnCongestionThrsDesc: prometheus.NewDesc(
+			"bowl_client_fuse_connection_congestion_threshold",
+			"Congestion threshold reported by Linux /sys/fs/fuse/connections/<dev>/congestion_threshold.",
+			nil,
 			nil,
 		),
 	}
@@ -653,7 +826,7 @@ func (m *Metrics) endOp(op FuseOp, start time.Time, status fuse.Status, nBytes u
 	}
 }
 
-// --- 8 子系统内部零分配记录方法（全部对 nil 接收者安全） ---
+// --- 9 子系统内部零分配记录方法（全部对 nil 接收者安全） ---
 
 func (m *Metrics) incNSCacheHit(kind nsCacheKind) {
 	if m != nil && kind < nsCacheKindCount {
@@ -736,6 +909,59 @@ func (m *Metrics) addReadAheadInflight(delta int64) {
 	}
 }
 
+func (m *Metrics) observeReadAheadWait(d time.Duration) {
+	if m != nil {
+		m.readAheadWaitHist.observe(d)
+	}
+}
+
+func (m *Metrics) addWriteBehindStaged(n uint64) {
+	if m != nil {
+		m.wbStagedCalls.Add(1)
+		if n > 0 {
+			m.wbStagedBytes.Add(n)
+		}
+	}
+}
+
+func (m *Metrics) addWriteBehindPassthrough(n uint64) {
+	if m != nil {
+		m.wbPassthroughCalls.Add(1)
+		if n > 0 {
+			m.wbPassthroughBytes.Add(n)
+		}
+	}
+}
+
+func (m *Metrics) incWriteBehindFlushRPC(isErr bool) {
+	if m == nil {
+		return
+	}
+	if isErr {
+		m.wbFlushRPCErrors.Add(1)
+	} else {
+		m.wbFlushRPCOK.Add(1)
+	}
+}
+
+func (m *Metrics) addWriteBehindInflight(delta int64) {
+	if m != nil && delta != 0 {
+		m.wbInflight.Add(delta)
+	}
+}
+
+func (m *Metrics) observeWriteBehindBackpressureWait(d time.Duration) {
+	if m != nil {
+		m.wbBackpressureWaitHist.observe(d)
+	}
+}
+
+func (m *Metrics) observeWriteBehindBarrierWait(d time.Duration) {
+	if m != nil {
+		m.wbBarrierWaitHist.observe(d)
+	}
+}
+
 func (m *Metrics) addTmpResidentPages(delta int64) {
 	if m != nil && delta != 0 {
 		m.tmpResidentPages.Add(delta)
@@ -772,6 +998,7 @@ func (m *Metrics) observeLockWait(d time.Duration) {
 		if ns := d.Nanoseconds(); ns > 0 {
 			m.lockWaitNanos.Add(uint64(ns))
 		}
+		m.lockWaitHist.observe(d)
 	}
 }
 
@@ -787,6 +1014,7 @@ func (m *Metrics) observeInodeLockContended(d time.Duration) {
 		if ns := d.Nanoseconds(); ns > 0 {
 			m.inodeLockWaitNanos.Add(uint64(ns))
 		}
+		m.inodeLockWaitHist.observe(d)
 	}
 }
 
@@ -855,6 +1083,15 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	ch <- m.raHitBytesDesc
 	ch <- m.raDiscardedDesc
 	ch <- m.raInflightDesc
+	ch <- m.raWaitDurationDesc
+
+	ch <- m.wbWritesTotalDesc
+	ch <- m.wbBytesTotalDesc
+	ch <- m.wbFlushRPCsTotalDesc
+	ch <- m.wbInflightDesc
+	ch <- m.wbPendingSlotsDesc
+	ch <- m.wbBackpressureWaitDesc
+	ch <- m.wbBarrierWaitDesc
 
 	ch <- m.tmpActiveFilesDesc
 	ch <- m.tmpResidentBytesDesc
@@ -867,13 +1104,18 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	ch <- m.locksActiveDesc
 	ch <- m.lockConflictsDesc
 	ch <- m.lockWaitsDesc
+	ch <- m.lockWaitSecDesc
+	ch <- m.lockWaitDurationDesc
 
 	ch <- m.inodeLockAcqDesc
 	ch <- m.inodeLockWaitSecDesc
+	ch <- m.inodeLockWaitDurationDesc
 	ch <- m.inodeLockActiveDesc
 
 	ch <- m.queueDepthDesc
 	ch <- m.queueOpsDesc
+	ch <- m.fuseConnWaitingDesc
+	ch <- m.fuseConnCongestionThrsDesc
 }
 
 // Collect 实现 prometheus.Collector 接口。
@@ -929,6 +1171,7 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 
+	writeBytes := m.ops[OpWrite].bytes.Load() + m.ops[OpWritev].bytes.Load() + m.ops[OpCopyFileRange].bytes.Load()
 	ch <- prometheus.MustNewConstMetric(
 		m.fuseIOBytesDesc,
 		prometheus.CounterValue,
@@ -938,7 +1181,7 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(
 		m.fuseIOBytesDesc,
 		prometheus.CounterValue,
-		float64(m.ops[OpWrite].bytes.Load()),
+		float64(writeBytes),
 		"write",
 	)
 
@@ -969,30 +1212,46 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(m.raHitBytesDesc, prometheus.CounterValue, float64(m.readAheadHitBytes.Load()))
 	ch <- prometheus.MustNewConstMetric(m.raDiscardedDesc, prometheus.CounterValue, float64(m.readAheadDiscardedBytes.Load()))
 	ch <- prometheus.MustNewConstMetric(m.raInflightDesc, prometheus.GaugeValue, float64(m.readAheadInflight.Load()))
+	ch <- m.readAheadWaitHist.constHistogram(m.raWaitDurationDesc)
 
-	// 4. TmpFileManager
+	// 4. WriteBehindCoordinator
+	ch <- prometheus.MustNewConstMetric(m.wbWritesTotalDesc, prometheus.CounterValue, float64(m.wbStagedCalls.Load()), "staged")
+	ch <- prometheus.MustNewConstMetric(m.wbWritesTotalDesc, prometheus.CounterValue, float64(m.wbPassthroughCalls.Load()), "passthrough")
+	ch <- prometheus.MustNewConstMetric(m.wbBytesTotalDesc, prometheus.CounterValue, float64(m.wbStagedBytes.Load()), "staged")
+	ch <- prometheus.MustNewConstMetric(m.wbBytesTotalDesc, prometheus.CounterValue, float64(m.wbPassthroughBytes.Load()), "passthrough")
+	ch <- prometheus.MustNewConstMetric(m.wbFlushRPCsTotalDesc, prometheus.CounterValue, float64(m.wbFlushRPCOK.Load()), "ok")
+	ch <- prometheus.MustNewConstMetric(m.wbFlushRPCsTotalDesc, prometheus.CounterValue, float64(m.wbFlushRPCErrors.Load()), "error")
+	ch <- prometheus.MustNewConstMetric(m.wbInflightDesc, prometheus.GaugeValue, float64(m.wbInflight.Load()))
+	ch <- prometheus.MustNewConstMetric(m.wbPendingSlotsDesc, prometheus.GaugeValue, float64(gauges.wbPendingSlots))
+	ch <- m.wbBackpressureWaitHist.constHistogram(m.wbBackpressureWaitDesc)
+	ch <- m.wbBarrierWaitHist.constHistogram(m.wbBarrierWaitDesc)
+
+	// 5. TmpFileManager
 	ch <- prometheus.MustNewConstMetric(m.tmpActiveFilesDesc, prometheus.GaugeValue, float64(gauges.tmpActiveFiles))
 	ch <- prometheus.MustNewConstMetric(m.tmpResidentBytesDesc, prometheus.GaugeValue, float64(gauges.tmpResidentByte))
 	ch <- prometheus.MustNewConstMetric(m.tmpPromotesDesc, prometheus.CounterValue, float64(m.tmpPromotes.Load()))
 	ch <- prometheus.MustNewConstMetric(m.tmpRollbacksDesc, prometheus.CounterValue, float64(m.tmpRollbacks.Load()))
 	ch <- prometheus.MustNewConstMetric(m.tmpRollbackErrorsDesc, prometheus.CounterValue, float64(m.tmpRollbackErrors.Load()))
 
-	// 5. HandleTable
+	// 6. HandleTable
 	ch <- prometheus.MustNewConstMetric(m.openHandlesDesc, prometheus.GaugeValue, float64(gauges.openFiles), "file")
 	ch <- prometheus.MustNewConstMetric(m.openHandlesDesc, prometheus.GaugeValue, float64(gauges.openDirs), "dir")
 
-	// 6. LockTable
+	// 7. LockTable
 	ch <- prometheus.MustNewConstMetric(m.locksActiveDesc, prometheus.GaugeValue, float64(gauges.activeLocks))
 	ch <- prometheus.MustNewConstMetric(m.lockConflictsDesc, prometheus.CounterValue, float64(m.lockConflicts.Load()))
 	ch <- prometheus.MustNewConstMetric(m.lockWaitsDesc, prometheus.CounterValue, float64(m.lockWaits.Load()))
+	ch <- prometheus.MustNewConstMetric(m.lockWaitSecDesc, prometheus.CounterValue, float64(m.lockWaitNanos.Load())*1e-9)
+	ch <- m.lockWaitHist.constHistogram(m.lockWaitDurationDesc)
 
-	// 7. inodeLocks
+	// 8. inodeLocks
 	ch <- prometheus.MustNewConstMetric(m.inodeLockAcqDesc, prometheus.CounterValue, float64(m.inodeLockFast.Load()), "fast")
 	ch <- prometheus.MustNewConstMetric(m.inodeLockAcqDesc, prometheus.CounterValue, float64(m.inodeLockContended.Load()), "contended")
 	ch <- prometheus.MustNewConstMetric(m.inodeLockWaitSecDesc, prometheus.CounterValue, float64(m.inodeLockWaitNanos.Load())*1e-9)
+	ch <- m.inodeLockWaitHist.constHistogram(m.inodeLockWaitDurationDesc)
 	ch <- prometheus.MustNewConstMetric(m.inodeLockActiveDesc, prometheus.GaugeValue, float64(gauges.inodeLockActive))
 
-	// 8. Async Queues
+	// 9. Async Queues & FUSE Connection Sysfs
 	ch <- prometheus.MustNewConstMetric(m.queueDepthDesc, prometheus.GaugeValue, float64(gauges.dirtyInodes), "dirty_inodes")
 	ch <- prometheus.MustNewConstMetric(m.queueDepthDesc, prometheus.GaugeValue, float64(gauges.orphanInodes), "orphan_inodes")
 	ch <- prometheus.MustNewConstMetric(m.queueDepthDesc, prometheus.GaugeValue, float64(gauges.releaseQueue), "release_queue")
@@ -1003,6 +1262,9 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(m.queueOpsDesc, prometheus.CounterValue, float64(m.orphanReclaimErrors.Load()), "orphan_reclaim", "error")
 	ch <- prometheus.MustNewConstMetric(m.queueOpsDesc, prometheus.CounterValue, float64(m.asyncReleaseOK.Load()), "async_release", "ok")
 	ch <- prometheus.MustNewConstMetric(m.queueOpsDesc, prometheus.CounterValue, float64(m.asyncReleaseErrors.Load()), "async_release", "error")
+
+	ch <- prometheus.MustNewConstMetric(m.fuseConnWaitingDesc, prometheus.GaugeValue, float64(gauges.fuseWaiting))
+	ch <- prometheus.MustNewConstMetric(m.fuseConnCongestionThrsDesc, prometheus.GaugeValue, float64(gauges.fuseCongestionThreshold))
 }
 
 // OpSnapshot 表示单个 FUSE 操作在抓取时刻的结构化统计快照。
@@ -1017,7 +1279,7 @@ type OpSnapshot struct {
 	Errnos        map[string]uint64     `json:"errnos,omitempty"`
 }
 
-// FUSESnapshot 汇总全部 36 个 FUSE 操作的运行态指标快照。
+// FUSESnapshot 汇总全部 41 个受观测 FUSE 操作的运行态指标快照。
 type FUSESnapshot struct {
 	TotalCalls           uint64       `json:"total_calls"`
 	TotalErrors          uint64       `json:"total_errors"`
@@ -1038,6 +1300,8 @@ type NamespaceCacheStats struct {
 	NegativeEntryMisses uint64 `json:"negative_entry_misses"`
 	ReadDirHits         uint64 `json:"readdir_hits"`
 	ReadDirMisses       uint64 `json:"readdir_misses"`
+	ReadlinkHits        uint64 `json:"readlink_hits"`
+	ReadlinkMisses      uint64 `json:"readlink_misses"`
 	Invalidations       uint64 `json:"invalidations"`
 	Evictions           uint64 `json:"evictions"`
 	Entries             int    `json:"entries"`
@@ -1054,14 +1318,32 @@ type CapabilityCacheStats struct {
 	Entries            int    `json:"entries"`
 }
 
-// ReadAheadStats 承载 ReadAheadCoordinator 的预读、命中与无效丢弃指标。
+// ReadAheadStats 承载 ReadAheadCoordinator 的预读、命中、等待与无效丢弃指标。
 type ReadAheadStats struct {
-	Triggers        uint64 `json:"triggers"`
-	PrefetchedBytes uint64 `json:"prefetched_bytes"`
-	Hits            uint64 `json:"hits"`
-	HitBytes        uint64 `json:"hit_bytes"`
-	DiscardedBytes  uint64 `json:"discarded_bytes"`
-	Inflight        int64  `json:"inflight"`
+	Triggers        uint64  `json:"triggers"`
+	PrefetchedBytes uint64  `json:"prefetched_bytes"`
+	Hits            uint64  `json:"hits"`
+	HitBytes        uint64  `json:"hit_bytes"`
+	DiscardedBytes  uint64  `json:"discarded_bytes"`
+	Inflight        int64   `json:"inflight"`
+	Waits           uint64  `json:"waits"`
+	WaitSeconds     float64 `json:"wait_seconds"`
+}
+
+// WriteBehindStats 承载 WriteBehindCoordinator 的聚批/直通、后台刷盘、背压等待与屏障等待指标。
+type WriteBehindStats struct {
+	StagedCalls             uint64  `json:"staged_calls"`
+	StagedBytes             uint64  `json:"staged_bytes"`
+	PassthroughCalls        uint64  `json:"passthrough_calls"`
+	PassthroughBytes        uint64  `json:"passthrough_bytes"`
+	FlushRPCs               uint64  `json:"flush_rpcs"`
+	FlushErrors             uint64  `json:"flush_errors"`
+	Inflight                int64   `json:"inflight"`
+	PendingSlots            int64   `json:"pending_slots"`
+	BackpressureWaits       uint64  `json:"backpressure_waits"`
+	BackpressureWaitSeconds float64 `json:"backpressure_wait_seconds"`
+	BarrierWaits            uint64  `json:"barrier_waits"`
+	BarrierWaitSeconds      float64 `json:"barrier_wait_seconds"`
 }
 
 // TmpFileStats 承载 TmpFileManager 的驻留内存、转正与回滚指标。
@@ -1095,20 +1377,22 @@ type InodeLockStats struct {
 	ActiveEntries         int     `json:"active_entries"`
 }
 
-// AsyncQueueStats 承载脏节点、孤儿节点与异步释放重试队列的深度与累计结果。
+// AsyncQueueStats 承载脏节点、孤儿节点、异步释放重试队列与内核 FUSE 连接拥塞指标。
 type AsyncQueueStats struct {
-	DirtyInodes         int    `json:"dirty_inodes"`
-	OrphanInodes        int    `json:"orphan_inodes"`
-	ReleaseQueueDepth   int    `json:"release_queue_depth"`
-	DirtyFlushOK        uint64 `json:"dirty_flush_ok"`
-	DirtyFlushErrors    uint64 `json:"dirty_flush_errors"`
-	OrphanReclaimOK     uint64 `json:"orphan_reclaim_ok"`
-	OrphanReclaimErrors uint64 `json:"orphan_reclaim_errors"`
-	AsyncReleaseOK      uint64 `json:"async_release_ok"`
-	AsyncReleaseErrors  uint64 `json:"async_release_errors"`
+	DirtyInodes             int    `json:"dirty_inodes"`
+	OrphanInodes            int    `json:"orphan_inodes"`
+	ReleaseQueueDepth       int    `json:"release_queue_depth"`
+	DirtyFlushOK            uint64 `json:"dirty_flush_ok"`
+	DirtyFlushErrors        uint64 `json:"dirty_flush_errors"`
+	OrphanReclaimOK         uint64 `json:"orphan_reclaim_ok"`
+	OrphanReclaimErrors     uint64 `json:"orphan_reclaim_errors"`
+	AsyncReleaseOK          uint64 `json:"async_release_ok"`
+	AsyncReleaseErrors      uint64 `json:"async_release_errors"`
+	FuseWaiting             int    `json:"fuse_waiting"`
+	FuseCongestionThreshold int    `json:"fuse_congestion_threshold"`
 }
 
-// Snapshot 承载客户端 FUSE 与 8 大子系统的完整一致性自省快照，统一服务于 bowl stats 与 .stats。
+// Snapshot 承载客户端 FUSE 与 9 大子系统的完整一致性自省快照，统一服务于 bowl stats 与 .stats。
 type Snapshot struct {
 	TimestampUnixNano int64                `json:"timestamp_unix_nano"`
 	UptimeSeconds     float64              `json:"uptime_seconds"`
@@ -1118,6 +1402,7 @@ type Snapshot struct {
 	NamespaceCache    NamespaceCacheStats  `json:"namespace_cache"`
 	CapabilityCache   CapabilityCacheStats `json:"capability_cache"`
 	ReadAhead         ReadAheadStats       `json:"read_ahead"`
+	WriteBehind       WriteBehindStats     `json:"write_behind"`
 	TmpFile           TmpFileStats         `json:"tmp_file"`
 	Handles           HandleStats          `json:"handles"`
 	Locks             LockStats            `json:"locks"`
@@ -1205,6 +1490,9 @@ func (m *Metrics) Snapshot() Snapshot {
 		totalInflight += inf
 	}
 
+	flushOK := m.wbFlushRPCOK.Load()
+	flushErr := m.wbFlushRPCErrors.Load()
+
 	return Snapshot{
 		TimestampUnixNano: nowNs,
 		UptimeSeconds:     uptimeSec,
@@ -1216,7 +1504,7 @@ func (m *Metrics) Snapshot() Snapshot {
 			TotalInflight:        totalInflight,
 			TotalDurationSeconds: float64(totalDurNs) * 1e-9,
 			ReadBytes:            ops[OpRead].Bytes,
-			WriteBytes:           ops[OpWrite].Bytes,
+			WriteBytes:           ops[OpWrite].Bytes + ops[OpWritev].Bytes + ops[OpCopyFileRange].Bytes,
 			Ops:                  ops,
 		},
 		NamespaceCache: NamespaceCacheStats{
@@ -1228,6 +1516,8 @@ func (m *Metrics) Snapshot() Snapshot {
 			NegativeEntryMisses: m.nsMisses[nsCacheNegativeEntry].Load(),
 			ReadDirHits:         m.nsHits[nsCacheReadDir].Load(),
 			ReadDirMisses:       m.nsMisses[nsCacheReadDir].Load(),
+			ReadlinkHits:        m.nsHits[nsCacheReadlink].Load(),
+			ReadlinkMisses:      m.nsMisses[nsCacheReadlink].Load(),
 			Invalidations:       m.nsInvalidations.Load(),
 			Evictions:           m.nsEvictions.Load(),
 			Entries:             gauges.nsEntries,
@@ -1248,6 +1538,22 @@ func (m *Metrics) Snapshot() Snapshot {
 			HitBytes:        m.readAheadHitBytes.Load(),
 			DiscardedBytes:  m.readAheadDiscardedBytes.Load(),
 			Inflight:        m.readAheadInflight.Load(),
+			Waits:           m.readAheadWaitHist.count.Load(),
+			WaitSeconds:     float64(m.readAheadWaitHist.sumNanos.Load()) * 1e-9,
+		},
+		WriteBehind: WriteBehindStats{
+			StagedCalls:             m.wbStagedCalls.Load(),
+			StagedBytes:             m.wbStagedBytes.Load(),
+			PassthroughCalls:        m.wbPassthroughCalls.Load(),
+			PassthroughBytes:        m.wbPassthroughBytes.Load(),
+			FlushRPCs:               flushOK + flushErr,
+			FlushErrors:             flushErr,
+			Inflight:                m.wbInflight.Load(),
+			PendingSlots:            gauges.wbPendingSlots,
+			BackpressureWaits:       m.wbBackpressureWaitHist.count.Load(),
+			BackpressureWaitSeconds: float64(m.wbBackpressureWaitHist.sumNanos.Load()) * 1e-9,
+			BarrierWaits:            m.wbBarrierWaitHist.count.Load(),
+			BarrierWaitSeconds:      float64(m.wbBarrierWaitHist.sumNanos.Load()) * 1e-9,
 		},
 		TmpFile: TmpFileStats{
 			ActiveFiles:    gauges.tmpActiveFiles,
@@ -1273,15 +1579,17 @@ func (m *Metrics) Snapshot() Snapshot {
 			ActiveEntries:         gauges.inodeLockActive,
 		},
 		Queues: AsyncQueueStats{
-			DirtyInodes:         gauges.dirtyInodes,
-			OrphanInodes:        gauges.orphanInodes,
-			ReleaseQueueDepth:   gauges.releaseQueue,
-			DirtyFlushOK:        m.dirtyFlushOK.Load(),
-			DirtyFlushErrors:    m.dirtyFlushErrors.Load(),
-			OrphanReclaimOK:     m.orphanReclaimOK.Load(),
-			OrphanReclaimErrors: m.orphanReclaimErrors.Load(),
-			AsyncReleaseOK:      m.asyncReleaseOK.Load(),
-			AsyncReleaseErrors:  m.asyncReleaseErrors.Load(),
+			DirtyInodes:             gauges.dirtyInodes,
+			OrphanInodes:            gauges.orphanInodes,
+			ReleaseQueueDepth:       gauges.releaseQueue,
+			DirtyFlushOK:            m.dirtyFlushOK.Load(),
+			DirtyFlushErrors:        m.dirtyFlushErrors.Load(),
+			OrphanReclaimOK:         m.orphanReclaimOK.Load(),
+			OrphanReclaimErrors:     m.orphanReclaimErrors.Load(),
+			AsyncReleaseOK:          m.asyncReleaseOK.Load(),
+			AsyncReleaseErrors:      m.asyncReleaseErrors.Load(),
+			FuseWaiting:             gauges.fuseWaiting,
+			FuseCongestionThreshold: gauges.fuseCongestionThreshold,
 		},
 	}
 }
@@ -1294,28 +1602,38 @@ func (s *Snapshot) FormatJSON() ([]byte, error) {
 // FormatText 将快照渲染为易读的多节文本摘要，供 bowl stats 默认输出。
 func (s *Snapshot) FormatText() string {
 	var b strings.Builder
-	b.Grow(1024)
+	b.Grow(1280)
 
 	fmt.Fprintf(&b, "Uptime: %.3fs  CPU: %.3fs  Memory: %d B\n", s.UptimeSeconds, s.CPUUsageSeconds, s.MemoryBytes)
 	fmt.Fprintf(&b, "FUSE: calls=%d errors=%d inflight=%d duration=%.6fs read_bytes=%d write_bytes=%d\n",
 		s.FUSE.TotalCalls, s.FUSE.TotalErrors, s.FUSE.TotalInflight,
 		s.FUSE.TotalDurationSeconds, s.FUSE.ReadBytes, s.FUSE.WriteBytes,
 	)
-	fmt.Fprintf(&b, "NamespaceCache: entries=%d weight=%d/%d attr=%d/%d entry=%d/%d neg=%d/%d readdir=%d/%d inv=%d evict=%d\n",
+	fmt.Fprintf(&b, "NamespaceCache: entries=%d weight=%d/%d attr=%d/%d entry=%d/%d neg=%d/%d readdir=%d/%d readlink=%d/%d inv=%d evict=%d\n",
 		s.NamespaceCache.Entries, s.NamespaceCache.UsedWeight, s.NamespaceCache.Capacity,
 		s.NamespaceCache.AttrHits, s.NamespaceCache.AttrMisses,
 		s.NamespaceCache.EntryHits, s.NamespaceCache.EntryMisses,
 		s.NamespaceCache.NegativeEntryHits, s.NamespaceCache.NegativeEntryMisses,
 		s.NamespaceCache.ReadDirHits, s.NamespaceCache.ReadDirMisses,
+		s.NamespaceCache.ReadlinkHits, s.NamespaceCache.ReadlinkMisses,
 		s.NamespaceCache.Invalidations, s.NamespaceCache.Evictions,
 	)
 	fmt.Fprintf(&b, "CapabilityCache: entries=%d hits=%d misses=%d grants=%d epoch_inv=%d\n",
 		s.CapabilityCache.Entries, s.CapabilityCache.Hits, s.CapabilityCache.Misses,
 		s.CapabilityCache.Grants, s.CapabilityCache.EpochInvalidations,
 	)
-	fmt.Fprintf(&b, "ReadAhead: triggers=%d prefetched_bytes=%d hits=%d hit_bytes=%d discarded_bytes=%d inflight=%d\n",
+	fmt.Fprintf(&b, "ReadAhead: triggers=%d prefetched_bytes=%d hits=%d hit_bytes=%d discarded_bytes=%d inflight=%d waits=%d wait_sec=%.6f\n",
 		s.ReadAhead.Triggers, s.ReadAhead.PrefetchedBytes, s.ReadAhead.Hits,
 		s.ReadAhead.HitBytes, s.ReadAhead.DiscardedBytes, s.ReadAhead.Inflight,
+		s.ReadAhead.Waits, s.ReadAhead.WaitSeconds,
+	)
+	fmt.Fprintf(&b, "WriteBehind: staged=%d/%dB passthrough=%d/%dB flush_rpcs=%d flush_err=%d inflight=%d slots=%d bp_waits=%d/%.6fs barrier_waits=%d/%.6fs\n",
+		s.WriteBehind.StagedCalls, s.WriteBehind.StagedBytes,
+		s.WriteBehind.PassthroughCalls, s.WriteBehind.PassthroughBytes,
+		s.WriteBehind.FlushRPCs, s.WriteBehind.FlushErrors,
+		s.WriteBehind.Inflight, s.WriteBehind.PendingSlots,
+		s.WriteBehind.BackpressureWaits, s.WriteBehind.BackpressureWaitSeconds,
+		s.WriteBehind.BarrierWaits, s.WriteBehind.BarrierWaitSeconds,
 	)
 	fmt.Fprintf(&b, "TmpFile: active=%d resident_bytes=%d promotes=%d rollbacks=%d rollback_errors=%d\n",
 		s.TmpFile.ActiveFiles, s.TmpFile.ResidentBytes,
@@ -1329,11 +1647,12 @@ func (s *Snapshot) FormatText() string {
 		s.InodeLocks.ActiveEntries, s.InodeLocks.FastAcquisitions,
 		s.InodeLocks.ContendedAcquisitions, s.InodeLocks.WaitSeconds,
 	)
-	fmt.Fprintf(&b, "Queues: dirty=%d orphan=%d release=%d flush_ok=%d flush_err=%d reclaim_ok=%d reclaim_err=%d release_ok=%d release_err=%d\n",
+	fmt.Fprintf(&b, "Queues: dirty=%d orphan=%d release=%d flush_ok=%d flush_err=%d reclaim_ok=%d reclaim_err=%d release_ok=%d release_err=%d fuse_waiting=%d fuse_congestion=%d\n",
 		s.Queues.DirtyInodes, s.Queues.OrphanInodes, s.Queues.ReleaseQueueDepth,
 		s.Queues.DirtyFlushOK, s.Queues.DirtyFlushErrors,
 		s.Queues.OrphanReclaimOK, s.Queues.OrphanReclaimErrors,
 		s.Queues.AsyncReleaseOK, s.Queues.AsyncReleaseErrors,
+		s.Queues.FuseWaiting, s.Queues.FuseCongestionThreshold,
 	)
 	return b.String()
 }
@@ -1381,8 +1700,8 @@ func (s *Snapshot) FormatStatsFile() string {
 		}
 		readCalls = s.FUSE.Ops[OpRead].Calls
 		readDurNs = s.FUSE.Ops[OpRead].DurationNanos
-		writeCalls = s.FUSE.Ops[OpWrite].Calls
-		writeDurNs = s.FUSE.Ops[OpWrite].DurationNanos
+		writeCalls = s.FUSE.Ops[OpWrite].Calls + s.FUSE.Ops[OpWritev].Calls + s.FUSE.Ops[OpCopyFileRange].Calls
+		writeDurNs = s.FUSE.Ops[OpWrite].DurationNanos + s.FUSE.Ops[OpWritev].DurationNanos + s.FUSE.Ops[OpCopyFileRange].DurationNanos
 		deleteCalls = s.FUSE.Ops[OpUnlink].Calls + s.FUSE.Ops[OpRmdir].Calls
 		deleteDurNs = s.FUSE.Ops[OpUnlink].DurationNanos + s.FUSE.Ops[OpRmdir].DurationNanos
 	}
@@ -1401,10 +1720,10 @@ func (s *Snapshot) FormatStatsFile() string {
 	writeF64("juicefs_object_request_durations_histogram_seconds_GET_sum", float64(readDurNs)*1e-9)
 	writeU64("juicefs_object_request_durations_histogram_seconds_DELETE_total", deleteCalls)
 	writeF64("juicefs_object_request_durations_histogram_seconds_DELETE_sum", float64(deleteDurNs)*1e-9)
-	writeU64("juicefs_blockcache_write_hist_seconds_total", 0)
-	writeF64("juicefs_blockcache_write_hist_seconds_sum", 0)
+	writeU64("juicefs_blockcache_write_hist_seconds_total", s.WriteBehind.StagedCalls)
+	writeF64("juicefs_blockcache_write_hist_seconds_sum", s.WriteBehind.BackpressureWaitSeconds)
 	writeU64("juicefs_blockcache_read_hist_seconds_total", s.ReadAhead.Hits)
-	writeF64("juicefs_blockcache_read_hist_seconds_sum", 0)
+	writeF64("juicefs_blockcache_read_hist_seconds_sum", s.ReadAhead.WaitSeconds)
 
 	// 2. Bowl 原生扁平指标键值
 	writeF64("bowl_client_uptime_seconds", s.UptimeSeconds)
@@ -1438,6 +1757,8 @@ func (s *Snapshot) FormatStatsFile() string {
 	writeU64("bowl_client_nscache_negative_entry_misses_total", s.NamespaceCache.NegativeEntryMisses)
 	writeU64("bowl_client_nscache_readdir_hits_total", s.NamespaceCache.ReadDirHits)
 	writeU64("bowl_client_nscache_readdir_misses_total", s.NamespaceCache.ReadDirMisses)
+	writeU64("bowl_client_nscache_readlink_hits_total", s.NamespaceCache.ReadlinkHits)
+	writeU64("bowl_client_nscache_readlink_misses_total", s.NamespaceCache.ReadlinkMisses)
 	writeU64("bowl_client_nscache_invalidations_total", s.NamespaceCache.Invalidations)
 	writeU64("bowl_client_nscache_evictions_total", s.NamespaceCache.Evictions)
 	writeI64("bowl_client_nscache_entries", int64(s.NamespaceCache.Entries))
@@ -1454,6 +1775,21 @@ func (s *Snapshot) FormatStatsFile() string {
 	writeU64("bowl_client_readahead_hit_bytes_total", s.ReadAhead.HitBytes)
 	writeU64("bowl_client_readahead_discarded_bytes_total", s.ReadAhead.DiscardedBytes)
 	writeI64("bowl_client_readahead_inflight", s.ReadAhead.Inflight)
+	writeU64("bowl_client_readahead_waits_total", s.ReadAhead.Waits)
+	writeF64("bowl_client_readahead_wait_seconds_total", s.ReadAhead.WaitSeconds)
+
+	writeU64("bowl_client_write_behind_staged_calls_total", s.WriteBehind.StagedCalls)
+	writeU64("bowl_client_write_behind_staged_bytes_total", s.WriteBehind.StagedBytes)
+	writeU64("bowl_client_write_behind_passthrough_calls_total", s.WriteBehind.PassthroughCalls)
+	writeU64("bowl_client_write_behind_passthrough_bytes_total", s.WriteBehind.PassthroughBytes)
+	writeU64("bowl_client_write_behind_flush_rpcs_total", s.WriteBehind.FlushRPCs)
+	writeU64("bowl_client_write_behind_flush_errors_total", s.WriteBehind.FlushErrors)
+	writeI64("bowl_client_write_behind_inflight", s.WriteBehind.Inflight)
+	writeI64("bowl_client_write_behind_pending_slots", s.WriteBehind.PendingSlots)
+	writeU64("bowl_client_write_behind_backpressure_waits_total", s.WriteBehind.BackpressureWaits)
+	writeF64("bowl_client_write_behind_backpressure_wait_seconds_total", s.WriteBehind.BackpressureWaitSeconds)
+	writeU64("bowl_client_write_behind_barrier_waits_total", s.WriteBehind.BarrierWaits)
+	writeF64("bowl_client_write_behind_barrier_wait_seconds_total", s.WriteBehind.BarrierWaitSeconds)
 
 	writeI64("bowl_client_tmpfile_active_files", int64(s.TmpFile.ActiveFiles))
 	writeU64("bowl_client_tmpfile_resident_bytes", s.TmpFile.ResidentBytes)
@@ -1467,6 +1803,7 @@ func (s *Snapshot) FormatStatsFile() string {
 	writeI64("bowl_client_locks_active", int64(s.Locks.ActiveLocks))
 	writeU64("bowl_client_lock_conflicts_total", s.Locks.Conflicts)
 	writeU64("bowl_client_lock_waits_total", s.Locks.Waits)
+	writeF64("bowl_client_lock_wait_seconds_total", s.Locks.WaitSeconds)
 
 	writeU64("bowl_client_inodelock_fast_total", s.InodeLocks.FastAcquisitions)
 	writeU64("bowl_client_inodelock_contended_total", s.InodeLocks.ContendedAcquisitions)
@@ -1482,6 +1819,8 @@ func (s *Snapshot) FormatStatsFile() string {
 	writeU64("bowl_client_queue_orphan_reclaim_errors_total", s.Queues.OrphanReclaimErrors)
 	writeU64("bowl_client_queue_async_release_ok_total", s.Queues.AsyncReleaseOK)
 	writeU64("bowl_client_queue_async_release_errors_total", s.Queues.AsyncReleaseErrors)
+	writeI64("bowl_client_fuse_connection_waiting", int64(s.Queues.FuseWaiting))
+	writeI64("bowl_client_fuse_connection_congestion_threshold", int64(s.Queues.FuseCongestionThreshold))
 
 	return b.String()
 }

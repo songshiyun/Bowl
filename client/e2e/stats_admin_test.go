@@ -185,7 +185,7 @@ func TestE2E_CLI_AdminAndStats(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(jsonOut), &snap))
 	require.Positive(t, snap.FUSE.TotalCalls)
-	require.Len(t, snap.FUSE.Ops, 36)
+	require.Len(t, snap.FUSE.Ops, 41)
 
 	rawOut := runBowlSuccess(t, "stats", mp1, "--raw")
 	require.Regexp(t, statsTwoColumnPattern, rawOut)

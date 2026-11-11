@@ -251,14 +251,24 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 	retryWarnLimiter := newLogRateLimiter(defaultLogRateLimitInterval)
 
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		return func(ctx context.Context, req connect.AnyRequest) (resp connect.AnyResponse, retErr error) {
+			procedure := req.Spec().Procedure
+			startTime := time.Now()
+			if metrics != nil {
+				defer func() {
+					code := "ok"
+					if retErr != nil {
+						code = connect.CodeOf(retErr).String()
+					}
+					metrics.observeLogicalDuration(procedure, code, time.Since(startTime))
+				}()
+			}
+
 			if config.Disable {
 				return next(ctx, req)
 			}
 
 			ctx, reqID := ensureRequestID(ctx)
-			procedure := req.Spec().Procedure
-			startTime := time.Now()
 			interval := config.InitialInterval
 			var (
 				lastErr          error

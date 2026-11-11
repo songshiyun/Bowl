@@ -1,8 +1,10 @@
 package fusefs
 
 import (
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -160,4 +162,45 @@ func TestNamespaceCache父目录nlink下溢保护与过期世代拒绝回填(t *
 	cache.invalidateDirListingTouchParentNowAt(cache.version()+1, 20, 0)
 	_, ok = cache.inode(20)
 	require.False(t, ok, "世代号不匹配时必须拒绝用陈旧响应回填父目录属性")
+}
+
+func TestNamespaceCacheReadlinkTTL与超长文件名边界(t *testing.T) {
+	cache := NewNamespaceCache(64)
+	epoch := cache.version()
+	cache.markNewDirAt(epoch, 10)
+
+	// 1. completeDirs 完整目录：<=255B 缺失名命中负缓存 (0, true)，>255B 超长名拒绝短路 (0, false)。
+	ino, ok := cache.entry(10, strings.Repeat("x", 255))
+	require.True(t, ok)
+	require.Zero(t, ino)
+
+	_, ok = cache.entry(10, strings.Repeat("x", 256))
+	require.False(t, ok, "超长文件名不得被 completeDirs 误判为 ENOENT 负命中")
+
+	// 2. Readlink TTL=0 不缓存；TTL>0 命中深拷贝并在到期/失效后淘汰。
+	base := time.Now()
+	cache.putReadlinkAt(epoch, 30, []byte("/strict"), 0, base)
+	_, ok = cache.readlink(30, base)
+	require.False(t, ok)
+
+	src := []byte("/prod/target")
+	cache.putReadlinkAt(epoch, 31, src, 1.0, base)
+	src[0] = 'X'
+	got, ok := cache.readlink(31, base.Add(500*time.Millisecond))
+	require.True(t, ok)
+	require.Equal(t, "/prod/target", string(got))
+	got[0] = 'Y'
+	got2, ok := cache.readlink(31, base.Add(999*time.Millisecond))
+	require.True(t, ok)
+	require.Equal(t, "/prod/target", string(got2))
+
+	// TTL 到期自动淘汰
+	_, ok = cache.readlink(31, base.Add(time.Second))
+	require.False(t, ok)
+
+	// invalidateInode 同步淘汰 Readlink 缓存
+	cache.putReadlinkAt(epoch, 32, []byte("/to-unlink"), 10.0, base)
+	cache.invalidateInode(32)
+	_, ok = cache.readlink(32, base)
+	require.False(t, ok)
 }

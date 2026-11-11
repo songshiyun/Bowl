@@ -84,12 +84,20 @@ func writeRequestIDHeader(header http.Header, reqID uint64) {
 	header.Set(HeaderRequestID, string(strconv.AppendUint(buf[:0], reqID, 10)))
 }
 
+// SubMillisecondDurationBuckets 定义客户端与服务端统一的 18 个亚毫秒至 10s 延迟直方图桶边界（25µs ~ 10s）。
+var SubMillisecondDurationBuckets = []float64{
+	0.000025, 0.00005, 0.0001, 0.00025, 0.0005,
+	0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
+	0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+}
+
 // Metrics 封装客户端 RPC 传输层的自定义 Prometheus 指标收集器。
 // 实例级隔离（不触碰全局 DefaultRegisterer），且全部方法对 nil 接收者安全。
 type Metrics struct {
-	retries        *prometheus.CounterVec
-	retryExhausted *prometheus.CounterVec
-	staleEpoch     prometheus.Counter
+	retries         *prometheus.CounterVec
+	retryExhausted  *prometheus.CounterVec
+	staleEpoch      prometheus.Counter
+	logicalDuration *prometheus.HistogramVec
 }
 
 var _ prometheus.Collector = (*Metrics)(nil)
@@ -117,6 +125,14 @@ func NewMetrics() *Metrics {
 				Help: "Total number of client RPC calls fenced by server due to stale writer epoch (EBUSY).",
 			},
 		),
+		logicalDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "bowl_client_rpc_logical_duration_seconds",
+				Help:    "Logical end-to-end client RPC call duration in seconds, including retry attempts and backoff sleeps.",
+				Buckets: SubMillisecondDurationBuckets,
+			},
+			[]string{"procedure", "code"},
+		),
 	}
 }
 
@@ -134,6 +150,9 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	if m.staleEpoch != nil {
 		m.staleEpoch.Describe(ch)
 	}
+	if m.logicalDuration != nil {
+		m.logicalDuration.Describe(ch)
+	}
 }
 
 // Collect 实现 prometheus.Collector 接口；对 nil 接收者安全。
@@ -149,6 +168,9 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	}
 	if m.staleEpoch != nil {
 		m.staleEpoch.Collect(ch)
+	}
+	if m.logicalDuration != nil {
+		m.logicalDuration.Collect(ch)
 	}
 }
 
@@ -171,6 +193,13 @@ func (m *Metrics) incStaleEpoch() {
 		return
 	}
 	m.staleEpoch.Inc()
+}
+
+func (m *Metrics) observeLogicalDuration(procedure, code string, d time.Duration) {
+	if m == nil || m.logicalDuration == nil {
+		return
+	}
+	m.logicalDuration.WithLabelValues(procedure, code).Observe(d.Seconds())
 }
 
 // logRateLimiter 提供实例级无锁 CAS 原子限频器。

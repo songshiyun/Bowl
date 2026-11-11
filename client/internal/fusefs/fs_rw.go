@@ -16,12 +16,15 @@ import (
 //  1. 映射内核 Inode 为服务端 Inode，并校验本地文件句柄；
 //  2. 目标读取长度以 input.Size 与传入非空 buf 长度二者较小值为准；长度为 0 时立即返回空数据；
 //  3. 在同一文件句柄上维护顺序读检测与 4 MiB 对齐预读缓冲：顺序读与内核并发预读流量统一按 4 MiB 对齐窗口
-//     向服务端单飞拉取，并在窗口发布后异步预取下一窗口，使后续落入窗口内的读取直接命中客户端内存；
+//     向服务端单飞拉取，并在确认连续顺序流后并发维持 W_read=4 个 4 MiB 预取窗口；
 //     非连续随机读保持按请求尺寸直通读取，不产生额外放大，且不清空落在窗口内的在途拉取；
 //     窗口未到文件末尾且请求跨窗口边界时，用下一 4 MiB 对齐窗口补齐；窗口已到 EOF 时直接返回剩余字节；
 //  4. 当 want > MaxRPCChunkSize 时按 4 MiB 顺序循环分片读取；
 //  5. 遇到 EOF 或短读立即停止分片循环并返回已读数据；中途分片报错但已有数据读取成功时按短读返回 fuse.OK，首片失败返回对应 errno。
-func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (fuse.ReadResult, fuse.Status) {
+func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (res fuse.ReadResult, status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpRead)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	if fs.isVirtualStatsIno(input.NodeId) {
@@ -59,10 +62,8 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		return fuse.ReadResultData(dest[:n]), st
 	}
 
-	fs.writeBehind.BarrierInode(ino)
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
-	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Read")
-	defer span.End()
 	baseCtx, cancelTimeout := context.WithTimeout(opCtx, DefaultRPCTimeout)
 	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
 	defer func() {
@@ -70,7 +71,7 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 		cancelTimeout()
 	}()
 
-	n, err := fs.readAhead.Read(ctx, input.Fh, ino, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) ([]byte, error) {
+	n, err := fs.readAhead.Read(ctx, input.Fh, ino, input.Offset, dest, func(fetchCtx context.Context, offset uint64, length uint32) (rpc.ReadPayload, error) {
 		reqCtx := rpc.WithRequestID(fetchCtx, fs.NextRequestID())
 		resp, rpcErr := fs.client.Read(reqCtx, connect.NewRequest(&storagev1.ReadRequest{
 			Ino:    ino,
@@ -80,9 +81,9 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 			DiskId: fs.cfg.DiskID,
 		}))
 		if rpcErr != nil {
-			return nil, rpcErr
+			return rpc.ReadPayload{}, rpcErr
 		}
-		return resp.Msg.GetData(), nil
+		return rpc.TakeReadPayload(resp.Msg), nil
 	})
 	if err != nil {
 		return nil, fs.ToStatus(err, cancel)
@@ -97,11 +98,14 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (f
 // 3. 当 len(data) <= MaxRPCChunkSize（包含 0 字节写入探针）时发起单次 Write RPC 直通落盘并校验模式；
 // 4. 当 len(data) > MaxRPCChunkSize 时按 4 MiB 顺序分片调用，并累加实际写入字节数；
 // 5. 遵循 POSIX 短写语义：若中途分片报错（如 ENOSPC）且已有数据写入成功，返回已写入字节数与 fuse.OK；首片即失败返回对应 errno。
-func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (uint32, fuse.Status) {
+func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (written uint32, status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpWrite)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	if status := fs.CheckWritable(); status != fuse.OK {
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return 0, status
 	}
 	if fs.isVirtualStatsIno(input.NodeId) {
@@ -134,9 +138,6 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		return n, st
 	}
 
-	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Write")
-	defer span.End()
-
 	dataLen := len(data)
 	syncMode := handle.Flags&(syscall.O_SYNC|syscall.O_DSYNC) != 0
 	// 属性未缓存（例如刚经 Ioctl/错误失效）或携带 Immutable/Append/SUID/SGID 时必须走同步直通校验。
@@ -153,7 +154,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		// 否则并发追加会读到相同旧大小而互相覆盖。
 		unlock := fs.inodeLocks.lock(input.NodeId)
 		defer unlock()
-		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(input.Fh, ino); flushErr != nil {
+		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(opCtx, input.Fh, ino); flushErr != nil {
 			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatus(flushErr, nil)
 		}
@@ -165,19 +166,19 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		copyInput.Offset = cached.inode.GetAttr().GetSize()
 		input = &copyInput
 	case syncMode || specialInode || !fs.caps.knownAbsent(input.NodeId) || dataLen == 0 || dataLen > MaxRPCChunkSize:
-		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(input.Fh, ino); flushErr != nil {
+		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(opCtx, input.Fh, ino); flushErr != nil {
 			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatus(flushErr, nil)
 		}
 	default:
 		fs.readAhead.InvalidateInode(ino)
-		if written, handled, wbErr := fs.writeBehind.WriteForHandle(input.Fh, ino, input.NodeId, input.Offset, data, epoch); handled {
+		if wbWritten, handled, wbErr := fs.writeBehind.WriteForHandle(opCtx, input.Fh, ino, input.NodeId, input.Offset, data, epoch); handled {
 			if wbErr != nil {
 				fs.cache.invalidateInode(input.NodeId)
 				return 0, fs.ToStatus(wbErr, nil)
 			}
 			fs.readAhead.InvalidateInode(ino)
-			return written, fuse.OK
+			return wbWritten, fuse.OK
 		}
 	}
 
@@ -207,7 +208,8 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.markDirty(ino)
 		fs.cache.refreshInodeAt(epoch, input.NodeId, resp.Msg.GetInode(), DefaultWriteAttrTimeoutSeconds)
 		fs.caps.markAbsent(input.NodeId)
-		written := resp.Msg.GetSize()
+		written = resp.Msg.GetSize()
+		fs.metrics.addWriteBehindPassthrough(uint64(written))
 		if !appendMode && !syncMode && dataLen > 0 {
 			fs.writeBehind.ObserveSyncWrite(ino, input.Offset, written)
 		}
@@ -253,6 +255,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.caps.markAbsent(input.NodeId)
 		n := resp.Msg.GetSize()
 		fs.markDirty(ino)
+		fs.metrics.addWriteBehindPassthrough(uint64(n))
 		totalWritten += n
 		if n < chunkSize {
 			break

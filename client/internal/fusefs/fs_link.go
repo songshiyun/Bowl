@@ -1,8 +1,8 @@
 package fusefs
 
 import (
-	"context"
 	"syscall"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -13,7 +13,10 @@ import (
 // Symlink 实现创建符号链接操作。
 // 校验只读挂载、重写父 Inode，透传调用进程 UID/GID、目标路径与链接名称。
 // 注意 go-fuse 参数顺序：pointedTo 为符号链接指向的目标路径，linkName 为待创建的目录项名称。
-func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo, linkName string, out *fuse.EntryOut) fuse.Status {
+func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo, linkName string, out *fuse.EntryOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpSymlink)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
@@ -32,7 +35,7 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Symlink(ctx, connect.NewRequest(&storagev1.SymlinkRequest{
@@ -48,20 +51,29 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 		return fs.ToStatus(err, cancel)
 	}
 
-	fs.cache.invalidateDirListingTouchParentAt(epoch, header.NodeId, resp.Msg.GetInode(), 0, resp.Msg.GetAttrTimeoutSeconds())
+	attrTTL := resp.Msg.GetAttrTimeoutSeconds()
+	fs.cache.invalidateDirListingTouchParentAt(epoch, header.NodeId, resp.Msg.GetInode(), 0, attrTTL)
 	inode := resp.Msg.GetInode()
 	if inode != nil {
 		child := fs.ToKernelIno(inode.GetIno())
 		fs.cache.putEntryAt(epoch, header.NodeId, linkName, child)
-		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), attrTTL)
+		linkTTL := attrTTL
+		if linkTTL <= 0 {
+			linkTTL = fs.cfg.AttrTimeoutSeconds
+		}
+		fs.cache.putReadlinkAt(epoch, child, []byte(pointedTo), linkTTL, time.Now())
 	}
-	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
+	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), attrTTL)
 	return fuse.OK
 }
 
 // Readlink 实现读取符号链接目标路径操作。
-// 将 Inode 映射为服务端 Inode 后调用 StorageService，原样返回目标字节切片，不进行有损字符集过滤。
-func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte, fuse.Status) {
+// 在受 TTL 管控的缓存有效期（attrTimeout > 0）内直接命中本地缓存；strict 0s 模式下自动穿透服务端。
+func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) (target []byte, status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpReadlink)
+	defer func() { endSpan(status) }()
+
 	if fs.isVirtualStatsIno(header.NodeId) {
 		return nil, fuse.EINVAL
 	}
@@ -72,23 +84,38 @@ func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) ([]byte
 		return nil, status
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	now := time.Now()
+	if cachedTarget, ok := fs.cache.readlink(header.NodeId, now); ok {
+		return cachedTarget, fuse.OK
+	}
+
+	epoch, generation := fs.cache.snapshot()
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Readlink(ctx, connect.NewRequest(&storagev1.ReadlinkRequest{
 		Ino:    ino,
 		DiskId: fs.cfg.DiskID,
 	}))
+	if fs.cache.version() != epoch {
+		return nil, fuse.Status(syscall.ESTALE)
+	}
 	if err != nil {
 		return nil, fs.ToStatus(err, cancel)
 	}
 
-	return resp.Msg.GetTarget(), fuse.OK
+	target = resp.Msg.GetTarget()
+	ttl := fs.cache.inodeAttrTimeout(header.NodeId, fs.cfg.AttrTimeoutSeconds)
+	fs.cache.putReadlinkAtIf(generation, epoch, header.NodeId, target, ttl, time.Now())
+	return target, fuse.OK
 }
 
 // Link 实现为非目录已有文件创建同盘硬链接操作。
 // 校验只读挂载，同时对源文件节点与目标父目录执行根 Inode 双向重写，回填递增 nlink 后的 Inode 属性。
-func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename string, out *fuse.EntryOut) fuse.Status {
+func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename string, out *fuse.EntryOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpLink)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
 	}
@@ -101,16 +128,14 @@ func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename strin
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	opCtx, span := fs.startOpSpan(context.Background(), "fuse.Link")
-	defer span.End()
-	if status, local := fs.linkTmp(opCtx, cancel, input, filename, out); local {
-		return status
+	if st, local := fs.linkTmp(opCtx, cancel, input, filename, out); local {
+		return st
 	}
 	srcIno, status := fs.ToServerIno(input.Oldnodeid)
 	if status != fuse.OK {
 		return status
 	}
-	fs.writeBehind.BarrierInode(srcIno)
+	fs.writeBehind.BarrierInode(opCtx, srcIno)
 
 	newParentIno, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {

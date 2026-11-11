@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -14,6 +15,9 @@ import (
 // mdtest 1proc 会创建约 1.2 万个节点，16K 容量会在创建阶段持续 LRU 抖动，
 // 64K 可容纳整棵工作集，同时常驻内存增量仍在数十 MB 量级。
 const DefaultNamespaceCacheCapacity = 65536
+
+// MaxFilenameBytes 定义单个目录项名称的最大字节数（对齐 POSIX NAME_MAX 与服务端契约）。
+const MaxFilenameBytes = 255
 
 type cacheKey struct {
 	kind byte
@@ -28,11 +32,13 @@ type cachedInode struct {
 }
 
 type cacheItem struct {
-	key    cacheKey
-	inode  cachedInode
-	entry  uint64
-	dir    []*storagev1.DirEntryPlus
-	weight int
+	key           cacheKey
+	inode         cachedInode
+	entry         uint64
+	dir           []*storagev1.DirEntryPlus
+	linkTarget    []byte
+	expiresAtNano int64
+	weight        int
 }
 
 func itemOf(el *list.Element) *cacheItem {
@@ -409,9 +415,114 @@ func (c *NamespaceCache) entryTimeoutLocked(ino uint64, fallback float64) float6
 	return fallback
 }
 
+// peekInode 在不污染属性命中率统计的前提下探查缓存中的节点属性（供 Unlink/Rename 判断 nlink 使用）。
+func (c *NamespaceCache) peekInode(ino uint64) (cachedInode, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el := c.items[cacheKey{kind: 'i', ino: ino}]; el != nil {
+		v := itemOf(el).inode
+		v.inode = cloneInode(v.inode)
+		return v, true
+	}
+	for dir := range c.dirsByChild[ino] {
+		el := c.items[cacheKey{kind: 'd', ino: dir}]
+		if el == nil {
+			continue
+		}
+		for _, entry := range itemOf(el).dir {
+			if entry.GetIno() != ino || entry.GetInode() == nil || entry.GetInode().GetAttr() == nil {
+				continue
+			}
+			return cachedInode{cloneInode(entry.GetInode()), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}, true
+		}
+	}
+	return cachedInode{}, false
+}
+
+// inodeAttrTimeout 读取缓存中已知的节点属性 TTL；未缓存时回退至 fallback。
+func (c *NamespaceCache) inodeAttrTimeout(ino uint64, fallback float64) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el := c.items[cacheKey{kind: 'i', ino: ino}]; el != nil {
+		return itemOf(el).inode.attrTimeout
+	}
+	for dir := range c.dirsByChild[ino] {
+		el := c.items[cacheKey{kind: 'd', ino: dir}]
+		if el == nil {
+			continue
+		}
+		for _, entry := range itemOf(el).dir {
+			if entry.GetIno() == ino {
+				return entry.GetAttrTimeoutSeconds()
+			}
+		}
+	}
+	return fallback
+}
+
+func (c *NamespaceCache) readlink(ino uint64, now time.Time) ([]byte, bool) {
+	c.mu.Lock()
+	el := c.items[cacheKey{kind: 'l', ino: ino}]
+	if el == nil {
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheMiss(nsCacheReadlink)
+		return nil, false
+	}
+	item := itemOf(el)
+	if now.UnixNano() >= item.expiresAtNano {
+		c.remove(el)
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheMiss(nsCacheReadlink)
+		return nil, false
+	}
+	c.lru.MoveToFront(el)
+	out := append([]byte(nil), item.linkTarget...)
+	c.mu.Unlock()
+	c.metrics.Load().incNSCacheHit(nsCacheReadlink)
+	return out, true
+}
+
+func (c *NamespaceCache) putReadlinkAt(epoch, ino uint64, target []byte, ttlSeconds float64, now time.Time) {
+	if ttlSeconds <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if epoch != ^uint64(0) && epoch != c.epoch {
+		return
+	}
+	c.putReadlinkLocked(ino, target, ttlSeconds, now)
+}
+
+func (c *NamespaceCache) putReadlinkAtIf(generation, epoch, ino uint64, target []byte, ttlSeconds float64, now time.Time) {
+	if ttlSeconds <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if generation != c.mutations || (epoch != ^uint64(0) && epoch != c.epoch) {
+		return
+	}
+	c.putReadlinkLocked(ino, target, ttlSeconds, now)
+}
+
+func (c *NamespaceCache) putReadlinkLocked(ino uint64, target []byte, ttlSeconds float64, now time.Time) {
+	ttlDur := time.Duration(ttlSeconds * float64(time.Second))
+	if ttlDur <= 0 {
+		return
+	}
+	c.putItem(&cacheItem{
+		key:           cacheKey{kind: 'l', ino: ino},
+		linkTarget:    append([]byte(nil), target...),
+		expiresAtNano: now.Add(ttlDur).UnixNano(),
+		weight:        1,
+	})
+}
+
 func (c *NamespaceCache) invalidateInode(ino uint64) {
 	c.mu.Lock()
 	c.removeKey(cacheKey{kind: 'i', ino: ino})
+	c.removeKey(cacheKey{kind: 'l', ino: ino})
 	for dir := range copyInoSet(c.dirsByChild[ino]) {
 		c.removeKey(cacheKey{kind: 'd', ino: dir})
 	}
@@ -422,6 +533,9 @@ func (c *NamespaceCache) invalidateInode(ino uint64) {
 
 // entry 返回子节点号；0 表示已缓存的 ENOENT。
 func (c *NamespaceCache) entry(parent uint64, name string) (uint64, bool) {
+	if len(name) > MaxFilenameBytes {
+		return 0, false
+	}
 	c.mu.Lock()
 	if item, ok := c.get(cacheKey{kind: 'e', ino: parent, name: name}); ok {
 		ino := item.entry
@@ -483,6 +597,9 @@ func (c *NamespaceCache) putEntryAtIf(generation, epoch, parent uint64, name str
 }
 
 func (c *NamespaceCache) putEntryLocked(parent uint64, name string, ino uint64) {
+	if len(name) > MaxFilenameBytes {
+		return
+	}
 	// 独立目录项与旧目录流冲突：先把目录流按条目降级，保留未变动兄弟项的权威命中，
 	// 再写入本次变更的目录项。
 	c.demoteDirStreamToEntriesLocked(parent)
