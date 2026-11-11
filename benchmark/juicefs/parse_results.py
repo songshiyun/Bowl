@@ -6,13 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+COMMON_DIR = Path(__file__).resolve().parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from collect_telemetry import load_telemetry_overview, render_report_telemetry_section  # noqa: E402
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TARGETS = [
-    ("bowl", "Bowl (PG 16 控制面 + Pebble)"),
+    ("bowl", "Bowl (PostgreSQL 控制面 + Pebble)"),
     ("jfs_pg", "JuiceFS (PG 16 + rclone S3)"),
     ("jfs_redis", "JuiceFS (Redis 7 + rclone S3)"),
 ]
@@ -239,7 +246,7 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
             if line.strip():
                 stage_timings.append(json.loads(line))
 
-    return {
+    out: dict[str, Any] = {
         "env_metadata": env_meta,
         "juicefs_bench": bench_data,
         "fio": fio_data,
@@ -247,6 +254,10 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
         "mdtest_4proc": mdtest_4proc,
         "stage_timings": stage_timings,
     }
+    telem = load_telemetry_overview(results_dir)
+    if telem:
+        out["telemetry_overview"] = telem
+    return out
 
 
 def render_report(summary: dict[str, Any]) -> str:
@@ -281,8 +292,15 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("本次评测采用同规格双机（4 vCPU / 32 GiB 内存）、VPC 私网与 894 GiB `local_ssd_pro` 本地 NVMe SSD 数据盘，服务端按目标隔离运行以下三组存储栈：")
     lines.append("")
+    bowl_pg_ver = srv.get("bowl_pg_version") or srv.get("pg_version", "")
+    bowl_deploy_desc = (
+        "deploy/prod 容器栈（PostgreSQL 18 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack + Jaeger/Prometheus/Loki 全栈可观测）"
+        if bowl_cfg.get("deploy_profile")
+        else "PostgreSQL 16 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack"
+    )
+
     lines.append(
-        "1. **Bowl（PostgreSQL 16 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack）**："
+        f"1. **Bowl（{bowl_deploy_desc}）**："
         "采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
         "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
         "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；"
@@ -506,8 +524,12 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **客户端版本** | Bowl `{bowl_cfg.get('bowl_git_commit', '')}` (`fusermount3` {cli.get('fusermount_version', '')}) | `{cli.get('juicefs_version', '')}` | `{cli.get('juicefs_version', '')}` |"
     )
     lines.append(
-        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / 单盘 `StoreActor` Pebble | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
+        f"| **控制面 / 文件元数据** | {bowl_pg_ver} 控制面 / 单盘 `StoreActor` Pebble | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
     )
+    if bowl_cfg.get("deploy_profile"):
+        lines.append(
+            f"| **部署编排与可观测性栈** | `{bowl_cfg.get('deploy_profile')}` · `{bowl_cfg.get('observability_stack', '')}` | systemd (`postgresql` + `jfs-s3`) | systemd (`redis-server` + `jfs-s3`) |"
+        )
     lines.append(
         f"| **数据块存储 (Server 节点本地 NVMe SSD)** | 单盘 Pebble + `packs/<pack_id_hex16>.pack` `64 MiB` 封包文件 (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
     )
@@ -693,10 +715,21 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append('ADR-0030 / ADR-0031 / ADR-0032 同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。')
     lines.append("")
 
-    # Section 7: Cloud Resource Audit
+    telem_overview = summary.get("telemetry_overview") or {}
+    if telem_overview:
+        lines.extend(
+            render_report_telemetry_section(
+                telem_overview, "## 7. 生产可观测性与慢路径遥测诊断（`deploy/prod` Telemetry）"
+            )
+        )
+        audit_sec_no = 8
+    else:
+        audit_sec_no = 7
+
+    # Cloud Resource Audit
     lines.append("---")
     lines.append("")
-    lines.append("## 7. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
+    lines.append(f"## {audit_sec_no}. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
     lines.append("")
     lines.append("| 审计项 | 记录值 |")
     lines.append("| :--- | :--- |")

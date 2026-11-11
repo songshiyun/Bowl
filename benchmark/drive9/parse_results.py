@@ -6,13 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+COMMON_DIR = Path(__file__).resolve().parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from collect_telemetry import load_telemetry_overview, render_report_telemetry_section  # noqa: E402
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TARGETS = [
-    ("bowl", "Bowl (PG 16 控制面 + Pebble)"),
+    ("bowl", "Bowl (PostgreSQL 控制面 + Pebble)"),
     ("drive9_default", "Drive9 Default (coding-agent + interactive)"),
     ("drive9_sync", "Drive9 Sync (profile=none + close-sync)"),
 ]
@@ -112,7 +119,7 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
             if line.strip():
                 stage_timings.append(json.loads(line))
 
-    return {
+    out: dict[str, Any] = {
         "env_metadata": env_meta,
         "juicefs_bench": bench_data,
         "drive9_fuse_bench_cold": d9_cold,
@@ -120,6 +127,10 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
         "fuse_perf_baseline": perf_baseline_data,
         "stage_timings": stage_timings,
     }
+    telem = load_telemetry_overview(results_dir)
+    if telem:
+        out["telemetry_overview"] = telem
+    return out
 
 
 def render_report(summary: dict[str, Any]) -> str:
@@ -174,8 +185,11 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("三组目标的客户端缓存和写入确认条件不同；本次在同台机器上依次测试默认与同步模式：")
     lines.append("")
+    bowl_pg_ver = srv.get("bowl_pg_version") or srv.get("pg_version", "PostgreSQL")
+    bowl_cp_label = "PostgreSQL 18（deploy/prod 容器栈）" if bowl_cfg.get("deploy_profile") else "PostgreSQL 16"
+
     lines.append(
-        "1. **Bowl (`bowl`)**：PostgreSQL 16 仅保存单张 `disks` 控制面表（ADR-0032）；"
+        f"1. **Bowl (`bowl`)**：{bowl_cp_label}仅保存单张 `disks` 控制面表（ADR-0032）；"
         "每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎，ADR-0030/0031）承载，"
         "保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；"
         "文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、`WriteRequest` 池化零分配解码与尾块热缓存），"
@@ -384,8 +398,12 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **代码版本 (Git SHA)** | Bowl `{bowl_cfg.get('git_commit', '')}` | Drive9 `{d9_cfg.get('git_commit', '')}` | Drive9 `{d9_cfg.get('git_commit', '')}` |"
     )
     lines.append(
-        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / 每盘单写者 `StoreActor` (Pebble) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) |"
+        f"| **控制面 / 文件元数据** | {bowl_pg_ver} 控制面 / 每盘单写者 `StoreActor` (Pebble) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) | TiDB `{srv.get('tidb_version', 'v8.5.5')}` Unistore (`127.0.0.1:4000`) |"
     )
+    if bowl_cfg.get("deploy_profile"):
+        lines.append(
+            f"| **部署编排与可观测性栈** | `{bowl_cfg.get('deploy_profile')}` · `{bowl_cfg.get('observability_stack', '')}` | systemd (`tidb` + `drive9-server`) | systemd (`tidb` + `drive9-server`) |"
+        )
     lines.append(
         "| **服务端数据块引擎** | 每盘 `StoreActor` Pebble + `packs/<pack_id_hex16>.pack` 64 MiB Pack 文件 (`/var/lib/bowl/data` -> `/mnt/nvme`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3` -> `/mnt/nvme`) | `drive9-server` 内置 Local S3 (`/var/lib/drive9/s3` -> `/mnt/nvme`) |"
     )
@@ -697,10 +715,21 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("ADR-0030/0031/0032 同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。")
     lines.append("")
 
-    # Section 7: Cloud Resource Audit
+    telem_overview = summary.get("telemetry_overview") or {}
+    if telem_overview:
+        lines.extend(
+            render_report_telemetry_section(
+                telem_overview, "## 7. 生产可观测性与慢路径遥测诊断（`deploy/prod` Telemetry）"
+            )
+        )
+        audit_sec_no = 8
+    else:
+        audit_sec_no = 7
+
+    # Cloud Resource Audit
     lines.append("---")
     lines.append("")
-    lines.append("## 7. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
+    lines.append(f"## {audit_sec_no}. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
     lines.append("")
     lines.append("| 审计项 | 记录值 |")
     lines.append("| :--- | :--- |")

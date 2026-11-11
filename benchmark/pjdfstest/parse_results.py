@@ -6,9 +6,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+COMMON_DIR = Path(__file__).resolve().parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from collect_telemetry import load_telemetry_overview, render_report_telemetry_section  # noqa: E402
 
 
 SYSCALL_DIR_DESCRIPTIONS: dict[str, str] = {
@@ -251,12 +258,14 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     directories_ok = all(d["rc"] == 0 and d["files"] > 0 for d in summary["directories"])
     status_badge = "100% PASS (全量通过)" if failed_tests == 0 and total_tests > 0 and directories_ok else f"PASS {passed_tests}/{total_tests} ({pass_rate_pct:.2f}%)；目录退出码见明细"
 
+    bowl_cp_label = "PostgreSQL 18（deploy/prod 容器栈）" if bowl_cfg.get("deploy_profile") else "PostgreSQL 16"
+
     lines: list[str] = []
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
     lines.append("")
     lines.append(
         "被测版本采用 ADR-0030 / ADR-0031 / ADR-0032 单盘独立 Actor 存储引擎与 `64 MiB` Append-Only Pack 数据层："
-        "PostgreSQL 16 仅保存单张 `disks` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
+        f"{bowl_cp_label}仅保存单张 `disks` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
         "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
         "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），"
         "DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；"
@@ -339,8 +348,10 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("| 组件 / 参数项 | 配置值 | 说明 |")
     lines.append("| :--- | :--- | :--- |")
     lines.append(f"| **Bowl Git Commit** | `{bowl_cfg.get('bowl_git_commit', '-')}` | 仓库当前评测版本 |")
+    if bowl_cfg.get("deploy_profile"):
+        lines.append(f"| **部署编排与可观测性栈** | `{bowl_cfg.get('deploy_profile')}` | `{bowl_cfg.get('observability_stack', '-')}` |")
     lines.append(f"| **pjdfstest Git Commit** | `{bowl_cfg.get('pjdfstest_git_commit', '-')}` | 上游 `https://github.com/pjd/pjdfstest` |")
-    lines.append(f"| **PostgreSQL 版本** | `{server.get('pg_version', '-')}` | Server 节点控制面数据库（单张 `disks` 表） |")
+    lines.append(f"| **PostgreSQL 版本** | `{server.get('bowl_pg_version') or server.get('pg_version', '-')}` | Server 节点控制面数据库（单张 `disks` 表） |")
     lines.append(f"| **FUSE 用户态版本** | `{client.get('fusermount_version', '-')}` | Linux 内核 FUSE 协议 + `github.com/hanwen/go-fuse/v2` |")
     lines.append(f"| **测试虚拟磁盘 (`DiskID` / `RootIno`)** | `{bowl_cfg.get('disk_id', '-')}` (`root_ino={bowl_cfg.get('root_ino', '-')}`) | 配额 `{bowl_cfg.get('disk_size', '-')}` |")
     lines.append(f"| **服务端 `STORAGE_ATIME_MODE`** | `{bowl_cfg.get('atime_mode', 'strictatime')}` | 开启严格访问时间更新，验证 `atime` 刷新语义 |")
@@ -435,10 +446,21 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     )
     lines.append("")
 
-    # Section 6: Cloud Resource Cleanup Audit
+    telem_overview = summary.get("telemetry_overview") or {}
+    if telem_overview:
+        lines.extend(
+            render_report_telemetry_section(
+                telem_overview, "## 6. 生产可观测性与慢路径遥测诊断（`deploy/prod` Telemetry）"
+            )
+        )
+        audit_sec_no = 7
+    else:
+        audit_sec_no = 6
+
+    # Cloud Resource Cleanup Audit
     lines.append("---")
     lines.append("")
-    lines.append("## 6. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
+    lines.append(f"## {audit_sec_no}. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
     lines.append("")
     lines.append("| 审计项 | 记录值 |")
     lines.append("| :--- | :--- |")
@@ -479,6 +501,9 @@ def main() -> None:
 
     summary = parse_tap_log(log_text, stage_timings)
     summary["environment"] = env_meta
+    telem = load_telemetry_overview(args.results_dir)
+    if telem:
+        summary["telemetry_overview"] = telem
 
     args.summary_out.parent.mkdir(parents=True, exist_ok=True)
     args.summary_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

@@ -4,19 +4,20 @@
 # ==============================================================================
 # Topology:
 #   - Node 1 (Server): ecs.i5.xlarge (4 vCPU, 32 GiB, 894 GiB local_ssd_pro NVMe SSD)
-#       Runs PostgreSQL 16 + Bowl Storage Service (:9000)
+#       Runs Bowl `deploy/prod` Docker Compose Stack (PostgreSQL 18 + Storage :9000 + Jaeger + Prometheus + Loki + Alloy + Grafana)
 #       Runs TiDB v8.5.5 (Unistore, :4000) + Drive9 Server (:9009, local S3)
 #   - Node 2 (Client): ecs.i5.xlarge (4 vCPU, 32 GiB, 894 GiB local_ssd_pro NVMe SSD)
 #       Runs Linux FUSE Clients over VPC Private Network:
-#         1. Bowl（PostgreSQL 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack，noatime + 1s 缓存）
+#         1. Bowl（deploy/prod 栈：PG 18 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack，noatime + 1s 缓存 + OTLP 全链路遥测）
 #         2. Drive9 Default (--profile=coding-agent --durability=interactive)
 #         3. Drive9 Remote Sync (--profile=none --durability=close-sync, 1s cache)
 #       Executes:
 #         - Suite 1: `juicefs bench -p 4`
 #         - Suite 2: `drive9_fuse_bench.py` (Cold & Hot cache, 10 micro + 5 macro)
 #         - Suite 3: `fuse_perf_baseline.py` (SHA-256 I/O + SQLite DELETE & WAL)
-# ADR-0030 / ADR-0031 / ADR-0032：
-# - 控制面：PostgreSQL 16 仅维护单张 disks 表；MountDisk 握手原子递增 WriterEpoch。
+# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 部署 PostgreSQL 18 控制面、
+#   storage-service 及 Jaeger (OTLP 1%) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
 #   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
 #   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
@@ -38,6 +39,8 @@ DRIVE9_REPO="${DRIVE9_REPO:-/Users/fanxing/code/other/filesystem/drive9}"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 SUMMARY_JSON="${RESULTS_DIR}/summary.json"
+# shellcheck source=../common/prod_stack.sh
+source "${REPO_ROOT}/benchmark/common/prod_stack.sh"
 
 REGION_ID="${REGION_ID:-${REGION:-us-west-1}}"
 ZONE_ID="${ZONE_ID:-${ZONE:-us-west-1a}}"
@@ -74,6 +77,9 @@ log() {
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"
 }
 
+TEST_START_EPOCH=""
+TEST_END_EPOCH=""
+
 fetch_telemetry_archive() {
   if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
     return 0
@@ -84,52 +90,23 @@ fetch_telemetry_archive() {
   old_opts="$(set +o)"
   set +e
 
-  local stage_dir="${WORK_DIR}/telemetry-${RUN_TS}"
-  local archive_path="${RESULTS_DIR}/telemetry-${RUN_TS}.tar.gz"
-  mkdir -p "${stage_dir}"
-
+  CLIENT_SSH_CMD_ARR=()
+  SERVER_SSH_CMD_ARR=()
   if [[ -n "${CLIENT_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
-    log "Collecting client telemetry from ${CLIENT_PUB_IP}..."
-    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "bash -s" <<'EOF_CLI_TELEM' >/dev/null 2>&1
-mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
-[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount.log || true
-curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > /tmp/bowl-telemetry/client/metrics/final.prom 2>/dev/null || true
-cat /proc/diskstats > /tmp/bowl-telemetry/client/diskstats/final.txt 2>/dev/null || true
-dmesg -T 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/client/logs/dmesg-tail.log || true
-EOF_CLI_TELEM
-    if ! ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "tar -czf - -C /tmp/bowl-telemetry client" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
-      log "WARN: Failed to stream client telemetry from ${CLIENT_PUB_IP} (non-fatal)."
-    fi
+    CLIENT_SSH_CMD_ARR=(ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}")
   fi
-
   if [[ -n "${SERVER_PUB_IP:-}" && -f "${KEY_FILE}" ]]; then
-    log "Collecting server telemetry from ${SERVER_PUB_IP}..."
-    ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "bash -s" <<'EOF_SRV_TELEM' >/dev/null 2>&1
-mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble
-journalctl -u bowl-storage --no-pager > /tmp/bowl-telemetry/server/logs/bowl-storage.log 2>/dev/null || true
-journalctl -u postgresql -u 'postgresql@*' --no-pager -n 300 > /tmp/bowl-telemetry/server/logs/postgresql.log 2>/dev/null || true
-journalctl -k --no-pager 2>/dev/null | tail -n 200 > /tmp/bowl-telemetry/server/logs/kernel.log || true
-{ free -m; df -h; } > /tmp/bowl-telemetry/server/logs/server-state.log 2>/dev/null || true
-if [[ -d /var/lib/bowl/data ]]; then
-  (cd /var/lib/bowl/data && find . -name 'LOG*' -exec cp --parents -a {} /tmp/bowl-telemetry/server/pebble/ \;) 2>/dev/null || true
-fi
-curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > /tmp/bowl-telemetry/server/metrics/final.prom 2>/dev/null || true
-cat /proc/diskstats > /tmp/bowl-telemetry/server/diskstats/final.txt 2>/dev/null || true
-EOF_SRV_TELEM
-    if ! ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "tar -czf - -C /tmp/bowl-telemetry server" 2>/dev/null | tar -xzf - -C "${stage_dir}" 2>/dev/null; then
-      log "WARN: Failed to stream server telemetry from ${SERVER_PUB_IP} (non-fatal)."
-    fi
+    SERVER_SSH_CMD_ARR=(ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}")
   fi
 
-  if find "${stage_dir}" -type f 2>/dev/null | grep -q .; then
-    if tar -czf "${archive_path}" -C "${WORK_DIR}" "telemetry-${RUN_TS}" 2>/dev/null; then
-      log "Telemetry archive saved to ${archive_path}"
-    else
-      log "WARN: Failed to create telemetry archive ${archive_path} (non-fatal)."
-    fi
-  else
-    log "WARN: No remote telemetry files available to archive (instances may not have initialized)."
-  fi
+  log "Collecting and distilling deploy/prod telemetry into ${RESULTS_DIR}/telemetry/ ..."
+  collect_and_process_bench_telemetry \
+    "${REPO_ROOT}" \
+    "${WORK_DIR}" \
+    "${RESULTS_DIR}" \
+    "drive9" \
+    "${TEST_START_EPOCH:-}" \
+    "${TEST_END_EPOCH:-}"
 
   eval "${old_opts}"
   return 0
@@ -251,7 +228,8 @@ DRIVE9_GIT_COMMIT="$(git -C "${DRIVE9_REPO}" rev-parse --short HEAD 2>/dev/null 
 cp "${SCRIPT_DIR}/drive9_fuse_bench.py" "${WORK_DIR}/drive9_fuse_bench.py"
 cp "${SCRIPT_DIR}/fuse_perf_baseline.py" "${WORK_DIR}/fuse_perf_baseline.py"
 
-tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" storage-service goose drive9-server
+prepare_prod_bundle "${REPO_ROOT}" "${WORK_DIR}"
+tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" drive9-server
 tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl drive9 drive9_fuse_bench.py fuse_perf_baseline.py
 
 STAGE_END=$(date +%s)
@@ -349,19 +327,19 @@ STAGE_END=$(date +%s)
 record_stage "provision_ecs_instances" "$((STAGE_END - STAGE_START))"
 
 # ------------------------------------------------------------------------------
-# Step 3: Deploy Server Node (Local NVMe SSD + PostgreSQL 16 + Bowl Storage + TiDB v8.5.5 + Drive9 Server)
+# Step 3: Deploy Server Node (Local NVMe SSD + Bowl deploy/prod Stack + TiDB v8.5.5 + Drive9 Server)
 # ------------------------------------------------------------------------------
 STAGE_START=$(date +%s)
-log "Uploading server-bins.tar.gz and migrations to Server (${SERVER_PUB_IP})..."
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "mkdir -p /opt/bowl/migrations /opt/drive9"
+log "Uploading prod-bundle.tar.gz and server-bins.tar.gz to Server (${SERVER_PUB_IP})..."
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "mkdir -p /opt/bowl /opt/drive9"
+scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
+  "${WORK_DIR}/prod-bundle.tar.gz" \
+  "root@${SERVER_PUB_IP}:/tmp/prod-bundle.tar.gz"
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
   "${WORK_DIR}/server-bins.tar.gz" \
   "root@${SERVER_PUB_IP}:/tmp/server-bins.tar.gz"
-scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
-  "${REPO_ROOT}/services/storage/db/migrations/"*.sql \
-  "root@${SERVER_PUB_IP}:/opt/bowl/migrations/"
 
-log "Mounting local NVMe SSD and configuring PostgreSQL 16, Bowl Storage, TiDB v8.5.5, and Drive9 Server on Server node..."
+log "Mounting local NVMe SSD and configuring TiDB v8.5.5 + Drive9 Server on Server node..."
 ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_SERVER'
 set -euo pipefail
 
@@ -379,70 +357,30 @@ mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
 mkdir -p /mnt/nvme
 mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
 
-mkdir -p /mnt/nvme/postgresql /mnt/nvme/bowl/data /mnt/nvme/drive9/s3 /mnt/nvme/tidb
-mkdir -p /var/lib/postgresql /var/lib/bowl /var/lib/drive9 /var/lib/tidb
-mount --bind /mnt/nvme/postgresql /var/lib/postgresql
-mount --bind /mnt/nvme/bowl /var/lib/bowl
+mkdir -p /mnt/nvme/drive9/s3 /mnt/nvme/tidb
+mkdir -p /var/lib/drive9 /var/lib/tidb
 mount --bind /mnt/nvme/drive9 /var/lib/drive9
 mount --bind /mnt/nvme/tidb /var/lib/tidb
 
 tar -xzf /tmp/server-bins.tar.gz -C /usr/local/bin/
-chmod +x /usr/local/bin/storage-service /usr/local/bin/goose /usr/local/bin/drive9-server
+chmod +x /usr/local/bin/drive9-server
 rm -f /tmp/server-bins.tar.gz
 
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq postgresql postgresql-contrib default-mysql-client iperf3 fio jq curl ca-certificates >/dev/null
+apt-get install -y -qq default-mysql-client iperf3 fio python3 jq curl ca-certificates >/dev/null
 
-# 1. Tune and start PostgreSQL 16 for Bowl
-systemctl enable --now postgresql
-PG_CONF=$(sudo -u postgres psql -tAc 'SHOW config_file;' | xargs)
-PG_HBA=$(sudo -u postgres psql -tAc 'SHOW hba_file;' | xargs)
-grep -q "^listen_addresses = '\*'" "${PG_CONF}" || echo "listen_addresses = '*'" >> "${PG_CONF}"
-grep -q "172.16.0.0/12" "${PG_HBA}" || echo "host all all 172.16.0.0/12 md5" >> "${PG_HBA}"
+# Measure Server local NVMe SSD disk baseline before starting heavy background daemons
+mkdir -p /mnt/nvme/disk_bench
+fio --name=nvme_seq_write --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --numjobs=1 --direct=1 --end_fsync=1 --group_reporting --output-format=json > /tmp/server_disk_write.json
+fio --name=nvme_seq_read --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --numjobs=1 --direct=1 --group_reporting --output-format=json > /tmp/server_disk_read.json
+fio --name=nvme_rand_write --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_randw.json
+fio --name=nvme_rand_read --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_randr.json
+fio --name=nvme_fsync_write --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_fsync.json
+rm -rf /mnt/nvme/disk_bench
 
-sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'bowl'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE bowl;"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '300';"
-sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '2GB';"
-systemctl restart postgresql
-
-/usr/local/bin/goose -dir /opt/bowl/migrations postgres "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable" up
-
-# 2. Start Bowl Storage Service on :9000
-cat > /etc/systemd/system/bowl-storage.service <<'UNIT'
-[Unit]
-Description=Bowl Storage Service
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-Environment="SERVER_HOST=0.0.0.0"
-Environment="SERVER_PORT=9000"
-Environment="INTERNAL_SERVER_HOST=127.0.0.1"
-Environment="INTERNAL_SERVER_PORT=9090"
-Environment="SERVER_READ_MAX_BYTES=16777216"
-Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
-Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
-Environment="DB_MAX_CONNS=64"
-Environment="DB_MIN_CONNS=8"
-Environment="STORAGE_ATIME_MODE=noatime"
-Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="STORAGE_ATTR_TIMEOUT_SECONDS=1.0"
-Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="LOG_LEVEL=info"
-Environment="OTEL_ENABLED=false"
-ExecStart=/usr/local/bin/storage-service
-Restart=always
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# 3. Install TiDB v8.5.5 via TiUP and run Unistore on :4000
+# 1. Install TiDB v8.5.5 via TiUP and run Unistore on :4000
 if [ ! -x /root/.tiup/bin/tiup ]; then
   curl --proto '=https' --tlsv1.2 -sSf --retry 5 --retry-delay 2 --retry-all-errors https://tiup-mirrors.pingcap.com/install.sh | sh
 fi
@@ -469,7 +407,7 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now bowl-storage.service tidb.service
+systemctl enable --now tidb.service
 
 # Wait for TiDB SQL readiness and create drive9_local database
 for _ in $(seq 1 60); do
@@ -481,7 +419,7 @@ for _ in $(seq 1 60); do
 done
 mysql --protocol=tcp -h 127.0.0.1 -P 4000 -u root -e "CREATE DATABASE IF NOT EXISTS drive9_local;"
 
-# 4. Start Drive9 Server on :9009
+# 2. Start Drive9 Server on :9009
 cat > /etc/systemd/system/drive9-server.service <<UNIT
 [Unit]
 Description=Drive9 Server (Local Tenant Provider + Local S3)
@@ -512,7 +450,7 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
-# 5. Start iperf3 daemon for VPC network baseline
+# 3. Start iperf3 daemon for VPC network baseline
 cat > /etc/systemd/system/iperf3-bench.service <<'UNIT'
 [Unit]
 Description=iperf3 server for VPC baseline
@@ -531,24 +469,19 @@ systemctl daemon-reload
 systemctl enable --now drive9-server.service iperf3-bench.service
 
 for _ in $(seq 1 30); do
-  if ss -tln | grep -q ':9000 ' && curl -sf http://127.0.0.1:9009/healthz >/dev/null; then
-    echo "Bowl Storage (:9000) and Drive9 Server (:9009) are healthy on local NVMe SSD."
+  if curl -sf http://127.0.0.1:9009/healthz >/dev/null; then
     break
   fi
   sleep 1
 done
-ss -tln | grep -q ':9000 '
 curl -sf http://127.0.0.1:9009/healthz >/dev/null
-
-# Measure Server local NVMe SSD disk baseline
-mkdir -p /mnt/nvme/disk_bench
-fio --name=nvme_seq_write --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --numjobs=1 --direct=1 --end_fsync=1 --group_reporting --output-format=json > /tmp/server_disk_write.json
-fio --name=nvme_seq_read --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --numjobs=1 --direct=1 --group_reporting --output-format=json > /tmp/server_disk_read.json
-fio --name=nvme_rand_write --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_randw.json
-fio --name=nvme_rand_read --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_randr.json
-fio --name=nvme_fsync_write --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --group_reporting --output-format=json > /tmp/server_disk_fsync.json
-rm -rf /mnt/nvme/disk_bench
 EOF_SERVER
+
+log "Initializing Bowl deploy/prod Docker Compose stack on Server (${SERVER_PRIV_IP})..."
+remote_setup_prod_stack "${SERVER_PRIV_IP}" "${CLIENT_PRIV_IP}" "prod" \
+  | ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "bash -s"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl up"
+log "Bowl deploy/prod (:9000 + Jaeger/Prometheus/Loki) and Drive9 Server (:9009) are healthy on local NVMe SSD."
 
 STAGE_END=$(date +%s)
 record_stage "deploy_server_node" "$((STAGE_END - STAGE_START))"
@@ -563,8 +496,10 @@ scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" \
   "${WORK_DIR}/client-bins.tar.gz" \
   "root@${CLIENT_PUB_IP}:/tmp/client-bins.tar.gz"
 
+emit_client_telemetry_helper | ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "mkdir -p /opt/bowl && cat >/opt/bowl/client_telemetry.sh && chmod +x /opt/bowl/client_telemetry.sh"
+
 log "Mounting local NVMe SSD, installing benchmark tools, and mounting Bowl + Drive9 on Client..."
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_CLIENT_SETUP'
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' BOWL_BENCH_LOG_LEVEL='${BOWL_BENCH_LOG_LEVEL}' BOWL_BENCH_TRACE_SAMPLE_RATIO='${BOWL_BENCH_TRACE_SAMPLE_RATIO}' bash -s" <<'EOF_CLIENT_SETUP'
 set -euo pipefail
 
 # 0. Detect, format, and mount the 894 GiB local NVMe SSD on Client
@@ -610,56 +545,23 @@ if [[ ! -x /usr/local/bin/juicefs ]]; then
 fi
 /usr/local/bin/juicefs --version
 
-# 1. Create Bowl Disk & Mount (/mnt/bowl)
+# 1. Create Bowl Disk & Mount (/mnt/bowl) with full OTLP tracing & Prometheus/:9567 admin endpoint
 ENDPOINT="http://${SERVER_PRIV_IP}:9000"
 CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "d9-bench-disk" --endpoint "${ENDPOINT}" --json)"
 DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
 echo "${CREATE_JSON}" > /tmp/bench_results/bowl_disk.json
+OTEL_SERVICE_NAME=bowl-client \
+OTEL_EXPORTER_OTLP_ENDPOINT="${SERVER_PRIV_IP}:4317" \
+OTEL_EXPORTER_OTLP_INSECURE=true \
 /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
   --endpoint "${ENDPOINT}" \
   --allow-other \
-  --admin-addr 127.0.0.1:9567 \
+  --admin-addr 0.0.0.0:9567 \
   --stats-file \
-  --log-level info \
+  --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
+  --log-format json \
+  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.01}" \
   --log-file /var/log/bowl-mount.log
-
-cat > /opt/bench/bowl_telemetry.sh <<'TELEM_SH'
-mkdir -p /tmp/bowl-telemetry/client/logs /tmp/bowl-telemetry/client/metrics /tmp/bowl-telemetry/client/diskstats /tmp/bowl-telemetry/client/pprof
-BOWL_PROFILE_PIDS=()
-
-capture_bowl_snapshot() {
-  local phase="$1"
-  curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > "/tmp/bowl-telemetry/client/metrics/${phase}.prom" 2>/dev/null || true
-  cat /proc/diskstats > "/tmp/bowl-telemetry/client/diskstats/${phase}.txt" 2>/dev/null || true
-  "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble && curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > '/tmp/bowl-telemetry/server/metrics/${phase}.prom' 2>/dev/null || true; cat /proc/diskstats > '/tmp/bowl-telemetry/server/diskstats/${phase}.txt' 2>/dev/null || true" || true
-}
-
-start_bowl_cpu_profile() {
-  local stage="$1"
-  local sec="${2:-10}"
-  local delay="${3:-0}"
-  BOWL_PROFILE_PIDS=()
-  ( [[ "${delay}" != "0" ]] && sleep "${delay}"; curl -fsS --max-time 25 "http://127.0.0.1:9567/debug/pprof/profile?seconds=${sec}" -o "/tmp/bowl-telemetry/client/pprof/${stage}_cpu.pb.gz" 2>/dev/null || true ) &
-  BOWL_PROFILE_PIDS+=("$!")
-  ( [[ "${delay}" != "0" ]] && sleep "${delay}"; "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 25 'http://127.0.0.1:9090/debug/pprof/profile?seconds=${sec}' -o '/tmp/bowl-telemetry/server/pprof/${stage}_cpu.pb.gz' 2>/dev/null || true" ) &
-  BOWL_PROFILE_PIDS+=("$!")
-}
-
-finish_bowl_stage_profiles() {
-  local stage="$1"
-  local pid
-  if [[ ${#BOWL_PROFILE_PIDS[@]} -gt 0 ]]; then
-    for pid in "${BOWL_PROFILE_PIDS[@]}"; do
-      [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true
-    done
-  fi
-  BOWL_PROFILE_PIDS=()
-  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/heap" -o "/tmp/bowl-telemetry/client/pprof/${stage}_heap.pb.gz" 2>/dev/null || true
-  curl -fsS --max-time 10 "http://127.0.0.1:9567/debug/pprof/mutex" -o "/tmp/bowl-telemetry/client/pprof/${stage}_mutex.pb.gz" 2>/dev/null || true
-  "${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/heap' -o '/tmp/bowl-telemetry/server/pprof/${stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/mutex' -o '/tmp/bowl-telemetry/server/pprof/${stage}_mutex.pb.gz' 2>/dev/null || true" || true
-}
-TELEM_SH
-chmod +x /opt/bench/bowl_telemetry.sh
 
 # 2. Provision two isolated Drive9 tenants (one for drive9_default, one for drive9_sync)
 provision_drive9_tenant() {
@@ -768,7 +670,8 @@ VCPU=$(nproc)
 MEM_GIB=$(free -h | awk '/^Mem:/ {print $2}')
 KERNEL=$(uname -r)
 OS_REL=$(. /etc/os-release && echo "${PRETTY_NAME}")
-PG_VER=$(psql --version | head -n 1)
+PG_VER=$(/usr/local/bin/bowl-prod-ctl pg-version 2>/dev/null | head -n 1 || echo "postgres (PostgreSQL) 18 (alpine)")
+DOCKER_VER=$(docker --version 2>/dev/null | head -n 1 || echo "n/a")
 TIDB_VER=$(/root/.tiup/components/tidb/v8.5.5/tidb-server -V | awk -F: '/Release Version/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')
 NVME_DEV=$(cat /etc/bowl_nvme_dev)
 NVME_SIZE_GIB=$(lsblk -dbno SIZE "${NVME_DEV}" | awk '{printf "%.0f", $1 / (1024*1024*1024)}')
@@ -785,6 +688,7 @@ jq -n \
   --arg kernel "${KERNEL}" \
   --arg os "${OS_REL}" \
   --arg pg "${PG_VER}" \
+  --arg docker_ver "${DOCKER_VER}" \
   --arg tidb "${TIDB_VER}" \
   --arg nvme_dev "${NVME_DEV}" \
   --argjson nvme_gib "${NVME_SIZE_GIB}" \
@@ -801,6 +705,8 @@ jq -n \
     kernel: $kernel,
     os_release: $os,
     pg_version: $pg,
+    bowl_pg_version: $pg,
+    docker_version: $docker_ver,
     tidb_version: $tidb,
     data_disk_device: $nvme_dev,
     data_disk_size_gib: $nvme_gib,
@@ -841,6 +747,8 @@ EOF_CMETA
 # ------------------------------------------------------------------------------
 # Step 6: Execute Benchmark Suites (1: juicefs bench, 2: drive9_fuse_bench, 3: fuse_perf_baseline)
 # ------------------------------------------------------------------------------
+TEST_START_EPOCH="$(date +%s)"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "date +%s > /var/run/bowl-prod-started.epoch"
 ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "mkdir -p /tmp/bench_results"
 
 run_juicefs_bench_for_target() {
@@ -853,11 +761,11 @@ run_juicefs_bench_for_target() {
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
-source /opt/bench/bowl_telemetry.sh
+source /opt/bowl/client_telemetry.sh
 if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; systemctl start postgresql bowl-storage"
+  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
 else
-  "${SSH_SRV[@]}" "systemctl stop bowl-storage 2>/dev/null || true; systemctl start tidb drive9-server"
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
   for _ in $(seq 1 30); do
     if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
     sleep 1
@@ -892,15 +800,11 @@ ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='$
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
-source /opt/bench/bowl_telemetry.sh
+source /opt/bowl/client_telemetry.sh
 DROP_CMD="sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@${SERVER_PRIV_IP} 'sync && echo 3 > /proc/sys/vm/drop_caches'"
 
 # 1. Run Bowl (Cold & Hot) with TiDB/Drive9 stopped on Server
-"${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; systemctl start postgresql bowl-storage"
-for _ in $(seq 1 30); do
-  if "${SSH_SRV[@]}" "ss -tln | grep -q ':9000 '"; then break; fi
-  sleep 1
-done
+"${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
 
 capture_bowl_snapshot "suite2_d9_cold_pre"
 python3 /opt/bench/drive9_fuse_bench.py \
@@ -957,7 +861,7 @@ python3 /opt/bench/drive9_fuse_bench.py \
 capture_bowl_snapshot "suite2_d9_hot_post"
 
 # 2. Run Drive9 Default & Sync (Cold & Hot) with Bowl stopped on Server
-"${SSH_SRV[@]}" "systemctl stop bowl-storage 2>/dev/null || true; systemctl start tidb drive9-server"
+"${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
 for _ in $(seq 1 30); do
   if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
   sleep 1
@@ -1047,15 +951,11 @@ run_perf_baseline_for_target() {
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
-source /opt/bench/bowl_telemetry.sh
+source /opt/bowl/client_telemetry.sh
 if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; systemctl start postgresql bowl-storage"
-  for _ in $(seq 1 30); do
-    if "${SSH_SRV[@]}" "ss -tln | grep -q ':9000 '"; then break; fi
-    sleep 1
-  done
+  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
 else
-  "${SSH_SRV[@]}" "systemctl stop bowl-storage 2>/dev/null || true; systemctl start tidb drive9-server"
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
   for _ in $(seq 1 30); do
     if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
     sleep 1
@@ -1091,14 +991,22 @@ EOF_PBASE
 run_perf_baseline_for_target "bowl" "/mnt/bowl"
 run_perf_baseline_for_target "drive9_default" "/mnt/drive9_default"
 run_perf_baseline_for_target "drive9_sync" "/mnt/drive9_sync"
+TEST_END_EPOCH="$(date +%s)"
 
 # ------------------------------------------------------------------------------
-# Step 7: Download Results & Destroy Cloud Instances
+# Step 7: Download Results, Harvest deploy/prod Telemetry & Destroy Cloud Instances
 # ------------------------------------------------------------------------------
 log "Downloading raw benchmark results to ${RESULTS_DIR}..."
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/"
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "/usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true" >/dev/null 2>&1 || true
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "systemctl stop bowl-storage 2>/dev/null || true" >/dev/null 2>&1 || true
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up" >/dev/null 2>&1 || true
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_CLI_FLUSH' >/dev/null 2>&1 || true
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+capture_bowl_snapshot "before_umount"
+/usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
+[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount-phase.log || true
+EOF_CLI_FLUSH
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${TEST_START_EPOCH}' '${TEST_END_EPOCH}' && /usr/local/bin/bowl-prod-ctl down-volumes" >/dev/null 2>&1 || true
 fetch_telemetry_archive
 
 DELETED_SERVER_ID="${SERVER_INSTANCE_ID}"
@@ -1201,6 +1109,9 @@ jq -n \
     },
     bowl_config: {
       git_commit: $bowl_commit,
+      deploy_profile: "deploy/prod (docker-compose.yaml + storage.env)",
+      observability_stack: "Jaeger (OTLP 1%) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      telemetry_dir: "results/telemetry",
       storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
       blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
       blob_size_bytes: 262144,
