@@ -17,7 +17,7 @@
 #         - Suite 3: `fuse_perf_baseline.py` (SHA-256 I/O + SQLite DELETE & WAL)
 # ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
 # - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 部署 PostgreSQL 18 控制面、
-#   storage-service 及 Jaeger (OTLP 1%) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana。
+#   storage-service 及 Jaeger (OTLP 默认 10% + 慢链路分层抓取) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
 #   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
 #   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
@@ -229,8 +229,8 @@ cp "${SCRIPT_DIR}/drive9_fuse_bench.py" "${WORK_DIR}/drive9_fuse_bench.py"
 cp "${SCRIPT_DIR}/fuse_perf_baseline.py" "${WORK_DIR}/fuse_perf_baseline.py"
 
 prepare_prod_bundle "${REPO_ROOT}" "${WORK_DIR}"
-tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" drive9-server
-tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl drive9 drive9_fuse_bench.py fuse_perf_baseline.py
+COPYFILE_DISABLE=1 tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" drive9-server
+COPYFILE_DISABLE=1 tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl drive9 drive9_fuse_bench.py fuse_perf_baseline.py
 
 STAGE_END=$(date +%s)
 record_stage "cross_compile_binaries" "$((STAGE_END - STAGE_START))"
@@ -551,7 +551,7 @@ CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "d9-bench-disk
 DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
 echo "${CREATE_JSON}" > /tmp/bench_results/bowl_disk.json
 OTEL_SERVICE_NAME=bowl-client \
-OTEL_EXPORTER_OTLP_ENDPOINT="${SERVER_PRIV_IP}:4317" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://${SERVER_PRIV_IP}:4317" \
 OTEL_EXPORTER_OTLP_INSECURE=true \
 /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
   --endpoint "${ENDPOINT}" \
@@ -560,7 +560,7 @@ OTEL_EXPORTER_OTLP_INSECURE=true \
   --stats-file \
   --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
   --log-format json \
-  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.01}" \
+  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.10}" \
   --log-file /var/log/bowl-mount.log
 
 # 2. Provision two isolated Drive9 tenants (one for drive9_default, one for drive9_sync)
@@ -746,10 +746,13 @@ EOF_CMETA
 
 # ------------------------------------------------------------------------------
 # Step 6: Execute Benchmark Suites (1: juicefs bench, 2: drive9_fuse_bench, 3: fuse_perf_baseline)
+# 为确保 Bowl 全链路遥测（Jaeger 内存 Trace 与 Prometheus 计数器）零重启连续完整，且 TEST_START/END_EPOCH
+# 严格仅包裹 Bowl 压测窗口：先在停用 TiDB/Drive9 的纯净环境下连续跑完 Bowl 的 Suite 1/2/3 并完成卸载前快照与
+# 遥测导出，随后执行 bowl-prod-ctl stop-storage（仅停业务容器，不动可观测性栈），再运行 Drive9 Default & Sync。
 # ------------------------------------------------------------------------------
-TEST_START_EPOCH="$(date +%s)"
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "date +%s > /var/run/bowl-prod-started.epoch"
 ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "mkdir -p /tmp/bench_results"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up; date +%s > /var/run/bowl-prod-started.epoch"
+TEST_START_EPOCH="$(date +%s)"
 
 run_juicefs_bench_for_target() {
   local target_key="$1"
@@ -762,21 +765,12 @@ set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
 source /opt/bowl/client_telemetry.sh
-if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
-else
-  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
-  for _ in $(seq 1 30); do
-    if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
-    sleep 1
-  done
-fi
 rm -rf "${MP:?}"/*
 sync && echo 3 > /proc/sys/vm/drop_caches || true
 "${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches" || true
-[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "suite1_juicefs_bench_pre"
+[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "jfs_bench_pre"
 /usr/local/bin/juicefs bench "${MP}" -p 4 2>&1 | tee "/tmp/bench_results/bench_${TARGET_KEY}.log"
-[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "suite1_juicefs_bench_post"
+[[ "${TARGET_KEY}" == "bowl" ]] && capture_bowl_snapshot "jfs_bench_post"
 if [[ "${TARGET_KEY}" == "drive9_default" ]]; then
   DRIVE9_SERVER="http://${SERVER_PRIV_IP}:9009" DRIVE9_API_KEY="$(cat /opt/bench/api_key_default.txt)" \
     /usr/local/bin/drive9 mount drain --timeout 300s "${MP}" || true
@@ -787,61 +781,207 @@ EOF_JBENCH
   local s_end
   s_end=$(date +%s)
   record_stage "${target_key}_juicefs_bench" "$((s_end - s_start))"
+  if [[ "${target_key}" == "bowl" ]]; then
+    record_stage "jfs_bench" "$((s_end - s_start))"
+  fi
 }
 
-run_juicefs_bench_for_target "bowl" "/mnt/bowl"
-run_juicefs_bench_for_target "drive9_default" "/mnt/drive9_default"
-run_juicefs_bench_for_target "drive9_sync" "/mnt/drive9_sync"
+run_perf_baseline_for_target() {
+  local target_key="$1"
+  local mountpoint="$2"
+  local s_start
+  s_start=$(date +%s)
+  log "=== [Suite 3: fuse_perf_baseline.py] Target: ${target_key} (${mountpoint}) ==="
+  ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "TARGET_KEY='${target_key}' MP='${mountpoint}' SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_PBASE'
+set -euo pipefail
+export TMPDIR=/opt/bench_tmp
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+rm -rf "${MP:?}"/*
+sync && echo 3 > /proc/sys/vm/drop_caches || true
+"${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches" || true
+if [[ "${TARGET_KEY}" == "bowl" ]]; then
+  capture_bowl_snapshot "fuse_perf_baseline_pre"
+  start_bowl_cpu_profile "sqlite_wal" 10 2
+fi
+python3 /opt/bench/fuse_perf_baseline.py \
+  "${MP}/perf_baseline" \
+  "/tmp/bench_results/perf_baseline_${TARGET_KEY}.json" \
+  64 1024 16 2 256
+if [[ "${TARGET_KEY}" == "bowl" ]]; then
+  finish_bowl_stage_profiles "sqlite_wal"
+  capture_bowl_snapshot "fuse_perf_baseline_post"
+fi
+if [[ "${TARGET_KEY}" == "drive9_default" ]]; then
+  DRIVE9_SERVER="http://${SERVER_PRIV_IP}:9009" DRIVE9_API_KEY="$(cat /opt/bench/api_key_default.txt)" \
+    /usr/local/bin/drive9 mount drain --timeout 300s "${MP}" || true
+fi
+rm -rf "${MP:?}"/*
+sync
+EOF_PBASE
+  local s_end
+  s_end=$(date +%s)
+  record_stage "${target_key}_fuse_perf_baseline" "$((s_end - s_start))"
+  if [[ "${target_key}" == "bowl" ]]; then
+    record_stage "fuse_perf_baseline" "$((s_end - s_start))"
+  fi
+}
 
-# Suite 2: drive9_fuse_bench.py (Cold & Hot cache, isolated per backend stack + dual-node drop_caches)
-STAGE_START=$(date +%s)
-log "=== [Suite 2: drive9_fuse_bench.py] Running Cold-Cache & Hot-Cache across Bowl, Drive9 Default, and Drive9 Sync ==="
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' DRIVE9_GIT_COMMIT='${DRIVE9_GIT_COMMIT}' bash -s" <<'EOF_D9BENCH'
+# --- Phase 6A: Bowl Suites 1 -> 2 (Cold I/O + Cold Meta/Macro + Hot) -> 3 ---
+run_juicefs_bench_for_target "bowl" "/mnt/bowl"
+
+BOWL_D9_START=$(date +%s)
+log "=== [Suite 2: drive9_fuse_bench.py] Target: bowl (Cold I/O + Cold Meta/Macro + Hot, zero-modification instrumentation) ==="
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' DRIVE9_GIT_COMMIT='${DRIVE9_GIT_COMMIT}' bash -s" <<'EOF_D9_BOWL'
 set -euo pipefail
 export TMPDIR=/opt/bench_tmp
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
 source /opt/bowl/client_telemetry.sh
 DROP_CMD="sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@${SERVER_PRIV_IP} 'sync && echo 3 > /proc/sys/vm/drop_caches'"
 
-# 1. Run Bowl (Cold & Hot) with TiDB/Drive9 stopped on Server
-"${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
+# 通过轻量外部导入钩子在 timed() 计时窗外打细粒度快照与 pprof（不改动 drive9_fuse_bench.py 任何逻辑与参数）
+SERVER_PRIV_IP="${SERVER_PRIV_IP}" DROP_CMD="${DROP_CMD}" DRIVE9_GIT_COMMIT="${DRIVE9_GIT_COMMIT}" python3 - <<'PY_BOWL_COLD'
+import os
+import subprocess
+import sys
 
-capture_bowl_snapshot "suite2_d9_cold_pre"
-python3 /opt/bench/drive9_fuse_bench.py \
-  --target bowl=/mnt/bowl \
-  --runs 3 \
-  --cache-state cold \
-  --drop-caches-command "${DROP_CMD}" \
-  --environment lan \
-  --server-url "http://${SERVER_PRIV_IP}:9000" \
-  --server-host "${SERVER_PRIV_IP}" \
-  --version "${DRIVE9_GIT_COMMIT}" \
-  --small-count 200 \
-  --stat-count 500 \
-  --dir-large-count 500 \
-  --large-mib 256 \
-  --random-reads 1000 \
-  --macro-files 200 \
-  --macro-total-mib 20 \
-  --out /tmp/bench_results/d9_cold_bowl.json &
-D9_COLD_PID=$!
-(
-  while kill -0 "${D9_COLD_PID}" 2>/dev/null; do
-    if pgrep -x go >/dev/null 2>&1; then
-      start_bowl_cpu_profile "macro_go_build" 10 0
-      finish_bowl_stage_profiles "macro_go_build"
-      exit 0
-    fi
-    sleep 0.5
-  done
-) &
-D9_WATCH_PID=$!
-wait "${D9_COLD_PID}"
-wait "${D9_WATCH_PID}" 2>/dev/null || true
-finish_bowl_stage_profiles "suite2_d9_cold"
-capture_bowl_snapshot "suite2_d9_cold_post"
+sys.path.insert(0, "/opt/bench")
+import drive9_fuse_bench as b
 
-capture_bowl_snapshot "suite2_d9_hot_pre"
+srv_ip = os.environ["SERVER_PRIV_IP"]
+runs = 3
+
+
+def run_helper(cmd: str) -> None:
+    full = (
+        f"SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o IdentitiesOnly=yes -i /root/.ssh/id_rsa 'root@{srv_ip}'); "
+        f"source /opt/bowl/client_telemetry.sh; {cmd}"
+    )
+    subprocess.run(["bash", "-c", full], check=False)
+
+
+def start_async_cpu(stage: str, sec: int = 8) -> subprocess.Popen:
+    full = (
+        f"SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+        f"-o IdentitiesOnly=yes -i /root/.ssh/id_rsa 'root@{srv_ip}'); "
+        f"source /opt/bowl/client_telemetry.sh; "
+        f"start_bowl_cpu_profile '{stage}' {sec} 0; "
+        f"for pid in \"${{BOWL_PROFILE_PIDS[@]}}\"; do wait \"$pid\" 2>/dev/null || true; done"
+    )
+    return subprocess.Popen(["bash", "-c", full])
+
+
+def finish_async_prof(stage: str, proc: subprocess.Popen | None) -> None:
+    if proc is not None:
+        try:
+            proc.wait(timeout=35)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    run_helper(f"finish_bowl_stage_profiles '{stage}'")
+
+
+orig_seq_write = b.bench_sequential_write
+orig_seq_read = b.bench_sequential_read
+orig_small_write = b.bench_small_write
+orig_mkdir = b.bench_mkdir
+orig_macro = b.bench_macro
+orig_run_cmd = b.run_command
+
+state = {"sw": 0, "sr": 0, "smw": 0, "mk": 0, "mc": 0, "go_prof": None, "sr_prof": None, "smw_prof": None}
+
+
+def hooked_seq_write(base, mib, config):
+    idx = state["sw"]
+    state["sw"] += 1
+    if idx == 0:
+        run_helper("capture_bowl_snapshot 'd9_cold_io_pre'")
+    return orig_seq_write(base, mib, config)
+
+
+def hooked_seq_read(base, mib, config):
+    idx = state["sr"]
+    state["sr"] += 1
+    if idx == 0:
+        run_helper("capture_bowl_snapshot 'd9_cold_seq_read_pre'")
+        state["sr_prof"] = start_async_cpu("seq_read", 6)
+    res = orig_seq_read(base, mib, config)
+    if idx == runs - 1:
+        finish_async_prof("seq_read", state["sr_prof"])
+        state["sr_prof"] = None
+        run_helper("capture_bowl_snapshot 'd9_cold_seq_read_post'")
+    return res
+
+
+def hooked_small_write(base, count, config):
+    idx = state["smw"]
+    state["smw"] += 1
+    if idx == 0:
+        run_helper("capture_bowl_snapshot 'd9_cold_small_write_fsync_pre'")
+        state["smw_prof"] = start_async_cpu("small_write_fsync", 8)
+    res = orig_small_write(base, count, config)
+    if idx == runs - 1:
+        finish_async_prof("small_write_fsync", state["smw_prof"])
+        state["smw_prof"] = None
+        run_helper("capture_bowl_snapshot 'd9_cold_small_write_fsync_post'")
+        run_helper("capture_bowl_snapshot 'd9_cold_io_post'")
+    return res
+
+
+def hooked_mkdir(base, count, config):
+    idx = state["mk"]
+    state["mk"] += 1
+    if idx == 0:
+        run_helper("capture_bowl_snapshot 'd9_cold_meta_macro_pre'")
+    return orig_mkdir(base, count, config)
+
+
+def hooked_run_cmd(cmd, cwd):
+    if cmd and cmd[0] == "go" and state["go_prof"] is None:
+        state["go_prof"] = start_async_cpu("macro_go_build", 10)
+    return orig_run_cmd(cmd, cwd)
+
+
+def hooked_macro(base, config, hot, errors_out):
+    idx = state["mc"]
+    state["mc"] += 1
+    res = orig_macro(base, config, hot, errors_out)
+    if idx == runs - 1:
+        finish_async_prof("macro_go_build", state["go_prof"])
+        state["go_prof"] = None
+        run_helper("capture_bowl_snapshot 'd9_cold_meta_macro_post'")
+    return res
+
+
+b.bench_sequential_write = hooked_seq_write
+b.bench_sequential_read = hooked_seq_read
+b.bench_small_write = hooked_small_write
+b.bench_mkdir = hooked_mkdir
+b.run_command = hooked_run_cmd
+b.bench_macro = hooked_macro
+
+rc = b.main([
+    "--target", "bowl=/mnt/bowl",
+    "--runs", str(runs),
+    "--cache-state", "cold",
+    "--drop-caches-command", os.environ["DROP_CMD"],
+    "--environment", "lan",
+    "--server-url", f"http://{srv_ip}:9000",
+    "--server-host", srv_ip,
+    "--version", os.environ["DRIVE9_GIT_COMMIT"],
+    "--small-count", "200",
+    "--stat-count", "500",
+    "--dir-large-count", "500",
+    "--large-mib", "256",
+    "--random-reads", "1000",
+    "--macro-files", "200",
+    "--macro-total-mib", "20",
+    "--out", "/tmp/bench_results/d9_cold_bowl.json",
+])
+raise SystemExit(rc)
+PY_BOWL_COLD
+
+capture_bowl_snapshot "d9_hot_pre"
 python3 /opt/bench/drive9_fuse_bench.py \
   --target bowl=/mnt/bowl \
   --runs 3 \
@@ -858,14 +998,44 @@ python3 /opt/bench/drive9_fuse_bench.py \
   --macro-files 200 \
   --macro-total-mib 20 \
   --out /tmp/bench_results/d9_hot_bowl.json
-capture_bowl_snapshot "suite2_d9_hot_post"
+capture_bowl_snapshot "d9_hot_post"
+EOF_D9_BOWL
+BOWL_D9_END=$(date +%s)
 
-# 2. Run Drive9 Default & Sync (Cold & Hot) with Bowl stopped on Server
-"${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
+run_perf_baseline_for_target "bowl" "/mnt/bowl"
+TEST_END_EPOCH="$(date +%s)"
+
+# 在卸载 Bowl 前采集完整 final 快照与活跃 Prometheus targets，卸载并等守护进程退出后导出连续无断层遥测，再仅停止 storage-service
+log "Harvesting Bowl pre/post-umount telemetry for exact Bowl window [${TEST_START_EPOCH}, ${TEST_END_EPOCH}] and stopping storage-service..."
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_CLI_FLUSH'
+set -euo pipefail
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+harvest_bowl_before_and_after_umount /mnt/bowl
+EOF_CLI_FLUSH
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${TEST_START_EPOCH}' '${TEST_END_EPOCH}' && /usr/local/bin/bowl-prod-ctl stop-storage"
+
+# --- Phase 6B: Drive9 Default & Sync Suites 1 -> 2 -> 3 (with Bowl storage-service stopped) ---
+log "Starting TiDB + Drive9 Server for isolated Drive9 Default & Sync benchmark suites..."
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl stop-storage 2>/dev/null || true; systemctl start tidb drive9-server"
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_WAIT_D9'
+set -euo pipefail
 for _ in $(seq 1 30); do
   if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
   sleep 1
 done
+curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null
+EOF_WAIT_D9
+
+run_juicefs_bench_for_target "drive9_default" "/mnt/drive9_default"
+run_juicefs_bench_for_target "drive9_sync" "/mnt/drive9_sync"
+
+D9_SUITE2_START=$(date +%s)
+log "=== [Suite 2: drive9_fuse_bench.py] Targets: drive9_default & drive9_sync (Cold & Hot) ==="
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' DRIVE9_GIT_COMMIT='${DRIVE9_GIT_COMMIT}' bash -s" <<'EOF_D9_COMP'
+set -euo pipefail
+export TMPDIR=/opt/bench_tmp
+DROP_CMD="sync; echo 3 > /proc/sys/vm/drop_caches; ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa root@${SERVER_PRIV_IP} 'sync && echo 3 > /proc/sys/vm/drop_caches'"
 
 python3 /opt/bench/drive9_fuse_bench.py \
   --target drive9_default=/mnt/drive9_default \
@@ -936,78 +1106,20 @@ for stem in ("drive9_fuse_bench_cold", "drive9_fuse_bench_hot"):
 PY
 
 rm -f /tmp/bench_results/d9_cold_bowl.json /tmp/bench_results/d9_cold_drive9.json /tmp/bench_results/d9_hot_bowl.json /tmp/bench_results/d9_hot_drive9.json
-EOF_D9BENCH
-STAGE_END=$(date +%s)
-record_stage "drive9_fuse_bench_cold_and_hot" "$((STAGE_END - STAGE_START))"
+EOF_D9_COMP
+D9_SUITE2_END=$(date +%s)
+record_stage "drive9_fuse_bench_cold_and_hot" "$(( (BOWL_D9_END - BOWL_D9_START) + (D9_SUITE2_END - D9_SUITE2_START) ))"
 
-# Suite 3: fuse_perf_baseline.py (SHA-256 Small/Large I/O + SQLite DELETE & WAL)
-run_perf_baseline_for_target() {
-  local target_key="$1"
-  local mountpoint="$2"
-  local s_start
-  s_start=$(date +%s)
-  log "=== [Suite 3: fuse_perf_baseline.py] Target: ${target_key} (${mountpoint}) ==="
-  ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "TARGET_KEY='${target_key}' MP='${mountpoint}' SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_PBASE'
-set -euo pipefail
-export TMPDIR=/opt/bench_tmp
-SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
-source /opt/bowl/client_telemetry.sh
-if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  "${SSH_SRV[@]}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up"
-else
-  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl start tidb drive9-server"
-  for _ in $(seq 1 30); do
-    if curl -sf "http://${SERVER_PRIV_IP}:9009/healthz" >/dev/null; then break; fi
-    sleep 1
-  done
-fi
-rm -rf "${MP:?}"/*
-sync && echo 3 > /proc/sys/vm/drop_caches || true
-"${SSH_SRV[@]}" "sync && echo 3 > /proc/sys/vm/drop_caches" || true
-if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  capture_bowl_snapshot "suite3_sqlite_wal_pre"
-  start_bowl_cpu_profile "sqlite_wal" 10 2
-fi
-python3 /opt/bench/fuse_perf_baseline.py \
-  "${MP}/perf_baseline" \
-  "/tmp/bench_results/perf_baseline_${TARGET_KEY}.json" \
-  64 1024 16 2 256
-if [[ "${TARGET_KEY}" == "bowl" ]]; then
-  finish_bowl_stage_profiles "sqlite_wal"
-  capture_bowl_snapshot "suite3_sqlite_wal_post"
-fi
-if [[ "${TARGET_KEY}" == "drive9_default" ]]; then
-  DRIVE9_SERVER="http://${SERVER_PRIV_IP}:9009" DRIVE9_API_KEY="$(cat /opt/bench/api_key_default.txt)" \
-    /usr/local/bin/drive9 mount drain --timeout 300s "${MP}" || true
-fi
-rm -rf "${MP:?}"/*
-sync
-EOF_PBASE
-  local s_end
-  s_end=$(date +%s)
-  record_stage "${target_key}_fuse_perf_baseline" "$((s_end - s_start))"
-}
-
-run_perf_baseline_for_target "bowl" "/mnt/bowl"
 run_perf_baseline_for_target "drive9_default" "/mnt/drive9_default"
 run_perf_baseline_for_target "drive9_sync" "/mnt/drive9_sync"
-TEST_END_EPOCH="$(date +%s)"
 
 # ------------------------------------------------------------------------------
-# Step 7: Download Results, Harvest deploy/prod Telemetry & Destroy Cloud Instances
+# Step 7: Download Results, Distill deploy/prod Telemetry & Destroy Cloud Instances
 # ------------------------------------------------------------------------------
 log "Downloading raw benchmark results to ${RESULTS_DIR}..."
 scp "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}:/tmp/bench_results/*" "${RESULTS_DIR}/"
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "systemctl stop drive9-server tidb 2>/dev/null || true; /usr/local/bin/bowl-prod-ctl up" >/dev/null 2>&1 || true
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${CLIENT_PUB_IP}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_CLI_FLUSH' >/dev/null 2>&1 || true
-SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
-source /opt/bowl/client_telemetry.sh
-capture_bowl_snapshot "before_umount"
-/usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
-[[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount-phase.log || true
-EOF_CLI_FLUSH
-ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${TEST_START_EPOCH}' '${TEST_END_EPOCH}' && /usr/local/bin/bowl-prod-ctl down-volumes" >/dev/null 2>&1 || true
 fetch_telemetry_archive
+ssh "${SSH_OPTS[@]}" -i "${KEY_FILE}" "root@${SERVER_PUB_IP}" "/usr/local/bin/bowl-prod-ctl down-volumes" >/dev/null 2>&1 || true
 
 DELETED_SERVER_ID="${SERVER_INSTANCE_ID}"
 DELETED_CLIENT_ID="${CLIENT_INSTANCE_ID}"
@@ -1110,7 +1222,7 @@ jq -n \
     bowl_config: {
       git_commit: $bowl_commit,
       deploy_profile: "deploy/prod (docker-compose.yaml + storage.env)",
-      observability_stack: "Jaeger (OTLP 1%) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      observability_stack: "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=\(env.BOWL_BENCH_TRACE_SAMPLE_RATIO // "0.10")) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
       telemetry_dir: "results/telemetry",
       storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
       blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",

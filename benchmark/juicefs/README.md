@@ -10,7 +10,7 @@
 2. **JuiceFS (PostgreSQL 16 + Server rclone S3)**：PostgreSQL 16 元数据引擎 + Server 节点本地 NVMe SSD（`/mnt/nvme`）上的 rclone S3 对象存储（`--trash-days 0`），客户端缓存目录 `/var/jfsCache` 挂载于 Client 本地 NVMe SSD。
 3. **JuiceFS (Redis 7 + Server rclone S3)**：JuiceFS 官方常规测试默认的 Redis 元数据引擎（`appendonly yes`, `appendfsync everysec`，AOF 落本地 NVMe SSD）+ Server 节点本地 NVMe SSD 上的 rclone S3 对象存储（`--trash-days 0`）。
 
-Bowl 客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；配备对称的 `WriteBehindCoordinator`（连续顺序写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发 Write RPC 流水线，`<64 KiB` 小写直通）、`ReadAheadCoordinator` 顺序预读与双端 `8 MiB / 32 MiB` HTTP/2 流控窗口，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。同时默认开启跨机 OTLP 追踪上报（直连服务端 Jaeger `:4317`）、`--admin-addr 0.0.0.0:9567`（暴露 `bowl stats` 8 大子系统快照、Prometheus `/metrics` 与 `pprof`）及 `--stats-file` 挂载点实时统计。Flush 排空异步写缓冲但不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。每个子测试前均执行 Client 与 Server 双端 `sync && echo 3 > /proc/sys/vm/drop_caches`。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
+Bowl 客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；配备对称的 `WriteBehindCoordinator`（连续顺序写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发 Write RPC 流水线，`<64 KiB` 小写直通）、`ReadAheadCoordinator` 顺序预读与双端 `8 MiB / 32 MiB` HTTP/2 流控窗口，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。同时默认开启跨机 OTLP 追踪上报（`http://<server_ip>:4317`）、`--admin-addr 0.0.0.0:9567`（暴露 `bowl stats` 9 大子系统快照、26 桶延迟直方图、Prometheus `/metrics` 与 `pprof`）及 `--stats-file` 挂载点实时统计。Flush 排空异步写缓冲但不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。每个子测试前均执行 Client 与 Server 双端 `sync && echo 3 > /proc/sys/vm/drop_caches`。不同存储栈的缓存与写入确认条件不同，性能数值需结合各自配置解读。
 
 ## 目录结构
 
@@ -23,8 +23,8 @@ Bowl 客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保
 | [`parse_results.py`](./parse_results.py) | `juicefs bench`、`fio` JSON、`mdtest` 输出及 `results/telemetry/` 解析器与 `REPORT.md` 渲染工具 |
 | [`results/summary.json`](./results/summary.json) | 结构化测试汇总数据（三大存储栈在全部测试套件中的吞吐量、IOPS、延迟、相对倍数及遥测诊断摘要） |
 | [`results/env_metadata.json`](./results/env_metadata.json) | 双机硬件规格、软件版本、`deploy/prod` 配置快照、VPC 内网 RTT / `iperf3` 带宽基线、云盘本地基线及云资源销毁审计元数据 |
-| [`results/telemetry/`](./results) | 轻量级可追踪遥测诊断产物：`overview.{md,json}`、`client_stats/`（`bowl stats` 与阶段增量）、`jaeger/`（慢调用/错误链路）、`prometheus/metrics_summary.json`、`loki/*.jsonl`、`pprof_top/*.txt` |
-| `results/telemetry-raw.tar.gz` | 原始二进制遥测归档（`.pb.gz` CPU/Heap/Mutex/Block 火焰图、`.prom` 快照、Pebble `LOG*`、`/proc/diskstats`，已加入 `.gitignore`） |
+| [`results/telemetry/`](./results) | 轻量级可追踪遥测诊断产物：`overview.{md,json}`、`phase_deltas.json`（9 大子工作负载全链路逐跳拆解）、`client_stats/`、`jaeger/`、`prometheus/metrics_summary.json`、`loki/*.jsonl`、`pebble/`、`pprof_top/*.txt` |
+| `results/telemetry-raw.tar.gz` | 原始二进制遥测归档（`.pb.gz` CPU/Heap/Mutex/Block 火焰图、`.prom` 快照、Pebble `LOG*`/`pebble_events.log`、`/proc/diskstats`，已加入 `.gitignore`） |
 | [`results/`](./results) | 各存储栈的 `bench_*.log`、`fio_*.json`、`mdtest_*.log` 原始实测输出文件 |
 
 ## 快速复现
@@ -46,7 +46,7 @@ bash benchmark/juicefs/run_benchmark.sh
 - `ZONE_ID`（默认 `us-west-1a`）
 - `INSTANCE_TYPE`（默认 `ecs.i5.xlarge`，配备 894 GiB 本地 NVMe SSD `local_ssd_pro`）
 - `SYSTEM_DISK_SIZE`（默认 `40` GiB `cloud_essd` 系统盘）
-- `BOWL_BENCH_TRACE_SAMPLE_RATIO`（默认 `0.01` 即与 `deploy/prod` 一致的 1% OTel 采样；排查细粒度尾延迟可设为 `0.1` 或 `1.0`）
+- `BOWL_BENCH_TRACE_SAMPLE_RATIO`（默认 `0.10` 即 10% OTel 采样并配合 Jaeger 按操作与慢链路分层抓取；全量采样可设为 `1.0`）
 - `BOWL_BENCH_LOG_LEVEL`（默认 `warn`）
 - `KEEP_INSTANCES`（默认 `0` 测试完成后立即销毁实例；设为 `1` 可保留实例用于现场排查）
 

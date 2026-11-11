@@ -4,7 +4,7 @@
 # ==============================================================================
 # ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
 # - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 容器化部署
-#   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger (OTLP 1%) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana；
+#   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger (OTLP 默认 10% + 慢链路分层抓取) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana；
 #   仅针对 POSIX 合规断言覆写 STORAGE_ATIME_MODE=strictatime 与 0s 缓存 TTL。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
 #   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
@@ -470,9 +470,9 @@ if grep -q " /mnt/bowl " /proc/self/mountinfo; then
   /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
 fi
 # 注意：pjdfstest 不传 --stats-file（避免在根目录下注入虚拟 .stats 节点干扰 POSIX 目录项断言），
-# 全量 8 大子系统指标仍通过 :9567/debug/stats?format=json|text 精确导出。
+# 全量 9 大子系统指标仍通过 :9567/debug/stats?format=json|text 精确导出。
 OTEL_SERVICE_NAME=bowl-client \
-OTEL_EXPORTER_OTLP_ENDPOINT="${SERVER_PRIV_IP}:4317" \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://${SERVER_PRIV_IP}:4317" \
 OTEL_EXPORTER_OTLP_INSECURE=true \
 /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
   --endpoint "${ENDPOINT}" \
@@ -480,7 +480,7 @@ OTEL_EXPORTER_OTLP_INSECURE=true \
   --admin-addr 0.0.0.0:9567 \
   --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
   --log-format json \
-  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.01}" \
+  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.10}" \
   --log-file /var/log/bowl-mount.log
 mkdir -p /mnt/bowl/work
 
@@ -555,13 +555,14 @@ ssh_srv_base = [
 
 
 def capture_snapshot(phase: str) -> None:
+    (cli_telem / "stats" / f"{phase}.epoch").write_text(f"{time.time():.6f}\n", encoding="utf-8")
     subprocess.run(
         [
             "sh",
             "-c",
-            f"curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > '{cli_telem}/metrics/{phase}.prom' 2>/dev/null || true; "
-            f"curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=json' > '{cli_telem}/stats/{phase}.json' 2>/dev/null || true; "
-            f"curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=text' > '{cli_telem}/stats/{phase}.txt' 2>/dev/null || true",
+            f"tmp='{cli_telem}/metrics/{phase}.prom.tmp'; if curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/metrics/{phase}.prom'; else rm -f \"$tmp\"; fi; "
+            f"tmp='{cli_telem}/stats/{phase}.json.tmp'; if curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=json' > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/stats/{phase}.json'; else rm -f \"$tmp\"; fi; "
+            f"tmp='{cli_telem}/stats/{phase}.txt.tmp'; if curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=text' > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/stats/{phase}.txt'; else rm -f \"$tmp\"; fi",
         ],
         check=False,
     )
@@ -624,14 +625,15 @@ subdirs = sorted([d.name for d in tests_root.iterdir() if d.is_dir()])
 print(f"[pjdfstest-runner] Discovered {len(subdirs)} syscall directories: {', '.join(subdirs)}", flush=True)
 
 capture_snapshot("suite_pre")
-slow_dirs = {"chown", "rename", "unlink"}
+slow_dirs = {"chmod", "chown", "ftruncate", "link", "open", "rename", "truncate", "unlink"}
+profile_dirs = {"chown", "rename"}
 
 with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encoding="utf-8") as tim_f:
     for idx, dname in enumerate(subdirs, 1):
         target_dir = tests_root / dname
         if dname in slow_dirs:
             capture_snapshot(f"{dname}_pre")
-        prof_procs = start_cpu_profile(dname, 10) if dname == "chown" else []
+        prof_procs = start_cpu_profile(dname, 10) if dname in profile_dirs else []
         t0 = time.monotonic()
         print(f"[{idx:02d}/{len(subdirs):02d}] Running prove --timer -rv {target_dir} ...", flush=True)
         proc = subprocess.run(
@@ -644,7 +646,7 @@ with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encod
             errors="replace",
         )
         elapsed = round(time.monotonic() - t0, 3)
-        if dname == "chown":
+        if dname in profile_dirs:
             finish_stage_profiles(dname, prof_procs)
         if dname in slow_dirs:
             capture_snapshot(f"{dname}_post")
@@ -675,8 +677,14 @@ TEST_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TEST_END_EPOCH="$(date +%s)"
 log "pjdfstest execution finished at ${TEST_COMPLETED_AT}."
 
-# Unmount cleanly while Jaeger is running so Client OTLP spans flush, then export deploy/prod telemetry
-ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "/usr/local/bin/bowl umount /mnt/bowl || umount /mnt/bowl || true; [[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount-phase.log || true"
+# 卸载前采集双端 final 快照与活跃 Prometheus targets，卸载并等待守护进程完整刷盘退出后再拉取完整 bowl-mount.log 与服务端遥测
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_PJDFS_HARVEST'
+set -euo pipefail
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+harvest_bowl_before_and_after_umount /mnt/bowl
+EOF_PJDFS_HARVEST
+TEST_END_EPOCH="$(date +%s)"
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${TEST_START_EPOCH}' '${TEST_END_EPOCH}' && /usr/local/bin/bowl-prod-ctl down-volumes"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
@@ -768,7 +776,7 @@ jq -n \
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
       deploy_profile: "deploy/prod (docker-compose.yaml + storage.env + strictatime/0s TTL override)",
-      observability_stack: "Jaeger (OTLP 1%) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      observability_stack: "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=\(env.BOWL_BENCH_TRACE_SAMPLE_RATIO // "0.10")) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
       telemetry_dir: "results/telemetry",
       storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
       blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",

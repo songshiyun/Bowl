@@ -188,7 +188,7 @@ if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
   cp "${GOOSE_CACHE_BIN}" "${WORK_DIR}/goose"
   chmod +x "${WORK_DIR}/storage-service" "${WORK_DIR}/bowl" "${WORK_DIR}/goose"
   prepare_prod_bundle "${REPO_ROOT}" "${WORK_DIR}"
-  tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl
+  COPYFILE_DISABLE=1 tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl
   log "Compiled binaries and deploy/prod bundle ready in ${WORK_DIR}"
 else
   log "Step 1/6: Skipping Bowl binary cross-compilation (TARGETS_TO_RUN=${TARGETS_TO_RUN})"
@@ -706,58 +706,83 @@ run_suites_on_mount() {
   mkdir -p "${fio_dir}"
 
   t0="$(date +%s.%N)"
+  local sub_t0 sub_t1
 
   # 2.1 seq_write_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_write_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
   capture_target_snapshot "${target}" "fio_seq_write_1job_pre"
+  sub_t0="$(date +%s.%N)"
   start_target_cpu_profile "${target}" "fio_seq_write_1job" 10
   fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
   finish_target_stage_profiles "${target}" "fio_seq_write_1job"
+  sub_t1="$(date +%s.%N)"
   capture_target_snapshot "${target}" "fio_seq_write_1job_post"
+  record_timing "${target}" "fio_seq_write_1job" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.2 seq_read_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_read_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
   capture_target_snapshot "${target}" "fio_seq_read_1job_pre"
+  sub_t0="$(date +%s.%N)"
   start_target_cpu_profile "${target}" "fio_seq_read_1job" 10
   fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
   finish_target_stage_profiles "${target}" "fio_seq_read_1job"
+  sub_t1="$(date +%s.%N)"
   capture_target_snapshot "${target}" "fio_seq_read_1job_post"
+  record_timing "${target}" "fio_seq_read_1job" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -f "${fio_dir}"/seq1*
 
-  # 2.3 seq_write_16jobs (4M, 1G x 16 = 16GiB)
+  # 2.3 & 2.4 seq_16jobs (4M, 1G x 16 = 16GiB write + read)
   echo "  -> [${target}] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
-  capture_target_snapshot "${target}" "fio_multi_and_direct_pre"
+  capture_target_snapshot "${target}" "fio_seq_16jobs_pre"
+  sub_t0="$(date +%s.%N)"
   fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
 
-  # 2.4 seq_read_16jobs (4M, 1G x 16 = 16GiB)
   echo "  -> [${target}] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
   fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_seq_16jobs_post"
+  record_timing "${target}" "fio_seq_16jobs" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -f "${fio_dir}"/seq16*
 
-  # 2.5 direct_write_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  # 2.5 & 2.6 direct_seq (1M, 1G x 4 = 4GiB, direct=1 write + read)
   echo "  -> [${target}] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
+  capture_target_snapshot "${target}" "fio_direct_seq_pre"
+  sub_t0="$(date +%s.%N)"
   fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
 
-  # 2.6 direct_read_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
   fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_seq_post"
+  record_timing "${target}" "fio_direct_seq" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.7 direct_randwrite_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
+  capture_target_snapshot "${target}" "fio_direct_randwrite_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "fio_direct_randwrite" 10
   fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
+  finish_target_stage_profiles "${target}" "fio_direct_randwrite"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_randwrite_post"
+  record_timing "${target}" "fio_direct_randwrite" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.8 direct_randread_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
+  capture_target_snapshot "${target}" "fio_direct_randread_pre"
+  sub_t0="$(date +%s.%N)"
   fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
-  capture_target_snapshot "${target}" "fio_multi_and_direct_post"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_randread_post"
+  record_timing "${target}" "fio_direct_randread" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   rm -rf "${fio_dir}"
   t1="$(date +%s.%N)"
@@ -767,14 +792,26 @@ run_suites_on_mount() {
   echo "[${target}] [3/3] Running mdtest suite on ${mp} ..."
   t0="$(date +%s.%N)"
   drop_all_caches
-  capture_target_snapshot "${target}" "mdtest_pre"
+  capture_target_snapshot "${target}" "mdtest_1p_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "mdtest_1p" 10
   /usr/local/bin/mdtest -d "${mp}/mdtest_1p" -b 6 -I 8 -z 4 </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_1proc.log"
+  finish_target_stage_profiles "${target}" "mdtest_1p"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "mdtest_1p_post"
+  record_timing "${target}" "mdtest_1p" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -rf "${mp}/mdtest_1p"
 
   drop_all_caches
+  capture_target_snapshot "${target}" "mdtest_4p_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "mdtest_4p" 10
   mpirun --allow-run-as-root --oversubscribe -np 4 /usr/local/bin/mdtest -d "${mp}/mdtest_4p" -b 3 -z 2 -I 20 -u </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_4proc.log"
+  finish_target_stage_profiles "${target}" "mdtest_4p"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "mdtest_4p_post"
+  record_timing "${target}" "mdtest_4p" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -rf "${mp}/mdtest_4p"
-  capture_target_snapshot "${target}" "mdtest_post"
   t1="$(date +%s.%N)"
   record_timing "${target}" "mdtest" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
 }
@@ -788,7 +825,6 @@ has_target() {
 # ------------------------------------------------------------------------------
 if has_target "bowl"; then
   "${SSH_SRV[@]}" "systemctl stop postgresql redis-server jfs-s3 jfs-webdav 2>/dev/null || true; date +%s > /var/run/bowl-prod-started.epoch; /usr/local/bin/bowl-prod-ctl up"
-  BOWL_PHASE_START="$(date +%s)"
   ENDPOINT="http://${SERVER_PRIV_IP}:9000"
   CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "jfs-bench-disk" --endpoint "${ENDPOINT}" --json)"
   DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
@@ -796,7 +832,7 @@ if has_target "bowl"; then
 
   mkdir -p /mnt/bowl
   OTEL_SERVICE_NAME=bowl-client \
-  OTEL_EXPORTER_OTLP_ENDPOINT="${SERVER_PRIV_IP}:4317" \
+  OTEL_EXPORTER_OTLP_ENDPOINT="http://${SERVER_PRIV_IP}:4317" \
   OTEL_EXPORTER_OTLP_INSECURE=true \
   /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
     --endpoint "${ENDPOINT}" \
@@ -805,21 +841,21 @@ if has_target "bowl"; then
     --stats-file \
     --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
     --log-format json \
-    --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.01}" \
+    --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.10}" \
     --log-file /var/log/bowl-mount.log
+  BOWL_PHASE_START="$(date +%s)"
   run_suites_on_mount "bowl" "/mnt/bowl"
-  capture_target_snapshot "bowl" "before_umount"
-  /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
   BOWL_PHASE_END="$(date +%s)"
-  [[ -f /var/log/bowl-mount.log ]] && cp -a /var/log/bowl-mount.log /tmp/bowl-telemetry/client/logs/bowl-mount-phase.log || true
-  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${BOWL_PHASE_START}' '${BOWL_PHASE_END}' && /usr/local/bin/bowl-prod-ctl down-volumes"
+  jq -nc --argjson s "${BOWL_PHASE_START}" --argjson e "${BOWL_PHASE_END}" '{start_epoch: $s, end_epoch: $e}' > "${OUT_DIR}/bowl_window.json"
+  harvest_bowl_before_and_after_umount /mnt/bowl
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${BOWL_PHASE_START}' '${BOWL_PHASE_END}' && /usr/local/bin/bowl-prod-ctl stop-storage"
 fi
 
 # ------------------------------------------------------------------------------
 # Target 2: JuiceFS + PostgreSQL 16 (jfs_pg)
 # ------------------------------------------------------------------------------
 if has_target "jfs_pg"; then
-  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl stop redis-server 2>/dev/null || true; systemctl start postgresql jfs-s3 jfs-webdav"
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop-storage 2>/dev/null || true; systemctl stop redis-server 2>/dev/null || true; systemctl start postgresql jfs-s3 jfs-webdav"
   export AWS_ACCESS_KEY_ID=minioadmin
   export AWS_SECRET_ACCESS_KEY=minioadmin
   export MINIO_ACCESS_KEY=minioadmin
@@ -855,7 +891,7 @@ fi
 # Target 3: JuiceFS + Redis 7 (jfs_redis)
 # ------------------------------------------------------------------------------
 if has_target "jfs_redis"; then
-  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop 2>/dev/null || true; systemctl stop postgresql 2>/dev/null || true; systemctl start redis-server jfs-s3 jfs-webdav"
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop-storage 2>/dev/null || true; systemctl stop postgresql 2>/dev/null || true; systemctl start redis-server jfs-s3 jfs-webdav"
   export AWS_ACCESS_KEY_ID=minioadmin
   export AWS_SECRET_ACCESS_KEY=minioadmin
   export MINIO_ACCESS_KEY=minioadmin
@@ -901,6 +937,10 @@ if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
   cat "${RESULTS_DIR}/stage_timings.jsonl" "${WORK_DIR}/prev_stage_timings.jsonl" | jq -sc 'unique_by(.target + ":" + .suite) | .[]' > "${WORK_DIR}/merged_timings.jsonl"
   mv "${WORK_DIR}/merged_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
 fi
+if [[ -f "${RESULTS_DIR}/bowl_window.json" ]]; then
+  TEST_START_EPOCH="$(jq -r '.start_epoch // empty' "${RESULTS_DIR}/bowl_window.json")"
+  TEST_END_EPOCH="$(jq -r '.end_epoch // empty' "${RESULTS_DIR}/bowl_window.json")"
+fi
 if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
   BOWL_DISK_JSON="$(cat "${RESULTS_DIR}/bowl_disk.json")"
 elif [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
@@ -914,6 +954,7 @@ fi
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
 # ==============================================================================
 fetch_telemetry_archive
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl down-volumes" >/dev/null 2>&1 || true
 log "Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md..."
 if [[ "${KEEP_INSTANCES}" != "1" ]]; then
   aliyun ecs DeleteInstances \
@@ -998,7 +1039,7 @@ jq -n \
     bowl_config: {
       bowl_git_commit: $bowl_commit,
       deploy_profile: "deploy/prod (docker-compose.yaml + storage.env)",
-      observability_stack: "Jaeger (OTLP 1%) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      observability_stack: "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=\(env.BOWL_BENCH_TRACE_SAMPLE_RATIO // "0.10")) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
       telemetry_dir: "results/telemetry",
       storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
       blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
