@@ -1,28 +1,28 @@
 [
   {
-    "trace_id": "c83b59632b4e92e8068e806e31d98638",
-    "total_duration_ms": 17.399,
+    "trace_id": "27764d429817cf678b1c945a885465c5",
+    "total_duration_ms": 12.07,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
+    "span_count": 9,
     "span_links_count": 1,
     "services": [
       "bowl-client",
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 17.399,
-    "server_max_span_ms": 0.763,
-    "client_rpc_span_ms": 17.089,
-    "server_rpc_span_ms": 0.763,
-    "rpc_network_codec_ms": 16.326,
-    "client_local_overhead_ms": 0.31,
-    "network_or_client_overhead_ms": 16.326,
+    "client_max_span_ms": 12.07,
+    "server_max_span_ms": 0.613,
+    "client_rpc_span_ms": 5.125,
+    "server_rpc_span_ms": 0.613,
+    "rpc_network_codec_ms": 4.512,
+    "client_local_overhead_ms": 6.945,
+    "network_or_client_overhead_ms": 4.512,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 17.399,
+        "duration_ms": 12.07,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -34,8 +34,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 17.089,
-        "start_offset_ms": 0.285,
+        "duration_ms": 5.125,
+        "start_offset_ms": 6.935,
         "error": true,
         "tags": {
           "error": true,
@@ -48,8 +48,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.763,
-        "start_offset_ms": 3.441,
+        "duration_ms": 0.613,
+        "start_offset_ms": 10.862,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Read",
@@ -59,85 +59,77 @@
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.073,
-        "start_offset_ms": 3.819,
+        "duration_ms": 0.156,
+        "start_offset_ms": 11.014,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.04,
-        "start_offset_ms": 3.502,
+        "duration_ms": 0.139,
+        "start_offset_ms": 11.175,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 3.622,
+        "duration_ms": 0.134,
+        "start_offset_ms": 11.317,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 3.662,
+        "duration_ms": 0.092,
+        "start_offset_ms": 10.919,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 3.896,
+        "operation": "store.KVScan",
+        "duration_ms": 0.023,
+        "start_offset_ms": 10.894,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 3.979,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.037,
-        "start_offset_ms": 3.776,
+        "operation": "store.KVGet",
+        "duration_ms": 0.007,
+        "start_offset_ms": 10.882,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "e6a62e6c3a11d9e91689a482c697d554",
-    "total_duration_ms": 13.007,
+    "trace_id": "319ae9c8f8743c133f84134df964f892",
+    "total_duration_ms": 11.702,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
+    "span_count": 9,
     "span_links_count": 1,
     "services": [
       "bowl-client",
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 13.007,
-    "server_max_span_ms": 1.015,
-    "client_rpc_span_ms": 12.695,
-    "server_rpc_span_ms": 1.015,
-    "rpc_network_codec_ms": 11.68,
-    "client_local_overhead_ms": 0.312,
-    "network_or_client_overhead_ms": 11.68,
+    "client_max_span_ms": 11.702,
+    "server_max_span_ms": 0.824,
+    "client_rpc_span_ms": 5.934,
+    "server_rpc_span_ms": 0.824,
+    "rpc_network_codec_ms": 5.11,
+    "client_local_overhead_ms": 5.768,
+    "network_or_client_overhead_ms": 5.11,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 13.007,
+        "duration_ms": 11.702,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -149,8 +141,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 12.695,
-        "start_offset_ms": 0.287,
+        "duration_ms": 5.934,
+        "start_offset_ms": 5.756,
         "error": true,
         "tags": {
           "error": true,
@@ -163,8 +155,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.015,
-        "start_offset_ms": 1.717,
+        "duration_ms": 0.824,
+        "start_offset_ms": 6.3,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Read",
@@ -174,200 +166,77 @@
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.071,
-        "start_offset_ms": 2.26,
+        "duration_ms": 0.176,
+        "start_offset_ms": 6.741,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.067,
-        "start_offset_ms": 2.071,
+        "duration_ms": 0.173,
+        "start_offset_ms": 6.387,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.062,
-        "start_offset_ms": 2.41,
+        "duration_ms": 0.171,
+        "start_offset_ms": 6.565,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.061,
-        "start_offset_ms": 2.337,
+        "duration_ms": 0.165,
+        "start_offset_ms": 6.927,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.054,
-        "start_offset_ms": 2.199,
+        "operation": "store.KVScan",
+        "duration_ms": 0.039,
+        "start_offset_ms": 6.346,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.054,
-        "start_offset_ms": 1.915,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.052,
-        "start_offset_ms": 2.016,
+        "operation": "store.KVGet",
+        "duration_ms": 0.01,
+        "start_offset_ms": 6.33,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "d8cbc42d815e8ae5169c8651b3ea30ee",
-    "total_duration_ms": 11.373,
+    "trace_id": "78bcd017c2ff25e60060be212c9e6a51",
+    "total_duration_ms": 11.227,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
+    "span_count": 9,
     "span_links_count": 1,
     "services": [
       "bowl-client",
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.82,
-    "server_max_span_ms": 10.845,
-    "client_rpc_span_ms": 0.656,
-    "server_rpc_span_ms": 10.845,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.164,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 10.845,
-        "start_offset_ms": 0.528,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.947,
-        "start_offset_ms": 7.973,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.183,
-        "start_offset_ms": 3.666,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.099,
-        "start_offset_ms": 4.859,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.99,
-        "start_offset_ms": 5.971,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.82,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.724,
-        "start_offset_ms": 1.684,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.656,
-        "start_offset_ms": 0.15,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.655,
-        "start_offset_ms": 10.68,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.639,
-        "start_offset_ms": 7.325,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "5c53e2f7f1da33ec0be8d7f7c7d271d0",
-    "total_duration_ms": 9.626,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 9.626,
-    "server_max_span_ms": 0.725,
-    "client_rpc_span_ms": 9.468,
-    "server_rpc_span_ms": 0.725,
-    "rpc_network_codec_ms": 8.743,
-    "client_local_overhead_ms": 0.158,
-    "network_or_client_overhead_ms": 8.743,
+    "client_max_span_ms": 11.227,
+    "server_max_span_ms": 1.657,
+    "client_rpc_span_ms": 10.955,
+    "server_rpc_span_ms": 1.657,
+    "rpc_network_codec_ms": 9.298,
+    "client_local_overhead_ms": 0.272,
+    "network_or_client_overhead_ms": 9.298,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 9.626,
+        "duration_ms": 11.227,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -379,8 +248,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 9.468,
-        "start_offset_ms": 0.143,
+        "duration_ms": 10.955,
+        "start_offset_ms": 0.262,
         "error": true,
         "tags": {
           "error": true,
@@ -393,8 +262,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.725,
-        "start_offset_ms": 1.205,
+        "duration_ms": 1.657,
+        "start_offset_ms": 2.265,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Read",
@@ -404,299 +273,77 @@
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 1.581,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 1.82,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 1.501,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 1.861,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.037,
-        "start_offset_ms": 1.701,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.037,
-        "start_offset_ms": 1.78,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.037,
-        "start_offset_ms": 1.461,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "1ddc767b07e2bfe50e4e3b239d07b420",
-    "total_duration_ms": 9.465,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.448,
-    "server_max_span_ms": 8.868,
-    "client_rpc_span_ms": 0.264,
-    "server_rpc_span_ms": 8.868,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.184,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 8.868,
-        "start_offset_ms": 0.597,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.216,
-        "start_offset_ms": 5.129,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.921,
-        "start_offset_ms": 3.206,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.723,
-        "start_offset_ms": 2.466,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.594,
-        "start_offset_ms": 1.864,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.578,
-        "start_offset_ms": 4.542,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.567,
-        "start_offset_ms": 7.192,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.548,
-        "start_offset_ms": 8.165,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.448,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.444,
-        "start_offset_ms": 6.358,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "5dcd079b57f30bea72f2c8c2300e93a9",
-    "total_duration_ms": 9.012,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.269,
-    "server_max_span_ms": 8.632,
-    "client_rpc_span_ms": 0.18,
-    "server_rpc_span_ms": 8.632,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.089,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 8.632,
-        "start_offset_ms": 0.38,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.598,
-        "start_offset_ms": 6.198,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.22,
-        "start_offset_ms": 0.448,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.581,
-        "start_offset_ms": 5.606,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.529,
-        "start_offset_ms": 4.769,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.471,
-        "start_offset_ms": 3.957,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.463,
-        "start_offset_ms": 7.81,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.46,
-        "start_offset_ms": 8.519,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.44,
-        "start_offset_ms": 2.446,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.418,
+        "duration_ms": 0.453,
         "start_offset_ms": 3.295,
         "error": false,
         "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.BlobPread",
+        "duration_ms": 0.307,
+        "start_offset_ms": 2.392,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.BlobPread",
+        "duration_ms": 0.276,
+        "start_offset_ms": 2.984,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.BlobPread",
+        "duration_ms": 0.259,
+        "start_offset_ms": 2.714,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVScan",
+        "duration_ms": 0.034,
+        "start_offset_ms": 2.354,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.031,
+        "start_offset_ms": 2.316,
+        "error": false,
+        "tags": {}
       }
     ]
   },
   {
-    "trace_id": "17def5351604f40e7271be683ce65c70",
-    "total_duration_ms": 8.36,
+    "trace_id": "c7f1a6953d826c74458f780e86d61d73",
+    "total_duration_ms": 7.567,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
+    "span_count": 9,
     "span_links_count": 1,
     "services": [
       "bowl-client",
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 8.36,
-    "server_max_span_ms": 0.916,
-    "client_rpc_span_ms": 8.247,
-    "server_rpc_span_ms": 0.916,
-    "rpc_network_codec_ms": 7.331,
-    "client_local_overhead_ms": 0.113,
-    "network_or_client_overhead_ms": 7.331,
+    "client_max_span_ms": 7.567,
+    "server_max_span_ms": 0.681,
+    "client_rpc_span_ms": 7.491,
+    "server_rpc_span_ms": 0.681,
+    "rpc_network_codec_ms": 6.81,
+    "client_local_overhead_ms": 0.076,
+    "network_or_client_overhead_ms": 6.81,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 8.36,
+        "duration_ms": 7.567,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -708,8 +355,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 8.247,
-        "start_offset_ms": 0.096,
+        "duration_ms": 7.491,
+        "start_offset_ms": 0.058,
         "error": true,
         "tags": {
           "error": true,
@@ -722,8 +369,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.916,
-        "start_offset_ms": 3.23,
+        "duration_ms": 0.681,
+        "start_offset_ms": 0.164,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Read",
@@ -733,86 +380,104 @@
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.068,
-        "start_offset_ms": 3.576,
+        "duration_ms": 0.155,
+        "start_offset_ms": 0.661,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.065,
-        "start_offset_ms": 3.503,
+        "duration_ms": 0.153,
+        "start_offset_ms": 0.364,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.057,
-        "start_offset_ms": 3.439,
+        "duration_ms": 0.136,
+        "start_offset_ms": 0.224,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.054,
-        "start_offset_ms": 3.651,
+        "duration_ms": 0.132,
+        "start_offset_ms": 0.524,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.051,
-        "start_offset_ms": 3.333,
+        "operation": "store.KVScan",
+        "duration_ms": 0.024,
+        "start_offset_ms": 0.196,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.043,
-        "start_offset_ms": 3.753,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.042,
-        "start_offset_ms": 3.39,
+        "operation": "store.KVGet",
+        "duration_ms": 0.007,
+        "start_offset_ms": 0.185,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "afb5ee789aea43d1e645976b3e7722cf",
-    "total_duration_ms": 7.91,
+    "trace_id": "86dbf7e859e538270f4db6e71035b52e",
+    "total_duration_ms": 7.427,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
+    "span_count": 9,
     "span_links_count": 1,
     "services": [
       "bowl-client",
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.41,
-    "server_max_span_ms": 7.244,
-    "client_rpc_span_ms": 0.378,
-    "server_rpc_span_ms": 7.244,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.032,
-    "network_or_client_overhead_ms": 0.0,
+    "client_max_span_ms": 7.427,
+    "server_max_span_ms": 1.118,
+    "client_rpc_span_ms": 6.939,
+    "server_rpc_span_ms": 1.118,
+    "rpc_network_codec_ms": 5.821,
+    "client_local_overhead_ms": 0.488,
+    "network_or_client_overhead_ms": 5.821,
     "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 7.427,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "canceled: context canceled"
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Read",
+        "duration_ms": 6.939,
+        "start_offset_ms": 0.478,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled",
+          "rpc.method": "storage.v1.StorageService/Read",
+          "rpc.response.status_code": "CANCELED"
+        }
+      },
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 7.244,
-        "start_offset_ms": 0.666,
+        "duration_ms": 1.118,
+        "start_offset_ms": 0.569,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Read",
@@ -822,957 +487,56 @@
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 1.567,
-        "start_offset_ms": 3.235,
+        "duration_ms": 0.337,
+        "start_offset_ms": 1.319,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 1.062,
-        "start_offset_ms": 0.753,
+        "duration_ms": 0.305,
+        "start_offset_ms": 1.002,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.622,
-        "start_offset_ms": 2.601,
+        "duration_ms": 0.185,
+        "start_offset_ms": 0.812,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.BlobPread",
-        "duration_ms": 0.555,
-        "start_offset_ms": 6.187,
+        "duration_ms": 0.174,
+        "start_offset_ms": 0.634,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.522,
-        "start_offset_ms": 4.851,
+        "operation": "store.KVScan",
+        "duration_ms": 0.027,
+        "start_offset_ms": 0.604,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.49,
-        "start_offset_ms": 7.105,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.41,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.38,
-        "start_offset_ms": 1.844,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.378,
-        "start_offset_ms": 0.028,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      }
-    ]
-  },
-  {
-    "trace_id": "d29c27fa28f2d85fe6590f35fc0a757f",
-    "total_duration_ms": 6.362,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.584,
-    "server_max_span_ms": 5.885,
-    "client_rpc_span_ms": 0.397,
-    "server_rpc_span_ms": 5.885,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.187,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 5.885,
-        "start_offset_ms": 0.477,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 2.207,
-        "start_offset_ms": 4.121,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.055,
-        "start_offset_ms": 1.003,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.811,
-        "start_offset_ms": 2.464,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.584,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.444,
-        "start_offset_ms": 0.551,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.397,
-        "start_offset_ms": 0.162,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.389,
-        "start_offset_ms": 2.069,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.104,
-        "start_offset_ms": 3.439,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.095,
-        "start_offset_ms": 4.014,
+        "operation": "store.KVGet",
+        "duration_ms": 0.007,
+        "start_offset_ms": 0.592,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "cf47d4e7dfda05e773c345338167b7dd",
-    "total_duration_ms": 5.999,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 5.999,
-    "server_max_span_ms": 0.776,
-    "client_rpc_span_ms": 5.474,
-    "server_rpc_span_ms": 0.776,
-    "rpc_network_codec_ms": 4.698,
-    "client_local_overhead_ms": 0.525,
-    "network_or_client_overhead_ms": 4.698,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 5.999,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 5.474,
-        "start_offset_ms": 0.506,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.776,
-        "start_offset_ms": 2.411,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.048,
-        "start_offset_ms": 3.101,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.044,
-        "start_offset_ms": 3.009,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.043,
-        "start_offset_ms": 3.055,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.04,
-        "start_offset_ms": 2.716,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.04,
-        "start_offset_ms": 2.47,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.04,
-        "start_offset_ms": 2.885,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.04,
-        "start_offset_ms": 2.8,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "94e055ac091193cd5ce96bceffc78797",
-    "total_duration_ms": 3.389,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 3.389,
-    "server_max_span_ms": 1.287,
-    "client_rpc_span_ms": 3.299,
-    "server_rpc_span_ms": 1.287,
-    "rpc_network_codec_ms": 2.012,
-    "client_local_overhead_ms": 0.09,
-    "network_or_client_overhead_ms": 2.012,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 3.389,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 3.299,
-        "start_offset_ms": 0.08,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.287,
-        "start_offset_ms": 1.518,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.144,
-        "start_offset_ms": 1.993,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.087,
-        "start_offset_ms": 1.805,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.079,
-        "start_offset_ms": 1.896,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.072,
-        "start_offset_ms": 1.73,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.07,
-        "start_offset_ms": 2.613,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.066,
-        "start_offset_ms": 2.475,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.066,
-        "start_offset_ms": 2.194,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "1ad28b63ab8f3c998e33b48e2dd952bf",
-    "total_duration_ms": 3.164,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 1.97,
-    "server_max_span_ms": 1.825,
-    "client_rpc_span_ms": 1.893,
-    "server_rpc_span_ms": 1.825,
-    "rpc_network_codec_ms": 0.068,
-    "client_local_overhead_ms": 0.077,
-    "network_or_client_overhead_ms": 0.068,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 1.97,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.893,
-        "start_offset_ms": 0.068,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.825,
-        "start_offset_ms": 1.339,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 1.075,
-        "start_offset_ms": 1.716,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.061,
-        "start_offset_ms": 1.439,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.038,
-        "start_offset_ms": 1.511,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.036,
-        "start_offset_ms": 1.595,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.035,
-        "start_offset_ms": 1.552,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.035,
-        "start_offset_ms": 2.834,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.035,
-        "start_offset_ms": 1.675,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "6f18bc07e2b5f0050f94d5b1e883d3dd",
-    "total_duration_ms": 1.773,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 1.345,
-    "server_max_span_ms": 0.035,
-    "client_rpc_span_ms": 1.224,
-    "server_rpc_span_ms": 0.035,
-    "rpc_network_codec_ms": 1.189,
-    "client_local_overhead_ms": 0.121,
-    "network_or_client_overhead_ms": 1.189,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 1.345,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.224,
-        "start_offset_ms": 0.108,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.035,
-        "start_offset_ms": 1.738,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
-        }
-      }
-    ]
-  },
-  {
-    "trace_id": "2a9a051c7d5b7d8a1433364464b48e85",
-    "total_duration_ms": 1.643,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.886,
-    "server_max_span_ms": 1.016,
-    "client_rpc_span_ms": 0.68,
-    "server_rpc_span_ms": 1.016,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.206,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.016,
-        "start_offset_ms": 0.627,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.886,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.68,
-        "start_offset_ms": 0.16,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.065,
-        "start_offset_ms": 0.759,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.062,
-        "start_offset_ms": 0.941,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.059,
-        "start_offset_ms": 1.006,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.058,
-        "start_offset_ms": 1.392,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.057,
-        "start_offset_ms": 1.067,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.057,
-        "start_offset_ms": 0.88,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.055,
-        "start_offset_ms": 1.129,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "3cfa4770bd8523db8ae4441547e388e2",
-    "total_duration_ms": 1.61,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.268,
-    "server_max_span_ms": 1.033,
-    "client_rpc_span_ms": 0.229,
-    "server_rpc_span_ms": 1.033,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.039,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.033,
-        "start_offset_ms": 0.577,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.268,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.229,
-        "start_offset_ms": 0.036,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.072,
-        "start_offset_ms": 1.08,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.071,
-        "start_offset_ms": 1.495,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.067,
-        "start_offset_ms": 1.155,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.063,
-        "start_offset_ms": 1.225,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.059,
-        "start_offset_ms": 1.016,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.053,
-        "start_offset_ms": 1.435,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.053,
-        "start_offset_ms": 1.291,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "3295a04e999af18d73f879573e028891",
-    "total_duration_ms": 1.488,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.597,
-    "server_max_span_ms": 1.172,
-    "client_rpc_span_ms": 0.538,
-    "server_rpc_span_ms": 1.172,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.059,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.172,
-        "start_offset_ms": 0.316,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.597,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.538,
-        "start_offset_ms": 0.053,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.111,
-        "start_offset_ms": 1.027,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.083,
-        "start_offset_ms": 0.86,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.077,
-        "start_offset_ms": 0.947,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.075,
-        "start_offset_ms": 0.583,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.074,
-        "start_offset_ms": 1.142,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.07,
-        "start_offset_ms": 0.66,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.064,
-        "start_offset_ms": 0.516,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "5ad078e459c5ec301889da393b5dc738",
-    "total_duration_ms": 1.453,
+    "trace_id": "2498e5bce7ea32a1b1099abd5d3c4238",
+    "total_duration_ms": 3.0,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
     "span_count": 1,
@@ -1781,7 +545,7 @@
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 1.453,
+    "client_max_span_ms": 3.0,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
@@ -1792,7 +556,7 @@
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 1.453,
+        "duration_ms": 3.0,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -1804,846 +568,307 @@
     ]
   },
   {
-    "trace_id": "659955b3260d1061b1926e327fcc6d61",
-    "total_duration_ms": 1.434,
+    "trace_id": "e00af2f9de50ca4c4f4199fab9fdb5a2",
+    "total_duration_ms": 2.996,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.706,
-    "server_max_span_ms": 1.1,
-    "client_rpc_span_ms": 0.604,
-    "server_rpc_span_ms": 1.1,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.102,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.1,
-        "start_offset_ms": 0.334,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.706,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.604,
-        "start_offset_ms": 0.099,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.097,
-        "start_offset_ms": 0.941,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.082,
-        "start_offset_ms": 0.605,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.074,
-        "start_offset_ms": 1.042,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.061,
-        "start_offset_ms": 1.347,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.058,
-        "start_offset_ms": 1.118,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.058,
-        "start_offset_ms": 0.76,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.057,
-        "start_offset_ms": 0.881,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "798f3e96f6905dc8419781ff6000c133",
-    "total_duration_ms": 1.397,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.689,
-    "server_max_span_ms": 1.112,
-    "client_rpc_span_ms": 0.609,
-    "server_rpc_span_ms": 1.112,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.08,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 1.112,
-        "start_offset_ms": 0.285,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.689,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.609,
-        "start_offset_ms": 0.07,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.076,
-        "start_offset_ms": 1.039,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.071,
-        "start_offset_ms": 0.954,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.062,
-        "start_offset_ms": 0.767,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.061,
-        "start_offset_ms": 0.703,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.061,
-        "start_offset_ms": 0.832,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.06,
-        "start_offset_ms": 0.64,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.059,
-        "start_offset_ms": 0.574,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "f58a211ec7e0b1610e9f8fed9aff379c",
-    "total_duration_ms": 1.187,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 21,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.369,
-    "server_max_span_ms": 0.904,
-    "client_rpc_span_ms": 0.285,
-    "server_rpc_span_ms": 0.904,
-    "rpc_network_codec_ms": 0.0,
-    "client_local_overhead_ms": 0.084,
-    "network_or_client_overhead_ms": 0.0,
-    "top_spans": [
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.904,
-        "start_offset_ms": 0.283,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.369,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.285,
-        "start_offset_ms": 0.075,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.075,
-        "start_offset_ms": 0.718,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.06,
-        "start_offset_ms": 0.915,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.056,
-        "start_offset_ms": 0.978,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.056,
-        "start_offset_ms": 1.037,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.054,
-        "start_offset_ms": 0.801,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.052,
-        "start_offset_ms": 0.858,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.BlobPread",
-        "duration_ms": 0.051,
-        "start_offset_ms": 0.612,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "81248c584727df462c33da1df0dbf1d3",
-    "total_duration_ms": 0.987,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.293,
-    "server_max_span_ms": 0.012,
-    "client_rpc_span_ms": 0.147,
-    "server_rpc_span_ms": 0.012,
-    "rpc_network_codec_ms": 0.135,
-    "client_local_overhead_ms": 0.146,
-    "network_or_client_overhead_ms": 0.135,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.293,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.147,
-        "start_offset_ms": 0.136,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.012,
-        "start_offset_ms": 0.975,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
-        }
-      }
-    ]
-  },
-  {
-    "trace_id": "4d3d3e5675eb8ca906b4cd21d7a171ab",
-    "total_duration_ms": 0.986,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 4,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.295,
-    "server_max_span_ms": 0.049,
-    "client_rpc_span_ms": 0.204,
-    "server_rpc_span_ms": 0.049,
-    "rpc_network_codec_ms": 0.155,
-    "client_local_overhead_ms": 0.091,
-    "network_or_client_overhead_ms": 0.155,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.295,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.204,
-        "start_offset_ms": 0.084,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.049,
-        "start_offset_ms": 0.937,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.007,
-        "start_offset_ms": 0.957,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "80127e782e7f87c7ecc32e12fa1b6557",
-    "total_duration_ms": 0.924,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.314,
-    "server_max_span_ms": 0.033,
-    "client_rpc_span_ms": 0.236,
-    "server_rpc_span_ms": 0.033,
-    "rpc_network_codec_ms": 0.203,
-    "client_local_overhead_ms": 0.078,
-    "network_or_client_overhead_ms": 0.203,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.314,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.236,
-        "start_offset_ms": 0.074,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.033,
-        "start_offset_ms": 0.891,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
-        }
-      }
-    ]
-  },
-  {
-    "trace_id": "58796a5b7733877704cf1df66f3cb687",
-    "total_duration_ms": 0.915,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 4,
-    "span_links_count": 1,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.864,
-    "server_max_span_ms": 0.05,
-    "client_rpc_span_ms": 0.485,
-    "server_rpc_span_ms": 0.05,
-    "rpc_network_codec_ms": 0.435,
-    "client_local_overhead_ms": 0.379,
-    "network_or_client_overhead_ms": 0.435,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.864,
-        "start_offset_ms": 0.0,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.485,
-        "start_offset_ms": 0.366,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.05,
-        "start_offset_ms": 0.865,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "OK"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.007,
-        "start_offset_ms": 0.888,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "cfbbc09fe439b7420109caf642558867",
-    "total_duration_ms": 0.806,
-    "root_service": "bowl-client",
-    "root_operation": "read_ahead.Prefetch",
-    "span_count": 2,
+    "span_count": 1,
     "span_links_count": 1,
     "services": [
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.806,
+    "client_max_span_ms": 2.996,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
     "rpc_network_codec_ms": null,
-    "client_local_overhead_ms": 0.166,
+    "client_local_overhead_ms": null,
     "network_or_client_overhead_ms": null,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.806,
+        "duration_ms": 2.996,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.64,
-        "start_offset_ms": 0.156,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
+          "otel.status_description": "context canceled"
         }
       }
     ]
   },
   {
-    "trace_id": "a237449950c2b039e36f4a0884138ed4",
-    "total_duration_ms": 0.758,
+    "trace_id": "c34231d6cc9280d19692186131aef6cc",
+    "total_duration_ms": 2.991,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
+    "span_count": 1,
     "span_links_count": 1,
     "services": [
-      "bowl-client",
-      "bowl-storage"
+      "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.284,
-    "server_max_span_ms": 0.057,
-    "client_rpc_span_ms": 0.087,
-    "server_rpc_span_ms": 0.057,
-    "rpc_network_codec_ms": 0.03,
-    "client_local_overhead_ms": 0.197,
-    "network_or_client_overhead_ms": 0.03,
+    "client_max_span_ms": 2.991,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.284,
+        "duration_ms": 2.991,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.087,
-        "start_offset_ms": 0.191,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.057,
-        "start_offset_ms": 0.701,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
+          "otel.status_description": "context canceled"
         }
       }
     ]
   },
   {
-    "trace_id": "4cdf578b9dcda2a63e74160b47912367",
-    "total_duration_ms": 0.729,
+    "trace_id": "4d8cc71dceae69e6661005a462d243fa",
+    "total_duration_ms": 2.987,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
+    "span_count": 1,
     "span_links_count": 1,
     "services": [
-      "bowl-client",
-      "bowl-storage"
+      "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.572,
-    "server_max_span_ms": 0.047,
-    "client_rpc_span_ms": 0.362,
-    "server_rpc_span_ms": 0.047,
-    "rpc_network_codec_ms": 0.315,
-    "client_local_overhead_ms": 0.21,
-    "network_or_client_overhead_ms": 0.315,
+    "client_max_span_ms": 2.987,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.572,
+        "duration_ms": 2.987,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.362,
-        "start_offset_ms": 0.204,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.047,
-        "start_offset_ms": 0.682,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
+          "otel.status_description": "context canceled"
         }
       }
     ]
   },
   {
-    "trace_id": "bc39b9e9c949995075b5fa8420697f83",
-    "total_duration_ms": 0.696,
+    "trace_id": "119ff98729ea53ae04796ab656202076",
+    "total_duration_ms": 1.455,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 3,
+    "span_count": 1,
     "span_links_count": 1,
     "services": [
-      "bowl-client",
-      "bowl-storage"
+      "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.273,
-    "server_max_span_ms": 0.018,
-    "client_rpc_span_ms": 0.127,
-    "server_rpc_span_ms": 0.018,
-    "rpc_network_codec_ms": 0.109,
-    "client_local_overhead_ms": 0.146,
-    "network_or_client_overhead_ms": 0.109,
+    "client_max_span_ms": 1.455,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.273,
+        "duration_ms": 1.455,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.127,
-        "start_offset_ms": 0.143,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.018,
-        "start_offset_ms": 0.678,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "UNKNOWN"
+          "otel.status_description": "context canceled"
         }
       }
     ]
   },
   {
-    "trace_id": "b4ce5cebcbb9c09c1323b6faeb037eb6",
-    "total_duration_ms": 0.669,
+    "trace_id": "91f2e1096517bca259f216b53292bad7",
+    "total_duration_ms": 1.035,
     "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 1.035,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 1.035,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "add315cdf01d7a7d4501f7bb196dc745",
+    "total_duration_ms": 1.026,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 1.026,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 1.026,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "dc5c91b2c7a916ef3173934996d8ccc0",
+    "total_duration_ms": 1.017,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 1.017,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 1.017,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "03813c2794d320237074c56b271b0b78",
+    "total_duration_ms": 1.017,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 1.017,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 1.017,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "d0427be96a0e868f0a317394e5cf0a4f",
+    "total_duration_ms": 0.987,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.987,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.987,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "582078e841a85f1f0e0e3e09e5b9ab4a",
+    "total_duration_ms": 0.979,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.GetXAttr",
     "span_count": 5,
     "span_links_count": 0,
     "services": [
@@ -2651,112 +876,527 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.669,
-    "server_max_span_ms": 0.112,
-    "client_rpc_span_ms": 0.625,
-    "server_rpc_span_ms": 0.112,
-    "rpc_network_codec_ms": 0.513,
-    "client_local_overhead_ms": 0.044,
-    "network_or_client_overhead_ms": 0.513,
+    "client_max_span_ms": 0.979,
+    "server_max_span_ms": 0.168,
+    "client_rpc_span_ms": 0.92,
+    "server_rpc_span_ms": 0.168,
+    "rpc_network_codec_ms": 0.752,
+    "client_local_overhead_ms": 0.059,
+    "network_or_client_overhead_ms": 0.752,
     "top_spans": [
       {
         "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.669,
+        "operation": "fuse.GetXAttr",
+        "duration_ms": 0.979,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
+          "fuse.errno": "ENODATA",
+          "fuse.op": "GetXAttr",
+          "fuse.status_code": 61
         }
       },
       {
         "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.625,
-        "start_offset_ms": 0.028,
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.92,
+        "start_offset_ms": 0.045,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
+          "otel.status_description": "store: no data available",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
           "rpc.response.status_code": "NOT_FOUND"
         }
       },
       {
         "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.112,
-        "start_offset_ms": 0.277,
+        "operation": "storage.v1.StorageService/GetXattr",
+        "duration_ms": 0.168,
+        "start_offset_ms": 0.419,
         "error": false,
         "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.method": "storage.v1.StorageService/GetXattr",
           "rpc.response.status_code": "NOT_FOUND"
         }
       },
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.009,
-        "start_offset_ms": 0.32,
+        "duration_ms": 0.046,
+        "start_offset_ms": 0.507,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.009,
-        "start_offset_ms": 0.335,
+        "duration_ms": 0.013,
+        "start_offset_ms": 0.488,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "6b9b84e459a80474df358a3a44fae5cb",
-    "total_duration_ms": 0.648,
+    "trace_id": "58decae22c8144460e4771a35877cc06",
+    "total_duration_ms": 0.933,
     "root_service": "bowl-client",
     "root_operation": "read_ahead.Prefetch",
-    "span_count": 2,
+    "span_count": 1,
     "span_links_count": 1,
     "services": [
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.648,
+    "client_max_span_ms": 0.933,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
     "rpc_network_codec_ms": null,
-    "client_local_overhead_ms": 0.586,
+    "client_local_overhead_ms": null,
     "network_or_client_overhead_ms": null,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "read_ahead.Prefetch",
-        "duration_ms": 0.648,
+        "duration_ms": 0.933,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "canceled: context canceled"
+          "otel.status_description": "context canceled"
         }
-      },
+      }
+    ]
+  },
+  {
+    "trace_id": "9f5d1a022f8e1ff120053d985d1f96e1",
+    "total_duration_ms": 0.86,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.86,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
       {
         "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Read",
-        "duration_ms": 0.062,
-        "start_offset_ms": 0.574,
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.86,
+        "start_offset_ms": 0.0,
         "error": true,
         "tags": {
           "error": true,
           "otel.status_code": "ERROR",
-          "otel.status_description": "context canceled",
-          "rpc.method": "storage.v1.StorageService/Read",
-          "rpc.response.status_code": "CANCELED"
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "0efd49d15e8dd140a48b9caf709874c0",
+    "total_duration_ms": 0.857,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.857,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.857,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "b81c89474d3a275fff7e91c1b6286eae",
+    "total_duration_ms": 0.856,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.856,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.856,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "f73d14036a20d29c041d5edce347572e",
+    "total_duration_ms": 0.826,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.826,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.826,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "d173fe75f60704a11acfdefd00472685",
+    "total_duration_ms": 0.819,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.819,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.819,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "6d915f80286780e09cb4bfd0c865055b",
+    "total_duration_ms": 0.441,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.441,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.441,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "cbdd7a486cc4db120cd87a840809b184",
+    "total_duration_ms": 0.425,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.425,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.425,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "c9ecd5b2151070944543803d5ce7fe9e",
+    "total_duration_ms": 0.424,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.424,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.424,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "28d3df7de5bc3cdce9a93030ceb7782a",
+    "total_duration_ms": 0.423,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.423,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.423,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "609177172005c8fc095675abec0af549",
+    "total_duration_ms": 0.389,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.389,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.389,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "f438a377d7e7d7b080ed882ae52b21fc",
+    "total_duration_ms": 0.387,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.387,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.387,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "dac88860abb78b1c014ef0d9662d369f",
+    "total_duration_ms": 0.357,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.357,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.357,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "3e587da54a037c6200a8fd4e01f5380e",
+    "total_duration_ms": 0.315,
+    "root_service": "bowl-client",
+    "root_operation": "read_ahead.Prefetch",
+    "span_count": 1,
+    "span_links_count": 1,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.315,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "read_ahead.Prefetch",
+        "duration_ms": 0.315,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "context canceled"
         }
       }
     ]

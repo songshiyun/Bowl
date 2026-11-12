@@ -22,12 +22,14 @@
 #   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
 #   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
 # - 数据层：BlobStore 采用扁平 64 MiB Append-Only .pack 封包文件、256 KiB 逻辑块网格、
-#   常驻句柄池与尾块分片热缓存（AppendBlocks 整块顺序写跳过用户态冗余缓存拷贝），
-#   支持活跃包末尾同块 ExtendTail 顺延扩展、无锁并发 Read、WriteRequest 池化零分配解码、
-#   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及已封口包自动回收。
+#   常驻句柄池与 64 MiB 分片热块缓存（AppendBlocks 整块顺序写跳过用户态冗余缓存拷贝），
+#   支持活跃包末尾同块 ExtendTail 顺延扩展、8 MiB SyncFileRange 渐进异步回写、相邻物理连续块合并单次 pread 无锁并发 Read、
+#   WriteRequest/ReadResponse 池化零分配编解码、服务端 128 MiB H2C 连接窗口、
+#   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及后台异步全死封口包回收。
 # - 客户端：无会话 RawFS FUSE 客户端，禁用 CAP_WRITEBACK_CACHE（保留 FOPEN_KEEP_CACHE 与 CAP_HANDLE_KILLPRIV），
-#   配备 WriteBehindCoordinator 顺序写 4 MiB 聚批与 W*=4 并发流水线（2 MiB 同步探测 + <64 KiB 直通写）+
-#   ReadAheadCoordinator 顺序预读 + 双端 8 MiB / 32 MiB HTTP/2 流控窗口；Flush 不触发跨机 Fsync RPC。
+#   配备 1+8 H2C 多连接条带池（32 MiB 元数据连接 + 8×64 MiB 数据连接，单流 8 MiB）与 MarshalAppend 零分配编码、
+#   WriteBehindCoordinator（4 MiB × W*=4 并发写流水线，2 MiB 同步探测 + Create 预热与 <=256 KiB 小块连续写内存聚合）、
+#   ReadAheadCoordinator 单飞有序槽位预读（W_read=4, ReadAheadMaxGlobalInflight=32）与 completeDirs 本地目录流合成；Flush 不触发跨机 Fsync RPC。
 # ==============================================================================
 
 set -euo pipefail

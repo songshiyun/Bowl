@@ -14,9 +14,9 @@
     "data_disk_size_gib": 894
   },
   "server_node": {
-    "instance_id": "i-rj95goqmagl76j2rt5r4",
-    "public_ip": "43.110.154.118",
-    "private_ip": "172.16.1.195",
+    "instance_id": "i-rj93vq1u38hlqnxjflpy",
+    "public_ip": "43.110.155.208",
+    "private_ip": "172.16.1.196",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
@@ -30,15 +30,15 @@
     "data_disk_size_gib": 894,
     "disk_seq_write_mib_s": 1998.05,
     "disk_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69959,
-    "local_randread_4k_iops": 699768,
-    "local_fsync_4k_iops": 50472,
-    "local_fsync_4k_p99_us": 63.1
+    "local_randwrite_4k_iops": 69945,
+    "local_randread_4k_iops": 699819,
+    "local_fsync_4k_iops": 51570,
+    "local_fsync_4k_p99_us": 62.6
   },
   "client_node": {
-    "instance_id": "i-rj95goqmagl76j2rt5r5",
-    "public_ip": "43.110.155.87",
-    "private_ip": "172.16.1.194",
+    "instance_id": "i-rj93vq1u38hlqnxjflpz",
+    "public_ip": "47.88.21.131",
+    "private_ip": "172.16.1.197",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
     "memory_gib": "30Gi",
@@ -50,19 +50,19 @@
     "sqlite_version": "3.45.1"
   },
   "network_baseline": {
-    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.042/0.084/0.289/0.058 ms",
+    "ping_rtt_ms": "rtt min/avg/max/mdev = 0.050/0.090/0.260/0.048 ms",
     "iperf3_gbps": 21.22
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69959,
-    "local_randread_4k_iops": 699768,
-    "local_fsync_4k_iops": 50472,
-    "local_fsync_4k_p99_us": 63.1
+    "local_randwrite_4k_iops": 69945,
+    "local_randread_4k_iops": 699819,
+    "local_fsync_4k_iops": 51570,
+    "local_fsync_4k_p99_us": 62.6
   },
   "bowl_config": {
-    "git_commit": "8afc63c",
+    "git_commit": "6399122",
     "deploy_profile": "deploy/prod (docker-compose.yaml + storage.env)",
     "observability_stack": "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=0.10) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
     "telemetry_dir": "results/telemetry",
@@ -92,11 +92,11 @@
     "sync_mode": "--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-d9bench-kp-20261111-191124",
-    "server_instance_ids": "i-rj95goqmagl76j2rt5r4",
-    "client_instance_ids": "i-rj95goqmagl76j2rt5r5",
-    "instances_created_at": "2026-11-11T19:11:39Z",
-    "instances_deleted_at": "2026-11-11T19:38:04Z",
+    "key_pair_name": "bowl-d9bench-kp-20261112-050638",
+    "server_instance_ids": "i-rj93vq1u38hlqnxjflpy",
+    "client_instance_ids": "i-rj93vq1u38hlqnxjflpz",
+    "instances_created_at": "2026-11-12T05:06:59Z",
+    "instances_deleted_at": "2026-11-12T05:32:21Z",
     "remaining_benchmark_instances": 0
   }
 }

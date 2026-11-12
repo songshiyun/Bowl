@@ -1,71 +1,71 @@
 === Top Self Hotspots (-flat) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: cpu
-Time: 2026-11-12 03:16:36 CST
-Duration: 10s, Total samples = 3.70s (37.00%)
-Showing nodes accounting for 1.87s, 50.54% of 3.70s total
-Dropped 211 nodes (cum <= 0.02s)
-Showing top 25 nodes out of 407
+Time: 2026-11-12 13:13:49 CST
+Duration: 10s, Total samples = 3.89s (38.90%)
+Showing nodes accounting for 1.99s, 51.16% of 3.89s total
+Dropped 230 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 380
       flat  flat%   sum%        cum   cum%
-     0.73s 19.73% 19.73%      0.73s 19.73%  internal/runtime/syscall/linux.Syscall6
-     0.15s  4.05% 23.78%      0.15s  4.05%  runtime.futex
-     0.11s  2.97% 26.76%      0.11s  2.97%  runtime.memclrNoHeapPointers
-     0.08s  2.16% 28.92%      0.08s  2.16%  runtime.(*mspan).writeHeapBitsSmall
-     0.07s  1.89% 30.81%      0.07s  1.89%  runtime.memmove
-     0.07s  1.89% 32.70%      0.07s  1.89%  runtime.nextFreeFast (inline)
-     0.06s  1.62% 34.32%      0.06s  1.62%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
-     0.05s  1.35% 35.68%      0.05s  1.35%  runtime.write1
-     0.04s  1.08% 36.76%      0.05s  1.35%  internal/sync.(*Mutex).Lock
-     0.04s  1.08% 37.84%      0.04s  1.08%  runtime.lock2
-     0.04s  1.08% 38.92%      0.26s  7.03%  runtime.newobject
-     0.04s  1.08% 40.00%      0.09s  2.43%  runtime.selectgo
-     0.03s  0.81% 40.81%      0.04s  1.08%  context.value
-     0.03s  0.81% 41.62%      0.10s  2.70%  github.com/starsrc/bowl/client/internal/fusefs.(*NamespaceCache).invalidateDirListingTouchParentAt
-     0.03s  0.81% 42.43%      0.03s  0.81%  internal/poll.(*fdMutex).decref
-     0.03s  0.81% 43.24%      0.08s  2.16%  runtime.adjustframe
-     0.03s  0.81% 44.05%      0.43s 11.62%  runtime.findRunnable
-     0.03s  0.81% 44.86%      0.03s  0.81%  runtime.findfunc
-     0.03s  0.81% 45.68%      0.40s 10.81%  runtime.mallocgc
-     0.03s  0.81% 46.49%      0.26s  7.03%  runtime.mapaccess1
-     0.03s  0.81% 47.30%      0.05s  1.35%  runtime.mapaccess1_faststr
-     0.03s  0.81% 48.11%      0.03s  0.81%  runtime.nanotime (inline)
-     0.03s  0.81% 48.92%      0.04s  1.08%  runtime.step
-     0.03s  0.81% 49.73%      0.03s  0.81%  type:.eq.vendor/golang.org/x/net/http2/hpack.pairNameValue
-     0.03s  0.81% 50.54%      0.03s  0.81%  vendor/golang.org/x/net/http2/hpack.AppendHuffmanString
+     0.79s 20.31% 20.31%      0.79s 20.31%  internal/runtime/syscall/linux.Syscall6
+     0.13s  3.34% 23.65%      0.13s  3.34%  runtime.futex
+     0.13s  3.34% 26.99%      0.13s  3.34%  runtime.memclrNoHeapPointers
+     0.10s  2.57% 29.56%      0.11s  2.83%  runtime.(*mspan).writeHeapBitsSmall
+     0.10s  2.57% 32.13%      0.10s  2.57%  runtime.nextFreeFast (inline)
+     0.09s  2.31% 34.45%      0.09s  2.31%  aeshashbody
+     0.08s  2.06% 36.50%      0.08s  2.06%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.06s  1.54% 38.05%      0.06s  1.54%  time.runtimeNow
+     0.05s  1.29% 39.33%      0.07s  1.80%  runtime.step
+     0.04s  1.03% 40.36%      0.04s  1.03%  internal/sync.(*Mutex).Lock (inline)
+     0.04s  1.03% 41.39%      0.04s  1.03%  runtime.memmove
+     0.04s  1.03% 42.42%      0.09s  2.31%  runtime.stealWork
+     0.04s  1.03% 43.44%      0.06s  1.54%  runtime.unlock2
+     0.03s  0.77% 44.22%      0.03s  0.77%  runtime.acquirem (inline)
+     0.03s  0.77% 44.99%      0.03s  0.77%  runtime.lock2
+     0.03s  0.77% 45.76%      0.13s  3.34%  runtime.netpoll
+     0.03s  0.77% 46.53%      0.15s  3.86%  runtime.selectgo
+     0.03s  0.77% 47.30%      0.03s  0.77%  sync.(*Pool).Put
+     0.03s  0.77% 48.07%      0.04s  1.03%  type:.eq.vendor/golang.org/x/net/http2/hpack.pairNameValue
+     0.02s  0.51% 48.59%      0.05s  1.29%  context.(*cancelCtx).cancel
+     0.02s  0.51% 49.10%      1.65s 42.42%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
+     0.02s  0.51% 49.61%      0.03s  0.77%  github.com/starsrc/bowl/client/internal/fusefs.(*Metrics).beginOp
+     0.02s  0.51% 50.13%      0.02s  0.51%  internal/runtime/maps.(*Iter).Next
+     0.02s  0.51% 50.64%      0.03s  0.77%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr
+     0.02s  0.51% 51.16%      0.02s  0.51%  internal/runtime/maps.(*ctrlGroup).setEmpty (inline)
 
 === Top Cumulative Hotspots (-cum) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: cpu
-Time: 2026-11-12 03:16:36 CST
-Duration: 10s, Total samples = 3.70s (37.00%)
-Showing nodes accounting for 0.81s, 21.89% of 3.70s total
-Dropped 211 nodes (cum <= 0.02s)
-Showing top 25 nodes out of 407
+Time: 2026-11-12 13:13:49 CST
+Duration: 10s, Total samples = 3.89s (38.90%)
+Showing nodes accounting for 0.90s, 23.14% of 3.89s total
+Dropped 230 nodes (cum <= 0.02s)
+Showing top 25 nodes out of 380
       flat  flat%   sum%        cum   cum%
-         0     0%     0%      2.05s 55.41%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
-         0     0%     0%      1.72s 46.49%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
-     0.01s  0.27%  0.27%      1.46s 39.46%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest
-         0     0%  0.27%      1.45s 39.19%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest.func1
-     0.02s  0.54%  0.81%      0.79s 21.35%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRetryInterceptor.func3.1
-     0.73s 19.73% 20.54%      0.73s 19.73%  internal/runtime/syscall/linux.Syscall6
-         0     0% 20.54%      0.70s 18.92%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
-     0.01s  0.27% 20.81%      0.70s 18.92%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRequestObservabilityInterceptor.func4.1
-     0.02s  0.54% 21.35%      0.69s 18.65%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
-         0     0% 21.35%      0.59s 15.95%  syscall.Syscall
-         0     0% 21.35%      0.58s 15.68%  syscall.RawSyscall6
-         0     0% 21.35%      0.57s 15.41%  net/http.(*http2clientStream).doRequest
-         0     0% 21.35%      0.54s 14.59%  github.com/hanwen/go-fuse/v2/fuse.doMkdir
-         0     0% 21.35%      0.54s 14.59%  github.com/starsrc/bowl/client/internal/fusefs.(*InstrumentedRawFS).Mkdir
-         0     0% 21.35%      0.54s 14.59%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Mkdir
-         0     0% 21.35%      0.53s 14.32%  net/http.(*http2clientStream).writeRequest
-         0     0% 21.35%      0.52s 14.05%  github.com/hanwen/go-fuse/v2/fuse.handleEINTR (inline)
-         0     0% 21.35%      0.49s 13.24%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).withFD (inline)
-         0     0% 21.35%      0.49s 13.24%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
-         0     0% 21.35%      0.48s 12.97%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.func2.1
-         0     0% 21.35%      0.47s 12.70%  github.com/hanwen/go-fuse/v2/fuse.doRmdir
-         0     0% 21.35%      0.47s 12.70%  github.com/starsrc/bowl/client/internal/fusefs.(*InstrumentedRawFS).Rmdir
-         0     0% 21.35%      0.47s 12.70%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Rmdir
-     0.01s  0.27% 21.62%      0.47s 12.70%  os.(*rawConn).Control
-     0.01s  0.27% 21.89%      0.46s 12.43%  internal/poll.(*FD).RawControl
+         0     0%     0%      2.10s 53.98%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
+     0.02s  0.51%  0.51%      1.65s 42.42%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
+         0     0%  0.51%      1.41s 36.25%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest
+         0     0%  0.51%      1.39s 35.73%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest.func1
+         0     0%  0.51%      0.82s 21.08%  net/http.(*http2clientStream).doRequest
+         0     0%  0.51%      0.80s 20.57%  net/http.(*http2clientStream).writeRequest
+     0.79s 20.31% 20.82%      0.79s 20.31%  internal/runtime/syscall/linux.Syscall6
+         0     0% 20.82%      0.74s 19.02%  syscall.Syscall
+     0.01s  0.26% 21.08%      0.72s 18.51%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRetryInterceptor.func3.1
+     0.01s  0.26% 21.34%      0.69s 17.74%  syscall.RawSyscall6
+         0     0% 21.34%      0.64s 16.45%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
+         0     0% 21.34%      0.64s 16.45%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
+         0     0% 21.34%      0.64s 16.45%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRequestObservabilityInterceptor.func4.1
+         0     0% 21.34%      0.60s 15.42%  github.com/hanwen/go-fuse/v2/fuse.handleEINTR (inline)
+         0     0% 21.34%      0.55s 14.14%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).withFD (inline)
+         0     0% 21.34%      0.54s 13.88%  internal/poll.(*FD).RawControl
+     0.02s  0.51% 21.85%      0.54s 13.88%  net/http.(*http2clientStream).encodeAndWriteHeaders
+         0     0% 21.85%      0.54s 13.88%  os.(*rawConn).Control
+     0.01s  0.26% 22.11%      0.53s 13.62%  github.com/hanwen/go-fuse/v2/fuse.doMkdir
+         0     0% 22.11%      0.52s 13.37%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
+     0.01s  0.26% 22.37%      0.52s 13.37%  github.com/starsrc/bowl/client/internal/fusefs.(*InstrumentedRawFS).Mkdir
+         0     0% 22.37%      0.52s 13.37%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.func2.1
+         0     0% 22.37%      0.51s 13.11%  runtime.mcall
+     0.01s  0.26% 22.62%      0.50s 12.85%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Mkdir
+     0.02s  0.51% 23.14%      0.49s 12.60%  runtime.mallocgc

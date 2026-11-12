@@ -1,7 +1,7 @@
-Uptime: 114.975s  CPU: 19.651s  Memory: 39966984 B
-FUSE: calls=18380 errors=978 inflight=0 duration=1.130616s read_bytes=0 write_bytes=12348
-NamespaceCache: entries=54 weight=54/65536 attr=13574/23 entry=4984/117 neg=564/1 readdir=124/124 readlink=0/988 inv=1648 evict=0
-CapabilityCache: entries=0 hits=397 misses=7 grants=658 epoch_inv=0
+Uptime: 114.260s  CPU: 19.895s  Memory: 44230936 B
+FUSE: calls=18376 errors=974 inflight=0 duration=1.008788s read_bytes=0 write_bytes=12348
+NamespaceCache: entries=54 weight=54/65536 attr=13575/22 entry=4984/117 neg=564/1 readdir=124/124 readlink=0/988 inv=1648 evict=0
+CapabilityCache: entries=0 hits=396 misses=7 grants=658 epoch_inv=0
 ReadAhead: triggers=0 prefetched_bytes=0 hits=0 hit_bytes=0 discarded_bytes=0 inflight=0 waits=0 wait_sec=0.000000
 WriteBehind: staged=0/0B passthrough=4/12348B flush_rpcs=0 flush_err=0 inflight=0 slots=0 bp_waits=0/0.000000s barrier_waits=0/0.000000s
 TmpFile: active=0 resident_bytes=0 promotes=0 rollbacks=0 rollback_errors=0

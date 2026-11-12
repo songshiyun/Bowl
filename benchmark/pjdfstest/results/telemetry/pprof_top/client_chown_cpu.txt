@@ -1,69 +1,69 @@
 === Top Self Hotspots (-flat) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: cpu
-Time: 2026-11-12 03:13:44 CST
-Duration: 10s, Total samples = 290ms ( 2.90%)
-Showing nodes accounting for 270ms, 93.10% of 290ms total
-Showing top 25 nodes out of 222
+Time: 2026-11-12 13:13:02 CST
+Duration: 10s, Total samples = 280ms ( 2.80%)
+Showing nodes accounting for 280ms, 100% of 280ms total
+Showing top 25 nodes out of 213
       flat  flat%   sum%        cum   cum%
-      30ms 10.34% 10.34%       30ms 10.34%  internal/runtime/syscall/linux.Syscall6
-      10ms  3.45% 13.79%       10ms  3.45%  aeshashbody
-      10ms  3.45% 17.24%       10ms  3.45%  bytes.(*Reader).Read
-      10ms  3.45% 20.69%       10ms  3.45%  compress/flate.matchLen
-      10ms  3.45% 24.14%       20ms  6.90%  connectrpc.com/connect.(*connectUnaryClientConn).validateResponse
-      10ms  3.45% 27.59%       10ms  3.45%  connectrpc.com/connect.getHeaderCanonical (inline)
-      10ms  3.45% 31.03%       10ms  3.45%  context.value
-      10ms  3.45% 34.48%       10ms  3.45%  github.com/prometheus/client_model/go.(*Bucket).GetCumulativeCountFloat
-      10ms  3.45% 37.93%       30ms 10.34%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).startFuseOp
-      10ms  3.45% 41.38%       10ms  3.45%  go.opentelemetry.io/otel/internal/baggage.ListFromContext
-      10ms  3.45% 44.83%       10ms  3.45%  go.opentelemetry.io/otel/trace.SpanContextFromContext
-      10ms  3.45% 48.28%       10ms  3.45%  google.golang.org/protobuf/proto.UnmarshalOptions.unmarshal
-      10ms  3.45% 51.72%       20ms  6.90%  internal/runtime/maps.(*Map).Delete
-      10ms  3.45% 55.17%       10ms  3.45%  internal/runtime/maps.(*Map).deleteSmall
-      10ms  3.45% 58.62%       10ms  3.45%  internal/runtime/maps.(*Map).putSlotSmallFastStr
-      10ms  3.45% 62.07%       10ms  3.45%  net.(*netFD).Write
-      10ms  3.45% 65.52%       10ms  3.45%  net/http/internal/httpcommon.LowerHeader
-      10ms  3.45% 68.97%       10ms  3.45%  runtime.(*timers).run
-      10ms  3.45% 72.41%       10ms  3.45%  runtime.chanrecv
-      10ms  3.45% 75.86%       10ms  3.45%  runtime.entersyscall
-      10ms  3.45% 79.31%       10ms  3.45%  runtime.futex
-      10ms  3.45% 82.76%       10ms  3.45%  runtime.mallocgcSmallScanNoHeader
-      10ms  3.45% 86.21%       10ms  3.45%  runtime.mallocgcTiny
-      10ms  3.45% 89.66%       20ms  6.90%  runtime.mapassign_faststr
-      10ms  3.45% 93.10%       10ms  3.45%  runtime.traceLocker.ok
+      30ms 10.71% 10.71%       30ms 10.71%  internal/runtime/syscall/linux.Syscall6
+      20ms  7.14% 17.86%       20ms  7.14%  runtime.futex
+      10ms  3.57% 21.43%       10ms  3.57%  github.com/cespare/xxhash/v2.(*Digest).Write
+      10ms  3.57% 25.00%       10ms  3.57%  github.com/prometheus/common/model.isValidLegacyRune
+      10ms  3.57% 28.57%       10ms  3.57%  go.opentelemetry.io/otel/exporters/otlp/otlptrace/internal/tracetransform.span
+      10ms  3.57% 32.14%       10ms  3.57%  go.opentelemetry.io/otel/trace.NewSpanStartConfig
+      10ms  3.57% 35.71%       10ms  3.57%  internal/sync.(*Mutex).Unlock
+      10ms  3.57% 39.29%       10ms  3.57%  net/http.(*http2Framer).WriteHeaders
+      10ms  3.57% 42.86%       10ms  3.57%  runtime.(*gcWork).putObjBatch
+      10ms  3.57% 46.43%       10ms  3.57%  runtime.(*moduledata).textAddr
+      10ms  3.57% 50.00%       20ms  7.14%  runtime.adjustframe
+      10ms  3.57% 53.57%       10ms  3.57%  runtime.bool2int
+      10ms  3.57% 57.14%       10ms  3.57%  runtime.exitsyscall
+      10ms  3.57% 60.71%       40ms 14.29%  runtime.findRunnable
+      10ms  3.57% 64.29%       10ms  3.57%  runtime.futexsleep
+      10ms  3.57% 67.86%       10ms  3.57%  runtime.heapBitsInSpan
+      10ms  3.57% 71.43%       10ms  3.57%  runtime.isSystemGoroutine
+      10ms  3.57% 75.00%       10ms  3.57%  runtime.mallocgcTiny
+      10ms  3.57% 78.57%       10ms  3.57%  runtime.mapIterStart
+      10ms  3.57% 82.14%       10ms  3.57%  runtime.memclrNoHeapPointers
+      10ms  3.57% 85.71%       10ms  3.57%  runtime.netpoll
+      10ms  3.57% 89.29%       10ms  3.57%  runtime.scanObjectSmall
+      10ms  3.57% 92.86%       10ms  3.57%  runtime.usleep
+      10ms  3.57% 96.43%       10ms  3.57%  sync.(*Pool).pin
+      10ms  3.57%   100%       10ms  3.57%  sync/atomic.(*Int32).Add
 
 === Top Cumulative Hotspots (-cum) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: cpu
-Time: 2026-11-12 03:13:44 CST
-Duration: 10s, Total samples = 290ms ( 2.90%)
-Showing nodes accounting for 0, 0% of 290ms total
-Showing top 25 nodes out of 222
+Time: 2026-11-12 13:13:02 CST
+Duration: 10s, Total samples = 280ms ( 2.80%)
+Showing nodes accounting for 40ms, 14.29% of 280ms total
+Showing top 25 nodes out of 213
       flat  flat%   sum%        cum   cum%
-         0     0%     0%      160ms 55.17%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
-         0     0%     0%      140ms 48.28%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
-         0     0%     0%      130ms 44.83%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest
-         0     0%     0%      130ms 44.83%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest.func1
-         0     0%     0%       70ms 24.14%  net/http.(*http2clientStream).doRequest
-         0     0%     0%       60ms 20.69%  connectrpc.com/connect.(*chain).WrapUnary.unaryThunk.func1
-         0     0%     0%       60ms 20.69%  connectrpc.com/otelconnect.(*Interceptor).WrapUnary.func1
-         0     0%     0%       60ms 20.69%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRequestObservabilityInterceptor.func4.1
-         0     0%     0%       60ms 20.69%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.newRetryInterceptor.func3.1
-         0     0%     0%       60ms 20.69%  net/http.(*http2clientStream).writeRequest
-         0     0%     0%       40ms 13.79%  connectrpc.com/connect.(*Client[go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Ino uint64 "protobuf:\"varint,1,opt,name=ino,proto3\" json:\"ino,omitempty\""; DiskId string "protobuf:\"bytes,2,opt,name=disk_id,json=diskId,proto3\" json:\"disk_id,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 },go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Target []uint8 "protobuf:\"bytes,1,opt,name=target,proto3\" json:\"target,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }]).CallUnary
-         0     0%     0%       40ms 13.79%  connectrpc.com/connect.NewClient[go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Ino uint64 "protobuf:\"varint,1,opt,name=ino,proto3\" json:\"ino,omitempty\""; DiskId string "protobuf:\"bytes,2,opt,name=disk_id,json=diskId,proto3\" json:\"disk_id,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 },go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Target []uint8 "protobuf:\"bytes,1,opt,name=target,proto3\" json:\"target,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
-         0     0%     0%       40ms 13.79%  github.com/hanwen/go-fuse/v2/fuse.(*Server).Serve
-         0     0%     0%       40ms 13.79%  github.com/hanwen/go-fuse/v2/fuse.doReadlink
-         0     0%     0%       40ms 13.79%  github.com/prometheus/client_golang/prometheus/promhttp.HandlerForTransactional.func1
-         0     0%     0%       40ms 13.79%  github.com/starsrc/Aether/pkg/serverx.(*errorReasonInterceptor).WrapUnary.errorReasonInterceptor.WrapUnary.func1
-         0     0%     0%       40ms 13.79%  github.com/starsrc/bowl/client/internal/cli.defaultServeFUSE.func1
-         0     0%     0%       40ms 13.79%  github.com/starsrc/bowl/client/internal/fusefs.(*InstrumentedRawFS).Readlink
-         0     0%     0%       40ms 13.79%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).Readlink
-         0     0%     0%       40ms 13.79%  github.com/starsrc/bowl/client/internal/rpc.NewClientFromConfig.func2.1
-         0     0%     0%       40ms 13.79%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.(*storageServiceClient).Readlink
-         0     0%     0%       40ms 13.79%  net/http.(*ServeMux).ServeHTTP
-         0     0%     0%       40ms 13.79%  net/http.(*conn).serve
-         0     0%     0%       40ms 13.79%  net/http.HandlerFunc.ServeHTTP
-         0     0%     0%       40ms 13.79%  net/http.serverHandler.ServeHTTP
+         0     0%     0%      120ms 42.86%  github.com/hanwen/go-fuse/v2/fuse.(*Server).loop
+         0     0%     0%       80ms 28.57%  github.com/hanwen/go-fuse/v2/fuse.(*Server).handleRequest
+         0     0%     0%       70ms 25.00%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest
+         0     0%     0%       70ms 25.00%  github.com/hanwen/go-fuse/v2/fuse.(*protocolServer).handleRequest.func1
+         0     0%     0%       50ms 17.86%  runtime.mcall
+         0     0%     0%       40ms 14.29%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest
+         0     0%     0%       40ms 14.29%  github.com/hanwen/go-fuse/v2/fuse.handleEINTR (inline)
+      10ms  3.57%  3.57%       40ms 14.29%  runtime.findRunnable
+         0     0%  3.57%       40ms 14.29%  runtime.goexit0
+         0     0%  3.57%       40ms 14.29%  runtime.mallocgc
+         0     0%  3.57%       40ms 14.29%  runtime.schedule
+         0     0%  3.57%       40ms 14.29%  runtime.systemstack
+         0     0%  3.57%       40ms 14.29%  syscall.Syscall
+         0     0%  3.57%       30ms 10.71%  github.com/hanwen/go-fuse/v2/fuse.(*Server).Serve
+         0     0%  3.57%       30ms 10.71%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).readRequest.func1 (inline)
+         0     0%  3.57%       30ms 10.71%  github.com/hanwen/go-fuse/v2/fuse.(*fuseFD).withFD (inline)
+         0     0%  3.57%       30ms 10.71%  github.com/starsrc/bowl/client/internal/cli.defaultServeFUSE.func1
+         0     0%  3.57%       30ms 10.71%  github.com/starsrc/bowl/client/internal/fusefs.(*RawFS).RPCContextFrom
+         0     0%  3.57%       30ms 10.71%  github.com/starsrc/bowl/client/internal/rpc.ContextWithCancelChan
+         0     0%  3.57%       30ms 10.71%  internal/poll.(*FD).RawControl
+      30ms 10.71% 14.29%       30ms 10.71%  internal/runtime/syscall/linux.Syscall6
+         0     0% 14.29%       30ms 10.71%  net/http.(*http2clientStream).doRequest
+         0     0% 14.29%       30ms 10.71%  net/http.(*http2clientStream).encodeAndWriteHeaders
+         0     0% 14.29%       30ms 10.71%  net/http.(*http2clientStream).writeRequest
+         0     0% 14.29%       30ms 10.71%  os.(*rawConn).Control

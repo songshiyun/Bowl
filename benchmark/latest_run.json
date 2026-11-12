@@ -1,13 +1,13 @@
 {
-  "bowl_commit": "8afc63c",
-  "bowl_commit_full": "8afc63cec7f85b78eb2421c41ed6ec58176a3f07",
-  "previous_bowl_commit": "9c60a34-dirty",
-  "previous_run_commit": "9c60a34-dirty",
+  "bowl_commit": "6399122",
+  "bowl_commit_full": "63991225ce318e4a69c3da67024e590a165d0ec7",
+  "previous_bowl_commit": "8afc63c",
+  "previous_run_commit": "8afc63c",
   "date_local": "2026-11-12",
-  "started_at_local": "2026-11-12T03:08:43+08:00",
-  "completed_at_local": "2026-11-12T03:38:06+08:00",
-  "started_at_utc": "2026-11-11T19:08:43Z",
-  "completed_at_utc": "2026-11-11T19:38:06Z",
+  "started_at_local": "2026-11-12T13:06:38+08:00",
+  "completed_at_local": "2026-11-12T13:32:21+08:00",
+  "started_at_utc": "2026-11-12T05:06:38Z",
+  "completed_at_utc": "2026-11-12T05:32:21Z",
   "timezone": "Asia/Shanghai",
   "region": "us-west-1",
   "zone": "us-west-1a",
@@ -16,28 +16,28 @@
   "data_disk_size_gib": 894,
   "production_code_modified": true,
   "code_commits": {
-    "juicefs": "8afc63c",
-    "drive9": "8afc63c",
-    "pjdfstest": "8afc63c",
-    "control": "9c60a34-dirty",
-    "note": "基于 8afc63c 完成端到端全链路可观测性闭环与性能优化后在阿里云硅谷 (us-west-1a) ecs.i5.xlarge (4 vCPU / 32 GiB / 894 GiB local_ssd_pro 本地 NVMe SSD) 双机按量 ECS 全量重跑 pjdfstest、juicefs 与 drive9 三套基准：(1) 全链路 8 跳可观测性（客户端 FUSE 26 桶/WriteBehind/ReadAhead SpanLinks + PriorityOpSampler Fsync 提权 + 亚毫秒 RPC 直方图 -> Alloy 尾部采样 (>10ms 慢链路/错误链路 100% 保留) -> 服务端外层 HTTP 中间件与 StoreActor Phase A/BlobStore/Phase B/Fsync 双层屏障精细直方图 + 子阶段快照隔离蒸馏）；(2) h2CoalesceConn 请求帧合并 (HEADERS+DATA 单次 Write/writev) + TCP_NODELAY + net.ipv4.tcp_autocorking=0 彻底根除 H2C 双次小包 Write 与 Delayed ACK 互锁导致的 ~9.5-10.1ms 双峰尾延迟；(3) ReadAheadCoordinator 异步流水线预读 (W_read=4, ReadAheadMaxGlobalInflight=12 全局并发预算) 与 NamespaceCache 超长文件名 (>255B) ENAMETOOLONG 前置校验（POSIX 合规达 8,798/8,798 = 100.00%）。"
+    "juicefs": "6399122",
+    "drive9": "6399122",
+    "pjdfstest": "6399122",
+    "control": "8afc63c",
+    "note": "基于 6399122（叠加 5749911 连续块 pread 合并与异步死包回收/渐进回写、85688bd 客户端 1+8 H2C 多连接条带池与单飞有序槽位预读、b40a79e 小块写内存聚合与 completeDirs 本地目录流合成、6399122 精细桶 MeterProvider 优雅停机幂等修复）在阿里云硅谷 (us-west-1a) ecs.i5.xlarge (4 vCPU / 32 GiB / 894 GiB local_ssd_pro 本地 NVMe SSD) 双机按量 ECS 全量复跑 pjdfstest、juicefs 与 drive9 三套基准：(1) juicefs 套件原 4 项大文件/Direct 读指标全面反超 PG & Redis（fio seq_read_16jobs 916.79->1,972.31 MiB/s +115.13%、seq_read_1job 1,057.31->1,662.34 MiB/s +57.22%、direct_read_4jobs 1,420.74->2,352.67 MiB/s +65.59%、bench Read big file 1,296.25->1,904.12 MiB/s +46.89%，全套 31 项对 jfs_pg 31/31 全胜、对 jfs_redis 30/31 胜出，服务端 .pack pread 减少 90.49%，预读丢弃量减少 98.26%，无屏障慢 Tick 归零）；(2) drive9 套件 SQLite WAL insert/update 跃升至 41,494.17 / 19,946.16 rows/s（+750.2% / +1,035.1%，领先 Default/Sync 5.2x~7.9x），SQLite DELETE insert/update 达 27,183.83 / 7,683.89 rows/s（2.91x / 8.31x），Cold readdir_small 提升至 65,134.91 ops/s（3.58x），Cold macro_git_clone 缩短至 0.3988s（提速 1.91x），Loki 双端 Warn/Error 0 条；(3) pjdfstest 8,798 / 8,798 (100.00%) 全量通过（170.776s，51.52 tests/s），Pebble wal_created 误报清零。"
   },
   "architecture": {
     "control_plane": "PostgreSQL 18 仅维护单张 disks 控制面表 (ADR-0032)，客户端 MountDisk 单次握手原子递增 WriterEpoch",
     "data_plane": "每个 Disk 独立常驻 StoreActor (单盘 Pebble + 共享 128 MiB Block Cache, ADR-0030/0031)，sys:stat (41B) 持久化统计与 WriterEpoch，DataKey 保存 16 字节 BlobRef (PackID + Offset + Length)",
-    "blob_layout": "packs/<pack_id_hex16>.pack 64 MiB Append-Only 封包文件 (256 KiB 逻辑块网格 + 常驻句柄池 + 尾块分片热缓存 + AppendBlocks 整块顺序写跳过用户态冗余拷贝)，支持活跃包末尾同块 ExtendTail 顺延扩展、封口包后台异步预刷盘、无锁并发 Read 及已封口包自动回收",
+    "blob_layout": "packs/<pack_id_hex16>.pack 64 MiB Append-Only 封包文件 (256 KiB 逻辑块网格 + 常驻句柄池 + 64 MiB 分片环形热块缓存 + AppendBlocks 整块顺序写跳过用户态冗余拷贝)，支持活跃包末尾同块 ExtendTail 顺延扩展、8 MiB SyncFileRange 后台渐进异步回写与封口包预刷盘、相邻物理连续块合并单次 pread 无锁并发 Read 及后台异步全死封口包回收",
     "wal": "双缓冲 MPSC Group Commit 循环 (Phase A 内存校验、WriterEpoch 栅栏与零拷贝 SetDeferred 编码，Phase B pebble.NoSync 批量提交 WAL) + Fsync/FsyncDir 多包并发双层并行落盘屏障 (脏 .pack fdatasync + Pebble LogData 并发同步)",
-    "server_concurrency": "单盘 StoreActor 串行化元数据变更与无锁并发快照读，配合 WriteRequest/ReadResponse 池化零分配编解码 (noscan 8x4 MiB 缓冲池)、外层 HTTP 中间件耗时度量与热路径零反射参数校验",
-    "client": "无会话 RawFS (kernel_writeback_cache=false) + h2CoalesceConn (HTTP/2 HEADERS+DATA 请求帧合并消除 tcp_autocorking + Delayed ACK 死锁) + WriteBehindCoordinator (连续顺序写经 2 MiB 同步探测后激活 4 MiB 聚批与 W*=4 并发 Write RPC 流水线，<64 KiB 小写直通) + ReadAheadCoordinator 异步顺序预读流水线 (单流 W_read=4，全局并发预算 ReadAheadMaxGlobalInflight=12) + 双端 8 MiB / 32 MiB HTTP/2 流控窗口 + FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV 负缓存 + completeDirs 权威完整目录本地 ENOENT 判定 (前置校验 len(name)>255 返回 ENAMETOOLONG) + 写后 AttrTimeout=1.0s + MaxBackground=64 / CongestionThreshold=48",
-    "observability": "deploy/prod 容器栈 (Alloy :4317/:4318 尾部采样 -> Jaeger + Prometheus 2s 双端抓取 + Loki + bowl stats 9 子系统快照 + pprof + Pebble EventListener)，配合 collect_telemetry.py 按子阶段 [pre, post] 快照差分生成 FUSE -> Client Cache/Pipeline -> Client RPC+Network -> Server HTTP Body+Codec -> StoreActor Queue -> Phase A/BlobStore -> Phase B WAL -> Fsync 双层屏障 8 跳拆解"
+    "server_concurrency": "单盘 StoreActor 串行化元数据变更与无锁并发快照读，配合服务端单流 8 MiB / 单连接 128 MiB H2C 接收窗口、WriteRequest 池化零分配解码与 ReadResponse MarshalAppend 零拷贝池化编码 (常驻 noscan 8x4 MiB 读写缓冲池)、外层 HTTP 中间件耗时度量与热路径零反射参数校验",
+    "client": "无会话 RawFS (kernel_writeback_cache=false) + 1+8 H2C 多连接条带池 (1 条 32 MiB 元数据连接 + 8 条各 64 MiB 大块数据连接，单流 8 MiB) + h2CoalesceConn (HTTP/2 HEADERS+DATA 帧合并 + TCP_NODELAY) + MarshalAppend 零分配编码与 ReadResponse 池化解码 (<=256 KiB 紧凑切片免租约 + 16x4 MiB 读缓冲池) + WriteBehindCoordinator (大块流式写经 2 MiB 同步探测后激活 4 MiB 聚批与 W*=4 并发 Write RPC 流水线，<=256 KiB 小块连续写经首笔探针或 Create 免探针预热后内存聚合) + ReadAheadCoordinator 单飞有序槽位预读 (单流 W_read=4，全局并发预算 ReadAheadMaxGlobalInflight=32) + completeDirs 权威完整目录本地零 RPC 目录流合成与本地 ENOENT/ENAMETOOLONG 判定 (目录流降级保留已知子项属性) + FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV 负缓存 + 写后 AttrTimeout=1.0s + MaxBackground=64 / CongestionThreshold=48",
+    "observability": "deploy/prod 容器栈 (Alloy :4317/:4318 尾部采样 -> Jaeger + Prometheus 2s 双端抓取 + Loki + bowl stats 9 子系统快照 + pprof + Pebble EventListener)，优雅停机单次幂等 MeterProvider Shutdown，配合 collect_telemetry.py 按子阶段 [pre, post] 快照差分生成 FUSE -> Client Cache/Pipeline -> Client RPC+Network -> Server HTTP Body+Codec -> StoreActor Queue -> Phase A/BlobStore -> Phase B WAL -> Fsync 双层屏障 8 跳拆解"
   },
   "hardware_baseline_nvme": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69959,
-    "local_randread_4k_iops": 699768,
-    "local_fsync_4k_iops": 50472,
-    "local_fsync_4k_p99_us": 63.1
+    "local_randwrite_4k_iops": 69945,
+    "local_randread_4k_iops": 699819,
+    "local_fsync_4k_iops": 51570,
+    "local_fsync_4k_p99_us": 62.6
   },
   "suites": {
     "pjdfstest": {
@@ -50,15 +50,16 @@
       "pass_rate": 1.0,
       "todo_tests": 28,
       "todo_expected_failures": 9,
-      "duration_sec": 172.845,
-      "throughput_tests_per_sec": 50.9,
-      "executed_at_utc": "2026-11-11T19:13:25Z/2026-11-11T19:16:27Z",
+      "duration_sec": 170.776,
+      "throughput_tests_per_sec": 51.52,
+      "executed_at_utc": "2026-11-12T05:12:44Z/2026-11-12T05:15:44Z",
       "failed_cases": [],
       "telemetry_highlights": {
-        "data_meta_requests_total": 9471,
+        "data_meta_requests_total": 9470,
         "server_http_le_2_5ms_ratio": 1.0,
-        "client_rpc_le_1_0ms_ratio": 0.998416,
-        "slowest_jaeger_trace_ms": 0.984,
+        "client_rpc_le_1_0ms_ratio": 0.998522,
+        "slowest_jaeger_trace_ms": 1.012,
+        "pebble_alert_count": 0,
         "prometheus_targets_up": 4
       },
       "report": "pjdfstest/REPORT.md",
@@ -76,115 +77,115 @@
       "mdtest_cases": 2,
       "same_instance_pair": true,
       "attempts": 1,
-      "executed_at_utc": "2026-11-11T19:14:57Z/2026-11-11T19:22:42Z",
+      "executed_at_utc": "2026-11-12T05:12:25Z/2026-11-12T05:19:44Z",
       "sample_policy": "同机按目标隔离服务端进程依次测量 bowl、jfs_pg、jfs_redis 三组目标，每项前执行双端 drop_caches",
       "bench_bowl": {
-        "Write big file": 1566.96,
-        "Read big file": 1296.25,
-        "Write small file": 1609.4,
-        "Read small file": 3932.0,
-        "Stat file": 84770.4
+        "Write big file": 1705.25,
+        "Read big file": 1904.12,
+        "Write small file": 2001.5,
+        "Read small file": 4390.7,
+        "Stat file": 29482.9
       },
       "bench_jfs_pg": {
-        "Write big file": 674.21,
-        "Read big file": 1590.09,
-        "Write small file": 675.2,
-        "Read small file": 2904.2,
-        "Stat file": 12325.6
+        "Write big file": 712.64,
+        "Read big file": 1696.46,
+        "Write small file": 682.7,
+        "Read small file": 3209.0,
+        "Stat file": 14168.7
       },
       "bench_jfs_redis": {
-        "Write big file": 673.26,
-        "Read big file": 1598.71,
-        "Write small file": 1116.2,
-        "Read small file": 4925.5,
-        "Stat file": 16760.9
+        "Write big file": 700.49,
+        "Read big file": 1612.45,
+        "Write small file": 1139.4,
+        "Read small file": 5206.2,
+        "Stat file": 17310.9
       },
       "fio_bowl_mib_s": {
-        "seq_write_1job": 1340.31,
-        "seq_read_1job": 1057.31,
-        "seq_write_16jobs": 1545.81,
-        "seq_read_16jobs": 916.79,
-        "direct_write_4jobs": 1599.38,
-        "direct_read_4jobs": 1420.74,
-        "direct_randwrite_4jobs": 1120.35,
-        "direct_randread_4jobs": 1057.58
+        "seq_write_1job": 1453.51,
+        "seq_read_1job": 1662.34,
+        "seq_write_16jobs": 1612.92,
+        "seq_read_16jobs": 1972.31,
+        "direct_write_4jobs": 1760.21,
+        "direct_read_4jobs": 2352.67,
+        "direct_randwrite_4jobs": 1361.25,
+        "direct_randread_4jobs": 1404.18
       },
       "fio_jfs_pg_mib_s": {
-        "seq_write_1job": 673.24,
-        "seq_read_1job": 1276.41,
-        "seq_write_16jobs": 673.6,
-        "seq_read_16jobs": 1517.6,
-        "direct_write_4jobs": 725.08,
-        "direct_read_4jobs": 1545.66,
-        "direct_randwrite_4jobs": 343.83,
-        "direct_randread_4jobs": 465.93
+        "seq_write_1job": 713.59,
+        "seq_read_1job": 1476.04,
+        "seq_write_16jobs": 707.61,
+        "seq_read_16jobs": 1705.42,
+        "direct_write_4jobs": 765.61,
+        "direct_read_4jobs": 1669.79,
+        "direct_randwrite_4jobs": 341.36,
+        "direct_randread_4jobs": 500.61
       },
       "fio_jfs_redis_mib_s": {
-        "seq_write_1job": 673.91,
-        "seq_read_1job": 1302.8,
-        "seq_write_16jobs": 662.86,
-        "seq_read_16jobs": 1600.94,
-        "direct_write_4jobs": 722.91,
-        "direct_read_4jobs": 1568.75,
-        "direct_randwrite_4jobs": 342.42,
-        "direct_randread_4jobs": 494.03
+        "seq_write_1job": 705.72,
+        "seq_read_1job": 1416.81,
+        "seq_write_16jobs": 696.98,
+        "seq_read_16jobs": 1710.59,
+        "direct_write_4jobs": 754.05,
+        "direct_read_4jobs": 1667.07,
+        "direct_randwrite_4jobs": 338.01,
+        "direct_randread_4jobs": 501.47
       },
       "mdtest_1proc_bowl_ops_s": {
         "command": "/usr/local/bin/mdtest '-d' '/mnt/bowl/mdtest_1p' '-b' '6' '-I' '8' '-z' '4'",
         "scale": "1 tasks, 12440 files/directories",
         "operations": {
           "Directory creation": {
-            "max": 3398.761,
-            "min": 3398.761,
-            "mean": 3398.761,
+            "max": 3928.745,
+            "min": 3928.745,
+            "mean": 3928.745,
             "stddev": 0.0
           },
           "Directory stat": {
-            "max": 87714.687,
-            "min": 87714.687,
-            "mean": 87714.687,
+            "max": 110524.732,
+            "min": 110524.732,
+            "mean": 110524.732,
             "stddev": 0.0
           },
           "Directory removal": {
-            "max": 3183.835,
-            "min": 3183.835,
-            "mean": 3183.835,
+            "max": 3906.121,
+            "min": 3906.121,
+            "mean": 3906.121,
             "stddev": 0.0
           },
           "File creation": {
-            "max": 3060.344,
-            "min": 3060.344,
-            "mean": 3060.344,
+            "max": 3564.459,
+            "min": 3564.459,
+            "mean": 3564.459,
             "stddev": 0.0
           },
           "File stat": {
-            "max": 89193.725,
-            "min": 89193.725,
-            "mean": 89193.725,
+            "max": 105621.027,
+            "min": 105621.027,
+            "mean": 105621.027,
             "stddev": 0.0
           },
           "File read": {
-            "max": 36817.81,
-            "min": 36817.81,
-            "mean": 36817.81,
+            "max": 40423.425,
+            "min": 40423.425,
+            "mean": 40423.425,
             "stddev": 0.0
           },
           "File removal": {
-            "max": 3522.944,
-            "min": 3522.944,
-            "mean": 3522.944,
+            "max": 4116.348,
+            "min": 4116.348,
+            "mean": 4116.348,
             "stddev": 0.0
           },
           "Tree creation": {
-            "max": 3261.52,
-            "min": 3261.52,
-            "mean": 3261.52,
+            "max": 3645.409,
+            "min": 3645.409,
+            "mean": 3645.409,
             "stddev": 0.0
           },
           "Tree removal": {
-            "max": 3008.486,
-            "min": 3008.486,
-            "mean": 3008.486,
+            "max": 3557.812,
+            "min": 3557.812,
+            "mean": 3557.812,
             "stddev": 0.0
           }
         }
@@ -194,68 +195,72 @@
         "scale": "4 tasks, 1040 files/directories",
         "operations": {
           "Directory creation": {
-            "max": 7738.165,
-            "min": 7730.585,
-            "mean": 7736.231,
-            "stddev": 3.26
+            "max": 9015.845,
+            "min": 9015.51,
+            "mean": 9015.708,
+            "stddev": 0.135
           },
           "Directory stat": {
-            "max": 1278382.551,
-            "min": 1092620.609,
-            "mean": 1142510.203,
-            "stddev": 78509.507
+            "max": 1470625.666,
+            "min": 1460188.112,
+            "mean": 1465150.074,
+            "stddev": 3731.982
           },
           "Directory removal": {
-            "max": 8942.678,
-            "min": 8941.932,
-            "mean": 8942.226,
-            "stddev": 0.276
+            "max": 11967.361,
+            "min": 11965.303,
+            "mean": 11966.736,
+            "stddev": 0.839
           },
           "File creation": {
-            "max": 8451.499,
-            "min": 8449.505,
-            "mean": 8450.942,
-            "stddev": 0.831
+            "max": 10282.879,
+            "min": 10282.062,
+            "mean": 10282.534,
+            "stddev": 0.302
           },
           "File stat": {
-            "max": 1462401.516,
-            "min": 1406308.103,
-            "mean": 1420999.623,
-            "stddev": 23911.325
+            "max": 1326297.157,
+            "min": 1303300.609,
+            "mean": 1315254.212,
+            "stddev": 8341.255
           },
           "File read": {
-            "max": 34163.806,
-            "min": 34157.354,
-            "mean": 34161.448,
-            "stddev": 2.547
+            "max": 54499.628,
+            "min": 54477.412,
+            "mean": 54484.203,
+            "stddev": 8.966
           },
           "File removal": {
-            "max": 10689.362,
-            "min": 10688.685,
-            "mean": 10688.949,
-            "stddev": 0.254
+            "max": 12098.441,
+            "min": 12097.553,
+            "mean": 12098.092,
+            "stddev": 0.336
           },
           "Tree creation": {
-            "max": 1807.02,
-            "min": 1807.02,
-            "mean": 1807.02,
+            "max": 2009.072,
+            "min": 2009.072,
+            "mean": 2009.072,
             "stddev": 0.0
           },
           "Tree removal": {
-            "max": 1660.056,
-            "min": 1660.056,
-            "mean": 1660.056,
+            "max": 2097.298,
+            "min": 2097.298,
+            "mean": 2097.298,
             "stddev": 0.0
           }
         }
       },
       "telemetry_highlights": {
-        "meta_small_rpc_total": 58059,
-        "autocork_5_to_25ms_stall_count": 0,
-        "http_outer_mkdir_p50_ms": 0.08,
-        "http_outer_mkdir_p99_ms": 0.245,
-        "http_outer_create_p50_ms": 0.084,
-        "http_outer_create_p99_ms": 0.249,
+        "meta_small_rpc_total": 58052,
+        "autocork_5_to_25ms_stall_count": 1,
+        "http_outer_mkdir_p50_ms": 0.069,
+        "http_outer_mkdir_p99_ms": 0.231,
+        "http_outer_create_p50_ms": 0.075,
+        "http_outer_create_p99_ms": 0.24,
+        "blob_pread_total": 17593,
+        "readahead_discarded_mib": 289.75,
+        "slowest_jaeger_trace_ms": 237.237,
+        "pebble_alert_count": 0,
         "prometheus_targets_up": 4
       },
       "report": "juicefs/REPORT.md",
@@ -267,6 +272,7 @@
       "cold_cases": 45,
       "hot_cases": 45,
       "samples_per_case": 3,
+      "executed_at_utc": "2026-11-12T05:12:49Z/2026-11-12T05:31:41Z",
       "integrity_fingerprints_match": true,
       "integrity_fingerprints": {
         "large_file_sha256": "11c4d91b11f028672f7dbde355692b01f93868f88aa66d9ef29f4a9e251445ad",
@@ -275,86 +281,93 @@
         "sqlite_wal_fingerprint": "2dda3083a7624485769be9511a6426adf3d3eeb3082ac64b82eb5c60a83d0df0"
       },
       "bench_bowl": {
-        "Write big file": 1649.21,
-        "Read big file": 1383.14,
-        "Write small file": 1738.9,
-        "Read small file": 3789.0,
-        "Stat file": 35967.1
+        "Write big file": 1696.0,
+        "Read big file": 1648.56,
+        "Write small file": 1710.7,
+        "Read small file": 4031.6,
+        "Stat file": 100365.0
       },
       "bench_drive9_default": {
-        "Write big file": 1332.24,
-        "Read big file": 2173.41,
-        "Write small file": 2309.4,
-        "Read small file": 2418.8,
-        "Stat file": 59838.0
+        "Write big file": 1383.02,
+        "Read big file": 2133.34,
+        "Write small file": 2102.2,
+        "Read small file": 5118.6,
+        "Stat file": 49665.7
       },
       "bench_drive9_sync": {
-        "Write big file": 606.09,
-        "Read big file": 1324.41,
-        "Write small file": 62.6,
-        "Read small file": 50.2,
-        "Stat file": 131.8
+        "Write big file": 688.52,
+        "Read big file": 1422.55,
+        "Write small file": 89.1,
+        "Read small file": 739.7,
+        "Stat file": 63833.3
       },
       "cold_bowl_median": {
-        "sequential_write": 1207.11,
-        "sequential_read": 1073.56,
-        "random_read_4k": 6.74,
-        "small_write_4k_fsync": 754.9,
-        "mkdir": 3146.57,
-        "rename": 3000.25,
-        "unlink": 3084.79,
-        "readdir_small": 18188.0,
-        "readdir_large": 139715.7,
-        "stat": 51930.62
+        "sequential_write": 1363.6,
+        "sequential_read": 1181.47,
+        "random_read_4k": 7.26,
+        "small_write_4k_fsync": 761.72,
+        "mkdir": 3490.5,
+        "rename": 3062.26,
+        "unlink": 3312.72,
+        "readdir_small": 65134.91,
+        "readdir_large": 234137.31,
+        "stat": 56560.37
       },
       "cold_bowl_macro_median_sec": {
-        "macro_git_clone": 0.7604,
-        "macro_git_status_dirty": 0.1123,
-        "macro_git_diff_dirty": 0.0997,
-        "macro_find_files": 0.0143,
-        "macro_go_build": 0.3325
+        "macro_git_clone": 0.3988,
+        "macro_git_status_dirty": 0.1993,
+        "macro_git_diff_dirty": 0.1629,
+        "macro_find_files": 0.0082,
+        "macro_go_build": 0.5897
       },
       "hot_bowl_median": {
-        "sequential_write": 1089.68,
-        "sequential_read": 7001.87,
-        "random_read_4k": 443.14,
-        "small_write_4k_fsync": 756.19,
-        "mkdir": 3612.06,
-        "rename": 3554.26,
-        "unlink": 3961.39,
-        "readdir_small": 344109.7,
-        "readdir_large": 1063485.85,
-        "stat": 807608.32
+        "sequential_write": 1312.59,
+        "sequential_read": 8316.35,
+        "random_read_4k": 497.09,
+        "small_write_4k_fsync": 759.71,
+        "mkdir": 3664.14,
+        "rename": 3583.44,
+        "unlink": 3871.52,
+        "readdir_small": 407199.28,
+        "readdir_large": 1094599.68,
+        "stat": 834705.03
       },
       "hot_bowl_macro_median_sec": {
-        "macro_git_clone": 0.7641,
-        "macro_git_status_dirty": 0.0206,
-        "macro_git_diff_dirty": 0.0207,
-        "macro_find_files": 0.0035,
-        "macro_go_build": 0.0599
+        "macro_git_clone": 0.3392,
+        "macro_git_status_dirty": 0.0301,
+        "macro_git_diff_dirty": 0.0253,
+        "macro_find_files": 0.0031,
+        "macro_go_build": 0.0313
       },
       "fuse_perf_baseline_bowl": {
-        "small_write_64x1k_fsync_files_s": 640.93,
-        "small_read_64x1k_sha256_files_s": 1506.55,
-        "large_write_16mib_fsync_mib_s": 62.93,
-        "large_read_16mib_pass1_mib_s": 1240.23,
-        "large_read_16mib_pass2_mib_s": 1253.24,
-        "sqlite_delete_insert_rows_s": 9332.29,
-        "sqlite_delete_update_rows_s": 924.95,
-        "sqlite_delete_read_rows_s": 581277.86,
-        "sqlite_wal_insert_rows_s": 4880.32,
-        "sqlite_wal_update_rows_s": 1757.27,
-        "sqlite_wal_read_rows_s": 1044706.07,
-        "sqlite_wal_checkpoint_sec": 0.0202
+        "small_write_64x1k_fsync_files_s": 808.7,
+        "small_read_64x1k_sha256_files_s": 1845.54,
+        "large_write_16mib_fsync_mib_s": 65.64,
+        "large_read_16mib_pass1_mib_s": 1326.73,
+        "large_read_16mib_pass2_mib_s": 1334.73,
+        "sqlite_delete_insert_rows_s": 27183.83,
+        "sqlite_delete_update_rows_s": 7683.89,
+        "sqlite_delete_read_rows_s": 835296.5,
+        "sqlite_wal_insert_rows_s": 41494.17,
+        "sqlite_wal_update_rows_s": 19946.16,
+        "sqlite_wal_read_rows_s": 1271455.82,
+        "sqlite_wal_checkpoint_sec": 0.0057
       },
       "telemetry_highlights": {
-        "meta_and_fsync_rpc_total": 51465,
+        "meta_and_fsync_rpc_total": 45193,
         "autocork_5_to_25ms_stall_count": 0,
-        "http_outer_mkdir_p50_ms": 0.073,
-        "http_outer_mkdir_p99_ms": 0.237,
-        "http_outer_fsync_p50_ms": 0.363,
-        "http_outer_fsync_p95_ms": 0.494,
-        "jaeger_cross_node_rtt_delta_p50_ms": 0.202,
+        "http_outer_mkdir_p50_ms": 0.072,
+        "http_outer_mkdir_p99_ms": 0.241,
+        "http_outer_fsync_p50_ms": 0.317,
+        "http_outer_fsync_p95_ms": 0.491,
+        "http_outer_fsync_p99_ms": 6.336,
+        "blob_pread_total": 5174,
+        "readahead_discarded_mib": 1.05,
+        "nscache_readdir_hits": 11351,
+        "jaeger_cross_node_rtt_delta_p50_ms": 0.41,
+        "slowest_jaeger_trace_ms": 75.671,
+        "loki_server_alert_count": 0,
+        "pebble_alert_count": 0,
         "prometheus_targets_up": 4
       },
       "report": "drive9/REPORT.md",
@@ -362,7 +375,7 @@
     }
   },
   "cleanup": {
-    "verified_at_utc": "2026-11-11T19:54:00Z",
+    "verified_at_utc": "2026-11-12T05:48:26Z",
     "remaining_instances": 0,
     "remaining_keypairs": 0,
     "remaining_instances_in_region": 0,
@@ -372,50 +385,50 @@
     "created_instances": [
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj990ykeh6eh5p2guwye",
+        "instance_id": "i-rj947g04pwz6x8nu9fbk",
         "role": "server",
-        "private_ip": "172.16.1.190"
+        "private_ip": "172.16.1.200"
       },
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj990ykeh6eh5p2guwyf",
+        "instance_id": "i-rj947g04pwz6x8nu9fbl",
         "role": "client",
-        "private_ip": "172.16.1.191"
+        "private_ip": "172.16.1.201"
       },
       {
         "suite": "juicefs",
-        "instance_id": "i-rj929hjdmkt42qgmghox",
+        "instance_id": "i-rj92npx0idoo4fww70e1",
         "role": "server",
-        "private_ip": "172.16.1.193"
+        "private_ip": "172.16.1.199"
       },
       {
         "suite": "juicefs",
-        "instance_id": "i-rj929hjdmkt42qgmghoy",
+        "instance_id": "i-rj92npx0idoo4fww70e2",
         "role": "client",
-        "private_ip": "172.16.1.192"
+        "private_ip": "172.16.1.198"
       },
       {
         "suite": "drive9",
-        "instance_id": "i-rj95goqmagl76j2rt5r4",
+        "instance_id": "i-rj93vq1u38hlqnxjflpy",
         "role": "server",
-        "private_ip": "172.16.1.195"
+        "private_ip": "172.16.1.196"
       },
       {
         "suite": "drive9",
-        "instance_id": "i-rj95goqmagl76j2rt5r5",
+        "instance_id": "i-rj93vq1u38hlqnxjflpz",
         "role": "client",
-        "private_ip": "172.16.1.194"
+        "private_ip": "172.16.1.197"
       }
     ],
     "created_keypairs": [
-      "bowl-pjdfstest-kp-20261111-190843",
-      "bowl-jfsbench-kp-20261111-190848",
-      "bowl-d9bench-kp-20261111-191124"
+      "bowl-pjdfstest-kp-20261112-050719",
+      "bowl-jfsbench-kp-20261112-050700",
+      "bowl-d9bench-kp-20261112-050638"
     ],
     "session_all_rounds_summary": {
-      "total_rounds_pairs": 16,
-      "total_instances_created_and_destroyed": 32,
-      "total_keypairs_created_and_destroyed": 16,
+      "total_rounds_pairs": 19,
+      "total_instances_created_and_destroyed": 38,
+      "total_keypairs_created_and_destroyed": 19,
       "remaining_instances": 0,
       "remaining_keypairs": 0,
       "rounds": [
@@ -561,6 +574,33 @@
           "server_instance_id": "i-rj95goqmagl76j2rt5r4",
           "client_instance_id": "i-rj95goqmagl76j2rt5r5",
           "keypair": "bowl-d9bench-kp-20261111-191124",
+          "status": "deleted_verified"
+        },
+        {
+          "round": "R4",
+          "suite": "pjdfstest",
+          "bowl_commit": "6399122",
+          "server_instance_id": "i-rj947g04pwz6x8nu9fbk",
+          "client_instance_id": "i-rj947g04pwz6x8nu9fbl",
+          "keypair": "bowl-pjdfstest-kp-20261112-050719",
+          "status": "deleted_verified"
+        },
+        {
+          "round": "R4",
+          "suite": "juicefs",
+          "bowl_commit": "6399122",
+          "server_instance_id": "i-rj92npx0idoo4fww70e1",
+          "client_instance_id": "i-rj92npx0idoo4fww70e2",
+          "keypair": "bowl-jfsbench-kp-20261112-050700",
+          "status": "deleted_verified"
+        },
+        {
+          "round": "R4",
+          "suite": "drive9",
+          "bowl_commit": "6399122",
+          "server_instance_id": "i-rj93vq1u38hlqnxjflpy",
+          "client_instance_id": "i-rj93vq1u38hlqnxjflpz",
+          "keypair": "bowl-d9bench-kp-20261112-050638",
           "status": "deleted_verified"
         }
       ]

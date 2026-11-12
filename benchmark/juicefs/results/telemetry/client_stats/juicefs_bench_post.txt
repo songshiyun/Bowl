@@ -1,9 +1,9 @@
-Uptime: 8.161s  CPU: 9.651s  Memory: 588298632 B
-FUSE: calls=52869 errors=9420 inflight=0 duration=18.084648s read_bytes=4347406394 write_bytes=4347396096
-NamespaceCache: entries=2 weight=2/65536 attr=6993/1 entry=1619/1 neg=406/1 readdir=17/1 readlink=0/0 inv=1216 evict=0
-CapabilityCache: entries=0 hits=8999 misses=0 grants=1836 epoch_inv=0
-ReadAhead: triggers=1062 prefetched_bytes=5100273664 hits=32577 hit_bytes=4269932544 discarded_bytes=822607872 inflight=0 waits=207 wait_sec=2.317733
-WriteBehind: staged=4088/4286578688B passthrough=408/60817408B flush_rpcs=1024 flush_err=0 inflight=0 slots=0 bp_waits=684/5.838100s barrier_waits=4/0.054121s
+Uptime: 6.768s  CPU: 16.204s  Memory: 512280952 B
+FUSE: calls=48324 errors=4921 inflight=0 duration=10.782132s read_bytes=4347406256 write_bytes=4347396096
+NamespaceCache: entries=2 weight=2/65536 attr=6948/0 entry=1619/1 neg=406/1 readdir=18/0 readlink=0/0 inv=1216 evict=0
+CapabilityCache: entries=0 hits=9001 misses=0 grants=1836 epoch_inv=0
+ReadAhead: triggers=1024 prefetched_bytes=4294967296 hits=32756 hit_bytes=4293394432 discarded_bytes=524288 inflight=0 waits=14 wait_sec=0.555659
+WriteBehind: staged=4488/4339007488B passthrough=8/8388608B flush_rpcs=1424 flush_err=0 inflight=0 slots=0 bp_waits=858/5.985110s barrier_waits=3/0.010095s
 TmpFile: active=0 resident_bytes=0 promotes=0 rollbacks=0 rollback_errors=0
 Handles: open_files=0 open_dirs=0
 Locks: active=0 conflicts=0 waits=0 wait_sec=0.000000

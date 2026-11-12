@@ -192,11 +192,13 @@ def render_report(summary: dict[str, Any]) -> str:
         f"1. **Bowl (`bowl`)**：{bowl_cp_label}仅保存单张 `disks` 控制面表（ADR-0032）；"
         "每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎，ADR-0030/0031）承载，"
         "保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；"
-        "文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、`WriteRequest` 池化零分配解码与尾块热缓存），"
+        "文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、连续块合并单次 `pread`、`8 MiB` `SyncFileRange` 渐进回写、后台异步死包回收、`WriteRequest`/`ReadResponse` 池化零分配编解码与 `64 MiB` 分片热块缓存），"
         "常规写批次以 `pebble.NoSync` 提交异步 WAL，显式 `Fsync`/`Sync` 触发 Pack `fdatasync` + Pebble WAL `LogData(Sync)` 双层并行落盘屏障。"
         "客户端挂载时执行单次 `MountDisk` 握手获取 `WriterEpoch`（无后台心跳），禁用内核 `CAP_WRITEBACK_CACHE`，"
-        "配备 `WriteBehindCoordinator`（`4 MiB × 4` 并发顺序写流水线，`2 MiB` 同步探测 + `<64 KiB` 直通）+ 双端 `8M/32M` H2C 窗口"
-        " + `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 + 写后 `AttrTimeout=1.0s` + `MaxBackground=64`。"
+        "配备客户端 `1+8` H2C 多连接条带池（`32M / 8×64M`）与服务端 `128 MiB` H2C 窗口、`MarshalAppend` 零分配编码、"
+        "`WriteBehindCoordinator`（`4 MiB × 4` 并发写流水线，`2 MiB` 同步探测 + `Create` 预热与小块连续写内存聚合）、"
+        "`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4, ReadAheadMaxGlobalInflight=32`）、`completeDirs` 本地目录流合成、"
+        "`FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 + 写后 `AttrTimeout=1.0s` + `MaxBackground=64`。"
     )
     lines.append("2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3（全部落于 Server 本地 NVMe SSD `/mnt/nvme`），客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 NVMe SSD Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地 NVMe 磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。")
     lines.append("3. **Drive9 远端同步模式 (`drive9_sync`)**：与 `drive9_default` 连接同台 Drive9 Server，但客户端挂载参数设为 `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`（禁用本地 Overlay，对齐 `1.0s` 内核缓存，并在每次 `close`/`fsync` 时同步提交至远端服务器）。")
@@ -411,10 +413,10 @@ def render_report(summary: dict[str, Any]) -> str:
         "| **客户端挂载参数** | `bowl mount` (生产默认 `noatime`，单次 `MountDisk` 握手) | `--profile=coding-agent --durability=interactive --write-cache-size-mb=0` | `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s` |"
     )
     lines.append(
-        "| **写入持久化路径** | `WriteBehindCoordinator`（`4 MiB × 4` 并发顺序写流水线，`writeback_cache=false`）+ 双端 `8M/32M` H2C 窗口 + `WriteRequest` 池化零分配解码；Group Commit `pebble.NoSync` + Fsync 双层并行落盘屏障 | 客户端本地 NVMe SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
+        "| **写入持久化路径** | `WriteBehindCoordinator`（`4 MiB × 4` 并发写流水线 + 小块连续写聚合，`writeback_cache=false`）+ 客户端 `1+8` H2C 池 (`32M/8×64M`) / 服务端 `128M` 窗口 + 零分配编解码；Group Commit `pebble.NoSync` + `8 MiB` `SyncFileRange` 渐进回写 + Fsync 双层并行落盘屏障 | 客户端本地 NVMe SSD Write-Back 暂存，后台 `CommitQueue` 异步上传 | 客户端本地暂存后在 `fsync`/`close` 时同步阻塞上传至 Server |"
     )
     lines.append(
-        "| **客户端读缓存与预读** | 无本地磁盘缓存；文件级顺序预读窗口（Sequential Read-Ahead） | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 |"
+        "| **客户端读缓存与预读** | 无本地磁盘缓存；`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4, ReadAheadMaxGlobalInflight=32`）+ `completeDirs` 本地目录流合成 | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 | 128 MiB 内存读缓存 + 1024 MiB 本地 NVMe SSD 读缓存 + 小文件整文件预取 |"
     )
     lines.append(
         "| **FUSE 内核属性/目录缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` | `attr=30s, entry=10s, dir=10s` + `.git`/构建目录 Local Overlay | `attr=1.0s, entry=1.0s, dir=1.0s`（禁用 Local Overlay） |"

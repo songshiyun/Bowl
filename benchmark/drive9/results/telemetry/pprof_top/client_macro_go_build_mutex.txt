@@ -1,15 +1,15 @@
 === Top Self Hotspots (-flat) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: delay
-Time: 2026-11-12 03:18:11 CST
+Time: 2026-11-12 13:14:31 CST
 Showing nodes accounting for 0, 0% of 0 total
       flat  flat%   sum%        cum   cum%
 
 === Top Cumulative Hotspots (-cum) ===
 File: bowl
-Build ID: 86e96bac9b444f2d5e12c662970b0d6a2db803eb
+Build ID: e768cc44e85c83a6533798524ed2ed37313adb3e
 Type: delay
-Time: 2026-11-12 03:18:11 CST
+Time: 2026-11-12 13:14:31 CST
 Showing nodes accounting for 0, 0% of 0 total
       flat  flat%   sum%        cum   cum%

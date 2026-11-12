@@ -1,7 +1,7 @@
 [
   {
-    "trace_id": "0e98e7194e3a38e6021228f9d522ca11",
-    "total_duration_ms": 0.512,
+    "trace_id": "7e96d19f5b3d936c01a222aed0f180a0",
+    "total_duration_ms": 0.514,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -11,18 +11,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.512,
-    "server_max_span_ms": 0.082,
-    "client_rpc_span_ms": 0.476,
-    "server_rpc_span_ms": 0.082,
-    "rpc_network_codec_ms": 0.394,
-    "client_local_overhead_ms": 0.036,
-    "network_or_client_overhead_ms": 0.394,
+    "client_max_span_ms": 0.514,
+    "server_max_span_ms": 0.093,
+    "client_rpc_span_ms": 0.471,
+    "server_rpc_span_ms": 0.093,
+    "rpc_network_codec_ms": 0.378,
+    "client_local_overhead_ms": 0.043,
+    "network_or_client_overhead_ms": 0.378,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.512,
+        "duration_ms": 0.514,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -34,8 +34,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.476,
-        "start_offset_ms": 0.021,
+        "duration_ms": 0.471,
+        "start_offset_ms": 0.028,
         "error": true,
         "tags": {
           "error": true,
@@ -48,8 +48,83 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.082,
-        "start_offset_ms": 0.183,
+        "duration_ms": 0.093,
+        "start_offset_ms": 0.213,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.014,
+        "start_offset_ms": 0.259,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.25,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "107f1112399805020da607ba1fe74223",
+    "total_duration_ms": 0.451,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.451,
+    "server_max_span_ms": 0.079,
+    "client_rpc_span_ms": 0.418,
+    "server_rpc_span_ms": 0.079,
+    "rpc_network_codec_ms": 0.339,
+    "client_local_overhead_ms": 0.033,
+    "network_or_client_overhead_ms": 0.339,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.451,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.418,
+        "start_offset_ms": 0.02,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.079,
+        "start_offset_ms": 0.178,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -60,23 +135,23 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.013,
-        "start_offset_ms": 0.222,
+        "start_offset_ms": 0.221,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.008,
-        "start_offset_ms": 0.21,
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.212,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "1a0104156763e6ee03d8a1f83dc6ce1d",
-    "total_duration_ms": 0.474,
+    "trace_id": "84072d40cc633a851297a3a005572571",
+    "total_duration_ms": 0.44,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -86,93 +161,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.474,
-    "server_max_span_ms": 0.122,
-    "client_rpc_span_ms": 0.449,
-    "server_rpc_span_ms": 0.122,
-    "rpc_network_codec_ms": 0.327,
-    "client_local_overhead_ms": 0.025,
-    "network_or_client_overhead_ms": 0.327,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.474,
-        "start_offset_ms": 0.0,
-        "error": false,
-        "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.449,
-        "start_offset_ms": 0.013,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.122,
-        "start_offset_ms": 0.113,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.028,
-        "start_offset_ms": 0.172,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.007,
-        "start_offset_ms": 0.159,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "8a4cddbcb26f0d201365da61eeeb07d4",
-    "total_duration_ms": 0.447,
-    "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
-    "span_count": 5,
-    "span_links_count": 0,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.447,
-    "server_max_span_ms": 0.068,
+    "client_max_span_ms": 0.44,
+    "server_max_span_ms": 0.091,
     "client_rpc_span_ms": 0.412,
-    "server_rpc_span_ms": 0.068,
-    "rpc_network_codec_ms": 0.344,
-    "client_local_overhead_ms": 0.035,
-    "network_or_client_overhead_ms": 0.344,
+    "server_rpc_span_ms": 0.091,
+    "rpc_network_codec_ms": 0.321,
+    "client_local_overhead_ms": 0.028,
+    "network_or_client_overhead_ms": 0.321,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.447,
+        "duration_ms": 0.44,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -185,7 +185,7 @@
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
         "duration_ms": 0.412,
-        "start_offset_ms": 0.021,
+        "start_offset_ms": 0.016,
         "error": true,
         "tags": {
           "error": true,
@@ -198,8 +198,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.068,
-        "start_offset_ms": 0.126,
+        "duration_ms": 0.091,
+        "start_offset_ms": 0.153,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -209,24 +209,24 @@
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.01,
-        "start_offset_ms": 0.156,
+        "duration_ms": 0.016,
+        "start_offset_ms": 0.201,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.004,
-        "start_offset_ms": 0.149,
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.192,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "5e89086e1c29e5ee0dcaf64cdffc9d56",
-    "total_duration_ms": 0.428,
+    "trace_id": "139249a728a429ed0dcfabd5eda40c6a",
+    "total_duration_ms": 0.42,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -236,18 +236,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.428,
-    "server_max_span_ms": 0.082,
-    "client_rpc_span_ms": 0.406,
-    "server_rpc_span_ms": 0.082,
-    "rpc_network_codec_ms": 0.324,
-    "client_local_overhead_ms": 0.022,
-    "network_or_client_overhead_ms": 0.324,
+    "client_max_span_ms": 0.42,
+    "server_max_span_ms": 0.083,
+    "client_rpc_span_ms": 0.389,
+    "server_rpc_span_ms": 0.083,
+    "rpc_network_codec_ms": 0.306,
+    "client_local_overhead_ms": 0.031,
+    "network_or_client_overhead_ms": 0.306,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.428,
+        "duration_ms": 0.42,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -259,8 +259,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.406,
-        "start_offset_ms": 0.011,
+        "duration_ms": 0.389,
+        "start_offset_ms": 0.02,
         "error": true,
         "tags": {
           "error": true,
@@ -273,8 +273,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.082,
-        "start_offset_ms": 0.128,
+        "duration_ms": 0.083,
+        "start_offset_ms": 0.162,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -284,8 +284,8 @@
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.01,
-        "start_offset_ms": 0.171,
+        "duration_ms": 0.016,
+        "start_offset_ms": 0.201,
         "error": false,
         "tags": {}
       },
@@ -293,15 +293,15 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.004,
-        "start_offset_ms": 0.158,
+        "start_offset_ms": 0.191,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "2b648c93342b068301180aebf09c7fe3",
-    "total_duration_ms": 0.423,
+    "trace_id": "dd8d77266b3423eb05ed5bd0943cf119",
+    "total_duration_ms": 0.4,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -311,93 +311,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.423,
-    "server_max_span_ms": 0.068,
-    "client_rpc_span_ms": 0.391,
-    "server_rpc_span_ms": 0.068,
-    "rpc_network_codec_ms": 0.323,
-    "client_local_overhead_ms": 0.032,
-    "network_or_client_overhead_ms": 0.323,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.423,
-        "start_offset_ms": 0.0,
-        "error": false,
-        "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.391,
-        "start_offset_ms": 0.015,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.068,
-        "start_offset_ms": 0.113,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.009,
-        "start_offset_ms": 0.146,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.003,
-        "start_offset_ms": 0.139,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "db42b67f14fd02dd0a1b23cb5f0f003e",
-    "total_duration_ms": 0.412,
-    "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
-    "span_count": 5,
-    "span_links_count": 0,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.412,
-    "server_max_span_ms": 0.095,
-    "client_rpc_span_ms": 0.383,
-    "server_rpc_span_ms": 0.095,
+    "client_max_span_ms": 0.4,
+    "server_max_span_ms": 0.081,
+    "client_rpc_span_ms": 0.369,
+    "server_rpc_span_ms": 0.081,
     "rpc_network_codec_ms": 0.288,
-    "client_local_overhead_ms": 0.029,
+    "client_local_overhead_ms": 0.031,
     "network_or_client_overhead_ms": 0.288,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.412,
+        "duration_ms": 0.4,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -409,232 +334,7 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.383,
-        "start_offset_ms": 0.01,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.095,
-        "start_offset_ms": 0.066,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.015,
-        "start_offset_ms": 0.116,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.004,
-        "start_offset_ms": 0.107,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "4d80a14466ab056e0d8bc2ddbb75d57f",
-    "total_duration_ms": 0.387,
-    "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
-    "span_count": 5,
-    "span_links_count": 0,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.387,
-    "server_max_span_ms": 0.085,
-    "client_rpc_span_ms": 0.351,
-    "server_rpc_span_ms": 0.085,
-    "rpc_network_codec_ms": 0.266,
-    "client_local_overhead_ms": 0.036,
-    "network_or_client_overhead_ms": 0.266,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.387,
-        "start_offset_ms": 0.0,
-        "error": false,
-        "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.351,
-        "start_offset_ms": 0.026,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.085,
-        "start_offset_ms": 0.104,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.011,
-        "start_offset_ms": 0.156,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.004,
-        "start_offset_ms": 0.148,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "4f4fa0bf52af7ad20dc888814379c5eb",
-    "total_duration_ms": 0.364,
-    "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
-    "span_count": 5,
-    "span_links_count": 0,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.364,
-    "server_max_span_ms": 0.082,
-    "client_rpc_span_ms": 0.346,
-    "server_rpc_span_ms": 0.082,
-    "rpc_network_codec_ms": 0.264,
-    "client_local_overhead_ms": 0.018,
-    "network_or_client_overhead_ms": 0.264,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.364,
-        "start_offset_ms": 0.0,
-        "error": false,
-        "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.346,
-        "start_offset_ms": 0.008,
-        "error": true,
-        "tags": {
-          "error": true,
-          "otel.status_code": "ERROR",
-          "otel.status_description": "store: not found",
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.082,
-        "start_offset_ms": 0.053,
-        "error": false,
-        "tags": {
-          "rpc.method": "storage.v1.StorageService/Lookup",
-          "rpc.response.status_code": "NOT_FOUND"
-        }
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.01,
-        "start_offset_ms": 0.099,
-        "error": false,
-        "tags": {}
-      },
-      {
-        "service": "bowl-storage",
-        "operation": "store.KVGet",
-        "duration_ms": 0.002,
-        "start_offset_ms": 0.092,
-        "error": false,
-        "tags": {}
-      }
-    ]
-  },
-  {
-    "trace_id": "12e14237d02434bc0fd238dc8af3938d",
-    "total_duration_ms": 0.354,
-    "root_service": "bowl-client",
-    "root_operation": "fuse.Lookup",
-    "span_count": 5,
-    "span_links_count": 0,
-    "services": [
-      "bowl-client",
-      "bowl-storage"
-    ],
-    "has_error": true,
-    "client_max_span_ms": 0.354,
-    "server_max_span_ms": 0.055,
-    "client_rpc_span_ms": 0.324,
-    "server_rpc_span_ms": 0.055,
-    "rpc_network_codec_ms": 0.269,
-    "client_local_overhead_ms": 0.03,
-    "network_or_client_overhead_ms": 0.269,
-    "top_spans": [
-      {
-        "service": "bowl-client",
-        "operation": "fuse.Lookup",
-        "duration_ms": 0.354,
-        "start_offset_ms": 0.0,
-        "error": false,
-        "tags": {
-          "fuse.errno": "ENOENT",
-          "fuse.op": "Lookup",
-          "fuse.status_code": 2
-        }
-      },
-      {
-        "service": "bowl-client",
-        "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.324,
+        "duration_ms": 0.369,
         "start_offset_ms": 0.017,
         "error": true,
         "tags": {
@@ -648,8 +348,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.055,
-        "start_offset_ms": 0.085,
+        "duration_ms": 0.081,
+        "start_offset_ms": 0.126,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -659,24 +359,24 @@
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.01,
-        "start_offset_ms": 0.107,
+        "duration_ms": 0.024,
+        "start_offset_ms": 0.16,
         "error": false,
         "tags": {}
       },
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.002,
-        "start_offset_ms": 0.103,
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.153,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "d6db0d42059cc3ce006cf8e94f2fa541",
-    "total_duration_ms": 0.335,
+    "trace_id": "71a191c872a0ccc8081d33d683c9d49b",
+    "total_duration_ms": 0.382,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -686,18 +386,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.335,
-    "server_max_span_ms": 0.051,
-    "client_rpc_span_ms": 0.299,
-    "server_rpc_span_ms": 0.051,
-    "rpc_network_codec_ms": 0.248,
-    "client_local_overhead_ms": 0.036,
-    "network_or_client_overhead_ms": 0.248,
+    "client_max_span_ms": 0.382,
+    "server_max_span_ms": 0.071,
+    "client_rpc_span_ms": 0.356,
+    "server_rpc_span_ms": 0.071,
+    "rpc_network_codec_ms": 0.285,
+    "client_local_overhead_ms": 0.026,
+    "network_or_client_overhead_ms": 0.285,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.335,
+        "duration_ms": 0.382,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -709,7 +409,7 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.299,
+        "duration_ms": 0.356,
         "start_offset_ms": 0.013,
         "error": true,
         "tags": {
@@ -723,8 +423,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.051,
-        "start_offset_ms": 0.079,
+        "duration_ms": 0.071,
+        "start_offset_ms": 0.138,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -734,8 +434,8 @@
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.008,
-        "start_offset_ms": 0.104,
+        "duration_ms": 0.012,
+        "start_offset_ms": 0.176,
         "error": false,
         "tags": {}
       },
@@ -743,15 +443,15 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.003,
-        "start_offset_ms": 0.099,
+        "start_offset_ms": 0.169,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "fa2578ecbd454a41038944a7e65132e5",
-    "total_duration_ms": 0.307,
+    "trace_id": "a4c9a1dd0ea3dbe40be891cca3686cad",
+    "total_duration_ms": 0.376,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -761,18 +461,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.307,
-    "server_max_span_ms": 0.055,
-    "client_rpc_span_ms": 0.285,
-    "server_rpc_span_ms": 0.055,
-    "rpc_network_codec_ms": 0.23,
-    "client_local_overhead_ms": 0.022,
-    "network_or_client_overhead_ms": 0.23,
+    "client_max_span_ms": 0.376,
+    "server_max_span_ms": 0.057,
+    "client_rpc_span_ms": 0.34,
+    "server_rpc_span_ms": 0.057,
+    "rpc_network_codec_ms": 0.283,
+    "client_local_overhead_ms": 0.036,
+    "network_or_client_overhead_ms": 0.283,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.307,
+        "duration_ms": 0.376,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -784,8 +484,8 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.285,
-        "start_offset_ms": 0.012,
+        "duration_ms": 0.34,
+        "start_offset_ms": 0.021,
         "error": true,
         "tags": {
           "error": true,
@@ -798,8 +498,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.055,
-        "start_offset_ms": 0.042,
+        "duration_ms": 0.057,
+        "start_offset_ms": 0.155,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -809,8 +509,8 @@
       {
         "service": "bowl-storage",
         "operation": "store.KVGet",
-        "duration_ms": 0.008,
-        "start_offset_ms": 0.065,
+        "duration_ms": 0.012,
+        "start_offset_ms": 0.177,
         "error": false,
         "tags": {}
       },
@@ -818,15 +518,15 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.002,
-        "start_offset_ms": 0.06,
+        "start_offset_ms": 0.171,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "f6b26accf3d0e8a90fc16546eaa36254",
-    "total_duration_ms": 0.305,
+    "trace_id": "c225db9449820a6f186ba20897650cbb",
+    "total_duration_ms": 0.369,
     "root_service": "bowl-client",
     "root_operation": "fuse.Lookup",
     "span_count": 5,
@@ -836,18 +536,18 @@
       "bowl-storage"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.305,
-    "server_max_span_ms": 0.053,
-    "client_rpc_span_ms": 0.28,
-    "server_rpc_span_ms": 0.053,
-    "rpc_network_codec_ms": 0.227,
-    "client_local_overhead_ms": 0.025,
-    "network_or_client_overhead_ms": 0.227,
+    "client_max_span_ms": 0.369,
+    "server_max_span_ms": 0.062,
+    "client_rpc_span_ms": 0.34,
+    "server_rpc_span_ms": 0.062,
+    "rpc_network_codec_ms": 0.278,
+    "client_local_overhead_ms": 0.029,
+    "network_or_client_overhead_ms": 0.278,
     "top_spans": [
       {
         "service": "bowl-client",
         "operation": "fuse.Lookup",
-        "duration_ms": 0.305,
+        "duration_ms": 0.369,
         "start_offset_ms": 0.0,
         "error": false,
         "tags": {
@@ -859,7 +559,232 @@
       {
         "service": "bowl-client",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.28,
+        "duration_ms": 0.34,
+        "start_offset_ms": 0.018,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.062,
+        "start_offset_ms": 0.146,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.009,
+        "start_offset_ms": 0.179,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.004,
+        "start_offset_ms": 0.171,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "b7836952037565fd0cb177cdf00841c2",
+    "total_duration_ms": 0.351,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.351,
+    "server_max_span_ms": 0.082,
+    "client_rpc_span_ms": 0.333,
+    "server_rpc_span_ms": 0.082,
+    "rpc_network_codec_ms": 0.251,
+    "client_local_overhead_ms": 0.018,
+    "network_or_client_overhead_ms": 0.251,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.351,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.333,
+        "start_offset_ms": 0.01,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.082,
+        "start_offset_ms": 0.106,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.012,
+        "start_offset_ms": 0.15,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.005,
+        "start_offset_ms": 0.14,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "31cade944cf231a40b79046b03f03365",
+    "total_duration_ms": 0.289,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.289,
+    "server_max_span_ms": 0.061,
+    "client_rpc_span_ms": 0.272,
+    "server_rpc_span_ms": 0.061,
+    "rpc_network_codec_ms": 0.211,
+    "client_local_overhead_ms": 0.017,
+    "network_or_client_overhead_ms": 0.211,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.289,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.272,
+        "start_offset_ms": 0.008,
+        "error": true,
+        "tags": {
+          "error": true,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "store: not found",
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.061,
+        "start_offset_ms": 0.088,
+        "error": false,
+        "tags": {
+          "rpc.method": "storage.v1.StorageService/Lookup",
+          "rpc.response.status_code": "NOT_FOUND"
+        }
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.009,
+        "start_offset_ms": 0.12,
+        "error": false,
+        "tags": {}
+      },
+      {
+        "service": "bowl-storage",
+        "operation": "store.KVGet",
+        "duration_ms": 0.003,
+        "start_offset_ms": 0.114,
+        "error": false,
+        "tags": {}
+      }
+    ]
+  },
+  {
+    "trace_id": "e5661aa54de704a80f5dddee6360fad5",
+    "total_duration_ms": 0.252,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Lookup",
+    "span_count": 5,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client",
+      "bowl-storage"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.252,
+    "server_max_span_ms": 0.044,
+    "client_rpc_span_ms": 0.232,
+    "server_rpc_span_ms": 0.044,
+    "rpc_network_codec_ms": 0.188,
+    "client_local_overhead_ms": 0.02,
+    "network_or_client_overhead_ms": 0.188,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Lookup",
+        "duration_ms": 0.252,
+        "start_offset_ms": 0.0,
+        "error": false,
+        "tags": {
+          "fuse.errno": "ENOENT",
+          "fuse.op": "Lookup",
+          "fuse.status_code": 2
+        }
+      },
+      {
+        "service": "bowl-client",
+        "operation": "storage.v1.StorageService/Lookup",
+        "duration_ms": 0.232,
         "start_offset_ms": 0.009,
         "error": true,
         "tags": {
@@ -873,8 +798,8 @@
       {
         "service": "bowl-storage",
         "operation": "storage.v1.StorageService/Lookup",
-        "duration_ms": 0.053,
-        "start_offset_ms": 0.058,
+        "duration_ms": 0.044,
+        "start_offset_ms": 0.104,
         "error": false,
         "tags": {
           "rpc.method": "storage.v1.StorageService/Lookup",
@@ -885,7 +810,7 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.005,
-        "start_offset_ms": 0.082,
+        "start_offset_ms": 0.128,
         "error": false,
         "tags": {}
       },
@@ -893,15 +818,15 @@
         "service": "bowl-storage",
         "operation": "store.KVGet",
         "duration_ms": 0.002,
-        "start_offset_ms": 0.077,
+        "start_offset_ms": 0.122,
         "error": false,
         "tags": {}
       }
     ]
   },
   {
-    "trace_id": "544eedf461ff94770211d3106613f7d6",
-    "total_duration_ms": 0.01,
+    "trace_id": "ba50332ab285a18f1733c52d0020730a",
+    "total_duration_ms": 0.006,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
     "span_count": 1,
@@ -910,7 +835,7 @@
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.01,
+    "client_max_span_ms": 0.006,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
@@ -921,7 +846,7 @@
       {
         "service": "bowl-client",
         "operation": "fuse.Ioctl",
-        "duration_ms": 0.01,
+        "duration_ms": 0.006,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -936,7 +861,43 @@
     ]
   },
   {
-    "trace_id": "c04fd799da7a97bc00a9773d698720c2",
+    "trace_id": "f6c0352e781be52b02e14f01af84de9a",
+    "total_duration_ms": 0.006,
+    "root_service": "bowl-client",
+    "root_operation": "fuse.Ioctl",
+    "span_count": 1,
+    "span_links_count": 0,
+    "services": [
+      "bowl-client"
+    ],
+    "has_error": true,
+    "client_max_span_ms": 0.006,
+    "server_max_span_ms": 0.0,
+    "client_rpc_span_ms": null,
+    "server_rpc_span_ms": null,
+    "rpc_network_codec_ms": null,
+    "client_local_overhead_ms": null,
+    "network_or_client_overhead_ms": null,
+    "top_spans": [
+      {
+        "service": "bowl-client",
+        "operation": "fuse.Ioctl",
+        "duration_ms": 0.006,
+        "start_offset_ms": 0.0,
+        "error": true,
+        "tags": {
+          "error": true,
+          "fuse.errno": "ENOTTY",
+          "fuse.op": "Ioctl",
+          "fuse.status_code": 25,
+          "otel.status_code": "ERROR",
+          "otel.status_description": "ENOTTY"
+        }
+      }
+    ]
+  },
+  {
+    "trace_id": "a80b8a7bd1a016ae0b801c8571fa615f",
     "total_duration_ms": 0.004,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -972,7 +933,7 @@
     ]
   },
   {
-    "trace_id": "1f5cc3e4303708b0154ebe6b454c6aa2",
+    "trace_id": "21d9f30f10bafa0d170b54e1d3fd6ca5",
     "total_duration_ms": 0.004,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1008,7 +969,7 @@
     ]
   },
   {
-    "trace_id": "f4d91a31d566930c13443c43609ae329",
+    "trace_id": "6cd86b7957eeb395181b553409cbc130",
     "total_duration_ms": 0.004,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1044,7 +1005,7 @@
     ]
   },
   {
-    "trace_id": "cd7ca9d177e833760c0dadaf59d401cb",
+    "trace_id": "dee10ed518551a1418efdbcbfe47e25d",
     "total_duration_ms": 0.004,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1080,7 +1041,7 @@
     ]
   },
   {
-    "trace_id": "a9246d3cfe4a65b70b0ccdb3ca37f055",
+    "trace_id": "98e5be761ae074861438e038e988b60b",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1116,7 +1077,7 @@
     ]
   },
   {
-    "trace_id": "78b5d8dfa9f242ce03c5a5a82153b96c",
+    "trace_id": "777a2ca20927b90f0fd2e2ade10cf055",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1152,7 +1113,7 @@
     ]
   },
   {
-    "trace_id": "49562a3f37d0da69181492abbe6966c2",
+    "trace_id": "fdd1fda6b60ce47f01d4fbe0c45a9d84",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1188,7 +1149,7 @@
     ]
   },
   {
-    "trace_id": "229bd781e89ccfb5090ba3a0979f92b1",
+    "trace_id": "c536a9703620d6c9010fc4e7569cc5f5",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1224,7 +1185,7 @@
     ]
   },
   {
-    "trace_id": "21464872ead99deb0094c32c18fd52fa",
+    "trace_id": "9ae3ebc8a3a67548196510b5abb08e2e",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1260,7 +1221,7 @@
     ]
   },
   {
-    "trace_id": "83b54ffeed39a5530f46fd28e23b5f43",
+    "trace_id": "89fefeed07d484cc062ca7dff22e818f",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1296,7 +1257,7 @@
     ]
   },
   {
-    "trace_id": "0dda9f98c2907ecd160f6c7fde2c58ee",
+    "trace_id": "e92ec02299c0956911bcf7c7888c1526",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1332,7 +1293,7 @@
     ]
   },
   {
-    "trace_id": "e2ca393b66ceb7cd0791775a354cfb66",
+    "trace_id": "ba6b687af26d7dba101e4179348b5e45",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1368,7 +1329,7 @@
     ]
   },
   {
-    "trace_id": "d63393fa6b65da3712e8fca22e7627a8",
+    "trace_id": "23d265e972cafa761315faeac9b18eb9",
     "total_duration_ms": 0.003,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
@@ -1404,8 +1365,8 @@
     ]
   },
   {
-    "trace_id": "56f9d7475d25cd3a153fd144bac7648b",
-    "total_duration_ms": 0.003,
+    "trace_id": "82ef2639bd8fb5db18f5769cf643a353",
+    "total_duration_ms": 0.002,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
     "span_count": 1,
@@ -1414,7 +1375,7 @@
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.003,
+    "client_max_span_ms": 0.002,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
@@ -1425,7 +1386,7 @@
       {
         "service": "bowl-client",
         "operation": "fuse.Ioctl",
-        "duration_ms": 0.003,
+        "duration_ms": 0.002,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -1440,8 +1401,8 @@
     ]
   },
   {
-    "trace_id": "16c9f4e7f0bc4891079a40db1c662484",
-    "total_duration_ms": 0.003,
+    "trace_id": "f518a81e959242e111bd18a2695d8d83",
+    "total_duration_ms": 0.002,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
     "span_count": 1,
@@ -1450,7 +1411,7 @@
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.003,
+    "client_max_span_ms": 0.002,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
@@ -1461,7 +1422,7 @@
       {
         "service": "bowl-client",
         "operation": "fuse.Ioctl",
-        "duration_ms": 0.003,
+        "duration_ms": 0.002,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -1476,8 +1437,8 @@
     ]
   },
   {
-    "trace_id": "d67fd54a380e87140ccb5054602cfb7d",
-    "total_duration_ms": 0.003,
+    "trace_id": "fe20f911a02c794f00877fb4747dbe43",
+    "total_duration_ms": 0.002,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",
     "span_count": 1,
@@ -1486,7 +1447,7 @@
       "bowl-client"
     ],
     "has_error": true,
-    "client_max_span_ms": 0.003,
+    "client_max_span_ms": 0.002,
     "server_max_span_ms": 0.0,
     "client_rpc_span_ms": null,
     "server_rpc_span_ms": null,
@@ -1497,7 +1458,7 @@
       {
         "service": "bowl-client",
         "operation": "fuse.Ioctl",
-        "duration_ms": 0.003,
+        "duration_ms": 0.002,
         "start_offset_ms": 0.0,
         "error": true,
         "tags": {
@@ -1512,7 +1473,7 @@
     ]
   },
   {
-    "trace_id": "5656deee326d53ea0469b700c7946d9a",
+    "trace_id": "6ef85ffbd542e8c5093625f335bc3829",
     "total_duration_ms": 0.002,
     "root_service": "bowl-client",
     "root_operation": "fuse.Ioctl",

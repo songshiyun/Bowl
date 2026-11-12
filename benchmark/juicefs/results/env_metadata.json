@@ -1,6 +1,6 @@
 {
-  "test_started_at": "2026-11-11T19:14:57Z",
-  "test_completed_at": "2026-11-11T19:22:42Z",
+  "test_started_at": "2026-11-12T05:12:25Z",
+  "test_completed_at": "2026-11-12T05:19:44Z",
   "cloud": {
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
@@ -30,16 +30,16 @@
     "rclone_version": "rclone v1.68.2",
     "data_disk_device": "/dev/nvme1n1",
     "data_disk_size_gib": 894,
-    "instance_id": "i-rj929hjdmkt42qgmghox",
-    "private_ip": "172.16.1.193"
+    "instance_id": "i-rj92npx0idoo4fww70e1",
+    "private_ip": "172.16.1.199"
   },
   "server_disk_baseline": {
     "local_seq_write_mib_s": 1998.05,
     "local_seq_read_mib_s": 3494.88,
-    "local_randwrite_4k_iops": 69939,
-    "local_randread_4k_iops": 699175,
-    "local_fsync_4k_iops": 50250,
-    "local_fsync_4k_p99_us": 64.4
+    "local_randwrite_4k_iops": 69961,
+    "local_randread_4k_iops": 699143,
+    "local_fsync_4k_iops": 50592,
+    "local_fsync_4k_p99_us": 62.8
   },
   "client_node": {
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
@@ -51,15 +51,15 @@
     "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
     "fio_version": "fio-3.36",
     "mdtest_version": "mdtest-3.3.0",
-    "instance_id": "i-rj929hjdmkt42qgmghoy",
-    "private_ip": "172.16.1.192"
+    "instance_id": "i-rj92npx0idoo4fww70e2",
+    "private_ip": "172.16.1.198"
   },
   "network_baseline": {
-    "ping_rtt_ms": "0.045/0.083/0.214/0.049",
+    "ping_rtt_ms": "0.041/0.078/0.258/0.055",
     "iperf3_gbps": "21.22"
   },
   "bowl_config": {
-    "bowl_git_commit": "8afc63c",
+    "bowl_git_commit": "6399122",
     "deploy_profile": "deploy/prod (docker-compose.yaml + storage.env)",
     "observability_stack": "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=0.10) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
     "telemetry_dir": "results/telemetry",
@@ -80,7 +80,7 @@
     "flush_issues_fsync_rpc": false,
     "wal_sync_mode": "pebble.NoSync Group Commit + Fsync/FsyncDir 双层并行落盘屏障 (fdatasync + LogData)",
     "concurrency_model": "单盘独立 StoreActor 串行 Phase A 内存校验 + WriterEpoch 世代号栅栏 + 无锁并发 Read",
-    "disk_id": "01a1cc09-0019-784d-9d6e-650c6971ed33",
+    "disk_id": "01a1ce2b-fef1-736c-9b02-518d7123d71f",
     "root_ino": 1,
     "disk_size": "2PiB",
     "atime_mode": "noatime",
@@ -95,9 +95,9 @@
     "chunk_size": "64MiB (default)"
   },
   "cleanup_audit": {
-    "key_pair_name": "bowl-jfsbench-kp-20261111-190848",
-    "instances_created_at": "2026-11-11T19:08:55Z",
-    "instances_deleted_at": "2026-11-11T19:24:03Z",
+    "key_pair_name": "bowl-jfsbench-kp-20261112-050700",
+    "instances_created_at": "2026-11-12T05:07:09Z",
+    "instances_deleted_at": "2026-11-12T05:21:00Z",
     "remaining_benchmark_instances": 0
   }
 }

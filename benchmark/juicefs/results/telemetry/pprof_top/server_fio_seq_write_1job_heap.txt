@@ -1,69 +1,69 @@
 === Top Self Hotspots (-flat) ===
 File: storage-service
-Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Build ID: 9a749ee50b8e5f4b6aa09fa2d35b351f2838960d
 Type: inuse_space
-Time: 2026-11-12 03:15:24 CST
-Showing nodes accounting for 179.57MB, 97.88% of 183.46MB total
-Dropped 84 nodes (cum <= 0.92MB)
-Showing top 25 nodes out of 98
+Time: 2026-11-12 13:12:50 CST
+Showing nodes accounting for 160.80MB, 95.80% of 167.86MB total
+Dropped 101 nodes (cum <= 0.84MB)
+Showing top 25 nodes out of 71
       flat  flat%   sum%        cum   cum%
-      96MB 52.33% 52.33%       96MB 52.33%  bytes.growSlice
-   68.02MB 37.08% 89.40%    68.02MB 37.08%  github.com/starsrc/bowl/services/storage/internal/server.init.func1
-    9.65MB  5.26% 94.66%     9.65MB  5.26%  net/http.init.func5
-    2.58MB  1.41% 96.07%     2.58MB  1.41%  github.com/cockroachdb/pebble/v2/internal/manual.New (inline)
-    2.31MB  1.26% 97.33%     2.31MB  1.26%  google.golang.org/grpc/internal/mem.(*sizedBufferPool).Get
-       1MB  0.55% 97.88%        1MB  0.55%  google.golang.org/protobuf/internal/filedesc.appendOptions (inline)
-         0     0% 97.88%        1MB  0.55%  buf.build/go/protovalidate.New
-         0     0% 97.88%        1MB  0.55%  buf.build/go/protovalidate.init
-         0     0% 97.88%       96MB 52.33%  bytes.(*Buffer).ReadFrom
-         0     0% 97.88%       96MB 52.33%  bytes.(*Buffer).grow
-         0     0% 97.88%   164.66MB 89.75%  connectrpc.com/connect.(*Handler).ServeHTTP
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryHandlerConn).Receive
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.(*errorTranslatingHandlerConnCloser).Receive
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.NewUnaryHandler[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.receiveUnaryMessage[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
-         0     0% 97.88%   164.02MB 89.40%  connectrpc.com/connect.receiveUnaryRequest[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).Apply
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).applyInternal
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).commitWrite
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).commitWrite.func1
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).makeRoomForWrite
-         0     0% 97.88%     2.58MB  1.41%  github.com/cockroachdb/pebble/v2.(*DB).newMemTable
-         0     0% 97.88%     1.95MB  1.06%  github.com/cockroachdb/pebble/v2.(*DB).rotateMemtable
+   99.20MB 59.10% 59.10%    99.20MB 59.10%  bytes.growSlice
+   44.01MB 26.22% 85.32%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.init.func1
+   14.22MB  8.47% 93.79%    14.22MB  8.47%  net/http.init.func5
+    2.37MB  1.41% 95.20%     2.37MB  1.41%  net/http.(*http2Server).serveConn.http2NewFramer.func2
+    0.50MB   0.3% 95.50%        1MB   0.6%  buf.build/go/protovalidate.(*builder).processFields
+    0.50MB   0.3% 95.80%     1.50MB  0.89%  buf.build/go/protovalidate.(*builder).build
+         0     0% 95.80%        1MB   0.6%  buf.build/go/protovalidate.(*builder).buildMessage
+         0     0% 95.80%        2MB  1.19%  buf.build/go/protovalidate.New
+         0     0% 95.80%     1.50MB  0.89%  buf.build/go/protovalidate.newBuilder
+         0     0% 95.80%    99.20MB 59.10%  bytes.(*Buffer).ReadFrom
+         0     0% 95.80%    99.20MB 59.10%  bytes.(*Buffer).grow
+         0     0% 95.80%   143.71MB 85.62%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryHandlerConn).Receive
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.(*errorTranslatingHandlerConnCloser).Receive
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.NewUnaryHandler[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.receiveUnaryMessage[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
+         0     0% 95.80%   143.21MB 85.32%  connectrpc.com/connect.receiveUnaryRequest[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
+         0     0% 95.80%   143.71MB 85.62%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0% 95.80%   143.71MB 85.62%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0% 95.80%        2MB  1.19%  github.com/starsrc/bowl/pkg/validator.NewStorageValidator
+         0     0% 95.80%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.(*protoBinaryCodec).Unmarshal
+         0     0% 95.80%        2MB  1.19%  github.com/starsrc/bowl/services/storage/internal/server.BuildInterceptors
+         0     0% 95.80%        2MB  1.19%  github.com/starsrc/bowl/services/storage/internal/server.New
 
 === Top Cumulative Hotspots (-cum) ===
 File: storage-service
-Build ID: b818e33f4b8283c978d7260b1643ede5861db840
+Build ID: 9a749ee50b8e5f4b6aa09fa2d35b351f2838960d
 Type: inuse_space
-Time: 2026-11-12 03:15:24 CST
-Showing nodes accounting for 164.02MB, 89.40% of 183.46MB total
-Dropped 84 nodes (cum <= 0.92MB)
-Showing top 25 nodes out of 98
+Time: 2026-11-12 13:12:50 CST
+Showing nodes accounting for 143.21MB, 85.32% of 167.86MB total
+Dropped 101 nodes (cum <= 0.84MB)
+Showing top 25 nodes out of 71
       flat  flat%   sum%        cum   cum%
-         0     0%     0%   165.54MB 90.23%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
-         0     0%     0%   165.54MB 90.23%  net/http.(*ServeMux).ServeHTTP
-         0     0%     0%   165.54MB 90.23%  net/http.HandlerFunc.ServeHTTP
-         0     0%     0%   165.54MB 90.23%  net/http.serverHandler.ServeHTTP
-         0     0%     0%   164.66MB 89.75%  connectrpc.com/connect.(*Handler).ServeHTTP
-         0     0%     0%   164.66MB 89.75%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
-         0     0%     0%   164.66MB 89.75%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
-         0     0%     0%   164.66MB 89.75%  net/http.(*http2serverConn).runHandler
-         0     0%     0%   164.66MB 89.75%  net/http.unencryptedHTTP2Request.ServeHTTP
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryHandlerConn).Receive
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.(*errorTranslatingHandlerConnCloser).Receive
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.NewUnaryHandler[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.receiveUnaryMessage[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
-         0     0%     0%   164.02MB 89.40%  connectrpc.com/connect.receiveUnaryRequest[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
-         0     0%     0%       96MB 52.33%  bytes.(*Buffer).ReadFrom
-         0     0%     0%       96MB 52.33%  bytes.(*Buffer).grow
-      96MB 52.33% 52.33%       96MB 52.33%  bytes.growSlice
-         0     0% 52.33%    77.67MB 42.34%  sync.(*Pool).Get
-         0     0% 52.33%    68.02MB 37.08%  github.com/starsrc/bowl/services/storage/internal/server.(*protoBinaryCodec).Unmarshal
-         0     0% 52.33%    68.02MB 37.08%  github.com/starsrc/bowl/services/storage/internal/server.acquireWritePayloadBuf
-   68.02MB 37.08% 89.40%    68.02MB 37.08%  github.com/starsrc/bowl/services/storage/internal/server.init.func1
-         0     0% 89.40%    68.02MB 37.08%  github.com/starsrc/bowl/services/storage/internal/server.unmarshalWriteRequest
-         0     0% 89.40%    10.53MB  5.74%  net/http.(*conn).serve
+         0     0%     0%   143.71MB 85.62%  connectrpc.com/connect.(*Handler).ServeHTTP
+         0     0%     0%   143.71MB 85.62%  github.com/starsrc/Aether/pkg/serverx.NewHTTPServer.MaxBytesHandler.func1
+         0     0%     0%   143.71MB 85.62%  github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect.NewStorageServiceHandler.func1
+         0     0%     0%   143.71MB 85.62%  github.com/starsrc/bowl/services/storage/internal/server.New.WrapHTTPHandler.func3
+         0     0%     0%   143.71MB 85.62%  net/http.(*ServeMux).ServeHTTP
+         0     0%     0%   143.71MB 85.62%  net/http.(*http2serverConn).runHandler
+         0     0%     0%   143.71MB 85.62%  net/http.HandlerFunc.ServeHTTP
+         0     0%     0%   143.71MB 85.62%  net/http.serverHandler.ServeHTTP
+         0     0%     0%   143.71MB 85.62%  net/http.unencryptedHTTP2Request.ServeHTTP
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryHandlerConn).Receive
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryUnmarshaler).Unmarshal (inline)
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.(*connectUnaryUnmarshaler).UnmarshalFunc
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.(*errorTranslatingHandlerConnCloser).Receive
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.NewUnaryHandler[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54,go.shape.struct { github.com/starsrc/bowl/gen/go/storage/v1.state google.golang.org/protobuf/internal/impl.MessageState "protogen:\"open.v1\""; Size uint32 "protobuf:\"varint,1,opt,name=size,proto3\" json:\"size,omitempty\""; Inode *github.com/starsrc/bowl/gen/go/storage/v1.Inode "protobuf:\"bytes,2,opt,name=inode,proto3\" json:\"inode,omitempty\""; github.com/starsrc/bowl/gen/go/storage/v1.unknownFields []uint8; github.com/starsrc/bowl/gen/go/storage/v1.sizeCache int32 }].func2
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.receiveUnaryMessage[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
+         0     0%     0%   143.21MB 85.32%  connectrpc.com/connect.receiveUnaryRequest[go.shape.557bfe076f56a996480e88c10413b0f43c6b5d69811f2f294c06c4dc84cffc54]
+         0     0%     0%    99.20MB 59.10%  bytes.(*Buffer).ReadFrom
+         0     0%     0%    99.20MB 59.10%  bytes.(*Buffer).grow
+   99.20MB 59.10% 59.10%    99.20MB 59.10%  bytes.growSlice
+         0     0% 59.10%    59.24MB 35.29%  sync.(*Pool).Get
+         0     0% 59.10%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.(*protoBinaryCodec).Unmarshal
+         0     0% 59.10%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.acquireWritePayloadBuf
+   44.01MB 26.22% 85.32%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.init.func1
+         0     0% 85.32%    44.01MB 26.22%  github.com/starsrc/bowl/services/storage/internal/server.unmarshalWriteRequest
+         0     0% 85.32%    15.22MB  9.07%  net/http.(*conn).maybeServeUnencryptedHTTP2
