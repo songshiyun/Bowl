@@ -1,34 +1,46 @@
-# Issue Tracker: Linear
+# Issue tracker: GitHub
 
-Issues for this repo are tracked in **Linear** via the `ACE_linear` MCP tools.
+Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
-## Project Details & Required Metadata
+## Conventions
 
-创建 Issue 时必须同时绑定 `project`、`assignee`、`priority` 和 `milestone`：
+- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
+- **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
+- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
+- **Make an issue a sub-issue of a parent**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>` afterwards (`gh` 2.94+). Older `gh`: `gh api --method POST repos/<owner>/<repo>/issues/<parent>/sub_issues -F sub_issue_id=<child-db-id>` (database id, as in **Blocking** below). Without sub-issues, put `Part of #<parent>` at the top of the child body.
+- **Comment on an issue**: `gh issue comment <number> --body "..."`
+- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
+- **Close**: `gh issue close <number> --comment "..."`
 
-- **Workspace / Team**: `StarSrc` (`STARSRC`, UUID: `8cc87de1-eb63-4863-ba60-1c701163997f`)
-- **Project**: `Bowl` (`P-STARSRC-2`, UUID: `4f644357-8dfa-4df8-9c11-7c0ae127e808`)
-- **Default Assignee**: `fan-x-ing` (UUID: `6761d517-a667-4dee-9f44-6c441aba4d96`)
-- **Milestones**:
-  - `M1: Disk & Storage Services`: `b1aa3a89-c6ed-495e-b619-0fc70a791c96`
-  - `M2: Chunking & S3 Object Storage Engine`: `bbc56709-9989-4dcf-947d-26a6c4aa9f4f`
-  - `M3: Linux FUSE Client`: `5fee39d6-0636-424d-b87d-6077ed51acd0`
-- **Priority**: `1` (Urgent), `2` (High), `3` (Normal), `4` (Low)
+Infer the repo from `git remote -v`; `gh` does this automatically when run inside a clone.
 
-## Agent Operations (`ACE_linear` Exact Parameter Signatures)
+## Pull requests as a triage surface
 
-- **Create / Update issue (`save_issue`)**:
-  - 参数名使用 `team`、`project`、`assignee`、`milestone`、`priority`、`state`、`labels`（数组）、`parentId`、`blockedBy`（数组）。**切勿**使用 `teamId`、`stateId`、`status` 或 `labelIds`。
-  - 示例：`{"team": "8cc87de1-eb63-4863-ba60-1c701163997f", "project": "4f644357-8dfa-4df8-9c11-7c0ae127e808", "assignee": "6761d517-a667-4dee-9f44-6c441aba4d96", "milestone": "b1aa3a89-c6ed-495e-b619-0fc70a791c96", "priority": 2, "title": "...", "description": "..."}`
-- **Get issue (`get_issue`)**:
-  - 参数名为 `id`（如 `{"id": "STARSRC-165"}`），**切勿**传 `issueId`。
-- **List issues (`list_issues`)**:
-  - 使用 `team`、`project`、`state`、`label`、`q`、`cursor` 过滤。**切勿**传 `filter` 或 `after`。
-- **List milestones (`list_milestones`)**:
-  - 直接调用 `list_milestones({"project": "4f644357-8dfa-4df8-9c11-7c0ae127e808"})`。**切勿**对 `list_projects` 传 `includeMilestones: true`（会触发 Linear GraphQL 复杂度 15880 > 10000 报错）。
-- **Comment on issue (`save_comment`)**:
-  - 参数为 `{"issueId": "STARSRC-...", "body": "..."}`。
-- **Apply triage labels**:
-  - 通过 `save_issue` 的 `labels`、`addLabels` 或 `removeLabels` 数组传入标签名称字符串（如 `["ready-for-agent"]`，详见 [docs/agents/triage-labels.md](triage-labels.md)）。**切勿**在 `labels` 数组中传入 Label UUID。
-- **Close / Update state**:
-  - 调用 `save_issue` 指定 `state: "In Progress"` / `"Done"` / `"Canceled"`。对于 `wontfix` 或重复工单，统一传 `state: "Canceled"`（若未提前建立 `duplicate` 关联关系，直接传 `state: "Duplicate"` 会触发 HTTP 400 报错）。
+**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+
+When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+
+- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
+- **List external PRs for triage**: `gh api --paginate 'repos/{owner}/{repo}/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
+- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+
+GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+
+## When a skill says "publish to the issue tracker"
+
+Create a GitHub issue.
+
+## When a skill says "fetch the relevant ticket"
+
+Read it as in **Read an issue** above.
+
+## Wayfinding operations
+
+Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
+
+- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
+- **Child ticket**: an issue linked to the map as a GitHub sub-issue (see **Make an issue a sub-issue of a parent**). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
+- **Blocking**: GitHub's **native issue dependencies**, the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only, the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
+- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
+- **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
+- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
