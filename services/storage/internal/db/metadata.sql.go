@@ -11,31 +11,136 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearLineageBaseCommits = `-- name: ClearLineageBaseCommits :exec
+UPDATE disks
+SET base_commit_id = NULL
+WHERE lineage_id = $1
+  AND base_commit_id IS NOT NULL
+`
+
+func (q *Queries) ClearLineageBaseCommits(ctx context.Context, lineageID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearLineageBaseCommits, lineageID)
+	return err
+}
+
+const countDisksByLineage = `-- name: CountDisksByLineage :one
+SELECT COUNT(*)
+FROM disks
+WHERE lineage_id = $1
+`
+
+func (q *Queries) CountDisksByLineage(ctx context.Context, lineageID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countDisksByLineage, lineageID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createDisk = `-- name: CreateDisk :one
-INSERT INTO disks (disk_id, name, created_at, updated_at)
-VALUES ($1, $2, clock_timestamp(), clock_timestamp())
-RETURNING disk_id, name, created_at, updated_at
+INSERT INTO disks (
+    disk_id,
+    name,
+    lineage_id,
+    parent_disk_id,
+    base_commit_id,
+    created_at,
+    updated_at
+)
+VALUES ($1, $2, $3, $4, $5, clock_timestamp(), clock_timestamp())
+RETURNING disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
 `
 
 type CreateDiskParams struct {
-	DiskID pgtype.UUID `json:"disk_id"`
-	Name   string      `json:"name"`
+	DiskID       pgtype.UUID `json:"disk_id"`
+	Name         string      `json:"name"`
+	LineageID    pgtype.UUID `json:"lineage_id"`
+	ParentDiskID pgtype.UUID `json:"parent_disk_id"`
+	BaseCommitID pgtype.UUID `json:"base_commit_id"`
 }
 
 func (q *Queries) CreateDisk(ctx context.Context, arg CreateDiskParams) (Disk, error) {
-	row := q.db.QueryRow(ctx, createDisk, arg.DiskID, arg.Name)
+	row := q.db.QueryRow(ctx, createDisk,
+		arg.DiskID,
+		arg.Name,
+		arg.LineageID,
+		arg.ParentDiskID,
+		arg.BaseCommitID,
+	)
 	var i Disk
 	err := row.Scan(
 		&i.DiskID,
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LineageID,
+		&i.ParentDiskID,
+		&i.BaseCommitID,
+	)
+	return i, err
+}
+
+const createDiskCommit = `-- name: CreateDiskCommit :one
+INSERT INTO disk_commits (
+    commit_id,
+    lineage_id,
+    source_disk_id,
+    parent_commit_id,
+    merge_parent_commit_id,
+    created_at
+)
+VALUES ($1, $2, $3, $4, $5, clock_timestamp())
+RETURNING commit_id, lineage_id, source_disk_id, parent_commit_id, merge_parent_commit_id, created_at
+`
+
+type CreateDiskCommitParams struct {
+	CommitID            pgtype.UUID `json:"commit_id"`
+	LineageID           pgtype.UUID `json:"lineage_id"`
+	SourceDiskID        pgtype.UUID `json:"source_disk_id"`
+	ParentCommitID      pgtype.UUID `json:"parent_commit_id"`
+	MergeParentCommitID pgtype.UUID `json:"merge_parent_commit_id"`
+}
+
+func (q *Queries) CreateDiskCommit(ctx context.Context, arg CreateDiskCommitParams) (DiskCommit, error) {
+	row := q.db.QueryRow(ctx, createDiskCommit,
+		arg.CommitID,
+		arg.LineageID,
+		arg.SourceDiskID,
+		arg.ParentCommitID,
+		arg.MergeParentCommitID,
+	)
+	var i DiskCommit
+	err := row.Scan(
+		&i.CommitID,
+		&i.LineageID,
+		&i.SourceDiskID,
+		&i.ParentCommitID,
+		&i.MergeParentCommitID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createDiskLineage = `-- name: CreateDiskLineage :one
+INSERT INTO disk_lineages (lineage_id, next_ino, next_pack_id, created_at)
+VALUES ($1, 2, 1, clock_timestamp())
+RETURNING lineage_id, next_ino, next_pack_id, created_at
+`
+
+func (q *Queries) CreateDiskLineage(ctx context.Context, lineageID pgtype.UUID) (DiskLineage, error) {
+	row := q.db.QueryRow(ctx, createDiskLineage, lineageID)
+	var i DiskLineage
+	err := row.Scan(
+		&i.LineageID,
+		&i.NextIno,
+		&i.NextPackID,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const deleteDisk = `-- name: DeleteDisk :execrows
-DELETE FROM disks WHERE disk_id = $1
+DELETE FROM disks
+WHERE disk_id = $1
 `
 
 func (q *Queries) DeleteDisk(ctx context.Context, diskID pgtype.UUID) (int64, error) {
@@ -46,9 +151,46 @@ func (q *Queries) DeleteDisk(ctx context.Context, diskID pgtype.UUID) (int64, er
 	return result.RowsAffected(), nil
 }
 
+const deleteDiskLineage = `-- name: DeleteDiskLineage :exec
+DELETE FROM disk_lineages
+WHERE lineage_id = $1
+`
+
+func (q *Queries) DeleteDiskLineage(ctx context.Context, lineageID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteDiskLineage, lineageID)
+	return err
+}
+
+const deleteLineageCommits = `-- name: DeleteLineageCommits :many
+DELETE FROM disk_commits
+WHERE lineage_id = $1
+RETURNING commit_id
+`
+
+func (q *Queries) DeleteLineageCommits(ctx context.Context, lineageID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, deleteLineageCommits, lineageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var commit_id pgtype.UUID
+		if err := rows.Scan(&commit_id); err != nil {
+			return nil, err
+		}
+		items = append(items, commit_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getDisk = `-- name: GetDisk :one
-SELECT disk_id, name, created_at, updated_at
-FROM disks WHERE disk_id = $1
+SELECT disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
+FROM disks
+WHERE disk_id = $1
 `
 
 func (q *Queries) GetDisk(ctx context.Context, diskID pgtype.UUID) (Disk, error) {
@@ -59,13 +201,18 @@ func (q *Queries) GetDisk(ctx context.Context, diskID pgtype.UUID) (Disk, error)
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LineageID,
+		&i.ParentDiskID,
+		&i.BaseCommitID,
 	)
 	return i, err
 }
 
 const getDiskForUpdate = `-- name: GetDiskForUpdate :one
-SELECT disk_id, name, created_at, updated_at
-FROM disks WHERE disk_id = $1 FOR UPDATE
+SELECT disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
+FROM disks
+WHERE disk_id = $1
+FOR UPDATE
 `
 
 func (q *Queries) GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (Disk, error) {
@@ -76,12 +223,15 @@ func (q *Queries) GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (Dis
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LineageID,
+		&i.ParentDiskID,
+		&i.BaseCommitID,
 	)
 	return i, err
 }
 
 const listDisks = `-- name: ListDisks :many
-SELECT disk_id, name, created_at, updated_at
+SELECT disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
 FROM disks
 WHERE (NOT $1::boolean)
    OR (created_at, disk_id) < ($2::timestamptz, $3::uuid)
@@ -115,6 +265,9 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]Disk, e
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.LineageID,
+			&i.ParentDiskID,
+			&i.BaseCommitID,
 		); err != nil {
 			return nil, err
 		}
@@ -126,10 +279,102 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]Disk, e
 	return items, nil
 }
 
-const updateDisk = `-- name: UpdateDisk :one
-UPDATE disks SET name = $2, updated_at = clock_timestamp()
+const lockDiskLineage = `-- name: LockDiskLineage :one
+SELECT lineage_id, next_ino, next_pack_id, created_at
+FROM disk_lineages
+WHERE lineage_id = $1
+FOR UPDATE
+`
+
+func (q *Queries) LockDiskLineage(ctx context.Context, lineageID pgtype.UUID) (DiskLineage, error) {
+	row := q.db.QueryRow(ctx, lockDiskLineage, lineageID)
+	var i DiskLineage
+	err := row.Scan(
+		&i.LineageID,
+		&i.NextIno,
+		&i.NextPackID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const reserveInodeSegment = `-- name: ReserveInodeSegment :one
+UPDATE disk_lineages
+SET next_ino = GREATEST(next_ino, $1::bigint) + $2::bigint
+WHERE lineage_id = $3::uuid
+  AND $2::bigint > 0
+RETURNING
+    (next_ino - $2::bigint)::bigint AS first_ino,
+    (next_ino - 1)::bigint AS last_ino
+`
+
+type ReserveInodeSegmentParams struct {
+	MinNext   int64       `json:"min_next"`
+	Count     int64       `json:"count"`
+	LineageID pgtype.UUID `json:"lineage_id"`
+}
+
+type ReserveInodeSegmentRow struct {
+	FirstIno int64 `json:"first_ino"`
+	LastIno  int64 `json:"last_ino"`
+}
+
+func (q *Queries) ReserveInodeSegment(ctx context.Context, arg ReserveInodeSegmentParams) (ReserveInodeSegmentRow, error) {
+	row := q.db.QueryRow(ctx, reserveInodeSegment, arg.MinNext, arg.Count, arg.LineageID)
+	var i ReserveInodeSegmentRow
+	err := row.Scan(&i.FirstIno, &i.LastIno)
+	return i, err
+}
+
+const reservePackSegment = `-- name: ReservePackSegment :one
+UPDATE disk_lineages
+SET next_pack_id = GREATEST(next_pack_id, $1::bigint) + $2::bigint
+WHERE lineage_id = $3::uuid
+  AND $2::bigint > 0
+RETURNING
+    (next_pack_id - $2::bigint)::bigint AS first_pack_id,
+    (next_pack_id - 1)::bigint AS last_pack_id
+`
+
+type ReservePackSegmentParams struct {
+	MinNext   int64       `json:"min_next"`
+	Count     int64       `json:"count"`
+	LineageID pgtype.UUID `json:"lineage_id"`
+}
+
+type ReservePackSegmentRow struct {
+	FirstPackID int64 `json:"first_pack_id"`
+	LastPackID  int64 `json:"last_pack_id"`
+}
+
+func (q *Queries) ReservePackSegment(ctx context.Context, arg ReservePackSegmentParams) (ReservePackSegmentRow, error) {
+	row := q.db.QueryRow(ctx, reservePackSegment, arg.MinNext, arg.Count, arg.LineageID)
+	var i ReservePackSegmentRow
+	err := row.Scan(&i.FirstPackID, &i.LastPackID)
+	return i, err
+}
+
+const setDiskBaseCommit = `-- name: SetDiskBaseCommit :exec
+UPDATE disks
+SET base_commit_id = $2
 WHERE disk_id = $1
-RETURNING disk_id, name, created_at, updated_at
+`
+
+type SetDiskBaseCommitParams struct {
+	DiskID       pgtype.UUID `json:"disk_id"`
+	BaseCommitID pgtype.UUID `json:"base_commit_id"`
+}
+
+func (q *Queries) SetDiskBaseCommit(ctx context.Context, arg SetDiskBaseCommitParams) error {
+	_, err := q.db.Exec(ctx, setDiskBaseCommit, arg.DiskID, arg.BaseCommitID)
+	return err
+}
+
+const updateDisk = `-- name: UpdateDisk :one
+UPDATE disks
+SET name = $2, updated_at = clock_timestamp()
+WHERE disk_id = $1
+RETURNING disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
 `
 
 type UpdateDiskParams struct {
@@ -145,6 +390,9 @@ func (q *Queries) UpdateDisk(ctx context.Context, arg UpdateDiskParams) (Disk, e
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.LineageID,
+		&i.ParentDiskID,
+		&i.BaseCommitID,
 	)
 	return i, err
 }

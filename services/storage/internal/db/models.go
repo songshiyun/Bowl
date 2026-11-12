@@ -9,8 +9,27 @@ import (
 )
 
 type Disk struct {
-	DiskID    pgtype.UUID        `json:"disk_id"`
-	Name      string             `json:"name"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	DiskID       pgtype.UUID        `json:"disk_id"`
+	Name         string             `json:"name"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	LineageID    pgtype.UUID        `json:"lineage_id"`
+	ParentDiskID pgtype.UUID        `json:"parent_disk_id"`
+	BaseCommitID pgtype.UUID        `json:"base_commit_id"`
+}
+
+type DiskCommit struct {
+	CommitID            pgtype.UUID        `json:"commit_id"`
+	LineageID           pgtype.UUID        `json:"lineage_id"`
+	SourceDiskID        pgtype.UUID        `json:"source_disk_id"`
+	ParentCommitID      pgtype.UUID        `json:"parent_commit_id"`
+	MergeParentCommitID pgtype.UUID        `json:"merge_parent_commit_id"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+}
+
+type DiskLineage struct {
+	LineageID  pgtype.UUID        `json:"lineage_id"`
+	NextIno    int64              `json:"next_ino"`
+	NextPackID int64              `json:"next_pack_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
