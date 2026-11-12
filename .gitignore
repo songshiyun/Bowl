@@ -43,3 +43,4 @@ __pycache__/
 .r3-ui/
 
 artifacts/
+.agents/
