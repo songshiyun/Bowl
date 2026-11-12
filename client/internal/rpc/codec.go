@@ -1,10 +1,12 @@
 package rpc
 
 import (
+	"bytes"
 	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 	"weak"
 
 	"connectrpc.com/connect"
@@ -19,6 +21,11 @@ const (
 
 	// MaxReadPayloadSize 为池化零分配解码支持的最大单次 ReadResponse 载荷上限（4 MiB）。
 	MaxReadPayloadSize = 4 << 20
+
+	// SmallReadPayloadCutoff 为小读响应免 4 MiB 缓冲池租约的字节上限（256 KiB）。
+	// <= 256 KiB 的载荷（如 128 KiB 小文件读与 4 KiB 随机读）直接克隆为紧凑切片返回，
+	// 避免占用 4 MiB 大缓冲槽位、全局租约锁竞争与 runtime.AddCleanup 注册开销。
+	SmallReadPayloadCutoff = 256 << 10
 
 	// readPayloadRetainedCap 常驻保留 16 x 4 MiB = 64 MiB noscan 读缓冲，
 	// 支撑 W_read=4 多窗口并发流水线预读与直读在 GC 周期间零分配复用。
@@ -72,7 +79,10 @@ func (p *ReadPayload) Release() {
 
 func cleanupUnclaimedReadPayloadEntry(key weak.Pointer[storagev1.ReadResponse]) {
 	leasedReadPayloadsMu.Lock()
-	delete(leasedReadPayloads, key)
+	if _, ok := leasedReadPayloads[key]; ok {
+		delete(leasedReadPayloads, key)
+		leasedReadPayloadActive.Add(-1)
+	}
 	leasedReadPayloadsMu.Unlock()
 }
 
@@ -88,8 +98,9 @@ var (
 		},
 	}
 
-	leasedReadPayloadsMu sync.Mutex
-	leasedReadPayloads   = make(map[weak.Pointer[storagev1.ReadResponse]]*readPayloadLease)
+	leasedReadPayloadsMu    sync.Mutex
+	leasedReadPayloads      = make(map[weak.Pointer[storagev1.ReadResponse]]*readPayloadLease)
+	leasedReadPayloadActive atomic.Int64
 )
 
 func acquireReadPayloadBuf() *[MaxReadPayloadSize]byte {
@@ -128,10 +139,14 @@ func registerLeasedReadPayload(msg *storagev1.ReadResponse, buf *[MaxReadPayload
 
 	var prev *readPayloadLease
 	leasedReadPayloadsMu.Lock()
-	if old := leasedReadPayloads[key]; old != nil && old != lease {
+	old, existed := leasedReadPayloads[key]
+	if existed && old != nil && old != lease {
 		prev = old
 	}
 	leasedReadPayloads[key] = lease
+	if !existed {
+		leasedReadPayloadActive.Add(1)
+	}
 	leasedReadPayloadsMu.Unlock()
 
 	if prev != nil && prev.claimed.CompareAndSwap(false, true) {
@@ -141,14 +156,15 @@ func registerLeasedReadPayload(msg *storagev1.ReadResponse, buf *[MaxReadPayload
 }
 
 func discardUnclaimedReadPayloadOnReset(msg *storagev1.ReadResponse) {
-	if msg == nil {
+	if msg == nil || leasedReadPayloadActive.Load() == 0 {
 		return
 	}
 	key := weak.Make(msg)
 	leasedReadPayloadsMu.Lock()
-	lease := leasedReadPayloads[key]
-	if lease != nil {
+	lease, existed := leasedReadPayloads[key]
+	if existed {
 		delete(leasedReadPayloads, key)
+		leasedReadPayloadActive.Add(-1)
 	}
 	leasedReadPayloadsMu.Unlock()
 
@@ -162,22 +178,23 @@ func discardUnclaimedReadPayloadOnReset(msg *storagev1.ReadResponse) {
 // TakeReadPayload 从 ReadResponse 接管数据载荷所有权并返回带池归还能力的 ReadPayload。
 // 若底层切片来自 4 MiB 缓冲池，调用返回的 ReadPayload.Release() 将确定性归还缓冲；
 // 若遗漏调用 Release()，runtime.AddCleanup 会在 ReadPayload 不可达时兜底回收缓冲。
-// 若消息非池化分配（如空切片、>4 MiB 载荷或单测手造消息），Release() 为安全空操作。
+// 若消息非池化分配（如空切片、<=256 KiB 小载荷、>4 MiB 载荷或单测手造消息），Release() 为安全空操作。
 func TakeReadPayload(msg *storagev1.ReadResponse) ReadPayload {
 	if msg == nil {
 		return ReadPayload{}
 	}
 	data := msg.Data
 	msg.Data = nil
-	if len(data) == 0 {
+	if len(data) <= SmallReadPayloadCutoff || len(data) > MaxReadPayloadSize || leasedReadPayloadActive.Load() == 0 {
 		return ReadPayload{Data: data}
 	}
 
 	key := weak.Make(msg)
 	leasedReadPayloadsMu.Lock()
-	lease := leasedReadPayloads[key]
-	if lease != nil {
+	lease, existed := leasedReadPayloads[key]
+	if existed {
 		delete(leasedReadPayloads, key)
+		leasedReadPayloadActive.Add(-1)
 	}
 	leasedReadPayloadsMu.Unlock()
 
@@ -214,6 +231,9 @@ func (c *protoBinaryCodec) Name() string {
 }
 
 func (c *protoBinaryCodec) Marshal(message any) ([]byte, error) {
+	if writeReq, ok := message.(*storagev1.WriteRequest); ok {
+		return marshalAppendWriteRequest(nil, writeReq)
+	}
 	protoMsg, ok := message.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
@@ -222,11 +242,88 @@ func (c *protoBinaryCodec) Marshal(message any) ([]byte, error) {
 }
 
 func (c *protoBinaryCodec) MarshalAppend(dst []byte, message any) ([]byte, error) {
+	if writeReq, ok := message.(*storagev1.WriteRequest); ok {
+		return marshalAppendWriteRequest(dst, writeReq)
+	}
 	protoMsg, ok := message.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
 	}
 	return proto.MarshalOptions{}.MarshalAppend(dst, protoMsg)
+}
+
+func writeRequestWireSize(msg *storagev1.WriteRequest) int {
+	var n int
+	if msg.Ino != 0 {
+		n += 1 + protowire.SizeVarint(msg.Ino)
+	}
+	if msg.Fh != 0 {
+		n += 1 + protowire.SizeVarint(msg.Fh)
+	}
+	if msg.Offset != 0 {
+		n += 1 + protowire.SizeVarint(msg.Offset)
+	}
+	if len(msg.Data) > 0 {
+		n += 1 + protowire.SizeBytes(len(msg.Data))
+	}
+	if msg.DiskId != "" {
+		n += 1 + protowire.SizeBytes(len(msg.DiskId))
+	}
+	if msg.Epoch != 0 {
+		n += 1 + protowire.SizeVarint(msg.Epoch)
+	}
+	return n
+}
+
+func marshalAppendWriteRequest(dst []byte, msg *storagev1.WriteRequest) ([]byte, error) {
+	if msg == nil {
+		if dst == nil {
+			return []byte{}, nil
+		}
+		return dst, nil
+	}
+	if !utf8.ValidString(msg.DiskId) {
+		return proto.MarshalOptions{}.MarshalAppend(dst, msg)
+	}
+
+	wireSize := writeRequestWireSize(msg)
+	if wireSize == 0 {
+		if dst == nil {
+			return []byte{}, nil
+		}
+		return dst, nil
+	}
+	if cap(dst)-len(dst) < wireSize {
+		grown := make([]byte, len(dst), len(dst)+wireSize)
+		copy(grown, dst)
+		dst = grown
+	}
+
+	if msg.Ino != 0 {
+		dst = protowire.AppendTag(dst, 1, protowire.VarintType)
+		dst = protowire.AppendVarint(dst, msg.Ino)
+	}
+	if msg.Fh != 0 {
+		dst = protowire.AppendTag(dst, 2, protowire.VarintType)
+		dst = protowire.AppendVarint(dst, msg.Fh)
+	}
+	if msg.Offset != 0 {
+		dst = protowire.AppendTag(dst, 3, protowire.VarintType)
+		dst = protowire.AppendVarint(dst, msg.Offset)
+	}
+	if len(msg.Data) > 0 {
+		dst = protowire.AppendTag(dst, 4, protowire.BytesType)
+		dst = protowire.AppendBytes(dst, msg.Data)
+	}
+	if msg.DiskId != "" {
+		dst = protowire.AppendTag(dst, 5, protowire.BytesType)
+		dst = protowire.AppendString(dst, msg.DiskId)
+	}
+	if msg.Epoch != 0 {
+		dst = protowire.AppendTag(dst, 6, protowire.VarintType)
+		dst = protowire.AppendVarint(dst, msg.Epoch)
+	}
+	return dst, nil
 }
 
 func (c *protoBinaryCodec) MarshalStable(message any) ([]byte, error) {
@@ -299,6 +396,12 @@ func unmarshalReadResponse(raw []byte, msg *storagev1.ReadResponse) error {
 					leased = nil
 				}
 				msg.Data = []byte{}
+			case len(v) <= SmallReadPayloadCutoff:
+				if leased != nil {
+					recycleReadPayloadBuf(leased)
+					leased = nil
+				}
+				msg.Data = bytes.Clone(v)
 			case len(v) <= MaxReadPayloadSize:
 				if leased == nil {
 					leased = acquireReadPayloadBuf()
@@ -310,7 +413,7 @@ func unmarshalReadResponse(raw []byte, msg *storagev1.ReadResponse) error {
 					recycleReadPayloadBuf(leased)
 					leased = nil
 				}
-				msg.Data = append([]byte(nil), v...)
+				msg.Data = bytes.Clone(v)
 			}
 			b = b[n:]
 		default:

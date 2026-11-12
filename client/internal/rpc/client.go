@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"connectrpc.com/connect"
@@ -38,9 +39,17 @@ const (
 	// 确保单次 4 MiB + Protobuf 信封载荷无需流级 WINDOW_UPDATE 停顿即可完整接收。
 	HTTP2MaxReceiveBufferPerStream = 8 << 20
 
-	// HTTP2MaxReceiveBufferPerConnection 为客户端单连接 HTTP/2 接收流控窗口上限 (32 MiB)，
-	// 支撑多路 4 MiB 请求/响应在单条 h2c/TLS 连接上无连接级流控阻塞地并发流水线传输。
-	HTTP2MaxReceiveBufferPerConnection = 32 << 20
+	// HTTP2MaxReceiveBufferPerConnection 为单连接最大 HTTP/2 接收流控窗口基准上限 (128 MiB)。
+	HTTP2MaxReceiveBufferPerConnection = 128 << 20
+
+	// HTTP2MetaMaxReceiveBufferPerConnection 为专用元数据/控制面轻量连接的 HTTP/2 接收流控窗口上限 (32 MiB)。
+	HTTP2MetaMaxReceiveBufferPerConnection = 32 << 20
+
+	// HTTP2DataMaxReceiveBufferPerConnection 为每条大块数据条带连接的 HTTP/2 接收流控窗口上限 (64 MiB)。
+	HTTP2DataMaxReceiveBufferPerConnection = 64 << 20
+
+	// HTTP2DataConnectionShards 为客户端并发大块读写（Read/Write）条带化的独立 H2C/TLS 连接数。
+	HTTP2DataConnectionShards = 8
 )
 
 // ClientConfig 定义 StorageServiceClient 的连接配置。
@@ -104,17 +113,20 @@ func ResolveToken(token string) string {
 	return strings.TrimSpace(os.Getenv(EnvToken))
 }
 
-// newHTTPTransport 根据已校验的 endpoint URL scheme 构建 h2c 或 TLS HTTP/2 Transport。
-func newHTTPTransport(endpoint string, tlsConfig *tls.Config) (*http.Transport, error) {
+// newHTTPTransport 根据已校验的 endpoint URL scheme 与指定连接级接收窗口构建独立 HTTP/2 Transport。
+func newHTTPTransport(endpoint string, tlsConfig *tls.Config, maxRecvBufPerConn int) (*http.Transport, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+	}
+	if maxRecvBufPerConn <= 0 {
+		maxRecvBufPerConn = HTTP2DataMaxReceiveBufferPerConnection
 	}
 
 	h2Cfg := &http.HTTP2Config{
 		MaxReadFrameSize:              HTTP2MaxReadFrameSize,
 		MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,
-		MaxReceiveBufferPerConnection: HTTP2MaxReceiveBufferPerConnection,
+		MaxReceiveBufferPerConnection: maxRecvBufPerConn,
 	}
 
 	dialer := &net.Dialer{
@@ -165,6 +177,70 @@ func newHTTPTransport(endpoint string, tlsConfig *tls.Config) (*http.Transport, 
 	return tlsTransport, nil
 }
 
+// isBulkDataProcedure 判断请求路径是否为大块数据面 RPC（Read / Write）。
+func isBulkDataProcedure(urlPath string) bool {
+	return urlPath == storagev1connect.StorageServiceReadProcedure ||
+		urlPath == storagev1connect.StorageServiceWriteProcedure ||
+		strings.HasSuffix(urlPath, storagev1connect.StorageServiceReadProcedure) ||
+		strings.HasSuffix(urlPath, storagev1connect.StorageServiceWriteProcedure)
+}
+
+type idleConnCloser interface {
+	CloseIdleConnections()
+}
+
+// shardedRoundTripper 将客户端传输物理隔离为 1 条专用元数据/控制轻量连接与 8 条独立大块数据连接：
+//   - Read / Write 大块流量通过原子轮询均匀打散到 8 条独立 H2C/TLS 连接，消除单连接 readLoop / writeSched 串行瓶颈；
+//   - Lookup / GetAttr / Create / Unlink / Fsync / ReadDirPlus 等元数据与屏障 RPC 走专用 metaTransport，彻底杜绝 4 MiB DATA 帧队头阻塞。
+type shardedRoundTripper struct {
+	metaTransport  http.RoundTripper
+	dataTransports [HTTP2DataConnectionShards]http.RoundTripper
+	nextDataShard  atomic.Uint64
+}
+
+func newShardedRoundTripper(endpoint string, tlsConfig *tls.Config) (*shardedRoundTripper, error) {
+	metaTr, err := newHTTPTransport(endpoint, tlsConfig, HTTP2MetaMaxReceiveBufferPerConnection)
+	if err != nil {
+		return nil, err
+	}
+	rt := &shardedRoundTripper{
+		metaTransport: metaTr,
+	}
+	for i := range HTTP2DataConnectionShards {
+		dataTr, trErr := newHTTPTransport(endpoint, tlsConfig, HTTP2DataMaxReceiveBufferPerConnection)
+		if trErr != nil {
+			rt.CloseIdleConnections()
+			return nil, trErr
+		}
+		rt.dataTransports[i] = dataTr
+	}
+	return rt, nil
+}
+
+func (rt *shardedRoundTripper) selectTransport(req *http.Request) http.RoundTripper {
+	if req != nil && req.URL != nil && isBulkDataProcedure(req.URL.Path) {
+		idx := (rt.nextDataShard.Add(1) - 1) % HTTP2DataConnectionShards
+		return rt.dataTransports[idx]
+	}
+	return rt.metaTransport
+}
+
+func (rt *shardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rt.selectTransport(req).RoundTrip(req)
+}
+
+// CloseIdleConnections 转发空闲连接清理至全部底层元数据与大块数据 Transport。
+func (rt *shardedRoundTripper) CloseIdleConnections() {
+	if closer, ok := rt.metaTransport.(idleConnCloser); ok {
+		closer.CloseIdleConnections()
+	}
+	for _, tr := range rt.dataTransports {
+		if closer, ok := tr.(idleConnCloser); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
 // NewClientFromConfig 根据传入的 ClientConfig 构建 StorageServiceClient。
 // 支持 h2c (明文 HTTP/2) 与 HTTPS TLS 传输，并在 token 非空时注入 Bearer 鉴权头。
 // 底层 http.Client 不设置固定 Timeout，连接生命周期完全由 context.Context 控制。
@@ -178,7 +254,7 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		tr, trErr := newHTTPTransport(endpoint, cfg.TLSConfig)
+		tr, trErr := newShardedRoundTripper(endpoint, cfg.TLSConfig)
 		if trErr != nil {
 			return nil, trErr
 		}

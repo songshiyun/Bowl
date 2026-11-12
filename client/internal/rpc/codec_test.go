@@ -50,12 +50,13 @@ func TestProtoBinaryCodec_ReadResponsePooledReuseAndZeroUAF(t *testing.T) {
 	require.Equal(t, firstPtr, secondPtr, "释放后的 4 MiB 池化缓冲应被确定性复用")
 	p2.Release()
 
-	// 2. 未调用 TakeReadPayload 但外部保留 msg.GetData() 时，GC 后不得发生 UAF 污染且弱引用表项应自动清理
-	smallRaw, err := proto.Marshal(&storagev1.ReadResponse{Data: src[:1024]})
+	// 2. 未调用 TakeReadPayload 但外部保留 msg.GetData() 时（>256 KiB 池化路径），GC 后不得发生 UAF 污染且弱引用表项应自动清理
+	pooledRaw, err := proto.Marshal(&storagev1.ReadResponse{Data: src[:SmallReadPayloadCutoff+1024]})
 	require.NoError(t, err)
 	holdUnclaimedSlice := func() []byte {
 		unclaimed := &storagev1.ReadResponse{}
-		require.NoError(t, codec.Unmarshal(smallRaw, unclaimed))
+		require.NoError(t, codec.Unmarshal(pooledRaw, unclaimed))
+		require.Equal(t, 1, leasedReadPayloadCount())
 		return unclaimed.GetData()
 	}
 	retained := holdUnclaimedSlice()
@@ -70,7 +71,26 @@ func TestProtoBinaryCodec_ReadResponsePooledReuseAndZeroUAF(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond)
 	require.Equal(t, expectedRetained, retained, "未接管的切片在 msg GC 后不得被池重用覆盖")
 
-	// 3. 未知字段回退到标准 proto.Unmarshal 不报错且保留数据
+	// 3. <= 256 KiB 小载荷（覆盖 4 KiB 随机小读与 128 KiB 小文件读）直接克隆返回，不进 4 MiB 租约池，TakeReadPayload/Release 安全无副作用
+	for _, sz := range []int{0, 4 << 10, 128 << 10, SmallReadPayloadCutoff} {
+		smallRaw, mErr := proto.Marshal(&storagev1.ReadResponse{Data: src[:sz]})
+		require.NoError(t, mErr)
+		smallMsg := &storagev1.ReadResponse{}
+		require.NoError(t, codec.Unmarshal(smallRaw, smallMsg))
+		require.Equal(t, 0, leasedReadPayloadCount(), "小载荷 (%d B) 不得注册 4 MiB 租约", sz)
+
+		pSmall := TakeReadPayload(smallMsg)
+		require.Nil(t, smallMsg.Data)
+		require.True(t, bytes.Equal(src[:sz], pSmall.Data))
+		if sz > 0 {
+			require.LessOrEqual(t, cap(pSmall.Data), SmallReadPayloadCutoff+64, "小载荷底层切片不得占用 4 MiB 大数组")
+		}
+		pSmall.Release()
+		pSmall.Release()
+		require.Nil(t, pSmall.Data)
+	}
+
+	// 4. 未知字段回退到标准 proto.Unmarshal 不报错且保留数据
 	var rawWithUnknown []byte
 	rawWithUnknown = protowire.AppendTag(rawWithUnknown, 1, protowire.BytesType)
 	rawWithUnknown = protowire.AppendBytes(rawWithUnknown, []byte("hello-bowl"))
@@ -80,6 +100,92 @@ func TestProtoBinaryCodec_ReadResponsePooledReuseAndZeroUAF(t *testing.T) {
 	msgFallback := &storagev1.ReadResponse{}
 	require.NoError(t, codec.Unmarshal(rawWithUnknown, msgFallback))
 	require.Equal(t, []byte("hello-bowl"), msgFallback.GetData())
+}
+
+func TestProtoBinaryCodec_WriteRequestMarshalAppendEquivalenceAndZeroAlloc(t *testing.T) {
+	codec := newProtoBinaryCodec()
+	appender, ok := codec.(interface {
+		MarshalAppend(dst []byte, msg any) ([]byte, error)
+	})
+	require.True(t, ok, "protoBinaryCodec 必须实现 MarshalAppend 以复用 Connect bufferPool")
+
+	payload4M := bytes.Repeat([]byte{0x19, 0x84, 0xAB, 0xCD}, MaxReadPayloadSize/4)
+	cases := []*storagev1.WriteRequest{
+		{},
+		{
+			Ino:    1,
+			Fh:     0,
+			Offset: 0,
+			Data:   []byte("small-write"),
+			DiskId: "11111111-1111-4111-8111-111111111111",
+			Epoch:  1,
+		},
+		{
+			Ino:    9876543210,
+			Fh:     42,
+			Offset: 1099511627776,
+			Data:   payload4M,
+			DiskId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+			Epoch:  777,
+		},
+	}
+
+	for i, tc := range cases {
+		stdWire, err := proto.Marshal(tc)
+		require.NoError(t, err)
+
+		gotMarshal, err := codec.Marshal(tc)
+		require.NoError(t, err)
+		require.True(t, bytes.Equal(stdWire, gotMarshal), "case %d Marshal 编码必须与标准 proto.Marshal 逐字节一致", i)
+
+		prefix := []byte("prefix-hdr:")
+		gotAppend, err := appender.MarshalAppend(append([]byte(nil), prefix...), tc)
+		require.NoError(t, err)
+		require.Equal(t, prefix, gotAppend[:len(prefix)])
+		require.True(t, bytes.Equal(stdWire, gotAppend[len(prefix):]), "case %d MarshalAppend 追加结果必须与标准 proto.Marshal 逐字节一致", i)
+
+		roundTrip := &storagev1.WriteRequest{}
+		require.NoError(t, proto.Unmarshal(gotMarshal, roundTrip))
+		require.True(t, proto.Equal(tc, roundTrip), "case %d 反序列化后全字段（Ino/Fh/Offset/Data/DiskId/Epoch）必须完全相等", i)
+	}
+
+	// 非法 UTF-8 DiskId 回退至标准库返回错误
+	_, invalidErr := appender.MarshalAppend(nil, &storagev1.WriteRequest{
+		Ino:    1,
+		DiskId: string([]byte{0xff, 0xfe}),
+		Epoch:  1,
+	})
+	require.Error(t, invalidErr)
+
+	// 预热池容量充足时，小载荷与 4 MiB 大载荷 WriteRequest 以及常规 Protobuf 请求 MarshalAppend 均达成 0 allocs/op
+	smallReq := cases[1]
+	bigReq := cases[2]
+	readReq := &storagev1.ReadRequest{
+		Ino:    42,
+		Fh:     7,
+		Offset: 4096,
+		Size:   128 << 10,
+		DiskId: "11111111-1111-4111-8111-111111111111",
+	}
+	reusableBuf := make([]byte, 0, MaxReadPayloadSize+256)
+	require.Zero(t, testing.AllocsPerRun(20, func() {
+		out, mErr := appender.MarshalAppend(reusableBuf[:0], smallReq)
+		if mErr != nil || len(out) == 0 {
+			t.Fatalf("unexpected small marshal result: len=%d err=%v", len(out), mErr)
+		}
+	}), "容量充足时小载荷 WriteRequest MarshalAppend 必须达成 0 allocs/op")
+	require.Zero(t, testing.AllocsPerRun(20, func() {
+		out, mErr := appender.MarshalAppend(reusableBuf[:0], bigReq)
+		if mErr != nil || len(out) <= MaxReadPayloadSize {
+			t.Fatalf("unexpected big marshal result: len=%d err=%v", len(out), mErr)
+		}
+	}), "容量充足时 4 MiB WriteRequest MarshalAppend 必须达成 0 allocs/op")
+	require.Zero(t, testing.AllocsPerRun(20, func() {
+		out, mErr := appender.MarshalAppend(reusableBuf[:0], readReq)
+		if mErr != nil || len(out) == 0 {
+			t.Fatalf("unexpected readReq marshal result: len=%d err=%v", len(out), mErr)
+		}
+	}), "容量充足时常规 Protobuf 请求 MarshalAppend 必须达成 0 allocs/op")
 }
 
 type readTestHandler struct {
