@@ -2461,7 +2461,7 @@ def build_telemetry_bundle(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", required=True, help="Benchmark suite name (juicefs, drive9, pjdfstest)")
+    parser.add_argument("--suite", required=True, help="Benchmark suite name (juicefs, drive9, pjdfstest, fork)")
     parser.add_argument("--stage-dir", required=True, type=Path, help="Staging directory containing client/ and server/")
     parser.add_argument("--results-dir", required=True, type=Path, help="Benchmark results directory")
     parser.add_argument("--server-bin", type=Path, default=None, help="Optional storage-service binary for pprof")

@@ -782,7 +782,10 @@ class CollectTelemetryTest(unittest.TestCase):
             ],
         }
 
-        for suite in ("juicefs", "drive9", "pjdfstest"):
+        suites = ["juicefs", "drive9", "pjdfstest"]
+        if (BENCH_ROOT / "fork" / "results" / "env_metadata.json").exists():
+            suites.append("fork")
+        for suite in suites:
             mod = load_suite_parser(suite)
             src_results = BENCH_ROOT / suite / "results"
             with tempfile.TemporaryDirectory() as tmp:
