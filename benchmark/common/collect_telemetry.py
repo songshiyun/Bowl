@@ -1773,11 +1773,13 @@ def process_logs(stage_dir: Path, out_dir: Path) -> dict[str, Any]:
             for ts_ns, raw_line in stream.get("values") or []:
                 rec: dict[str, Any] = {"ts_ns": ts_ns, "service": svc}
                 stripped = raw_line.strip()
+                parsed_dict = False
                 if stripped.startswith("{") and stripped.endswith("}"):
                     try:
                         parsed = json.loads(stripped)
                         if isinstance(parsed, dict):
                             rec.update(parsed)
+                            parsed_dict = True
                         else:
                             rec["msg"] = stripped
                     except Exception:
@@ -1788,8 +1790,14 @@ def process_logs(stage_dir: Path, out_dir: Path) -> dict[str, Any]:
                 lvl = str(rec.get("level", ""))
                 if _is_alert_level(lvl):
                     server_alerts.append(rec)
-                elif not lvl and CLIENT_RAW_ERR_RE.search(stripped):
-                    server_alerts.append(rec)
+                elif not lvl:
+                    if parsed_dict:
+                        ev_name = str(rec.get("event") or "").lower()
+                        err_val = str(rec.get("err") or rec.get("error") or "").strip()
+                        if err_val or (ev_name and any(k in ev_name for k in ("stall", "slow", "error"))):
+                            server_alerts.append(rec)
+                    elif CLIENT_RAW_ERR_RE.search(stripped):
+                        server_alerts.append(rec)
 
     container_entries.sort(key=lambda x: str(x.get("ts_ns", "")))
     if container_entries:

@@ -1415,10 +1415,9 @@ func (s *StoreActor) commitWithSyncBarrier(fsyncFileInodes, deadPacks []uint64) 
 		}
 		if len(toReclaim) > 0 {
 			remStart := time.Now()
-			s.removePacks(toReclaim)
+			s.enqueueRemovePacks(toReclaim)
 			deadRemoveDur = time.Since(remStart)
 			reclaimed = len(toReclaim)
-			s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
 		}
 	}
 	return packSyncDur, walSyncDur, deadRemoveDur, reclaimed, errors.Join(dataErr, walErr)
@@ -1466,10 +1465,9 @@ func (s *StoreActor) syncBarrierWithoutBatch(fsyncFileInodes []uint64) (packSync
 			s.walDirty.Store(true)
 		} else if len(toReclaim) > 0 {
 			remStart := time.Now()
-			s.removePacks(toReclaim)
+			s.enqueueRemovePacks(toReclaim)
 			deadRemoveDur = time.Since(remStart)
 			reclaimed = len(toReclaim)
-			s.metrics.observePhaseDeadPackRemove(deadRemoveDur)
 		}
 	}
 	return packSyncDur, walSyncDur, deadRemoveDur, reclaimed, errors.Join(dataErr, walErr)

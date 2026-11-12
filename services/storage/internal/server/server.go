@@ -30,9 +30,9 @@ const (
 	// 确保单次 4 MiB + Protobuf 信封载荷无需流级 WINDOW_UPDATE 停顿即可完整接收。
 	HTTP2MaxReceiveBufferPerStream = 8 << 20
 
-	// HTTP2MaxReceiveBufferPerConnection 为服务端单连接 HTTP/2 接收流控窗口上限 (32 MiB)，
-	// 支撑客户端 W*=4 并发 4 MiB Write 请求在单条连接上无连接级流控阻塞地流水线接收。
-	HTTP2MaxReceiveBufferPerConnection = 32 << 20
+	// HTTP2MaxReceiveBufferPerConnection 为服务端单连接 HTTP/2 接收流控窗口上限 (128 MiB)，
+	// 支撑客户端高并发多路 4 MiB Write 请求在单条连接上无连接级流控阻塞地流水线接收。
+	HTTP2MaxReceiveBufferPerConnection = 128 << 20
 )
 
 // Server 封装并管理底层公网 RPC HTTP 服务与内网管理面 HTTP 服务。

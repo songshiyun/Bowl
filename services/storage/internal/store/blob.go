@@ -26,8 +26,17 @@ const (
 	hotBlobSlots                   = 64
 	hotBlobTotalBudget             = 64 << 20                           // 64 MiB
 	hotBlobShardBudget             = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
+	hotExtendMinCap                = 16 << 10                           // ExtendTail 热块倍增扩容最小预留容量（16 KiB）
 	maxSyncBatchConcurrency        = 8
+	packWritebackWindow     uint32 = 8 << 20 // 活跃 .pack 渐进异步回写对齐窗口（8 MiB）
+	writebackHintQueueCap          = 32
 )
+
+type writebackHint struct {
+	packID uint64
+	offset uint32
+	length uint32
+}
 
 type packSyncFlight struct {
 	targetSeq uint64
@@ -76,20 +85,22 @@ type BlobStore struct {
 	hot [hotBlobShards]hotShard
 
 	// 3. 活跃 .pack 写句柄、脏包追踪表与前后台落盘协同状态
-	mu           sync.Mutex
-	closed       bool
-	activePackID uint64
-	activeFile   *os.File
-	activeOffset uint32
-	writeSeq     uint64
-	dirtyPacks   map[uint64]uint64            // 未完成 fdatasync 的脏 packID -> 最新写序号
-	unownedDirty map[uint64]uint64            // 未绑定特定 ino (ino=0) 的脏 packID -> 最新写序号
-	inoPacks     map[uint64]map[uint64]uint64 // ino -> (未同步脏 packID -> 最新写序号)
-	dirtyNew     map[uint64]struct{}          // 新建尚未完成首次 fdatasync 的 packID 集合
-	dirDirty     bool                         // packs/ 目录项发生变更（新建包落盘或 RemovePack）需执行目录 fsync
-	dirDirtySeq  uint64
-	syncFlights  map[uint64]*packSyncFlight
-	dirFlight    *dirSyncFlight
+	atomicActivePackID atomic.Uint64
+	mu                 sync.Mutex
+	closed             bool
+	activePackID       uint64
+	activeFile         *os.File
+	activeOffset       uint32
+	activeFlushedTo    uint32
+	writeSeq           uint64
+	dirtyPacks         map[uint64]uint64            // 未完成 fdatasync 的脏 packID -> 最新写序号
+	unownedDirty       map[uint64]uint64            // 未绑定特定 ino (ino=0) 的脏 packID -> 最新写序号
+	inoPacks           map[uint64]map[uint64]uint64 // ino -> (未同步脏 packID -> 最新写序号)
+	dirtyNew           map[uint64]struct{}          // 新建尚未完成首次 fdatasync 的 packID 集合
+	dirDirty           bool                         // packs/ 目录项发生变更（新建包落盘或 RemovePack）需执行目录 fsync
+	dirDirtySeq        uint64
+	syncFlights        map[uint64]*packSyncFlight
+	dirFlight          *dirSyncFlight
 
 	bgStarted    bool
 	bgQueue      []uint64
@@ -97,12 +108,27 @@ type BlobStore struct {
 	bgDone       chan struct{}
 	syncFileHook func(packID uint64)
 
+	wbStarted bool
+	wbCh      chan writebackHint
+	wbStop    chan struct{}
+	wbDone    chan struct{}
+
+	reclaimStarted  bool
+	reclaimQueue    []uint64
+	reclaimInFlight int
+	reclaimNotify   chan struct{}
+	reclaimIdleCh   chan struct{}
+	reclaimDone     chan struct{}
+	removePackHook  func(packID uint64)
+
 	// 4. 常驻 .pack 文件句柄表（涵盖活跃包与已封口只读包，0 open/close 并发 ReadAt）
 	filesMu   sync.RWMutex
 	packFiles map[uint64]*os.File
 
-	syncFileCount atomic.Uint64
-	syncDirCount  atomic.Uint64
+	preadCount         atomic.Uint64
+	writebackHintCount atomic.Uint64
+	syncFileCount      atomic.Uint64
+	syncDirCount       atomic.Uint64
 }
 
 // Blobs 返回当前 StoreActor 绑定的 *BlobStore 实例。
@@ -211,11 +237,9 @@ func (s *BlobStore) SetMaxPackSize(size uint32) {
 	s.maxPackSize.Store(size)
 }
 
-// ActivePackID 返回当前活跃可写 .pack 的编号（0 表示尚无活跃包或已封口）。
+// ActivePackID 无锁原子返回当前活跃可写 .pack 的编号（0 表示尚无活跃包或已封口）。
 func (s *BlobStore) ActivePackID() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.activePackID
+	return s.atomicActivePackID.Load()
 }
 
 // ActiveOffset 返回当前活跃可写 .pack 的尾部写偏移量。
@@ -344,8 +368,11 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 	}
 
 	s.activeOffset = offset + uint32(len(data))
+	wbHint, wbCh := s.takeWritebackHintLocked(packID, s.activeOffset)
 	s.markPackDirtyLocked(packID, ino)
 	s.mu.Unlock()
+
+	s.dispatchWritebackHint(wbCh, wbHint)
 
 	ref := BlobRef{
 		PackID: packID,
@@ -377,6 +404,13 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 		return nil, ErrClosed
 	}
 
+	var (
+		pendingHints [4]writebackHint
+		hintCount    int
+		wbCh         chan writebackHint
+	)
+	var overflowHints []writebackHint
+
 	for consumed := 0; consumed < len(data); {
 		if s.activeFile == nil || uint64(s.activeOffset)+BlobSize > uint64(maxCap) {
 			if err := s.openNextActivePackLocked(); err != nil {
@@ -400,6 +434,15 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 		}
 
 		s.activeOffset = baseOffset + uint32(batchBytes)
+		if h, ch := s.takeWritebackHintLocked(packID, s.activeOffset); ch != nil {
+			wbCh = ch
+			if hintCount < len(pendingHints) {
+				pendingHints[hintCount] = h
+				hintCount++
+			} else {
+				overflowHints = append(overflowHints, h)
+			}
+		}
 		s.markPackDirtyLocked(packID, ino)
 
 		for b := range batchBlocks {
@@ -412,6 +455,13 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 		consumed += batchBytes
 	}
 	s.mu.Unlock()
+
+	for i := range hintCount {
+		s.dispatchWritebackHint(wbCh, pendingHints[i])
+	}
+	for _, h := range overflowHints {
+		s.dispatchWritebackHint(wbCh, h)
+	}
 
 	return refs, nil
 }
@@ -473,8 +523,11 @@ func (s *BlobStore) ExtendTail(ino uint64, oldRef BlobRef, patchOffset uint32, p
 	}
 
 	s.activeOffset = oldRef.Offset + newLength
+	wbHint, wbCh := s.takeWritebackHintLocked(packID, s.activeOffset)
 	s.markPackDirtyLocked(packID, ino)
 	s.mu.Unlock()
+
+	s.dispatchWritebackHint(wbCh, wbHint)
 
 	newRef := BlobRef{
 		PackID: oldRef.PackID,
@@ -509,8 +562,10 @@ func (s *BlobStore) openNextActivePackLocked() error {
 	s.filesMu.Unlock()
 
 	s.activePackID = packID
+	s.atomicActivePackID.Store(packID)
 	s.activeFile = file
 	s.activeOffset = 0
+	s.activeFlushedTo = 0
 	s.dirtyNew[packID] = struct{}{}
 
 	if prevPackID != 0 {
@@ -519,6 +574,58 @@ func (s *BlobStore) openNextActivePackLocked() error {
 		}
 	}
 	return nil
+}
+
+func (s *BlobStore) takeWritebackHintLocked(packID uint64, newOffset uint32) (hint writebackHint, ch chan writebackHint) {
+	if s.closed || packID == 0 || newOffset < packWritebackWindow {
+		return writebackHint{}, nil
+	}
+	alignedEnd := (newOffset / packWritebackWindow) * packWritebackWindow
+	if alignedEnd <= s.activeFlushedTo {
+		return writebackHint{}, nil
+	}
+	hint = writebackHint{
+		packID: packID,
+		offset: s.activeFlushedTo,
+		length: alignedEnd - s.activeFlushedTo,
+	}
+	s.activeFlushedTo = alignedEnd
+	if !s.wbStarted {
+		s.wbStarted = true
+		s.wbCh = make(chan writebackHint, writebackHintQueueCap)
+		s.wbStop = make(chan struct{})
+		s.wbDone = make(chan struct{})
+		go s.wbLoop(s.wbCh, s.wbStop, s.wbDone)
+	}
+	s.writebackHintCount.Add(1)
+	return hint, s.wbCh
+}
+
+func (s *BlobStore) dispatchWritebackHint(ch chan writebackHint, hint writebackHint) {
+	if ch == nil || hint.packID == 0 || hint.length == 0 {
+		return
+	}
+	select {
+	case ch <- hint:
+	default:
+	}
+}
+
+func (s *BlobStore) wbLoop(ch <-chan writebackHint, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	for {
+		select {
+		case <-stop:
+			return
+		case h := <-ch:
+			s.filesMu.RLock()
+			f := s.packFiles[h.packID]
+			if f != nil {
+				_ = startAsyncWriteback(f, int64(h.offset), int64(h.length))
+			}
+			s.filesMu.RUnlock()
+		}
+	}
 }
 
 func (s *BlobStore) enqueueBgSyncLocked(packID uint64) {
@@ -607,10 +714,30 @@ func (s *BlobStore) ReadAt(ref BlobRef, offset int64, dst []byte) error {
 	return s.ReadAtContext(context.Background(), ref, offset, dst)
 }
 
+// TryReadHot 尝试仅从分片内存热块缓存读取指定区间；命中时计入 hot_cache 指标并返回 true。
+func (s *BlobStore) TryReadHot(ref BlobRef, offset int64, dst []byte) bool {
+	if len(dst) == 0 {
+		return true
+	}
+	if offset < 0 || uint64(offset)+uint64(len(dst)) > uint64(ref.Length) {
+		return false
+	}
+	if s.hotReadAt(ref.PackID, ref.Offset, offset, dst) {
+		s.metrics.incReadHotCache()
+		return true
+	}
+	return false
+}
+
 // ReadAtContext 按块内相对偏移 offset 读取指定区间，并在命中磁盘冷读时记录 pread 耗时直方图与按需创建 store.BlobPread 子 Span。
-func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64, dst []byte) (err error) {
+func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64, dst []byte) error {
 	if len(dst) == 0 {
 		return nil
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	if ref.PackID == 0 || ref.Length == 0 || ref.Length > BlobSize || uint64(ref.Offset)+uint64(ref.Length) > PackMaxSize {
 		return ErrInvalidValue
@@ -618,23 +745,40 @@ func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64
 	if offset < 0 || uint64(offset)+uint64(len(dst)) > uint64(ref.Length) {
 		return io.ErrUnexpectedEOF
 	}
-	if s.hotReadAt(ref.PackID, ref.Offset, offset, dst) {
-		s.metrics.incReadHotCache()
+	if s.TryReadHot(ref, offset, dst) {
 		return nil
 	}
+	return s.ReadRangeAtContext(ctx, ref.PackID, int64(ref.Offset)+offset, dst, 1)
+}
 
-	s.metrics.incReadDiskPack()
+// ReadRangeAtContext 对同一 .pack 文件内物理紧邻的冷块区间执行单次合并 ReadAt 系统调用，
+// 并按 blockCount 累加逻辑冷块计数、按单次系统调用记录 pread 耗时与追踪 Span。
+func (s *BlobStore) ReadRangeAtContext(ctx context.Context, packID uint64, packOffset int64, dst []byte, blockCount uint64) (err error) {
+	if len(dst) == 0 {
+		return nil
+	}
+	if ctx != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+	}
+	if packID == 0 || packOffset < 0 || uint64(packOffset)+uint64(len(dst)) > PackMaxSize {
+		return ErrInvalidValue
+	}
+
+	s.metrics.addReadDiskPack(max(1, blockCount))
 	var span trace.Span
 	if isSpanRecording(ctx) {
 		_, span = startChildSpan(ctx, "store.BlobPread",
-			attribute.Int64("pack.id", int64(ref.PackID)),
-			attribute.Int64("pack.offset", int64(ref.Offset)+offset),
+			attribute.Int64("pack.id", int64(packID)),
+			attribute.Int64("pack.offset", packOffset),
 			attribute.Int("read.bytes", len(dst)),
+			attribute.Int64("read.blocks", int64(max(1, blockCount))),
 		)
 		defer func() { finishSpan(span, err) }()
 	}
 
-	file, err := s.getOrOpenPackFile(ref.PackID)
+	file, err := s.getOrOpenPackFile(packID)
 	if err != nil {
 		return err
 	}
@@ -642,7 +786,8 @@ func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64
 	if s.metrics != nil {
 		preadStart = time.Now()
 	}
-	n, err := file.ReadAt(dst, int64(ref.Offset)+offset)
+	n, err := file.ReadAt(dst, packOffset)
+	s.preadCount.Add(1)
 	if s.metrics != nil {
 		s.metrics.observeBlobPread(time.Since(preadStart))
 	}
@@ -654,6 +799,12 @@ func (s *BlobStore) ReadAtContext(ctx context.Context, ref BlobRef, offset int64
 	}
 	return err
 }
+
+// PreadCount 返回底层 .pack 文件实际执行 ReadAt (pread) 系统调用的累计次数（用于测试观测）。
+func (s *BlobStore) PreadCount() uint64 { return s.preadCount.Load() }
+
+// WritebackHintCount 返回活跃 .pack 跨 8 MiB 对齐边界生成的后台异步回写提示累计次数（用于测试观测）。
+func (s *BlobStore) WritebackHintCount() uint64 { return s.writebackHintCount.Load() }
 
 func (s *BlobStore) getOrOpenPackFile(packID uint64) (*os.File, error) {
 	s.filesMu.RLock()
@@ -788,7 +939,12 @@ func (s *BlobStore) extendHotShard(oldRef BlobRef, patchOffset uint32, patchData
 				clear(newData[len(oldData):newLen])
 			}
 		} else {
-			newData = make([]byte, newLen)
+			nextCap := max(hotExtendMinCap, cap(oldData)*2)
+			for nextCap < newLen {
+				nextCap *= 2
+			}
+			nextCap = min(BlobSize, max(nextCap, newLen))
+			newData = make([]byte, newLen, nextCap)
 			copy(newData, oldData)
 		}
 		if len(patchData) > 0 && int(patchOffset)+len(patchData) <= newLen {
@@ -1132,18 +1288,130 @@ func (s *BlobStore) syncBatch(packs []uint64, trigger syncTrigger) error {
 	return errors.Join(errs...)
 }
 
-// RemovePack 关闭指定 .pack 的常驻文件句柄、剔除热块缓存并从宿主机删除物理 .pack 文件（ADR-0031 §4.2）。
-func (s *BlobStore) RemovePack(packID uint64) error {
-	if packID == 0 {
-		return nil
+// EnqueueRemovePacks 将已完成 Pebble WAL Sync 确认的死包编号投递至后台回收协程异步物理删除，
+// 避免在前台 Fsync 屏障路径上同步阻塞 StoreActor。
+func (s *BlobStore) EnqueueRemovePacks(packIDs []uint64) {
+	if len(packIDs) == 0 {
+		return
 	}
-	s.evictHotPack(packID)
 
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		for _, packID := range packIDs {
+			if packID != 0 {
+				s.execReclaimPack(packID, nil)
+			}
+		}
+		return
+	}
+
+	enqueued := false
+	for _, packID := range packIDs {
+		if packID == 0 {
+			continue
+		}
+		s.clearDirtyStateForPackLocked(packID)
+		if !slices.Contains(s.reclaimQueue, packID) {
+			s.reclaimQueue = append(s.reclaimQueue, packID)
+			enqueued = true
+		}
+	}
+	if !enqueued {
+		s.mu.Unlock()
+		return
+	}
+	if !s.reclaimStarted {
+		s.reclaimStarted = true
+		s.reclaimNotify = make(chan struct{}, 1)
+		s.reclaimDone = make(chan struct{})
+		go s.reclaimLoop()
+	}
+	select {
+	case s.reclaimNotify <- struct{}{}:
+	default:
+	}
+	s.mu.Unlock()
+}
+
+// WaitPendingReclaims 阻塞等待当前后台死包异步回收队列中所有已投递任务执行完毕。
+func (s *BlobStore) WaitPendingReclaims() {
+	for {
+		s.mu.Lock()
+		if len(s.reclaimQueue) == 0 && s.reclaimInFlight == 0 {
+			s.mu.Unlock()
+			return
+		}
+		if s.reclaimIdleCh == nil {
+			s.reclaimIdleCh = make(chan struct{})
+		}
+		ch := s.reclaimIdleCh
+		s.mu.Unlock()
+		<-ch
+	}
+}
+
+func (s *BlobStore) reclaimLoop() {
+	defer close(s.reclaimDone)
+	for {
+		s.mu.Lock()
+		for len(s.reclaimQueue) == 0 && !s.closed {
+			if s.reclaimInFlight == 0 && s.reclaimIdleCh != nil {
+				close(s.reclaimIdleCh)
+				s.reclaimIdleCh = nil
+			}
+			s.mu.Unlock()
+			<-s.reclaimNotify
+			s.mu.Lock()
+		}
+		if len(s.reclaimQueue) == 0 && s.closed {
+			if s.reclaimInFlight == 0 && s.reclaimIdleCh != nil {
+				close(s.reclaimIdleCh)
+				s.reclaimIdleCh = nil
+			}
+			s.mu.Unlock()
+			return
+		}
+		packID := s.reclaimQueue[0]
+		s.reclaimQueue = s.reclaimQueue[1:]
+		s.reclaimInFlight++
+		hook := s.removePackHook
+		s.mu.Unlock()
+
+		s.execReclaimPack(packID, hook)
+
+		s.mu.Lock()
+		s.reclaimInFlight--
+		if len(s.reclaimQueue) == 0 && s.reclaimInFlight == 0 && s.reclaimIdleCh != nil {
+			close(s.reclaimIdleCh)
+			s.reclaimIdleCh = nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *BlobStore) execReclaimPack(packID uint64, hook func(uint64)) {
+	if hook != nil {
+		hook(packID)
+	}
+	remStart := time.Now()
+	err := s.RemovePack(packID)
+	s.metrics.observePhaseDeadPackRemove(time.Since(remStart))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		s.metrics.incPackRemoveErrors()
+		if s.logger != nil {
+			s.logger.Warn("dead pack remove failed", "pack_id", packID, "err", err)
+		}
+	}
+}
+
+func (s *BlobStore) clearDirtyStateForPackLocked(packID uint64) {
 	if s.activePackID == packID {
 		s.activePackID = 0
+		s.atomicActivePackID.Store(0)
 		s.activeFile = nil
 		s.activeOffset = 0
+		s.activeFlushedTo = 0
 	}
 	delete(s.dirtyPacks, packID)
 	delete(s.unownedDirty, packID)
@@ -1156,6 +1424,17 @@ func (s *BlobStore) RemovePack(packID uint64) error {
 	}
 	s.bgQueue = slices.DeleteFunc(s.bgQueue, func(id uint64) bool { return id == packID })
 	s.markDirDirtyLocked()
+}
+
+// RemovePack 关闭指定 .pack 的常驻文件句柄、剔除热块缓存并从宿主机删除物理 .pack 文件（ADR-0031 §4.2）。
+func (s *BlobStore) RemovePack(packID uint64) error {
+	if packID == 0 {
+		return nil
+	}
+	s.evictHotPack(packID)
+
+	s.mu.Lock()
+	s.clearDirtyStateForPackLocked(packID)
 	flight := s.syncFlights[packID]
 	s.mu.Unlock()
 
@@ -1176,20 +1455,34 @@ func (s *BlobStore) RemovePack(packID uint64) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	if err == nil {
+		s.mu.Lock()
+		s.markDirDirtyLocked()
+		s.mu.Unlock()
+	}
 	return err
 }
 
-// Close 安全停止后台刷盘协程并关闭所有常驻 .pack 文件句柄（含活跃包与已封口只读包）。
+// Close 安全停止后台回写与刷盘协程、排空待回收死包队列并关闭所有常驻 .pack 文件句柄。
 func (s *BlobStore) Close() error {
 	s.mu.Lock()
+	wasClosed := s.closed
 	s.closed = true
 	s.activePackID = 0
+	s.atomicActivePackID.Store(0)
 	s.activeFile = nil
 	s.activeOffset = 0
+	s.activeFlushedTo = 0
 	s.bgQueue = nil
 	bgStarted := s.bgStarted
 	bgNotify := s.bgNotify
 	bgDone := s.bgDone
+	wbStarted := s.wbStarted
+	wbStop := s.wbStop
+	wbDone := s.wbDone
+	reclaimStarted := s.reclaimStarted
+	reclaimNotify := s.reclaimNotify
+	reclaimDone := s.reclaimDone
 	flights := make([]*packSyncFlight, 0, len(s.syncFlights))
 	for _, f := range s.syncFlights {
 		flights = append(flights, f)
@@ -1197,6 +1490,12 @@ func (s *BlobStore) Close() error {
 	dirFlight := s.dirFlight
 	s.mu.Unlock()
 
+	if wbStarted {
+		if !wasClosed {
+			close(wbStop)
+		}
+		<-wbDone
+	}
 	if bgStarted {
 		select {
 		case bgNotify <- struct{}{}:
@@ -1209,6 +1508,13 @@ func (s *BlobStore) Close() error {
 	}
 	if dirFlight != nil {
 		<-dirFlight.done
+	}
+	if reclaimStarted {
+		select {
+		case reclaimNotify <- struct{}{}:
+		default:
+		}
+		<-reclaimDone
 	}
 
 	s.filesMu.Lock()

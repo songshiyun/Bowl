@@ -289,3 +289,60 @@ func TestProtoBinaryCodecReadResponsePoolAndOrphanedGC(t *testing.T) {
 		return leasedReadPayloadCount() == 0
 	}, 2*time.Second, 10*time.Millisecond, "孤儿 ReadResponse 租约必须在 GC 后自动归零")
 }
+
+func TestProtoBinaryCodecReadResponseMarshalAppendZeroAllocAndCompatibility(t *testing.T) {
+	codec := &protoBinaryCodec{}
+
+	sizes := []int{0, 1, 127, 128, 4096, 256 << 10, maxReadWriteSize}
+	dst := make([]byte, 0, maxReadWriteSize+64)
+	for _, sz := range sizes {
+		var payload []byte
+		if sz > 0 {
+			payload = bytes.Repeat([]byte{0x5A, 0xA5, 0x3C, 0xC3}, (sz+3)/4)[:sz]
+		}
+		resp := &storagev1.ReadResponse{Data: payload}
+
+		want, err := proto.Marshal(resp)
+		require.NoError(t, err)
+
+		got, err := codec.MarshalAppend(dst[:0], resp)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "size=%d 的手写 MarshalAppend 编码字节必须与标准 proto.Marshal 100%% 一致", sz)
+
+		var decoded storagev1.ReadResponse
+		require.NoError(t, proto.Unmarshal(got, &decoded))
+		if sz == 0 {
+			require.Empty(t, decoded.Data)
+		} else {
+			require.Equal(t, payload, decoded.Data)
+		}
+
+		// 验证带前缀切片追加与容量不足自动扩容路径同样字节级兼容
+		prefix := []byte("frame:")
+		wantPrefixed, err := proto.MarshalOptions{}.MarshalAppend(append([]byte(nil), prefix...), resp)
+		require.NoError(t, err)
+		gotPrefixed, err := codec.MarshalAppend(append([]byte(nil), prefix...), resp)
+		require.NoError(t, err)
+		require.Equal(t, wantPrefixed, gotPrefixed)
+	}
+
+	// 验证复用充足容量 dst 时严格 0 allocs/op（非空与空响应）
+	payload4M := bytes.Repeat([]byte{0x7E}, maxReadWriteSize)
+	reusedResp := &storagev1.ReadResponse{Data: payload4M}
+	allocsNonEmpty := testing.AllocsPerRun(50, func() {
+		out, err := codec.MarshalAppend(dst[:0], reusedResp)
+		if err != nil || len(out) <= maxReadWriteSize {
+			t.Fatalf("unexpected marshal result: len=%d err=%v", len(out), err)
+		}
+	})
+	require.Zero(t, allocsNonEmpty, "复用 dst 容量时 ReadResponse MarshalAppend 必须 0 allocs/op")
+
+	emptyResp := &storagev1.ReadResponse{}
+	allocsEmpty := testing.AllocsPerRun(50, func() {
+		out, err := codec.MarshalAppend(dst[:0], emptyResp)
+		if err != nil || len(out) != 0 {
+			t.Fatalf("unexpected empty marshal result: len=%d err=%v", len(out), err)
+		}
+	})
+	require.Zero(t, allocsEmpty, "空载荷 ReadResponse MarshalAppend 必须 0 allocs/op")
+}

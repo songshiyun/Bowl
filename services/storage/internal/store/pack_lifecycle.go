@@ -363,18 +363,11 @@ func (s *StoreActor) restorePendingDeadPacks(packIDs []uint64) {
 	s.addPendingDeadPacks(packIDs)
 }
 
-func (s *StoreActor) removePacks(packIDs []uint64) {
+func (s *StoreActor) enqueueRemovePacks(packIDs []uint64) {
 	if len(packIDs) == 0 || s.blobs == nil {
 		return
 	}
-	for _, packID := range packIDs {
-		if err := s.blobs.RemovePack(packID); err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.metrics.incPackRemoveErrors()
-			if s.logger != nil {
-				s.logger.Warn("dead pack remove failed", "pack_id", packID, "err", err)
-			}
-		}
-	}
+	s.blobs.EnqueueRemovePacks(packIDs)
 }
 
 func (s *StoreActor) syncFileInodes(inodes []uint64) error {
@@ -389,7 +382,7 @@ func (s *StoreActor) syncFileInodes(inodes []uint64) error {
 }
 
 // syncWALAndReclaimDeadPacks 在存在未落盘 NoSync WAL 写入或挂起死包时执行同步 WAL 屏障，
-// 并在 WAL 落盘确认后物理移除已无存活引用的封口 .pack 文件（ADR-0031 §4.2）。
+// 并在 WAL 落盘确认后投递并等待死包物理删除完成（ADR-0031 §4.2）。
 func (s *StoreActor) syncWALAndReclaimDeadPacks() error {
 	_, _, _, _, err := s.syncWALAndReclaimDeadPacksTimed()
 	return err
@@ -399,7 +392,12 @@ func (s *StoreActor) syncWALAndReclaimDeadPacksTimed() (didWALSync bool, walDur 
 	toReclaim := s.takePendingDeadPacks()
 	wasDirty := s.walDirty.Swap(false)
 	if !wasDirty && len(toReclaim) == 0 {
-		return false, 0, 0, 0, nil
+		if s.blobs != nil {
+			remStart := time.Now()
+			s.blobs.WaitPendingReclaims()
+			removeDur = time.Since(remStart)
+		}
+		return false, 0, 0, removeDur, nil
 	}
 	walStart := time.Now()
 	if syncErr := s.db.LogData(nil, pebble.Sync); syncErr != nil {
@@ -409,11 +407,16 @@ func (s *StoreActor) syncWALAndReclaimDeadPacksTimed() (didWALSync bool, walDur 
 		return true, walDur, 0, 0, syncErr
 	}
 	walDur = time.Since(walStart)
+	remStart := time.Now()
 	if len(toReclaim) > 0 {
-		remStart := time.Now()
-		s.removePacks(toReclaim)
-		removeDur = time.Since(remStart)
+		s.enqueueRemovePacks(toReclaim)
 		reclaimed = len(toReclaim)
+	}
+	if s.blobs != nil {
+		s.blobs.WaitPendingReclaims()
+	}
+	if reclaimed > 0 {
+		removeDur = time.Since(remStart)
 	}
 	return true, walDur, reclaimed, removeDur, nil
 }

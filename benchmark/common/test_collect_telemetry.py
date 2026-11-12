@@ -934,6 +934,58 @@ class CollectTelemetryTest(unittest.TestCase):
             self.assertIn("子阶段 · 隶属 `d9_cold_io`", md)
             self.assertIn("异步并发流水线 (累计为 FUSE 活跃 4.08x)", md)
 
+    def test_process_logs_ignores_benign_pebble_empty_err_json(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            stage_dir = Path(td) / "stage"
+            out_dir = Path(td) / "out"
+            loki_dir = stage_dir / "server" / "loki"
+            loki_dir.mkdir(parents=True, exist_ok=True)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            loki_payload = {
+                "status": "success",
+                "data": {
+                    "result": [
+                        {
+                            "stream": {"service": "pebble_events"},
+                            "values": [
+                                ["1000000001", json.dumps({"disk_id": "d1", "event": "wal_created", "file_num": 5, "err": ""})],
+                                ["1000000002", json.dumps({"disk_id": "d1", "event": "flush_end", "err": ""})],
+                                ["1000000003", json.dumps({"disk_id": "d1", "event": "compaction_end", "err": ""})],
+                                ["1000000004", json.dumps({"disk_id": "d1", "event": "write_stall_begin", "reason": "memtable count"})],
+                                ["1000000005", json.dumps({"disk_id": "d1", "event": "table_deleted", "err": "enosys"})],
+                            ],
+                        },
+                        {
+                            "stream": {"service": "bowl-storage"},
+                            "values": [
+                                ["1000000006", json.dumps({"level": "INFO", "msg": "server started", "err": ""})],
+                                ["1000000007", json.dumps({"level": "WARN", "msg": "store actor slow tick", "total_ms": 22.1})],
+                                ["1000000008", "panic: unexpected raw crash"],
+                            ],
+                        },
+                    ]
+                },
+            }
+            (loki_dir / "query_range.json").write_text(json.dumps(loki_payload), encoding="utf-8")
+
+            res = collect_telemetry.process_logs(stage_dir, out_dir)
+            self.assertEqual(res["loki_log_entries"], 8)
+            self.assertEqual(res["server_alert_count"], 4)
+            alert_events_or_msgs = [
+                a.get("event") or a.get("msg")
+                for a in res["server_alerts_sample"]
+            ]
+            self.assertEqual(
+                alert_events_or_msgs,
+                [
+                    "write_stall_begin",
+                    "table_deleted",
+                    "store actor slow tick",
+                    "panic: unexpected raw crash",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

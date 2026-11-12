@@ -431,6 +431,11 @@ func (s *StoreActor) ReadInto(ctx context.Context, ino, offset uint64, size uint
 			s.metrics.observeReadOp(readOpRead, time.Since(opStart))
 		}()
 	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
 	if err := validateNodeIno(ino); err != nil {
 		return nil, err
 	}
@@ -569,10 +574,40 @@ func (s *StoreActor) scanDataBlockRefs(ctx context.Context, ino, firstBlock, las
 	return hits, nil
 }
 
+type coalescedDiskRead struct {
+	active     bool
+	packID     uint64
+	packOffset uint64
+	outStart   uint64
+	length     uint64
+	lastBlock  uint64
+	lastRef    BlobRef
+	blockCount uint64
+}
+
 func (s *StoreActor) readMultiBlocks(ctx context.Context, ino, firstBlock, lastBlock, offset, end uint64, out []byte, preZeroed bool) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	blobs := s.blobs
+	if blobs == nil {
+		return ErrIO
+	}
 	hits, err := s.scanDataBlockRefs(ctx, ino, firstBlock, lastBlock)
 	if err != nil {
 		return err
+	}
+
+	var run coalescedDiskRead
+	flushRun := func() error {
+		if !run.active {
+			return nil
+		}
+		cur := run
+		run = coalescedDiskRead{}
+		return blobs.ReadRangeAtContext(ctx, cur.packID, int64(cur.packOffset), out[cur.outStart:cur.outStart+cur.length], cur.blockCount)
 	}
 
 	filledEnd := offset
@@ -584,13 +619,89 @@ func (s *StoreActor) readMultiBlocks(ctx context.Context, ino, firstBlock, lastB
 		if rangeStart >= rangeEnd {
 			continue
 		}
-		if !preZeroed && rangeStart > filledEnd {
-			clear(out[filledEnd-offset : rangeStart-offset])
+		if rangeStart > filledEnd {
+			if err := flushRun(); err != nil {
+				return err
+			}
+			if !preZeroed {
+				clear(out[filledEnd-offset : rangeStart-offset])
+			}
 		}
-		if err := s.readBlockSlice(ctx, h.ref, rangeStart, rangeEnd, offset, out, preZeroed); err != nil {
-			return err
+
+		inBlockStart := rangeStart % BlobSize
+		reqLen := rangeEnd - rangeStart
+		dstStart := rangeStart - offset
+		dst := out[dstStart : dstStart+reqLen]
+
+		if inBlockStart >= uint64(h.ref.Length) {
+			if err := flushRun(); err != nil {
+				return err
+			}
+			if !preZeroed {
+				clear(dst)
+			}
+			filledEnd = rangeEnd
+			continue
+		}
+
+		if h.ref.PackID == 0 || h.ref.Length == 0 || h.ref.Length > BlobSize || uint64(h.ref.Offset)+uint64(h.ref.Length) > PackMaxSize {
+			if err := flushRun(); err != nil {
+				return err
+			}
+			return ErrInvalidValue
+		}
+
+		n := min(reqLen, uint64(h.ref.Length)-inBlockStart)
+		// 一致性守卫：仍在 hotShard 内存热缓存中的块（活跃包尾块或部分覆写块）优先命中最新内存字节，
+		// 仅对不在 hotShard 中的相邻物理连续冷块区间合并执行单次底层 pread。
+		if blobs.TryReadHot(h.ref, int64(inBlockStart), dst[:n]) {
+			if err := flushRun(); err != nil {
+				return err
+			}
+			if !preZeroed && n < reqLen {
+				clear(dst[n:])
+			}
+			filledEnd = rangeEnd
+			continue
+		}
+
+		canMerge := run.active &&
+			h.blockIdx == run.lastBlock+1 &&
+			h.ref.PackID == run.packID &&
+			run.lastRef.Length == BlobSize &&
+			uint64(run.lastRef.Offset)+uint64(run.lastRef.Length) == uint64(h.ref.Offset) &&
+			inBlockStart == 0 &&
+			run.packOffset+run.length == uint64(h.ref.Offset) &&
+			run.outStart+run.length == dstStart
+		if canMerge {
+			run.length += n
+			run.lastBlock = h.blockIdx
+			run.lastRef = h.ref
+			run.blockCount++
+		} else {
+			if err := flushRun(); err != nil {
+				return err
+			}
+			run = coalescedDiskRead{
+				active:     true,
+				packID:     h.ref.PackID,
+				packOffset: uint64(h.ref.Offset) + inBlockStart,
+				outStart:   dstStart,
+				length:     n,
+				lastBlock:  h.blockIdx,
+				lastRef:    h.ref,
+				blockCount: 1,
+			}
+		}
+
+		if !preZeroed && n < reqLen {
+			clear(dst[n:])
 		}
 		filledEnd = rangeEnd
+	}
+
+	if err := flushRun(); err != nil {
+		return err
 	}
 	if !preZeroed && filledEnd < end {
 		clear(out[filledEnd-offset : end-offset])

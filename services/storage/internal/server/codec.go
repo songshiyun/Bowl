@@ -150,6 +150,7 @@ func (l *readPayloadLease) release(stopCleanup bool) {
 		delete(leasedReadPayloads, l.key)
 	}
 	leasedReadPayloadsMu.Unlock()
+	activeReadPayloadLeases.Add(-1)
 	recycleReadPayloadBuf(l.buf)
 	l.buf = nil
 }
@@ -166,8 +167,9 @@ var (
 		},
 	}
 
-	leasedReadPayloadsMu sync.Mutex
-	leasedReadPayloads   = make(map[weak.Pointer[storagev1.ReadResponse]]*readPayloadLease)
+	activeReadPayloadLeases atomic.Int64
+	leasedReadPayloadsMu    sync.Mutex
+	leasedReadPayloads      = make(map[weak.Pointer[storagev1.ReadResponse]]*readPayloadLease)
 )
 
 func acquireReadPayloadBuf() *[maxReadWriteSize]byte {
@@ -202,6 +204,7 @@ func registerLeasedReadPayload(msg *storagev1.ReadResponse, buf *[maxReadWriteSi
 	}
 	lease.cleanup = runtime.AddCleanup(msg, cleanupOrphanedReadPayloadLease, lease)
 
+	activeReadPayloadLeases.Add(1)
 	var prev *readPayloadLease
 	leasedReadPayloadsMu.Lock()
 	if old := leasedReadPayloads[key]; old != nil && old != lease {
@@ -216,7 +219,7 @@ func registerLeasedReadPayload(msg *storagev1.ReadResponse, buf *[maxReadWriteSi
 }
 
 func releaseReadPayload(msg *storagev1.ReadResponse) {
-	if msg == nil {
+	if msg == nil || activeReadPayloadLeases.Load() == 0 {
 		return
 	}
 	key := weak.Make(msg)
@@ -256,7 +259,7 @@ func newWritePayloadReleaseInterceptor() connect.UnaryInterceptorFunc {
 }
 
 // protoBinaryCodec 实现 connect.Codec 及其内部的 marshalAppender / stableCodec 扩展接口，
-// 对高频大载荷 WriteRequest 采用池化 4 MiB 缓冲直解，消除每次 4 MiB Write RPC 的堆分配、清零与 GC 扫描开销。
+// 对高频大载荷 WriteRequest 采用池化 4 MiB 缓冲直解，并对 ReadResponse 实现手写 protowire MarshalAppend 零分配快路径。
 type protoBinaryCodec struct{}
 
 func newProtoBinaryCodec() connect.Codec {
@@ -279,12 +282,31 @@ func (c *protoBinaryCodec) Marshal(message any) ([]byte, error) {
 }
 
 func (c *protoBinaryCodec) MarshalAppend(dst []byte, message any) ([]byte, error) {
+	if readResp, ok := message.(*storagev1.ReadResponse); ok {
+		if readResp == nil {
+			return dst, nil
+		}
+		data := readResp.Data
+		if len(data) == 0 {
+			releaseReadPayload(readResp)
+			return dst, nil
+		}
+		// ReadResponse 仅含字段 `bytes data = 1`（wire tag = (1<<3)|2 = 0x0a）。
+		need := 1 + protowire.SizeVarint(uint64(len(data))) + len(data)
+		if cap(dst)-len(dst) < need {
+			grown := make([]byte, len(dst), len(dst)+need)
+			copy(grown, dst)
+			dst = grown
+		}
+		dst = append(dst, 0x0a)
+		dst = protowire.AppendVarint(dst, uint64(len(data)))
+		dst = append(dst, data...)
+		releaseReadPayload(readResp)
+		return dst, nil
+	}
 	protoMsg, ok := message.(proto.Message)
 	if !ok {
 		return nil, fmt.Errorf("%T does not implement proto.Message", message)
-	}
-	if readResp, ok := message.(*storagev1.ReadResponse); ok && readResp != nil {
-		defer releaseReadPayload(readResp)
 	}
 	return proto.MarshalOptions{}.MarshalAppend(dst, protoMsg)
 }

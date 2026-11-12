@@ -16,3 +16,10 @@ func (s *BlobStore) SetSyncFileHookForTest(hook func(packID uint64)) {
 	s.syncFileHook = hook
 	s.mu.Unlock()
 }
+
+// SetRemovePackHookForTest 注册在 BlobStore 后台死包回收协程物理删除每个死包前触发的测试钩子。
+func (s *BlobStore) SetRemovePackHookForTest(hook func(packID uint64)) {
+	s.mu.Lock()
+	s.removePackHook = hook
+	s.mu.Unlock()
+}

@@ -589,11 +589,11 @@ func (m *Metrics) incReadHotCache() {
 	m.readHotCache.Add(1)
 }
 
-func (m *Metrics) incReadDiskPack() {
-	if m == nil {
+func (m *Metrics) addReadDiskPack(n uint64) {
+	if m == nil || n == 0 {
 		return
 	}
-	m.readDiskPack.Add(1)
+	m.readDiskPack.Add(n)
 }
 
 func (m *Metrics) addHotCacheEvictions(n uint64) {
