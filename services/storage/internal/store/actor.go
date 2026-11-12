@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Pebble 初始化与批次重置阈值常量（ADR-0030 §2.2 & §2.5）。
+// Pebble 初始化与批次重置阈值常量。
 const (
 	DefaultMemTableSize    = 16 << 20 // 16 MiB
 	DefaultCacheSize       = 64 << 20 // 64 MiB
@@ -159,7 +159,7 @@ type Options struct {
 	slowTickThreshold time.Duration
 }
 
-// NewPebbleOptions 构建符合 ADR-0030 §2.2 规范的 *pebble.Options：
+// NewPebbleOptions 构建*pebble.Options：
 //   - 自定义 Comparer.Split（entry:/xattr: -> 15，data: -> 14，其余 -> len(key)）；
 //   - 全部 7 层启用 bloom.FilterPolicy(10)；
 //   - MemTableSize=16MiB, MaxOpenFiles=128, WALBytesPerSync=4MiB, FormatMajorVersion=pebble.FormatNewest。
@@ -190,9 +190,9 @@ func NewPebbleOptions(cache *pebble.Cache, readOnly bool) *pebble.Options {
 	}
 }
 
-// StoreActor 是单盘（或只读快照）存储引擎实例（ADR-0030 §2.3、ADR-0032）。
+// StoreActor 是单盘（或只读快照）存储引擎实例。
 //
-//nolint:revive // exported: StoreActor 为 ADR-0030 与领域词汇表锁定的核心实体名称。
+//nolint:revive // exported: StoreActor 为存储引擎锁定的核心实体名称。
 type StoreActor struct {
 	dir            string
 	diskID         string
@@ -483,7 +483,7 @@ func (s *StoreActor) scanMaxInode() (uint64, error) {
 	return RootIno, iter.Error()
 }
 
-// enter 是所有直读路径与写阶段 1 预读的统一生命周期读守卫（ADR-0030 §2.6）。
+// enter 是所有直读路径与写阶段 1 预读的统一生命周期读守卫。
 func (s *StoreActor) enter() (func(), error) {
 	if s.closing.Load() {
 		return nil, ErrClosed
@@ -523,7 +523,7 @@ type advanceEpochOp struct {
 }
 
 // AdvanceEpoch 通过 Actor 队列原子递增 WriterEpoch 并以 pebble.Sync 持久化至 "sys:stat"，
-// 同时清扫所有残留 Orphan Inode 并返回新 WriterEpoch 与根目录 Inode(1) 的最新 Attribute（ADR-0032）。
+// 同时清扫所有残留 Orphan Inode 并返回新 WriterEpoch 与根目录 Inode(1) 的最新 Attribute。
 func (s *StoreActor) AdvanceEpoch(ctx context.Context) (uint64, Attribute, error) {
 	if s.readOnly {
 		return 0, Attribute{}, ErrReadOnly
@@ -586,7 +586,7 @@ type updateMaxBytesOp struct {
 	maxBytes uint64
 }
 
-// UpdateMaxBytes 通过 Actor 队列在线扩容或安全缩容单盘逻辑容量配额上限，并以 pebble.Sync 持久化至 "sys:stat"（ADR-0032）。
+// UpdateMaxBytes 通过 Actor 队列在线扩容或安全缩容单盘逻辑容量配额上限，并以 pebble.Sync 持久化至 "sys:stat"。
 func (s *StoreActor) UpdateMaxBytes(ctx context.Context, maxBytes uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -633,7 +633,7 @@ func (s *StoreActor) BatchReallocCount() uint64 { return s.batchResetCnt.Load() 
 // WALDirty 报告是否存在尚未通过 pebble.Sync 刷盘的 NoSync WAL 写入（用于测试观测）。
 func (s *StoreActor) WALDirty() bool { return s.walDirty.Load() }
 
-// StatFS 直接从内存原子镜像读取逻辑已用字节数与节点数（0 锁、0 I/O，ADR-0030 §2.4）。
+// StatFS 直接从内存原子镜像读取逻辑已用字节数与节点数（0 锁、0 I/O）。
 func (s *StoreActor) StatFS(_ context.Context) (StatFSResult, error) {
 	if s.metrics != nil {
 		opStart := time.Now()
@@ -842,7 +842,7 @@ func (s *StoreActor) discardDirtyAtime(ino uint64) {
 }
 
 // FlushWAL 在存在未落盘 NoSync 写入时执行一次同步 WAL 刷盘（db.LogData(nil, pebble.Sync)），
-// 并在 WAL 落盘确认后物理清理挂起的全死封口 .pack 文件（ADR-0031 §4.2）。
+// 并在 WAL 落盘确认后物理清理挂起的全死封口 .pack 文件。
 func (s *StoreActor) FlushWAL() error {
 	if s.readOnly {
 		return nil
@@ -1045,7 +1045,7 @@ func (s *StoreActor) runLoop() {
 	}
 }
 
-// processTick 严格执行 ADR-0030 §2.5 与 ADR-0031 §3 的 Step 2 ~ Step 4。
+// processTick 严格执行 Group Commit 的 Step 2 ~ Step 4。
 func (s *StoreActor) processTick() {
 	if s.beforeTickHook != nil {
 		s.beforeTickHook()

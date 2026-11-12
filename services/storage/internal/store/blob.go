@@ -19,7 +19,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// BlobStore 规格与分片热块缓存参数（ADR-0031 §1.2 & §3.1）。
+// BlobStore 规格与分片热块缓存参数。
 const (
 	BlobIDSegment           uint64 = 4096
 	hotBlobShards                  = 16
@@ -66,7 +66,7 @@ type hotShard struct {
 }
 
 // BlobStore 管理单盘目录下扁平的 packs/<pack_id_hex16>.pack 封包文件（单包上限 64 MiB）、
-// 常驻活跃写句柄与已封口只读句柄池、64 MiB 分片环形热块缓存及脏包屏障追踪表（ADR-0031 §1.2 & §3, ADR-0032 §4）。
+// 常驻活跃写句柄与已封口只读句柄池、64 MiB 分片环形热块缓存及脏包屏障追踪表。
 type BlobStore struct {
 	dir         string
 	logger      *slog.Logger
@@ -466,7 +466,7 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 	return refs, nil
 }
 
-// ExtendTail 尝试对位于当前活跃 .pack 最末尾的逻辑块执行原地顺延扩展（ADR-0031 §3.2）：
+// ExtendTail 尝试对位于当前活跃 .pack 最末尾的逻辑块执行原地顺延扩展：
 //   - 仅当 oldRef.PackID == activePackID && oldRef.Offset + oldRef.Length == activeOffset 且扩展后不超过 MaxPackSize 时生效；
 //   - 若不满足尾部顺延条件，返回 (BlobRef{}, false, nil)，调用方应回退为读取旧块合并后调用 Append。
 func (s *BlobStore) ExtendTail(ino uint64, oldRef BlobRef, patchOffset uint32, patchData []byte, newLength uint32) (BlobRef, bool, error) {
@@ -1068,7 +1068,7 @@ func (s *BlobStore) Sync() error {
 }
 
 // SyncInode 仅对包含指定 Inode 未刷盘写入的脏 .pack 常驻句柄执行 fdatasync，
-// 且仅在涉及新建 .pack 首次落盘或目录变更时对 packs/ 目录执行 1 次目录 fsync（ADR-0031 §3.3）。
+// 且仅在涉及新建 .pack 首次落盘或目录变更时对 packs/ 目录执行 1 次目录 fsync。
 func (s *BlobStore) SyncInode(ino uint64) error {
 	s.mu.Lock()
 	var packs []uint64
@@ -1426,7 +1426,7 @@ func (s *BlobStore) clearDirtyStateForPackLocked(packID uint64) {
 	s.markDirDirtyLocked()
 }
 
-// RemovePack 关闭指定 .pack 的常驻文件句柄、剔除热块缓存并从宿主机删除物理 .pack 文件（ADR-0031 §4.2）。
+// RemovePack 关闭指定 .pack 的常驻文件句柄、剔除热块缓存并从宿主机删除物理 .pack 文件。
 func (s *BlobStore) RemovePack(packID uint64) error {
 	if packID == 0 {
 		return nil

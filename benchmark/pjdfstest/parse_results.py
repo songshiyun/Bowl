@@ -264,7 +264,7 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     lines.append("# Bowl 分布式文件系统 — 阿里云硅谷双机内网 `pjdfstest` 基准测试报告")
     lines.append("")
     lines.append(
-        "被测版本采用 ADR-0030 / ADR-0031 / ADR-0032 单盘独立 Actor 存储引擎与 `64 MiB` Append-Only Pack 数据层："
+        "被测版本采用 单盘独立 Actor 存储引擎与 `64 MiB` Append-Only Pack 数据层："
         f"{bowl_cp_label}仅保存单张 `disks` 控制面表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
         "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
         "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），"

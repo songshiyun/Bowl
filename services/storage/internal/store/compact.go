@@ -21,7 +21,7 @@ type compactRelocateOp struct {
 	specs []relocateBlockSpec
 }
 
-// CompactPacks 执行基于 ShardStore (SOSP '21) 的低水位已封口 .pack 搬迁回收（ADR-0031 §4.2）：
+// CompactPacks 执行基于 ShardStore (SOSP '21) 的低水位已封口 .pack 搬迁回收：
 //  1. 筛选存活率低于水位线（srcPackID != activePackID && LiveBytes > 0 && LiveBytes * 2 <= TotalBytes）的已封口 .pack；
 //  2. 扫描当前分支 Pebble DataKey 找出仍指向候选 srcPackID 的活块 (ino, blockIdx, oldRef)，在队列外从源包读取块内容并追加写入活跃 .pack 获得 newRef；
 //  3. 投递 opCompactRelocate 至 StoreActor：

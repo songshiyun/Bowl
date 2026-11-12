@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 )
 
-// 键物理编码长度常量（ADR-0030 §2.1, ADR-0031 §2.2 & ADR-0032 §4）。
+// 键物理编码长度常量。
 const (
 	StatKeyLen        = 8  // "sys:stat"
 	PackStatPrefixLen = 9  // "sys:pack:"

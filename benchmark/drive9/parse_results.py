@@ -189,8 +189,8 @@ def render_report(summary: dict[str, Any]) -> str:
     bowl_cp_label = "PostgreSQL 18（deploy/prod 容器栈）" if bowl_cfg.get("deploy_profile") else "PostgreSQL 16"
 
     lines.append(
-        f"1. **Bowl (`bowl`)**：{bowl_cp_label}仅保存单张 `disks` 控制面表（ADR-0032）；"
-        "每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎，ADR-0030/0031）承载，"
+        f"1. **Bowl (`bowl`)**：{bowl_cp_label}仅保存单张 `disks` 控制面表；"
+        "每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎）承载，"
         "保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；"
         "文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、连续块合并单次 `pread`、`8 MiB` `SyncFileRange` 渐进回写、后台异步死包回收、`WriteRequest`/`ReadResponse` 池化零分配编解码与 `64 MiB` 分片热块缓存），"
         "常规写批次以 `pebble.NoSync` 提交异步 WAL，显式 `Fsync`/`Sync` 触发 Pack `fdatasync` + Pebble WAL `LogData(Sync)` 双层并行落盘屏障。"
@@ -714,7 +714,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。")
     lines.append("")
 
-    lines.append("ADR-0030/0031/0032 同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。")
+    lines.append("本轮架构演进同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。")
     lines.append("")
 
     telem_overview = summary.get("telemetry_overview") or {}

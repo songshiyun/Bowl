@@ -6,7 +6,7 @@
 
 三组目标的客户端缓存和写入确认条件不同；本次在同台机器上依次测试默认与同步模式：
 
-1. **Bowl (`bowl`)**：PostgreSQL 18（deploy/prod 容器栈）仅保存单张 `disks` 控制面表（ADR-0032）；每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎，ADR-0030/0031）承载，保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、连续块合并单次 `pread`、`8 MiB` `SyncFileRange` 渐进回写、后台异步死包回收、`WriteRequest`/`ReadResponse` 池化零分配编解码与 `64 MiB` 分片热块缓存），常规写批次以 `pebble.NoSync` 提交异步 WAL，显式 `Fsync`/`Sync` 触发 Pack `fdatasync` + Pebble WAL `LogData(Sync)` 双层并行落盘屏障。客户端挂载时执行单次 `MountDisk` 握手获取 `WriterEpoch`（无后台心跳），禁用内核 `CAP_WRITEBACK_CACHE`，配备客户端 `1+8` H2C 多连接条带池（`32M / 8×64M`）与服务端 `128 MiB` H2C 窗口、`MarshalAppend` 零分配编码、`WriteBehindCoordinator`（`4 MiB × 4` 并发写流水线，`2 MiB` 同步探测 + `Create` 预热与小块连续写内存聚合）、`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4, ReadAheadMaxGlobalInflight=32`）、`completeDirs` 本地目录流合成、`FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 + 写后 `AttrTimeout=1.0s` + `MaxBackground=64`。
+1. **Bowl (`bowl`)**：PostgreSQL 18（deploy/prod 容器栈）仅保存单张 `disks` 控制面表；每个 `Disk` 由单个常驻 `StoreActor`（单写者串行执行器 + Pebble 引擎）承载，保存 `sys:stat`（含持久化 `WriterEpoch`）、Inode、Entry、Xattr、Orphan 与 16 字节 `BlobRef`（`PackID + Offset + Length`）索引；文件数据追加写入 `packs/<pack_id_hex16>.pack` 的 64 MiB Append-Only Pack 文件中（`256 KiB` 逻辑块网格、`AppendBlocks` 整块零冗余拷贝、连续块合并单次 `pread`、`8 MiB` `SyncFileRange` 渐进回写、后台异步死包回收、`WriteRequest`/`ReadResponse` 池化零分配编解码与 `64 MiB` 分片热块缓存），常规写批次以 `pebble.NoSync` 提交异步 WAL，显式 `Fsync`/`Sync` 触发 Pack `fdatasync` + Pebble WAL `LogData(Sync)` 双层并行落盘屏障。客户端挂载时执行单次 `MountDisk` 握手获取 `WriterEpoch`（无后台心跳），禁用内核 `CAP_WRITEBACK_CACHE`，配备客户端 `1+8` H2C 多连接条带池（`32M / 8×64M`）与服务端 `128 MiB` H2C 窗口、`MarshalAppend` 零分配编码、`WriteBehindCoordinator`（`4 MiB × 4` 并发写流水线，`2 MiB` 同步探测 + `Create` 预热与小块连续写内存聚合）、`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4, ReadAheadMaxGlobalInflight=32`）、`completeDirs` 本地目录流合成、`FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存 + 写后 `AttrTimeout=1.0s` + `MaxBackground=64`。
 2. **Drive9 默认模式 (`drive9_default`)**：TiDB v8.5.5 + Drive9 Server Local S3（全部落于 Server 本地 NVMe SSD `/mnt/nvme`），客户端挂载参数为 `--profile=coding-agent --durability=interactive --write-cache-size-mb=0`（启用本地 NVMe SSD Write-Back 异步后台提交、128 MiB 内存读缓存 + 1024 MiB 本地 NVMe 磁盘读缓存、`30s` 属性缓存，以及 `.git`/构建产物本地 Overlay）。
 3. **Drive9 远端同步模式 (`drive9_sync`)**：与 `drive9_default` 连接同台 Drive9 Server，但客户端挂载参数设为 `--profile=none --durability=close-sync --write-cache-size-mb=0 --attr-ttl=1s --entry-ttl=1s --dir-ttl=1s`（禁用本地 Overlay，对齐 `1.0s` 内核缓存，并在每次 `close`/`fsync` 时同步提交至远端服务器）。
 
@@ -175,7 +175,7 @@ Bowl 并发写对照：`juicefs bench` 4 并发 1 GiB 大文件写为 `1696.00 M
 
 微观与宏观工作负载各运行 3 次，表中保留中位数、P95 与原始样本；3 个样本不足以估计稳定的尾延迟或统计显著性。
 
-ADR-0030/0031/0032 同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。
+本轮架构演进同时引入每盘单写者 `StoreActor`、64 MiB Pack 文件引擎与单次 `MountDisk` 握手；单轮数据反映当前 `labs/actor-architecture` 分支整体表现，本套件未测试整机断电恢复。
 
 ---
 

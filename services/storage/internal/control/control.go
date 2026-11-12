@@ -1,4 +1,4 @@
-// Package control 实现单盘 StoreActor 控制面管理、MountDisk 世代号颁发与实例池路由（ADR-0032）。
+// Package control 实现单盘 StoreActor 控制面管理、MountDisk 世代号颁发与实例池路由。
 package control
 
 import (

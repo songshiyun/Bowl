@@ -301,7 +301,7 @@ def render_report(summary: dict[str, Any]) -> str:
 
     lines.append(
         f"1. **Bowl（{bowl_deploy_desc}）**："
-        "采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
+        "PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
         "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
         "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；"
         "文件数据落在本地 NVMe SSD 的 `packs/<pack_id_hex16>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、"
@@ -714,7 +714,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")
     lines.append("")
 
-    lines.append('ADR-0030 / ADR-0031 / ADR-0032 同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。')
+    lines.append('本轮架构演进同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。')
     lines.append("")
 
     telem_overview = summary.get("telemetry_overview") or {}

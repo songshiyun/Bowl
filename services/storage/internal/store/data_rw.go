@@ -39,7 +39,7 @@ func isAllZero(data []byte) bool {
 	return true
 }
 
-// Write 执行跨 256 KiB 逻辑块的追加式数据写入流水线（ADR-0031 §3.2）：
+// Write 执行跨 256 KiB 逻辑块的追加式数据写入流水线：
 //   - 满 256 KiB 对齐整块写：阶段 1 在不持 inodeLocks 的状态下向活跃 .pack 追加写入满块数据，随后获取 s.inodeLocks[ino&0xfff] 投递进 Actor 双阶段队列；
 //   - 局部或非对齐跨块写：全程持 s.inodeLocks[ino&0xfff]，若命中活跃 .pack 最末尾同块则走 ExtendTail 原地顺延写指针，否则读取旧块合并后通过 Append 追加至活跃 .pack；
 //   - 在 Actor Phase B 的同一个 IndexedBatch 中原子更新 InodeKey 与涉及的全部 DataKey -> 16B BlobRef{PackID, Offset, Length}。
@@ -414,7 +414,7 @@ func (s *StoreActor) mutateWriteCmd(cmd *writeCmd) {
 	op.attr = inode.ToAttribute()
 }
 
-// Read 在队列外执行 100% 无锁并发直读（ADR-0031 §3.2）：
+// Read 在队列外执行 100% 无锁并发直读：
 //   - 单块读直接调 1 次 s.db.Get(DataKey)，跨块读调 s.db.NewIter(nil) + SeekPrefixGE(DataKey(ino, firstBlock))；
 //   - 稀疏空洞直接填零；
 //   - 通过 16B BlobRef{PackID, Offset, Length} 优先从 hotShard 拷贝，未命中直接对常驻 .pack 句柄执行 ReadAt（0 open/close、0 撕裂读、无 ENOENT 重试）。

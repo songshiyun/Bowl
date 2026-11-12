@@ -6,7 +6,7 @@
 
 本次评测采用同规格双机（4 vCPU / 32 GiB 内存）、VPC 私网与 894 GiB `local_ssd_pro` 本地 NVMe SSD 数据盘，服务端按目标隔离运行以下三组存储栈：
 
-1. **Bowl（deploy/prod 容器栈（PostgreSQL 18 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack + Jaeger/Prometheus/Loki 全栈可观测））**：采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；文件数据落在本地 NVMe SSD 的 `packs/<pack_id_hex16>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、常驻句柄池与 `64 MiB` 分片热块缓存（`AppendBlocks` 整块顺序写跳过用户态冗余拷贝），配合服务端 `128 MiB` H2C 连接窗口、`WriteRequest`/`ReadResponse` 池化零分配编解码、活跃包末尾同块 `ExtendTail` 顺延扩展、`8 MiB` `SyncFileRange` 渐进异步回写、相邻物理连续块合并单次 `pread` 无锁并发 `Read`、`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及后台异步全死封口包回收。
+1. **Bowl（deploy/prod 容器栈（PostgreSQL 18 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack + Jaeger/Prometheus/Loki 全栈可观测））**：PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；文件数据落在本地 NVMe SSD 的 `packs/<pack_id_hex16>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、常驻句柄池与 `64 MiB` 分片热块缓存（`AppendBlocks` 整块顺序写跳过用户态冗余拷贝），配合服务端 `128 MiB` H2C 连接窗口、`WriteRequest`/`ReadResponse` 池化零分配编解码、活跃包末尾同块 `ExtendTail` 顺延扩展、`8 MiB` `SyncFileRange` 渐进异步回写、相邻物理连续块合并单次 `pread` 无锁并发 `Read`、`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及后台异步全死封口包回收。
    客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；配备客户端 `1+8` H2C 多连接条带池（`32 MiB` 元数据连接 + `8×64 MiB` 数据连接，单流 `8 MiB`）与 `MarshalAppend` 零分配编码、`WriteBehindCoordinator`（大块流式写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发 Write RPC 流水线，小块连续写经首笔探针或 `Create` 预热后内存聚合）、`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4`、`ReadAheadMaxGlobalInflight=32`）与 `completeDirs` 本地目录流合成，写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。
 2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块本地 NVMe SSD 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。
 3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`，AOF 落本地 NVMe SSD）作为元数据引擎 + Server 节点本地 NVMe SSD rclone S3 存储（`--trash-days 0`）。
@@ -165,7 +165,7 @@ Bowl 的写入和同步路径使用单盘 `StoreActor` Pebble 与 `64 MiB` `.pac
 
 `mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。
 
-ADR-0030 / ADR-0031 / ADR-0032 同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。
+本轮架构演进同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。
 
 ---
 

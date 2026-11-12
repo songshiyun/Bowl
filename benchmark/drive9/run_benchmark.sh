@@ -15,7 +15,7 @@
 #         - Suite 1: `juicefs bench -p 4`
 #         - Suite 2: `drive9_fuse_bench.py` (Cold & Hot cache, 10 micro + 5 macro)
 #         - Suite 3: `fuse_perf_baseline.py` (SHA-256 I/O + SQLite DELETE & WAL)
-# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# 单盘 StoreActor + 64 MiB Pack + deploy/prod 生产编排栈：
 # - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 部署 PostgreSQL 18 控制面、
 #   storage-service 及 Jaeger (OTLP 默认 10% + 慢链路分层抓取) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），

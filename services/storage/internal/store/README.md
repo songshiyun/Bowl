@@ -2,9 +2,9 @@
 
 ## 定位与目标
 
-`store` 是 `services/storage` 下的新一代实验性存储引擎（Labs 第一步），完整架构决策见 [ADR-0030](../../../../docs/adr/0030-store-actor-group-commit-and-four-stage-data-pipeline.md)、[ADR-0031](../../../../docs/adr/0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 与 [ADR-0032](../../../../docs/adr/0032-single-disk-control-plane-and-stateless-epoch-fencing.md)。
+`store` 是 `services/storage` 下的单盘独立 Actor 存储引擎。
 
-本模块采用**完全重写（Clean-slate）**的方式设计，不迁就现有 `meta`、`pebblekv` 或 `server` 的历史实现包袱，唯一目标是追求**极致的性能与清晰的架构边界**。
+本模块采用**完全重写（Clean-slate）**的方式设计，目标是追求**极致的性能与清晰的架构边界**。
 
 ## 核心架构：Meta + Data 融合的单盘 Actor 模型与 64 MiB Append-Only Pack 数据层
 
@@ -15,7 +15,7 @@
    - 写请求通过双缓冲 MPSC 队列进入单协程主循环，按 **Phase A（纯内存只读预校验）$\rightarrow$ Phase B（零拷贝 `SetDeferred`/`DeleteDeferred` 批次编码）$\rightarrow$ 单次 `IndexedBatch` 提交** 批量收敛；读请求 100% 在队列外无锁直读。
 2. **文件元数据层（Meta Layer）**
    - 采用 7 类大端序定长/前缀键（`sys:stat`、`sys:pack:<packID>`、`inode:<ino>`、`entry:<parent>:<name>`、`xattr:<ino>:<name>`、`orphan:<ino>`、`data:<ino>:<blockIdx>`）配合 Prefix Bloom Filter，消除高频操作下的多余比较与内存分配。
-3. **`256 KiB` 逻辑分块网格与 `64 MiB` Append-Only `.pack` 封包容器（ADR-0031）**
+3. **`256 KiB` 逻辑分块网格与 `64 MiB` Append-Only `.pack` 封包容器**
    - **逻辑分块（`BlobSize = 256 KiB`）**：对齐 AWS EBS SSD 最大 I/O 切片粒度，每个逻辑块在 Pebble 中严格对应 1 条 `DataKey(ino, blockIdx) -> 16B BlobRef{PackID(8B), Offset(4B), Length(4B)}`（绝不变长区间分裂），按实际有效字节长度 `Length`（`1..256 KiB`）紧凑追加。
    - **扁平 `.pack` 容器与常驻句柄池**：数据存储在 `<disk_dir>/packs/<pack_id_hex16>.pack`（单包封口上限 `PackMaxSize = 64 MiB`），维护 1 个常驻活跃可写句柄与已封口只读句柄表 `packFiles`，配合 `64 MiB` 分片环形热块缓存（`hotShard`），实现读写路径 `0` 次 `open/close/unlink` 系统调用。
    - **严格 Append-Only + 活跃包尾部顺延（`ExtendTail`）**：历史已写偏移永不原地覆写或 `Truncate`；当目标块恰好位于当前活跃 `.pack` 最末尾时直接原地顺延写指针（流式追加写 `0` 写放大），其余局部修改合并后追加写入活跃 `.pack` 尾部。

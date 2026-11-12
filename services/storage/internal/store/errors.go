@@ -1,4 +1,4 @@
-// Package store 实现基于 Pebble 与不可变块文件的 StoreActor 存储引擎（ADR-0030）。
+// Package store 实现基于 Pebble 与不可变块文件的 StoreActor 存储引擎。
 package store
 
 import (
@@ -56,8 +56,8 @@ const (
 const (
 	RootIno                uint64 = 1
 	InodeSegment           uint64 = 4096
-	BlobSize                      = 256 << 10 // 256 KiB 固定逻辑分块网格（ADR-0031 §1.1）
-	PackMaxSize                   = 64 << 20  // 64 MiB 单分支 .pack 封包容量上限（ADR-0031 §1.2）
+	BlobSize                      = 256 << 10 // 256 KiB 固定逻辑分块网格
+	PackMaxSize                   = 64 << 20  // 64 MiB 单分支 .pack 封包容量上限
 	MaxWriteBytes                 = 1 << 20   // 1 MiB 单次最大写入长度
 	DefaultBlockSize       uint32 = 65536
 	DefaultDirSize         uint64 = 4096

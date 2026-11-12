@@ -2,7 +2,7 @@
 # ==============================================================================
 # Bowl - Aliyun Silicon Valley (us-west-1) Dual-ECS Internal Network pjdfstest
 # ==============================================================================
-# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# 单盘 StoreActor + 64 MiB Pack + deploy/prod 生产编排栈：
 # - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 容器化部署
 #   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger (OTLP 默认 10% + 慢链路分层抓取) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana；
 #   仅针对 POSIX 合规断言覆写 STORAGE_ATIME_MODE=strictatime 与 0s 缓存 TTL。
@@ -462,7 +462,7 @@ PING_RTT="$(echo "${PING_OUT}" | awk -F'=' '{gsub(/ ms/, "", $2); gsub(/^[ \t]+/
 IPERF_BPS="$(iperf3 -c "${SERVER_PRIV_IP}" -t 5 -J | jq -r '.end.sum_received.bits_per_second // 0')"
 IPERF_GBPS="$(awk -v bps="${IPERF_BPS}" 'BEGIN {printf "%.2f", bps / 1e9}')"
 
-# ADR-0029 中每个磁盘的根 Inode 固定为 1。
+# 每个磁盘的根 Inode 固定为 1。
 CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "pjdfstest-disk" --endpoint "${ENDPOINT}" --json)"
 DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
 ROOT_INO="$(echo "${CREATE_JSON}" | jq -r '.root_ino')"

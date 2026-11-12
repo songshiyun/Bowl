@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线（ADR-0031 §3.2）：
+// setAttrWithSize 按 256 KiB 逻辑块网格执行包含 Size 截断/扩容的 SetAttr 流水线：
 //   - 完全落入截断区间的整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
 //   - 边界残块在 inodeLocks[ino&0xfff] 保护下读取有效前缀，若全为零则直接删除该 DataKey，否则追加写入活跃 .pack 并更新 DataKey -> newRef。
 func (s *StoreActor) setAttrWithSize(ctx context.Context, ino uint64, req SetAttrReq) (Attribute, error) {
@@ -113,7 +113,7 @@ type fallocateDataOp struct {
 	fullDeleteKeys []dataKeyEntry
 }
 
-// Fallocate 按 256 KiB 逻辑块网格执行文件空间预留扩展或区间打洞/置零（ADR-0031 §3.2）：
+// Fallocate 按 256 KiB 逻辑块网格执行文件空间预留扩展或区间打洞/置零：
 //   - 支持 mode: 0（默认预留扩展）、FallocKeepSize、FallocPunchHole|FallocKeepSize、FallocZeroRange、FallocZeroRange|FallocKeepSize；
 //   - 完全落入打洞/置零区间的 256 KiB 整块直接在 Phase B 中执行 batchDeleteDeferred(DataKey)；
 //   - 首尾边界残块在 inodeLocks[ino&0xfff] 保护下读取并清零目标子区间，若打洞后全为零则直接删除该 DataKey，否则追加写入活跃 .pack 并更新 DataKey -> newRef。

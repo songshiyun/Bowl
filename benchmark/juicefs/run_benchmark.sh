@@ -2,7 +2,7 @@
 # ==============================================================================
 # Bowl vs JuiceFS - Aliyun Silicon Valley (us-west-1) Dual-ECS Benchmark Suite
 # ==============================================================================
-# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# 单盘 StoreActor + 64 MiB Pack + deploy/prod 生产编排栈：
 # - 部署与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 容器化部署
 #   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger + Prometheus + Loki + Alloy + Grafana。
 # - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），

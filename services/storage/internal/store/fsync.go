@@ -6,7 +6,7 @@ type fsyncOp struct {
 	ino uint64
 }
 
-// Fsync 将目标非目录节点的挂起脏访问时间、元数据 WAL 与该文件关联的脏 .pack 封包持久化落盘（ADR-0030 §3.5 & ADR-0031 §3.3）。
+// Fsync 将目标非目录节点的挂起脏访问时间、元数据 WAL 与该文件关联的脏 .pack 封包持久化落盘。
 func (s *StoreActor) Fsync(ctx context.Context, ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -26,7 +26,7 @@ func (s *StoreActor) Fsync(ctx context.Context, ino uint64, epoch ...uint64) err
 	return s.submit(ctx, cmd)
 }
 
-// FsyncDir 将目标目录节点的挂起脏访问时间与已提交目录项/属性元数据 WAL 持久化落盘（ADR-0030 §3.5）。
+// FsyncDir 将目标目录节点的挂起脏访问时间与已提交目录项/属性元数据 WAL 持久化落盘。
 func (s *StoreActor) FsyncDir(ctx context.Context, ino uint64, epoch ...uint64) error {
 	if s.readOnly {
 		return ErrReadOnly

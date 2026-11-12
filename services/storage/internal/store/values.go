@@ -7,7 +7,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 )
 
-// 定长值物理编码字节数常量（ADR-0030 §2.1, ADR-0031 §2.1/§2.2 & ADR-0032 §4）。
+// 定长值物理编码字节数常量。
 const (
 	BranchStatSize  = 41 // [ver(1B) | LogicalBytes(8B) | Inodes(8B) | NextWriteSeq(8B) | WriterEpoch(8B) | MaxBytes(8B)]
 	PackMetaSize    = 17 // [ver(1B) | LiveBytes(8B) | TotalBytes(8B)]
@@ -225,7 +225,7 @@ func DecodeInode(b []byte) (Inode, error) {
 	}, nil
 }
 
-// BlobRef 表示 DataKey 指向的 16 字节定长数据块定位指针（ADR-0031 §2.1）。
+// BlobRef 表示 DataKey 指向的 16 字节定长数据块定位指针。
 type BlobRef struct {
 	PackID uint64
 	Offset uint32
@@ -261,7 +261,7 @@ func DecodeBlobRef(b []byte) (BlobRef, error) {
 	return ref, nil
 }
 
-// PackMeta 表示 "sys:pack:<pack_id>" 持久化的 17 字节封包存活字节与总字节统计（ADR-0031 §2.2）。
+// PackMeta 表示 "sys:pack:<pack_id>" 持久化的 17 字节封包存活字节与总字节统计。
 type PackMeta struct {
 	LiveBytes  uint64
 	TotalBytes uint64

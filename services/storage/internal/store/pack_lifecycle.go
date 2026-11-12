@@ -382,7 +382,7 @@ func (s *StoreActor) syncFileInodes(inodes []uint64) error {
 }
 
 // syncWALAndReclaimDeadPacks 在存在未落盘 NoSync WAL 写入或挂起死包时执行同步 WAL 屏障，
-// 并在 WAL 落盘确认后投递并等待死包物理删除完成（ADR-0031 §4.2）。
+// 并在 WAL 落盘确认后投递并等待死包物理删除完成。
 func (s *StoreActor) syncWALAndReclaimDeadPacks() error {
 	_, _, _, _, err := s.syncWALAndReclaimDeadPacksTimed()
 	return err
