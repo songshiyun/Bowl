@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -16,10 +18,14 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.uber.org/fx"
 
 	"github.com/starsrc/Aether/pkg/observability"
+	"github.com/starsrc/Aether/pkg/observability/obsfx"
+	"github.com/starsrc/Aether/pkg/serverx"
 	"github.com/starsrc/Aether/pkg/tx"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -129,24 +135,42 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 
 	rt, err := observability.Setup(
 		ctx,
-		obsCfg,
+		config.NewObservabilityConfig(&obsCfg),
 		observability.WithLogWriter(io.Discard),
 		observability.WithSetDefaultLogger(false),
 		observability.WithCollectors(httpMetrics, storeMetrics, mgr.Collector()),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = rt.Shutdown(context.Background())
-		otel.SetMeterProvider(prevMP)
-		otel.SetTracerProvider(prevTP)
+		require.NoError(t, rt.Shutdown(context.Background()))
+		if otel.GetMeterProvider() != prevMP {
+			otel.SetMeterProvider(prevMP)
+		}
+		if otel.GetTracerProvider() != prevTP {
+			otel.SetTracerProvider(prevTP)
+		}
 		otel.SetTextMapPropagator(prevProp)
 	})
 
 	ready, err := ConfigureFineBucketMeterProvider(FineBucketParams{
 		Runtime:   rt,
 		Telemetry: obsCfg,
+		AdminCfg:  obsCfg,
 	})
 	require.NoError(t, err)
+	fineMP, ok := otel.GetMeterProvider().(*sdkmetric.MeterProvider)
+	require.True(t, ok)
+	var mpShutdownOnce sync.Once
+	shutdownFineMP := func(c context.Context) error {
+		var sErr error
+		mpShutdownOnce.Do(func() {
+			sErr = fineMP.Shutdown(c)
+		})
+		return sErr
+	}
+	t.Cleanup(func() {
+		require.NoError(t, shutdownFineMP(context.Background()))
+	})
 
 	// 挂载内存 Span 导出器以便断言 Server -> Control -> StoreActor 端到端 Span 链
 	spanExporter := tracetest.NewInMemoryExporter()
@@ -161,17 +185,20 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	srv, err := New(Params{
 		Config: config.ServerConfig{
 			ServerPort:         0,
+			InternalServerPort: 9090,
 			ServerReadMaxBytes: 8 << 20,
 		},
 		Control:       mgr,
 		Observability: obsCfg,
 		Telemetry:     obsCfg,
+		AdminCfg:      obsCfg,
 		Gatherer:      rt.Gatherer(),
 		FineBuckets:   ready,
 		HTTPMetrics:   httpMetrics,
 		Logger:        rt.Logger(),
 	})
 	require.NoError(t, err)
+	require.NotNil(t, srv.AdminHandler())
 
 	httpSrv := httptest.NewServer(srv.Handler())
 	defer httpSrv.Close()
@@ -339,4 +366,98 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	} {
 		require.GreaterOrEqual(t, spanNames[expected], 1, "端到端 RPC 链路缺少子 Span %s", expected)
 	}
+
+	// 4. 真实请求管理面 /metrics，校验 Go runtime / process 标准指标与 bowl_storage_* / rpc_server_* 精细桶直方图完整共存，且优雅关闭零报错
+	adminReq := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
+	adminRec := httptest.NewRecorder()
+	srv.AdminHandler().ServeHTTP(adminRec, adminReq)
+	require.Equal(t, http.StatusOK, adminRec.Code)
+	metricsText := adminRec.Body.String()
+	for _, wantMetric := range []string{
+		"go_goroutines",
+		"go_memstats_alloc_bytes",
+		"go_gc_duration_seconds",
+		"go_build_info",
+		"target_info",
+		"bowl_storage_disks_loaded",
+		"bowl_storage_logical_bytes",
+		"bowl_storage_inodes",
+		"bowl_storage_http_request_duration_seconds_bucket",
+		"bowl_storage_blob_sync_duration_seconds_bucket",
+		"rpc_server_call_duration_seconds_bucket",
+	} {
+		require.Contains(t, metricsText, wantMetric, "/metrics 必须导出指标 %s", wantMetric)
+	}
+	if runtime.GOOS == "linux" {
+		require.Contains(t, metricsText, "process_cpu_seconds_total")
+		require.Contains(t, metricsText, "process_resident_memory_bytes")
+	}
+
+	require.NoError(t, shutdownFineMP(ctx))
+	require.NoError(t, rt.Shutdown(ctx))
+}
+
+func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
+	ctx := context.Background()
+	prevMP := otel.GetMeterProvider()
+	t.Cleanup(func() {
+		if otel.GetMeterProvider() != prevMP {
+			otel.SetMeterProvider(prevMP)
+		}
+	})
+
+	cfg := &config.Config{
+		ServerConfig: serverx.ServerConfig{
+			ServerHost:         "127.0.0.1",
+			ServerPort:         0,
+			InternalServerPort: 0,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		EnvConfig: observability.DefaultConfig(),
+		Meta: config.MetaConfig{
+			StorageDataDirVal: t.TempDir(),
+		},
+	}
+	cfg.LogLevel = "error"
+	cfg.AdminAddr = "off"
+
+	var (
+		srv *Server
+		rt  *observability.Runtime
+	)
+	app := fx.New(
+		fx.Supply(cfg),
+		config.Module,
+		obsfx.Module,
+		fx.Provide(
+			obsfx.AsOption(func() observability.Option { return observability.WithLogWriter(io.Discard) }),
+			obsfx.AsOption(func() observability.Option { return observability.WithSetDefaultLogger(false) }),
+			func() db.Store { return newMemDiskDB() },
+		),
+		control.Module,
+		Module,
+		fx.Populate(&srv, &rt),
+		fx.NopLogger,
+	)
+
+	require.NoError(t, app.Start(ctx))
+	require.Nil(t, rt.MeterProvider(), "obsfx Runtime 默认 MeterProvider 必须被抑制以避免二次 Shutdown")
+
+	pubSrv := httptest.NewServer(srv.Handler())
+	defer pubSrv.Close()
+	client := storagev1connect.NewStorageServiceClient(pubSrv.Client(), pubSrv.URL)
+	_, err := client.ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{}))
+	require.NoError(t, err)
+
+	adminMux := http.NewServeMux()
+	observability.RegisterAdminRoutes(adminMux, rt.Gatherer(), cfg)
+	rec := httptest.NewRecorder()
+	adminMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	require.Contains(t, body, "go_goroutines")
+	require.Contains(t, body, "bowl_storage_http_request_duration_seconds_bucket")
+	require.Contains(t, body, "rpc_server_call_duration_seconds_bucket")
+
+	require.NoError(t, app.Stop(ctx), "Fx 应用优雅停机必须零错误退出（不得触发 reader is shutdown）")
 }

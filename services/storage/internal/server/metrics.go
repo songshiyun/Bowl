@@ -97,10 +97,15 @@ func classifyHTTPStatus(code int) string {
 type FineBucketsReady struct{}
 
 // NewFineBucketMeterProvider 构建带显式亚毫秒直方图 View 的 OTel MeterProvider，
-// 覆盖 otelconnect 的 rpc.server.call.duration 及通用 rpc.server.duration 指标。
+// 幂等预注册 Go/Process/BuildInfo 标准运行时 Collector，并覆盖 otelconnect 的
+// rpc.server.call.duration 及通用 rpc.server.duration 指标。
 func NewFineBucketMeterProvider(cfg telemetry.Config, reg *prometheus.Registry) (*sdkmetric.MeterProvider, error) {
 	if reg == nil {
 		reg = telemetry.NewRegistry()
+	}
+
+	if err := telemetry.RegisterRuntimeCollectors(reg); err != nil {
+		return nil, err
 	}
 
 	res, err := telemetry.NewResource(cfg)
@@ -133,24 +138,29 @@ func NewFineBucketMeterProvider(cfg telemetry.Config, reg *prometheus.Registry) 
 	return mp, nil
 }
 
-// FineBucketParams 定义升级全局 OTel MeterProvider 所需的 Fx 可选参数。
+// FineBucketParams 定义注册全局亚毫秒桶 OTel MeterProvider 所需的 Fx 可选参数。
 type FineBucketParams struct {
 	fx.In
 
-	Lifecycle fx.Lifecycle           `optional:"true"`
-	Runtime   *observability.Runtime `optional:"true"`
-	Telemetry telemetry.Config       `optional:"true"`
-	ObsReady  observability.Ready    `optional:"true"`
+	Lifecycle fx.Lifecycle                   `optional:"true"`
+	Runtime   *observability.Runtime         `optional:"true"`
+	Telemetry telemetry.Config               `optional:"true"`
+	AdminCfg  observability.AdminRouteConfig `optional:"true"`
+	ObsReady  observability.Ready            `optional:"true"`
 }
 
-// ConfigureFineBucketMeterProvider 在 observability.Setup 完成后替换默认 5ms 首桶的 MeterProvider，
-// 先关闭旧 MeterProvider 防止 target_info 重复导出，再将带 18 级亚毫秒桶的新实例挂载到同一隔离 Registry。
+// ConfigureFineBucketMeterProvider 在 observability.Setup 完成后基于同一隔离 Registry
+// 一次性注册标准运行时 Collector 与 18 级亚毫秒桶 MeterProvider，并绑定 Fx OnStop 优雅关闭。
 func ConfigureFineBucketMeterProvider(p FineBucketParams) (FineBucketsReady, error) {
-	if p.Runtime == nil || p.Runtime.MeterProvider() == nil {
+	if p.Runtime == nil {
 		return FineBucketsReady{}, nil
 	}
-
-	_ = p.Runtime.MeterProvider().Shutdown(context.Background())
+	if p.AdminCfg != nil && !p.AdminCfg.IsMetricsEnabled() {
+		return FineBucketsReady{}, nil
+	}
+	if p.Runtime.MeterProvider() != nil {
+		return FineBucketsReady{}, errors.New("server: runtime default meter provider must be disabled before configuring fine-bucket meter provider")
+	}
 
 	mp, err := NewFineBucketMeterProvider(p.Telemetry, p.Runtime.Registry())
 	if err != nil {
