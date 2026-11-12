@@ -533,6 +533,14 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
 apt-get install -y -qq fuse3 git golang-go sqlite3 python3 iperf3 jq curl ca-certificates util-linux >/dev/null
 
+# Pre-warm host Go standard library build cache (/root/.cache/go-build) on /tmp so
+# the first measured target does not pay one-off stdlib compilation cost alone.
+GO_WARMUP_DIR="$(mktemp -d /tmp/go-build-warmup.XXXXXX)"
+printf 'module drive9bench\n\ngo 1.22\n' > "${GO_WARMUP_DIR}/go.mod"
+printf 'package main\n\nfunc main() {}\n' > "${GO_WARMUP_DIR}/main.go"
+(cd "${GO_WARMUP_DIR}" && go build -o /dev/null ./...)
+rm -rf "${GO_WARMUP_DIR}"
+
 grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
 
 # Install JuiceFS v1.2.1 Linux amd64 binary for `juicefs bench`
@@ -890,8 +898,19 @@ orig_small_write = b.bench_small_write
 orig_mkdir = b.bench_mkdir
 orig_macro = b.bench_macro
 orig_run_cmd = b.run_command
+orig_prepare_cache = b.prepare_measurement_cache
 
-state = {"sw": 0, "sr": 0, "smw": 0, "mk": 0, "mc": 0, "go_prof": None, "sr_prof": None, "smw_prof": None}
+state = {
+    "sw": 0,
+    "sr": 0,
+    "smw": 0,
+    "mk": 0,
+    "mc": 0,
+    "arm_go_prof": False,
+    "go_prof": None,
+    "sr_prof": None,
+    "smw_prof": None,
+}
 
 
 @functools.wraps(orig_seq_write)
@@ -947,9 +966,19 @@ def hooked_mkdir(root, count, config, *args, **kwargs):
 
 @functools.wraps(orig_run_cmd)
 def hooked_run_cmd(cmd, cwd=None, *args, **kwargs):
-    if cmd and cmd[0] == "go" and state["go_prof"] is None:
-        state["go_prof"] = start_async_cpu("macro_go_build", 10)
+    if cmd and cmd[0] == "sh" and len(cmd) >= 3 and "find " in cmd[2] and state["go_prof"] is None:
+        state["arm_go_prof"] = True
     return orig_run_cmd(cmd, cwd, *args, **kwargs)
+
+
+@functools.wraps(orig_prepare_cache)
+def hooked_prepare_cache(config, *args, **kwargs):
+    res = orig_prepare_cache(config, *args, **kwargs)
+    if state["arm_go_prof"]:
+        state["arm_go_prof"] = False
+        if state["go_prof"] is None:
+            state["go_prof"] = start_async_cpu("macro_go_build", 10)
+    return res
 
 
 @functools.wraps(orig_macro)
@@ -959,6 +988,7 @@ def hooked_macro(root, config, hot, errors_out, *args, **kwargs):
     try:
         return orig_macro(root, config, hot, errors_out, *args, **kwargs)
     finally:
+        state["arm_go_prof"] = False
         if idx == runs - 1:
             finish_async_prof("macro_go_build", state["go_prof"])
             state["go_prof"] = None
@@ -970,6 +1000,7 @@ b.bench_sequential_read = hooked_seq_read
 b.bench_small_write = hooked_small_write
 b.bench_mkdir = hooked_mkdir
 b.run_command = hooked_run_cmd
+b.prepare_measurement_cache = hooked_prepare_cache
 b.bench_macro = hooked_macro
 
 rc = b.main([

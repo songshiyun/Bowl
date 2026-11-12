@@ -18,15 +18,38 @@ func (fs *RawFS) lookupInodeWithContext(parentCtx context.Context, cancel <-chan
 	if len(name) > MaxFilenameBytes {
 		return cachedInode{}, fuse.Status(syscall.ENAMETOOLONG)
 	}
-	if ino, ok := fs.cache.entry(parent, name); ok {
-		if ino == 0 {
+	cached, childIno, negative, ok := fs.cache.lookupReadOnly(parent, name)
+	return fs.lookupInodeAfterCache(parentCtx, cancel, parent, parentIno, name, cached, childIno, negative, ok)
+}
+
+func (fs *RawFS) lookupInodeAfterCache(
+	parentCtx context.Context,
+	cancel <-chan struct{},
+	parent, parentIno uint64,
+	name string,
+	cached cachedInode,
+	childIno uint64,
+	negative, ok bool,
+) (cachedInode, fuse.Status) {
+	if ok {
+		if negative {
 			return cachedInode{}, fuse.ENOENT
 		}
-		if serverIno, st := fs.ToServerIno(ino); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
-			fs.writeBehind.BarrierInode(parentCtx, serverIno)
+		if fs.cfg.AttrTimeoutSeconds <= 0 {
+			if serverIno, st := fs.ToServerIno(childIno); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
+				fs.writeBehind.BarrierInode(parentCtx, serverIno)
+				if fresh, hit := fs.cache.inodeReadOnly(childIno); hit {
+					return fresh, fuse.OK
+				}
+			}
 		}
-		if cached, ok := fs.cache.inode(ino); ok {
-			return cached, fuse.OK
+		return cached, fuse.OK
+	} else if childIno != 0 {
+		if serverIno, st := fs.ToServerIno(childIno); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
+			fs.writeBehind.BarrierInode(parentCtx, serverIno)
+			if fresh, hit := fs.cache.inodeReadOnly(childIno); hit {
+				return fresh, fuse.OK
+			}
 		}
 	}
 	epoch, generation := fs.cache.snapshot()
@@ -55,12 +78,12 @@ func (fs *RawFS) lookupInodeWithContext(parentCtx context.Context, cancel <-chan
 	ino := fs.ToKernelIno(inode.GetIno())
 	if fs.writeBehind.HasPending(inode.GetIno()) {
 		fs.writeBehind.BarrierInode(parentCtx, inode.GetIno())
-		if fresh, ok := fs.cache.inode(ino); ok {
+		if fresh, ok := fs.cache.inodeReadOnly(ino); ok {
 			fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
 			return fresh, fuse.OK
 		}
 	}
-	cached := cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
+	cached = cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
 	fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
 	fs.cache.putInodeAtIf(generation, epoch, ino, inode, cached.entryTimeout, cached.attrTimeout)
 	return cached, fuse.OK
@@ -74,11 +97,21 @@ func (fs *RawFS) getInodeWithContext(parentCtx context.Context, cancel <-chan st
 	if status != fuse.OK {
 		return cachedInode{}, status
 	}
-	if fs.writeBehind.HasPending(serverIno) {
+	if fs.cfg.AttrTimeoutSeconds <= 0 && fs.writeBehind.HasPending(serverIno) {
 		fs.writeBehind.BarrierInode(parentCtx, serverIno)
 	}
-	if cached, ok := fs.cache.inode(ino); ok {
+	if cached, ok := fs.cache.inodeReadOnly(ino); ok {
 		return cached, fuse.OK
+	}
+	return fs.getInodeMissWithContext(parentCtx, cancel, ino, serverIno)
+}
+
+func (fs *RawFS) getInodeMissWithContext(parentCtx context.Context, cancel <-chan struct{}, ino, serverIno uint64) (cachedInode, fuse.Status) {
+	if fs.writeBehind.HasPending(serverIno) {
+		fs.writeBehind.BarrierInode(parentCtx, serverIno)
+		if cached, ok := fs.cache.inodeReadOnly(ino); ok {
+			return cached, fuse.OK
+		}
 	}
 	epoch, generation := fs.cache.snapshot()
 	ctx, cancelFunc := fs.RPCContextFrom(parentCtx, cancel)
@@ -104,6 +137,30 @@ func (fs *RawFS) getInodeWithContext(parentCtx context.Context, cancel <-chan st
 
 // Lookup 在缓存命中时直接返回目录项。
 func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) (status fuse.Status) {
+	if !fs.isVirtualStatsName(header.NodeId, name) && len(name) <= MaxFilenameBytes && fs.cfg.AttrTimeoutSeconds > 0 {
+		if parentIno, st := fs.ToServerIno(header.NodeId); st == fuse.OK {
+			fs.lifecycleMu.RLock()
+			cached, childIno, negative, ok := fs.cache.lookupReadOnly(header.NodeId, name)
+			if ok && !negative {
+				fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
+				out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
+				out.Ino = out.NodeId
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			opCtx, endSpan := fs.startFuseOp(OpLookup)
+			cached, status = fs.lookupInodeAfterCache(opCtx, cancel, header.NodeId, parentIno, name, cached, childIno, negative, ok)
+			if status == fuse.OK {
+				fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
+				out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
+				out.Ino = out.NodeId
+			}
+			fs.lifecycleMu.RUnlock()
+			endSpan(status)
+			return status
+		}
+	}
+
 	opCtx, endSpan := fs.startFuseOp(OpLookup)
 	defer func() { endSpan(status) }()
 
@@ -127,6 +184,40 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 
 // GetAttr 在缓存命中时直接返回节点属性。
 func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	if !fs.isVirtualStatsIno(in.NodeId) && fs.cfg.AttrTimeoutSeconds > 0 {
+		if serverIno, st := fs.ToServerIno(in.NodeId); st == fuse.OK {
+			fs.lifecycleMu.RLock()
+			if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
+				fs.FillAttrOut(out, inode, 0)
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			if handled, tmpSt := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
+				out.SetTimeout(0)
+				fs.lifecycleMu.RUnlock()
+				if tmpSt != fuse.OK {
+					_, endSpan := fs.startFuseOp(OpGetAttr)
+					endSpan(tmpSt)
+				}
+				return tmpSt
+			}
+			if cached, ok := fs.cache.inodeReadOnly(in.NodeId); ok {
+				fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			opCtx, endSpan := fs.startFuseOp(OpGetAttr)
+			var cached cachedInode
+			cached, status = fs.getInodeMissWithContext(opCtx, cancel, in.NodeId, serverIno)
+			if status == fuse.OK {
+				fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
+			}
+			fs.lifecycleMu.RUnlock()
+			endSpan(status)
+			return status
+		}
+	}
+
 	opCtx, endSpan := fs.startFuseOp(OpGetAttr)
 	defer func() { endSpan(status) }()
 

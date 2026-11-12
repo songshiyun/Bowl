@@ -69,6 +69,7 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 	if attr == securityCapabilityXattr && fs.caps.knownAbsent(header.NodeId) {
 		return 0, fuse.Status(syscall.ENODATA)
 	}
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
 	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
@@ -117,6 +118,7 @@ func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest [
 	if status != fuse.OK {
 		return 0, status
 	}
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
 	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()

@@ -93,6 +93,16 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 	fs.cache.putEntryAt(epoch, input.NodeId, name, ino)
 	fs.cache.putInodeAt(epoch, ino, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	fs.caps.markAbsent(ino)
+	attr := inode.GetAttr()
+	if !fs.cfg.DirectIO &&
+		fs.cfg.AttrTimeoutSeconds > 0 &&
+		resp.Msg.GetAttrTimeoutSeconds() > 0 &&
+		attr.GetMode()&syscall.S_IFMT == syscall.S_IFREG &&
+		attr.GetMode()&(syscall.S_ISUID|syscall.S_ISGID) == 0 &&
+		attr.GetFlags()&(ProtoFlagImmutable|ProtoFlagAppend) == 0 &&
+		input.Flags&uint32(syscall.O_SYNC|syscall.O_DSYNC|syscall.O_APPEND) == 0 {
+		fs.writeBehind.SeedCreatedInode(inode.GetIno())
+	}
 	fs.FillEntryOut(&out.EntryOut, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	out.Fh = fh
 	out.OpenFlags = resp.Msg.GetOpenFlags()

@@ -15,11 +15,11 @@ import (
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -103,6 +103,7 @@ type RawFS struct {
 	tmpMgr     *TmpFileManager
 	cfg        Config
 	metrics    *Metrics
+	tracer     trace.Tracer
 	nextReqID  atomic.Uint64
 
 	releaseMu       sync.Mutex
@@ -154,6 +155,16 @@ func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 		releaseCancel:  releaseCancel,
 		readAhead:      NewReadAheadCoordinator(),
 	}
+	fs.cache.configure(fuse.FUSE_ROOT_ID, cfg.EntryTimeoutSeconds, cfg.AttrTimeoutSeconds)
+	if cfg.RootInode != nil && cfg.RootInode.GetAttr() != nil {
+		fs.cache.putInode(fuse.FUSE_ROOT_ID, cfg.RootInode, cfg.EntryTimeoutSeconds, cfg.AttrTimeoutSeconds)
+	}
+	var onStage func(nodeID, cacheEpoch, endOffset uint64, ts *timestamppb.Timestamp)
+	if cfg.AttrTimeoutSeconds > 0 {
+		onStage = func(nodeID, cacheEpoch, endOffset uint64, ts *timestamppb.Timestamp) {
+			fs.cache.stageWriteInodeAt(cacheEpoch, nodeID, endOffset, ts)
+		}
+	}
 	fs.writeBehind = NewWriteBehindCoordinator(
 		func(ctx context.Context, ino, offset uint64, data []byte) (uint32, *storagev1.Inode, error) {
 			if fs.client == nil {
@@ -174,10 +185,11 @@ func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
 			return resp.Msg.GetSize(), resp.Msg.GetInode(), nil
 		},
 		WriteBehindHooks{
-			OnCommit: func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, refreshAttr bool) {
+			OnStage: onStage,
+			OnCommit: func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, minSize uint64, refreshAttr bool) {
 				fs.markDirty(ino)
 				if refreshAttr && inode != nil {
-					fs.cache.refreshInodeAt(cacheEpoch, nodeID, inode, DefaultWriteAttrTimeoutSeconds)
+					fs.cache.refreshInodeFromWriteAt(cacheEpoch, nodeID, inode, minSize, DefaultWriteAttrTimeoutSeconds)
 				}
 				fs.caps.markAbsent(nodeID)
 			},
@@ -211,10 +223,17 @@ func (fs *RawFS) tracerProvider() trace.TracerProvider {
 	if fs.cfg.TracerProvider != nil {
 		return fs.cfg.TracerProvider
 	}
-	return otel.GetTracerProvider()
+	return noop.NewTracerProvider()
 }
 
 func (fs *RawFS) bindTracerProvider(tp trace.TracerProvider) {
+	if tp == nil {
+		fs.tracer = nil
+	} else if _, isNoop := tp.(noop.TracerProvider); isNoop {
+		fs.tracer = nil
+	} else {
+		fs.tracer = tp.Tracer("bowl/client/fusefs")
+	}
 	fs.readAhead.bindTracerProvider(tp)
 	fs.writeBehind.bindTracerProvider(tp)
 }
@@ -297,11 +316,10 @@ func (fs *RawFS) logger() *slog.Logger {
 }
 
 func (fs *RawFS) startFuseOp(op FuseOp) (opCtx context.Context, endSpan func(fuse.Status)) {
-	tp := fs.tracerProvider()
-	if _, isNoop := tp.(noop.TracerProvider); isNoop {
+	if fs.tracer == nil {
 		return context.Background(), noopEndFuseOp
 	}
-	ctx, span := tp.Tracer("bowl/client/fusefs").Start(context.Background(), fuseSpanNames[op])
+	ctx, span := fs.tracer.Start(context.Background(), fuseSpanNames[op])
 	if !span.IsRecording() {
 		return ctx, noopEndFuseOp
 	}

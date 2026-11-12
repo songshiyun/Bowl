@@ -55,9 +55,9 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		child := fs.ToKernelIno(inode.GetIno())
 		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
 		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
-		// 新建目录在本次会话内为空：登记为权威完整目录，目录内首次 Create/Mkdir 的
-		// Lookup 可直接返回 ENOENT，无需一次必然失败的网络 RPC。
-		fs.cache.markNewDirAt(epoch, child)
+		// 新建目录在本次会话内为空：登记为权威完整目录并记录其父目录，目录内首次 Create/Mkdir 的
+		// Lookup 可直接返回 ENOENT，且后续冷读 ReadDirPlus 可直接从本地缓存合成完整目录流。
+		fs.cache.markNewDirWithParentAt(epoch, child, input.NodeId)
 	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK

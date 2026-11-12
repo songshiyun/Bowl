@@ -142,7 +142,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	syncMode := handle.Flags&(syscall.O_SYNC|syscall.O_DSYNC) != 0
 	// 属性未缓存（例如刚经 Ioctl/错误失效）或携带 Immutable/Append/SUID/SGID 时必须走同步直通校验。
 	specialInode := true
-	if cached, ok := fs.cache.inode(input.NodeId); ok && cached.inode != nil && cached.inode.GetAttr() != nil {
+	if cached, ok := fs.cache.inodeReadOnly(input.NodeId); ok && cached.inode != nil && cached.inode.GetAttr() != nil {
 		attr := cached.inode.GetAttr()
 		specialInode = attr.GetFlags()&(ProtoFlagImmutable|ProtoFlagAppend) != 0 ||
 			attr.GetMode()&(syscall.S_ISUID|syscall.S_ISGID) != 0
@@ -165,7 +165,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		copyInput := *input
 		copyInput.Offset = cached.inode.GetAttr().GetSize()
 		input = &copyInput
-	case syncMode || specialInode || !fs.caps.knownAbsent(input.NodeId) || dataLen == 0 || dataLen > MaxRPCChunkSize:
+	case syncMode || fs.cfg.AttrTimeoutSeconds <= 0 || specialInode || !fs.caps.knownAbsent(input.NodeId) || dataLen == 0 || dataLen > MaxRPCChunkSize:
 		if flushErr := fs.writeBehind.FlushAndResetInodeForHandle(opCtx, input.Fh, ino); flushErr != nil {
 			fs.cache.invalidateInode(input.NodeId)
 			return 0, fs.ToStatus(flushErr, nil)
@@ -210,7 +210,7 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 		fs.caps.markAbsent(input.NodeId)
 		written = resp.Msg.GetSize()
 		fs.metrics.addWriteBehindPassthrough(uint64(written))
-		if !appendMode && !syncMode && dataLen > 0 {
+		if !appendMode && !syncMode && fs.cfg.AttrTimeoutSeconds > 0 && dataLen > 0 {
 			fs.writeBehind.ObserveSyncWrite(ino, input.Offset, written)
 		}
 		return written, fuse.OK
@@ -263,4 +263,25 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 	}
 
 	return totalWritten, fuse.OK
+}
+
+// Writev 实现聚集向量写入，消除 go-fuse 默认返回 ENOSYS 导致的首次写入回退往返开销：
+// 空段传 nil、单段零拷贝直传 data[0]、多段连续拼接后委托 Write 处理。
+func (fs *RawFS) Writev(cancel <-chan struct{}, input *fuse.WriteIn, data [][]byte) (uint32, fuse.Status) {
+	switch len(data) {
+	case 0:
+		return fs.Write(cancel, input, nil)
+	case 1:
+		return fs.Write(cancel, input, data[0])
+	default:
+		var total int
+		for _, seg := range data {
+			total += len(seg)
+		}
+		merged := make([]byte, 0, total)
+		for _, seg := range data {
+			merged = append(merged, seg...)
+		}
+		return fs.Write(cancel, input, merged)
+	}
 }

@@ -2,6 +2,7 @@ package fusefs
 
 import (
 	"container/list"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,6 +60,9 @@ type NamespaceCache struct {
 	used        int
 	epoch       uint64
 	mutations   uint64
+	rootIno     uint64
+	entryTTL    float64
+	attrTTL     float64
 	items       map[cacheKey]*list.Element
 	lru         list.List
 	byParent    map[uint64]map[string]struct{}
@@ -68,7 +72,10 @@ type NamespaceCache struct {
 	// 命中时未找到的名字可以确定返回 ENOENT，无需再发 Lookup RPC。
 	// 任一目录项被淘汰或目录发生未知变更时必须同步撤销该标记，避免把已存在名字误判为不存在。
 	completeDirs map[uint64]struct{}
-	metrics      atomic.Pointer[Metrics]
+	// parentByDir 记录已知目录的权威父目录内核 Inode（来自 Mkdir 或 ReadDirPlus 的 ".."），
+	// 供 completeDirs 在目录流缺失时本地合成包含 "." 与 ".." 的完整目录流。
+	parentByDir map[uint64]uint64
+	metrics     atomic.Pointer[Metrics]
 }
 
 // NewNamespaceCache 创建容量有界的缓存。
@@ -78,12 +85,24 @@ func NewNamespaceCache(capacity int) *NamespaceCache {
 	}
 	return &NamespaceCache{
 		capacity:     capacity,
+		rootIno:      1,
 		items:        make(map[cacheKey]*list.Element),
 		byParent:     make(map[uint64]map[string]struct{}),
 		dirsByChild:  make(map[uint64]map[uint64]struct{}),
 		inodeDirs:    make(map[uint64]map[uint64]struct{}),
 		completeDirs: make(map[uint64]struct{}),
+		parentByDir:  make(map[uint64]uint64),
 	}
+}
+
+func (c *NamespaceCache) configure(rootIno uint64, entryTTL, attrTTL float64) {
+	c.mu.Lock()
+	if rootIno > 0 {
+		c.rootIno = rootIno
+	}
+	c.entryTTL = entryTTL
+	c.attrTTL = attrTTL
+	c.mu.Unlock()
 }
 
 func (c *NamespaceCache) bindMetrics(m *Metrics) {
@@ -271,14 +290,28 @@ func cloneDir(entries []*storagev1.DirEntryPlus) []*storagev1.DirEntryPlus {
 	return out
 }
 
-func (c *NamespaceCache) inode(ino uint64) (cachedInode, bool) {
-	c.mu.Lock()
+func (c *NamespaceCache) peekCachedInodeLocked(ino uint64) (cachedInode, bool) {
+	if el := c.items[cacheKey{kind: 'i', ino: ino}]; el != nil {
+		return itemOf(el).inode, true
+	}
+	for dir := range c.dirsByChild[ino] {
+		el := c.items[cacheKey{kind: 'd', ino: dir}]
+		if el == nil {
+			continue
+		}
+		for _, entry := range itemOf(el).dir {
+			if entry.GetIno() != ino || entry.GetInode() == nil || entry.GetInode().GetAttr() == nil {
+				continue
+			}
+			return cachedInode{entry.GetInode(), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}, true
+		}
+	}
+	return cachedInode{}, false
+}
+
+func (c *NamespaceCache) getCachedInodeLocked(ino uint64) (cachedInode, bool) {
 	if item, ok := c.get(cacheKey{kind: 'i', ino: ino}); ok {
-		v := item.inode
-		v.inode = cloneInode(v.inode)
-		c.mu.Unlock()
-		c.metrics.Load().incNSCacheHit(nsCacheAttr)
-		return v, true
+		return item.inode, true
 	}
 	// 完整目录流本身包含属性，即使独立属性项被淘汰也可定向命中。
 	for dir := range c.dirsByChild[ino] {
@@ -291,15 +324,112 @@ func (c *NamespaceCache) inode(ino uint64) (cachedInode, bool) {
 				continue
 			}
 			c.lru.MoveToFront(el)
-			v := cachedInode{cloneInode(entry.GetInode()), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}
-			c.mu.Unlock()
-			c.metrics.Load().incNSCacheHit(nsCacheAttr)
-			return v, true
+			return cachedInode{entry.GetInode(), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}, true
 		}
+	}
+	return cachedInode{}, false
+}
+
+// inode 返回深拷贝后的节点属性，供外部调用方安全读写。
+func (c *NamespaceCache) inode(ino uint64) (cachedInode, bool) {
+	c.mu.Lock()
+	v, ok := c.getCachedInodeLocked(ino)
+	if ok {
+		v.inode = cloneInode(v.inode)
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheHit(nsCacheAttr)
+		return v, true
 	}
 	c.mu.Unlock()
 	c.metrics.Load().incNSCacheMiss(nsCacheAttr)
 	return cachedInode{}, false
+}
+
+// inodeReadOnly 单次加锁零分配读取节点属性快照；缓存内 Inode 一经发布严禁原地修改，调用方仅可只读访问返回值。
+func (c *NamespaceCache) inodeReadOnly(ino uint64) (cachedInode, bool) {
+	c.mu.Lock()
+	v, ok := c.getCachedInodeLocked(ino)
+	c.mu.Unlock()
+	if ok {
+		c.metrics.Load().incNSCacheHit(nsCacheAttr)
+		return v, true
+	}
+	c.metrics.Load().incNSCacheMiss(nsCacheAttr)
+	return cachedInode{}, false
+}
+
+// lookupReadOnly 在单把锁内同时解析目录项与目标节点属性（零堆分配只读快路径）：
+//   - negative == true && ok == true：权威负缓存命中（ENOENT）；
+//   - negative == false && ok == true：目录项与节点属性同时命中，返回只读 cachedInode；
+//   - ok == false：未完整命中；若 childIno > 0 表示目录项已命中正子节点但缺少缓存属性。
+func (c *NamespaceCache) lookupReadOnly(parent uint64, name string) (cached cachedInode, childIno uint64, negative, ok bool) {
+	if len(name) > MaxFilenameBytes {
+		return cachedInode{}, 0, false, false
+	}
+	c.mu.Lock()
+	if item, hit := c.get(cacheKey{kind: 'e', ino: parent, name: name}); hit {
+		ino := item.entry
+		if ino == 0 {
+			c.mu.Unlock()
+			c.metrics.Load().incNSCacheHit(nsCacheNegativeEntry)
+			return cachedInode{}, 0, true, true
+		}
+		v, attrHit := c.getCachedInodeLocked(ino)
+		c.mu.Unlock()
+		m := c.metrics.Load()
+		m.incNSCacheHit(nsCacheEntry)
+		if attrHit {
+			m.incNSCacheHit(nsCacheAttr)
+			return v, ino, false, true
+		}
+		m.incNSCacheMiss(nsCacheAttr)
+		return cachedInode{}, ino, false, false
+	}
+	if item, hit := c.get(cacheKey{kind: 'd', ino: parent}); hit {
+		for _, entry := range item.dir {
+			if string(entry.GetName()) != name {
+				continue
+			}
+			ino := entry.GetIno()
+			if ino == 0 {
+				c.mu.Unlock()
+				c.metrics.Load().incNSCacheHit(nsCacheNegativeEntry)
+				return cachedInode{}, 0, true, true
+			}
+			if attrItem, attrHit := c.get(cacheKey{kind: 'i', ino: ino}); attrHit {
+				v := attrItem.inode
+				c.mu.Unlock()
+				m := c.metrics.Load()
+				m.incNSCacheHit(nsCacheEntry)
+				m.incNSCacheHit(nsCacheAttr)
+				return v, ino, false, true
+			}
+			if entry.GetInode() != nil && entry.GetInode().GetAttr() != nil {
+				v := cachedInode{entry.GetInode(), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds()}
+				c.mu.Unlock()
+				m := c.metrics.Load()
+				m.incNSCacheHit(nsCacheEntry)
+				m.incNSCacheHit(nsCacheAttr)
+				return v, ino, false, true
+			}
+			c.mu.Unlock()
+			m := c.metrics.Load()
+			m.incNSCacheHit(nsCacheEntry)
+			m.incNSCacheMiss(nsCacheAttr)
+			return cachedInode{}, ino, false, false
+		}
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheHit(nsCacheNegativeEntry)
+		return cachedInode{}, 0, true, true
+	}
+	if _, complete := c.completeDirs[parent]; complete {
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheHit(nsCacheNegativeEntry)
+		return cachedInode{}, 0, true, true
+	}
+	c.mu.Unlock()
+	c.metrics.Load().incNSCacheMiss(nsCacheEntry)
+	return cachedInode{}, 0, false, false
 }
 
 func (c *NamespaceCache) putInode(ino uint64, inode *storagev1.Inode, entryTimeout, attrTimeout float64) {
@@ -391,6 +521,62 @@ func (c *NamespaceCache) refreshInodeLocked(ino uint64, inode *storagev1.Inode, 
 	c.removeKey(cacheKey{kind: 'i', ino: ino})
 	c.mutations++
 	c.putInodeLocked(ino, inode, entryTimeout, attrTimeout)
+}
+
+// stageWriteInodeAt 在 WriteBehind 内存缓冲写入成功后，以写时复制方式单调推进本地缓存的 Size 与 Mtime/Ctime，
+// 使 AttrTimeout > 0 时随后的本地 fstat/stat 零 RPC 即可观测最新文件大小，且绝不原地修改已发布指针。
+func (c *NamespaceCache) stageWriteInodeAt(epoch, ino, endOffset uint64, ts *timestamppb.Timestamp) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.attrTTL <= 0 || (epoch != ^uint64(0) && epoch != c.epoch) {
+		return
+	}
+	cur, ok := c.peekCachedInodeLocked(ino)
+	if !ok || cur.inode == nil || cur.inode.GetAttr() == nil {
+		return
+	}
+	updated := cloneInode(cur.inode)
+	if endOffset > updated.Attr.Size {
+		updated.Attr.Size = endOffset
+		minBlocks := (endOffset + 511) / 512
+		if minBlocks > updated.Attr.Blocks {
+			updated.Attr.Blocks = minBlocks
+		}
+	}
+	if ts != nil {
+		updated.Attr.Mtime = cloneTimestamp(ts)
+		updated.Attr.Ctime = cloneTimestamp(ts)
+	}
+	at := cur.attrTimeout
+	if at <= 0 {
+		at = DefaultWriteAttrTimeoutSeconds
+	}
+	c.removeKey(cacheKey{kind: 'i', ino: ino})
+	c.mutations++
+	c.putInodeLocked(ino, updated, cur.entryTimeout, at)
+}
+
+// refreshInodeFromWriteAt 在异步/聚合写提交完成时刷新缓存，并保护同一顺序写世代内已被后续缓冲推进的最小文件尺寸不倒退。
+func (c *NamespaceCache) refreshInodeFromWriteAt(epoch, ino uint64, inode *storagev1.Inode, minSize uint64, attrTimeout float64) {
+	if inode == nil || inode.GetAttr() == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if epoch != ^uint64(0) && epoch != c.epoch {
+		return
+	}
+	target := inode
+	if minSize > inode.GetAttr().GetSize() {
+		cloned := cloneInode(inode)
+		cloned.Attr.Size = minSize
+		minBlocks := (minSize + 511) / 512
+		if minBlocks > cloned.Attr.Blocks {
+			cloned.Attr.Blocks = minBlocks
+		}
+		target = cloned
+	}
+	c.refreshInodeLocked(ino, target, attrTimeout)
 }
 
 // entryTimeoutLocked 取回该 Inode 已知的目录项有效期：优先独立属性项，
@@ -521,6 +707,7 @@ func (c *NamespaceCache) putReadlinkLocked(ino uint64, target []byte, ttlSeconds
 
 func (c *NamespaceCache) invalidateInode(ino uint64) {
 	c.mu.Lock()
+	delete(c.parentByDir, ino)
 	c.removeKey(cacheKey{kind: 'i', ino: ino})
 	c.removeKey(cacheKey{kind: 'l', ino: ino})
 	for dir := range copyInoSet(c.dirsByChild[ino]) {
@@ -613,6 +800,7 @@ func (c *NamespaceCache) putEntryLocked(parent uint64, name string, ino uint64) 
 func (c *NamespaceCache) invalidateDir(parent uint64) {
 	c.mu.Lock()
 	delete(c.completeDirs, parent)
+	delete(c.parentByDir, parent)
 	c.removeKey(cacheKey{kind: 'd', ino: parent})
 	c.removeKey(cacheKey{kind: 'i', ino: parent})
 	for _, name := range copyNames(c.byParent[parent]) {
@@ -646,7 +834,7 @@ func (c *NamespaceCache) invalidateDirListing(parent uint64) {
 	c.metrics.Load().incNSCacheInvalidation()
 }
 
-// demoteDirStreamToEntriesLocked 把父目录的完整目录流拆成独立目录项。
+// demoteDirStreamToEntriesLocked 把父目录的完整目录流拆成独立目录项，并保留尚无独立属性项的子节点属性。
 // 只在目录流条目数不超过容量四分之一时降级，避免小容量缓存被单个大目录挤爆；
 // 若降级过程中同父目录的目录项被 LRU 淘汰，则不能声称内容完整，撤销权威标记。
 func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
@@ -662,6 +850,9 @@ func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
 	evictedSameParent := false
 	for _, entry := range entries {
 		name := string(entry.GetName())
+		if name == ".." && entry.GetIno() != 0 && len(c.parentByDir) < c.capacity {
+			c.parentByDir[parent] = entry.GetIno()
+		}
 		if name == "" || name == "." || name == ".." || entry.GetIno() == 0 {
 			continue
 		}
@@ -679,11 +870,42 @@ func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
 	if !evictedSameParent {
 		c.completeDirs[parent] = struct{}{}
 	}
+	// 当目录流携带有效属性（AttrTimeoutSeconds > 0）时，为尚无独立 'i' 项的子节点及父目录（".."）保留属性，
+	// 消除祖先目录流因局部目录变更降级后后续 OpenDir/GetAttr 对未变动子目录的穿透 RPC。
+	for _, entry := range entries {
+		childIno := entry.GetIno()
+		if childIno == 0 || childIno == parent {
+			continue
+		}
+		inode := entry.GetInode()
+		at := entry.GetAttrTimeoutSeconds()
+		if inode == nil || inode.GetAttr() == nil || at <= 0 {
+			continue
+		}
+		key := cacheKey{kind: 'i', ino: childIno}
+		if c.items[key] != nil {
+			continue
+		}
+		et := entry.GetEntryTimeoutSeconds()
+		if string(entry.GetName()) == ".." && et <= 0 {
+			et = c.entryTimeoutLocked(childIno, c.entryTTL)
+		}
+		c.putItem(&cacheItem{
+			key:    key,
+			inode:  cachedInode{cloneInode(inode), et, at},
+			weight: 1,
+		})
+	}
 }
 
 // markNewDirAt 把刚由 Mkdir 创建的空目录登记为权威完整目录。
 // 新建目录在本次会话内没有任何子项，缺失名字可直接返回 ENOENT。
 func (c *NamespaceCache) markNewDirAt(epoch, dirIno uint64) {
+	c.markNewDirWithParentAt(epoch, dirIno, 0)
+}
+
+// markNewDirWithParentAt 把刚由 Mkdir 创建的空目录登记为权威完整目录并记录其权威父目录。
+func (c *NamespaceCache) markNewDirWithParentAt(epoch, dirIno, parentIno uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if epoch != ^uint64(0) && epoch != c.epoch {
@@ -692,6 +914,9 @@ func (c *NamespaceCache) markNewDirAt(epoch, dirIno uint64) {
 	// 标记不参与 LRU 计费，用容量作为上界，避免长生命周期客户端创建海量目录后无界增长。
 	if len(c.completeDirs) < c.capacity {
 		c.completeDirs[dirIno] = struct{}{}
+		if parentIno != 0 && len(c.parentByDir) < c.capacity {
+			c.parentByDir[dirIno] = parentIno
+		}
 	}
 }
 
@@ -793,18 +1018,135 @@ func (c *NamespaceCache) removeEntry(parent uint64, name string) {
 
 func (c *NamespaceCache) dir(ino uint64) ([]*storagev1.DirEntryPlus, bool) {
 	c.mu.Lock()
-	item, ok := c.get(cacheKey{kind: 'd', ino: ino})
-	if !ok {
+	if item, ok := c.get(cacheKey{kind: 'd', ino: ino}); ok {
+		// 只做指针快照：缓存项一经发布就不再原地修改（putInodeLocked 以替换元素的方式更新），
+		// 因此调用方可以安全并发读取。500 项目录从 2,001 次分配 / 65~97µs 降到 1 次分配 / ~0.3µs。
+		out := append([]*storagev1.DirEntryPlus(nil), item.dir...)
 		c.mu.Unlock()
-		c.metrics.Load().incNSCacheMiss(nsCacheReadDir)
+		c.metrics.Load().incNSCacheHit(nsCacheReadDir)
+		return out, true
+	}
+	if synth, ok := c.synthesizeCompleteDirLocked(ino); ok {
+		out := append([]*storagev1.DirEntryPlus(nil), synth...)
+		c.mu.Unlock()
+		c.metrics.Load().incNSCacheHit(nsCacheReadDir)
+		return out, true
+	}
+	c.mu.Unlock()
+	c.metrics.Load().incNSCacheMiss(nsCacheReadDir)
+	return nil, false
+}
+
+type synthChildEntry struct {
+	name   string
+	ino    uint64
+	cached cachedInode
+}
+
+// synthesizeCompleteDirLocked 在目录处于权威完整状态（completeDirs）且自身、父目录及全部正子项属性均在有效缓存中时，
+// 直接按服务端 ReadDirPlus 契约（"."、".." 及按字节序升序排列的正子项与连续 NextOffset）本地合成完整目录流并回填 'd'。
+// 任一子项或父项缺失有效属性缓存时立即返回 false，由调用方安全回退远端 ReadDirPlus RPC。
+func (c *NamespaceCache) synthesizeCompleteDirLocked(dirIno uint64) ([]*storagev1.DirEntryPlus, bool) {
+	if c.entryTTL <= 0 || c.attrTTL <= 0 {
 		return nil, false
 	}
-	// 只做指针快照：缓存项一经发布就不再原地修改（putInodeLocked 以替换元素的方式更新），
-	// 因此调用方可以安全并发读取。500 项目录从 2,001 次分配 / 65~97µs 降到 1 次分配 / ~0.3µs。
-	out := append([]*storagev1.DirEntryPlus(nil), item.dir...)
-	c.mu.Unlock()
-	c.metrics.Load().incNSCacheHit(nsCacheReadDir)
-	return out, true
+	if _, complete := c.completeDirs[dirIno]; !complete {
+		return nil, false
+	}
+	var parentIno uint64
+	if c.rootIno != 0 && dirIno == c.rootIno {
+		parentIno = dirIno
+	} else {
+		parentIno = c.parentByDir[dirIno]
+		if parentIno == 0 {
+			return nil, false
+		}
+	}
+	dirCached, ok := c.peekCachedInodeLocked(dirIno)
+	if !ok || dirCached.inode == nil || dirCached.inode.GetAttr() == nil || dirCached.attrTimeout <= 0 {
+		return nil, false
+	}
+	parentCached := dirCached
+	if parentIno != dirIno {
+		parentCached, ok = c.peekCachedInodeLocked(parentIno)
+		if !ok || parentCached.inode == nil || parentCached.inode.GetAttr() == nil || parentCached.attrTimeout <= 0 {
+			return nil, false
+		}
+	}
+
+	namesMap := c.byParent[dirIno]
+	children := make([]synthChildEntry, 0, len(namesMap))
+	for name := range namesMap {
+		el := c.items[cacheKey{kind: 'e', ino: dirIno, name: name}]
+		if el == nil {
+			return nil, false
+		}
+		childIno := itemOf(el).entry
+		if childIno == 0 {
+			continue
+		}
+		childCached, hit := c.peekCachedInodeLocked(childIno)
+		if !hit || childCached.inode == nil || childCached.inode.GetAttr() == nil ||
+			childCached.attrTimeout <= 0 || childCached.entryTimeout <= 0 {
+			return nil, false
+		}
+		children = append(children, synthChildEntry{
+			name:   name,
+			ino:    childIno,
+			cached: childCached,
+		})
+	}
+
+	total := 2 + len(children)
+	if total+1 > c.capacity {
+		return nil, false
+	}
+
+	slices.SortFunc(children, func(a, b synthChildEntry) int {
+		if a.name < b.name {
+			return -1
+		}
+		if a.name > b.name {
+			return 1
+		}
+		return 0
+	})
+
+	entries := make([]*storagev1.DirEntryPlus, 0, total)
+	entries = append(entries,
+		&storagev1.DirEntryPlus{
+			Ino:                 dirIno,
+			Name:                []byte("."),
+			NextOffset:          1,
+			Inode:               dirCached.inode,
+			EntryTimeoutSeconds: 0,
+			AttrTimeoutSeconds:  dirCached.attrTimeout,
+		},
+		&storagev1.DirEntryPlus{
+			Ino:                 parentIno,
+			Name:                []byte(".."),
+			NextOffset:          2,
+			Inode:               parentCached.inode,
+			EntryTimeoutSeconds: 0,
+			AttrTimeoutSeconds:  parentCached.attrTimeout,
+		},
+	)
+	for i, ch := range children {
+		entries = append(entries, &storagev1.DirEntryPlus{
+			Ino:                 ch.ino,
+			Name:                []byte(ch.name),
+			NextOffset:          uint64(3 + i),
+			Inode:               ch.cached.inode,
+			EntryTimeoutSeconds: ch.cached.entryTimeout,
+			AttrTimeoutSeconds:  ch.cached.attrTimeout,
+		})
+	}
+
+	c.putDirLocked(dirIno, entries)
+	if el := c.items[cacheKey{kind: 'd', ino: dirIno}]; el != nil {
+		return itemOf(el).dir, true
+	}
+	return cloneDir(entries), true
 }
 
 func (c *NamespaceCache) putDir(ino uint64, entries []*storagev1.DirEntryPlus) {
@@ -836,6 +1178,18 @@ func (c *NamespaceCache) putDirLocked(ino uint64, entries []*storagev1.DirEntryP
 	for _, name := range copyNames(c.byParent[ino]) {
 		c.removeKey(cacheKey{kind: 'e', ino: ino, name: name})
 	}
+	if c.rootIno != 0 && ino == c.rootIno && len(c.parentByDir) < c.capacity {
+		c.parentByDir[ino] = ino
+	} else {
+		for _, entry := range entries {
+			if string(entry.GetName()) == ".." && entry.GetIno() != 0 {
+				if len(c.parentByDir) < c.capacity {
+					c.parentByDir[ino] = entry.GetIno()
+				}
+				break
+			}
+		}
+	}
 	c.putItem(&cacheItem{
 		key:    cacheKey{kind: 'd', ino: ino},
 		dir:    cloneDir(entries),
@@ -861,6 +1215,7 @@ func (c *NamespaceCache) clear() {
 	c.dirsByChild = make(map[uint64]map[uint64]struct{})
 	c.inodeDirs = make(map[uint64]map[uint64]struct{})
 	c.completeDirs = make(map[uint64]struct{})
+	c.parentByDir = make(map[uint64]uint64)
 	c.mu.Unlock()
 	c.metrics.Load().incNSCacheInvalidation()
 }

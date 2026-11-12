@@ -47,6 +47,16 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 	opCtx, endSpan := fs.startFuseOp(OpIoctl)
 	defer func() { endSpan(status) }()
 
+	// 在加锁与写回屏障前先短路不支持的命令（如终端探测 TCGETS 等），避免触发无谓的 BarrierInode 同步刷盘；
+	// 严格返回 ENOTTY，切勿返回 ENOSYS 导致整挂载点禁用合法 FS_IOC_* 命令。
+	switch input.Cmd {
+	case FS_IOC_GETFLAGS, FS_IOC32_GETFLAGS,
+		FS_IOC_SETFLAGS, FS_IOC32_SETFLAGS,
+		FS_IOC_FSGETXATTR, FS_IOC_FSSETXATTR:
+	default:
+		return fuse.Status(syscall.ENOTTY)
+	}
+
 	if fs.isVirtualStatsIno(input.NodeId) {
 		return fuse.Status(syscall.ENOTTY)
 	}

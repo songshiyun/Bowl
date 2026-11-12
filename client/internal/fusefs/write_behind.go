@@ -28,13 +28,10 @@ const (
 	// 从数学上保证任意两个在途 Write RPC 覆盖完全不相交的 256 KiB 物理块区间。
 	WriteBehindBlockAlign = 256 * 1024
 
-	// WriteBehindActivateBytes 为激活异步写聚合前的同步探针字节阈值 (2 MiB)：
-	// 首段同步写入直接透传验证 Epoch 栅栏、Immutable/Append 标志、KILLPRIV 与小盘配额，
-	// 对小文件与数据库页写保持零缓冲放大、零额外协程开销。
+	// WriteBehindActivateBytes 为大块流式写入（> 256 KiB，如 1 MiB FUSE 分片）激活异步并发流水线前的同步探针字节阈值 (2 MiB)：
+	// 首段同步写入直接透传验证 Epoch 栅栏、Immutable/Append、KILLPRIV 与小盘配额；
+	// 小块写入（<= 256 KiB）在完成首笔同步探针或经 Create 预热（SeedCreatedInode）后直接合并进内存 stageBuf。
 	WriteBehindActivateBytes = 2 * 1024 * 1024
-
-	// WriteBehindMinStageWrite 为参与顺序流探测与聚合的最小单次写入字节数 (64 KiB)。
-	WriteBehindMinStageWrite = 64 * 1024
 
 	// writeBehindRetainedBufs 为常驻有界 noscan 4 MiB 缓冲槽数（8 x 4 MiB = 32 MiB，免受 GC 周期驱逐）。
 	writeBehindRetainedBufs = 8
@@ -79,9 +76,10 @@ func releaseWriteBehindBuf(buf *[WriteBehindChunkSize]byte) {
 // ChunkWriter 定义向底层存储服务提交单块写入的端口函数。
 type ChunkWriter func(ctx context.Context, ino, offset uint64, data []byte) (uint32, *storagev1.Inode, error)
 
-// WriteBehindHooks 定义异步分片完成后的本地状态同步钩子。
+// WriteBehindHooks 定义内存缓冲与异步/同步刷盘完成后的本地状态同步钩子。
 type WriteBehindHooks struct {
-	OnCommit func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, refreshAttr bool)
+	OnStage  func(nodeID, cacheEpoch, endOffset uint64, ts *timestamppb.Timestamp)
+	OnCommit func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, minSize uint64, refreshAttr bool)
 	OnError  func(nodeID uint64)
 }
 
@@ -96,8 +94,10 @@ type inodeWriteBehind struct {
 	removed        bool
 	nodeID         uint64
 	cacheEpoch     uint64
+	probed         bool
 	probedBytes    uint64
 	expectedOffset uint64
+	maxStagedEnd   uint64
 	hasStream      bool
 	streamGen      uint64
 	stageBuf       *[WriteBehindChunkSize]byte
@@ -168,7 +168,9 @@ func isNotOlderCommittedInode(prev, cand *storagev1.Inode) bool {
 
 func (st *inodeWriteBehind) resetStreamLocked() {
 	st.hasStream = false
+	st.probed = false
 	st.probedBytes = 0
+	st.maxStagedEnd = 0
 	st.streamGen++
 	st.lastCommitted = nil
 }
@@ -376,12 +378,16 @@ func (st *inodeWriteBehind) dispatchLocked(ctx context.Context, c *WriteBehindCo
 			}
 		} else {
 			refreshAttr := false
-			if gen == st.streamGen && isNotOlderCommittedInode(st.lastCommitted, respInode) {
-				st.lastCommitted = cloneInode(respInode)
-				refreshAttr = true
+			var minSize uint64
+			if gen == st.streamGen {
+				minSize = st.maxStagedEnd
+				if isNotOlderCommittedInode(st.lastCommitted, respInode) {
+					st.lastCommitted = cloneInode(respInode)
+					refreshAttr = true
+				}
 			}
 			if hooks.OnCommit != nil {
-				hooks.OnCommit(nodeID, ino, cacheEpoch, respInode, refreshAttr)
+				hooks.OnCommit(nodeID, ino, cacheEpoch, respInode, minSize, refreshAttr)
 			}
 		}
 		st.inflight--
@@ -393,9 +399,112 @@ func (st *inodeWriteBehind) dispatchLocked(ctx context.Context, c *WriteBehindCo
 	return true
 }
 
+// flushStageSyncLocked 在调用方当前协程内将未满 4 MiB 或未 256 KiB 对齐的聚合槽合并为单次同步 Write RPC 刷出，
+// 零后台协程派生、零条件变量唤醒开销；刷出期间维持 inflight 与 pendingCount，保证并发 HasPending/BarrierInode 严格等待。
+// 调用前提：调用方同时持有 st.opMu 与 st.mu。
+func (st *inodeWriteBehind) flushStageSyncLocked(ctx context.Context, c *WriteBehindCoordinator) bool {
+	if st.stageBuf == nil || st.stageLen == 0 {
+		st.discardStageLocked(&c.pendingCount)
+		return true
+	}
+	if st.stageGen != st.streamGen {
+		st.discardStageLocked(&c.pendingCount)
+		return false
+	}
+	if st.stageOffset%WriteBehindBlockAlign != 0 && st.inflight > 0 {
+		st.waitInflightObservedLocked(ctx, c)
+		if st.stageBuf == nil || st.stageLen == 0 {
+			st.discardStageLocked(&c.pendingCount)
+			return true
+		}
+		if st.stageGen != st.streamGen {
+			st.discardStageLocked(&c.pendingCount)
+			return false
+		}
+	}
+
+	buf := st.stageBuf
+	chunkOff := st.stageOffset
+	chunkLen := st.stageLen
+	ino := st.ino
+	nodeID := st.nodeID
+	cacheEpoch := st.cacheEpoch
+	gen := st.stageGen
+	writer := c.writer
+	hooks := c.hooks
+
+	st.stageBuf = nil
+	st.stageOffset = 0
+	st.stageLen = 0
+	st.stageGen = 0
+	st.stageLinks = nil
+	st.inflight++
+	c.metrics.Load().addWriteBehindInflight(1)
+	st.mu.Unlock()
+
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	rpcCtx, cancel := context.WithTimeout(baseCtx, DefaultRPCTimeout)
+	written, respInode, err := writer(rpcCtx, ino, chunkOff, buf[:chunkLen:chunkLen])
+	cancel()
+	releaseWriteBehindBuf(buf)
+
+	if err == nil && written < uint32(chunkLen) {
+		err = syscall.EIO
+	}
+	m := c.metrics.Load()
+	m.incWriteBehindFlushRPC(err != nil)
+	m.addWriteBehindInflight(-1)
+
+	st.mu.Lock()
+	if err != nil {
+		if st.errGen != gen {
+			st.errGen = gen
+			st.lastErr = err
+			st.errSeq = c.errSeqGen.Add(1)
+		}
+		if st.streamGen == gen {
+			st.resetStreamLocked()
+		}
+		if hooks.OnError != nil {
+			hooks.OnError(nodeID)
+		}
+	} else {
+		refreshAttr := false
+		var minSize uint64
+		if gen == st.streamGen {
+			minSize = st.maxStagedEnd
+			if isNotOlderCommittedInode(st.lastCommitted, respInode) {
+				st.lastCommitted = cloneInode(respInode)
+				refreshAttr = true
+			}
+		}
+		if hooks.OnCommit != nil {
+			hooks.OnCommit(nodeID, ino, cacheEpoch, respInode, minSize, refreshAttr)
+		}
+	}
+	st.inflight--
+	c.pendingCount.Add(-1)
+	st.cond.Broadcast()
+	return err == nil
+}
+
+func (st *inodeWriteBehind) flushFullStageLocked(ctx context.Context, c *WriteBehindCoordinator) bool {
+	if st.stageLen == WriteBehindChunkSize && st.stageOffset%WriteBehindBlockAlign == 0 {
+		return st.dispatchLocked(ctx, c)
+	}
+	return st.flushStageSyncLocked(ctx, c)
+}
+
 func (st *inodeWriteBehind) barrierLocked(ctx context.Context, c *WriteBehindCoordinator) {
 	if st.stageBuf != nil || st.stageLen > 0 {
-		st.dispatchLocked(ctx, c)
+		if st.stageLen == WriteBehindChunkSize && st.stageOffset%WriteBehindBlockAlign == 0 {
+			st.dispatchLocked(ctx, c)
+		} else {
+			st.flushStageSyncLocked(ctx, c)
+		}
 	}
 	st.waitInflightObservedLocked(ctx, c)
 }
@@ -571,14 +680,29 @@ func (c *WriteBehindCoordinator) HasPending(ino uint64) bool {
 	return pending
 }
 
+// SeedCreatedInode 为客户端刚通过 Create 新建的常规文件预热顺序流探针标记：
+// 新建普通文件已知无 SUID/SGID、无 Immutable/Append、无 security.capability，
+// 允许首笔小块写入（<= 256 KiB）直接进入内存聚合槽直至 Flush/Fsync 批量提交。
+func (c *WriteBehindCoordinator) SeedCreatedInode(ino uint64) {
+	st := c.acquireInode(ino)
+	st.mu.Lock()
+	if st.stageLen == 0 && st.inflight == 0 && st.errSeq == 0 {
+		st.hasStream = true
+		st.probed = true
+		st.expectedOffset = 0
+	}
+	st.mu.Unlock()
+	st.opMu.Unlock()
+}
+
 // Write 尝试将顺序写入纳入 4 MiB 聚合槽与 W*=4 异步流水线（默认无句柄游标模式）。
 func (c *WriteBehindCoordinator) Write(ctx context.Context, ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
 	return c.WriteForHandle(ctx, 0, ino, nodeID, offset, data, cacheEpoch)
 }
 
-// WriteForHandle 尝试将指定句柄 fh 的顺序写入纳入 4 MiB 聚合槽与 W*=4 异步流水线：
-//   - 若 handled == true，说明本次请求已由流水线接管（或捕获到该句柄尚未观测的异步写错误 err）；
-//   - 若 handled == false，说明当前处于首段探针期、小块直通或非连续跳转（已自动排空旧缓冲），调用方应走同步 RPC。
+// WriteForHandle 尝试将指定句柄 fh 的写入纳入 4 MiB 内存聚合槽与 W*=4 异步流水线：
+//   - 若 handled == true，说明本次请求已由聚合槽/流水线接管（或捕获到该句柄尚未观测的异步写错误 err）；
+//   - 若 handled == false，说明当前处于首笔探针期、大块激活探针期或大块非连续跳转（已自动排空旧缓冲），调用方应走同步 RPC。
 func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, nodeID, offset uint64, data []byte, cacheEpoch uint64) (written uint32, handled bool, err error) {
 	if len(data) == 0 || len(data) > WriteBehindChunkSize || c.writer == nil {
 		if flushErr := c.FlushAndResetInodeForHandle(ctx, fh, ino); flushErr != nil {
@@ -587,7 +711,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, no
 		return 0, false, nil
 	}
 
-	if len(data) < WriteBehindMinStageWrite && c.getInode(ino) == nil && c.errSeqGen.Load() == 0 {
+	if c.getInode(ino) == nil && c.errSeqGen.Load() == 0 {
 		return 0, false, nil
 	}
 	st := c.acquireInode(ino)
@@ -601,8 +725,7 @@ func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, no
 		return 0, true, err
 	}
 
-	// 非连续写入：先排空已缓冲数据与在途分片，再回退至同步写入重新探测。
-	if !st.hasStream || offset != st.expectedOffset {
+	if !st.probed {
 		st.barrierLocked(ctx, c)
 		if err = st.consumeErrLocked(c, fh); err != nil {
 			st.mu.Unlock()
@@ -613,24 +736,122 @@ func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, no
 		return 0, false, nil
 	}
 
-	// 尚未达到激活阈值，或当前无活跃槽且尚未对齐到 256 KiB 块边界 / 写入过小：保持同步直通。
-	if st.probedBytes < WriteBehindActivateBytes ||
-		(st.stageBuf == nil && (len(data) < WriteBehindMinStageWrite || offset%WriteBehindBlockAlign != 0)) {
-		st.barrierLocked(ctx, c)
-		if err = st.consumeErrLocked(c, fh); err != nil {
-			st.mu.Unlock()
-			return 0, true, err
-		}
-		if len(data) < WriteBehindMinStageWrite {
+	isSmallWrite := len(data) <= WriteBehindBlockAlign
+	if !isSmallWrite {
+		// 大块流式写入（> 256 KiB，如 1 MiB FUSE 分片）：维持严格连续性与 2 MiB 同步探针阈值。
+		if !st.hasStream || offset != st.expectedOffset {
+			st.barrierLocked(ctx, c)
+			if err = st.consumeErrLocked(c, fh); err != nil {
+				st.mu.Unlock()
+				return 0, true, err
+			}
 			st.resetStreamLocked()
+			st.mu.Unlock()
+			return 0, false, nil
 		}
-		st.mu.Unlock()
-		return 0, false, nil
+		if st.stageBuf == nil && (st.probedBytes < WriteBehindActivateBytes || offset%WriteBehindBlockAlign != 0) {
+			st.barrierLocked(ctx, c)
+			if err = st.consumeErrLocked(c, fh); err != nil {
+				st.mu.Unlock()
+				return 0, true, err
+			}
+			st.mu.Unlock()
+			return 0, false, nil
+		}
 	}
 
 	st.nodeID = nodeID
 	st.cacheEpoch = cacheEpoch
 	activeGen := st.streamGen
+	writeEnd := offset + uint64(len(data))
+
+	// 已探测的小块/页写（<= 256 KiB）优先尝试在当前活跃 stageBuf 窗口内原地合并（覆盖连续帧追加、局部覆写与相邻页写）。
+	if isSmallWrite && st.stageBuf != nil && st.stageLen > 0 {
+		stageStart := st.stageOffset
+		stageEnd := stageStart + uint64(st.stageLen)
+		switch {
+		case offset >= stageStart && offset <= stageEnd && writeEnd-stageStart <= WriteBehindChunkSize:
+			st.recordStageLinkLocked(ctx)
+			relOff := int(offset - stageStart)
+			copy(st.stageBuf[relOff:relOff+len(data)], data)
+			if relOff+len(data) > st.stageLen {
+				st.stageLen = relOff + len(data)
+			}
+			st.hasStream = true
+			st.expectedOffset = st.stageOffset + uint64(st.stageLen)
+			if writeEnd > st.maxStagedEnd {
+				st.maxStagedEnd = writeEnd
+			}
+			if st.stageLen == WriteBehindChunkSize {
+				if !st.flushFullStageLocked(ctx, c) {
+					st.waitInflightObservedLocked(ctx, c)
+					err = st.consumeErrLocked(c, fh)
+					if err == nil {
+						err = st.lastErr
+					}
+					st.resetStreamLocked()
+					st.mu.Unlock()
+					return 0, true, err
+				}
+			}
+			if c.hooks.OnStage != nil {
+				c.hooks.OnStage(nodeID, cacheEpoch, st.maxStagedEnd, timestamppb.Now())
+			}
+			st.mu.Unlock()
+			c.metrics.Load().addWriteBehindStaged(uint64(len(data)))
+			return uint32(len(data)), true, nil
+
+		case offset < stageStart && writeEnd >= stageStart &&
+			max(stageEnd, writeEnd)-offset <= WriteBehindChunkSize && st.stageLen <= WriteBehindBlockAlign:
+			st.recordStageLinkLocked(ctx)
+			newEnd := max(stageEnd, writeEnd)
+			shift := int(stageStart - offset)
+			copy(st.stageBuf[shift:shift+st.stageLen], st.stageBuf[:st.stageLen])
+			copy(st.stageBuf[:len(data)], data)
+			st.stageOffset = offset
+			st.stageLen = int(newEnd - offset)
+			st.hasStream = true
+			st.expectedOffset = newEnd
+			if newEnd > st.maxStagedEnd {
+				st.maxStagedEnd = newEnd
+			}
+			if st.stageLen == WriteBehindChunkSize {
+				if !st.flushFullStageLocked(ctx, c) {
+					st.waitInflightObservedLocked(ctx, c)
+					err = st.consumeErrLocked(c, fh)
+					if err == nil {
+						err = st.lastErr
+					}
+					st.resetStreamLocked()
+					st.mu.Unlock()
+					return 0, true, err
+				}
+			}
+			if c.hooks.OnStage != nil {
+				c.hooks.OnStage(nodeID, cacheEpoch, st.maxStagedEnd, timestamppb.Now())
+			}
+			st.mu.Unlock()
+			c.metrics.Load().addWriteBehindStaged(uint64(len(data)))
+			return uint32(len(data)), true, nil
+
+		case offset == stageEnd:
+			// 连续追加跨越 4 MiB 槽位上限：落入下方分片循环先填满当前 4 MiB 槽刷出，再开启下一槽位。
+
+		default:
+			// 非相邻偏移跳转（例如 wal_checkpoint 分段页写）：先将旧聚合槽合并为单次同步 Write RPC 刷出，再开启新聚合槽。
+			if !st.flushStageSyncLocked(ctx, c) {
+				st.waitInflightObservedLocked(ctx, c)
+				err = st.consumeErrLocked(c, fh)
+				if err == nil {
+					err = st.lastErr
+				}
+				st.resetStreamLocked()
+				st.mu.Unlock()
+				return 0, true, err
+			}
+			activeGen = st.streamGen
+		}
+	}
 
 	rem := data
 	curOff := offset
@@ -659,10 +880,14 @@ func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, no
 		st.stageLen += n
 		rem = rem[n:]
 		curOff += uint64(n)
+		st.hasStream = true
 		st.expectedOffset = curOff
+		if curOff > st.maxStagedEnd {
+			st.maxStagedEnd = curOff
+		}
 
 		if st.stageLen == WriteBehindChunkSize {
-			if !st.dispatchLocked(ctx, c) {
+			if !st.flushFullStageLocked(ctx, c) {
 				st.waitInflightObservedLocked(ctx, c)
 				err = st.consumeErrLocked(c, fh)
 				if err == nil {
@@ -675,38 +900,37 @@ func (c *WriteBehindCoordinator) WriteForHandle(ctx context.Context, fh, ino, no
 		}
 	}
 
+	if c.hooks.OnStage != nil {
+		c.hooks.OnStage(nodeID, cacheEpoch, st.maxStagedEnd, timestamppb.Now())
+	}
 	st.mu.Unlock()
 	c.metrics.Load().addWriteBehindStaged(uint64(len(data)))
 	return uint32(len(data)), true, nil
 }
 
-// ObserveSyncWrite 在同步直通写入成功后推进该 Inode 的顺序流探针进度。
+// ObserveSyncWrite 在同步直通写入成功后记录首写探针已完成并推进顺序流偏移。
 func (c *WriteBehindCoordinator) ObserveSyncWrite(ino, offset uint64, written uint32) {
-	if written < WriteBehindMinStageWrite {
-		st := c.lockExistingInode(ino)
-		if st == nil {
-			return
-		}
-		st.mu.Lock()
-		if st.stageLen == 0 && st.inflight == 0 {
-			st.resetStreamLocked()
-		}
-		st.mu.Unlock()
-		st.opMu.Unlock()
+	if written == 0 {
 		return
 	}
 	st := c.acquireInode(ino)
 	st.mu.Lock()
 	if st.stageLen == 0 && st.inflight == 0 {
+		end := offset + uint64(written)
 		if st.hasStream && offset == st.expectedOffset {
+			st.probed = true
 			st.probedBytes += uint64(written)
-			st.expectedOffset = offset + uint64(written)
+			st.expectedOffset = end
 		} else {
 			st.streamGen++
 			st.lastCommitted = nil
 			st.hasStream = true
+			st.probed = true
 			st.probedBytes = uint64(written)
-			st.expectedOffset = offset + uint64(written)
+			st.expectedOffset = end
+		}
+		if end > st.maxStagedEnd {
+			st.maxStagedEnd = end
 		}
 	}
 	st.mu.Unlock()
