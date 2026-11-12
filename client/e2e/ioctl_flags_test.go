@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -17,9 +18,26 @@ const (
 	fsAppendFl    = 0x00000020
 )
 
-func getIoctlFlags(fd int) (int, error) { return unix.IoctlGetInt(fd, unix.FS_IOC_GETFLAGS) }
+func ioctlGetIntEINTR(fd int, req uint) (int, error) {
+	for {
+		v, err := unix.IoctlGetInt(fd, req)
+		if !errors.Is(err, syscall.EINTR) {
+			return v, err
+		}
+	}
+}
+
+func getIoctlFlags(fd int) (int, error) {
+	return ioctlGetIntEINTR(fd, unix.FS_IOC_GETFLAGS)
+}
+
 func setIoctlFlags(fd, flags int) error {
-	return unix.IoctlSetPointerInt(fd, unix.FS_IOC_SETFLAGS, flags)
+	for {
+		err := unix.IoctlSetPointerInt(fd, unix.FS_IOC_SETFLAGS, flags)
+		if !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+	}
 }
 
 func requireWriteDenied(t *testing.T, path string) {
@@ -76,12 +94,19 @@ func TestE2E_Ioctl(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("line 1\n"), 0o644))
 		f, err := os.Open(path)
 		require.NoError(t, err)
+		fClosed := false
+		defer func() {
+			if !fClosed {
+				_ = f.Close()
+			}
+		}()
 		require.NoError(t, setIoctlFlags(int(f.Fd()), fsImmutableFl))
+		t.Cleanup(func() { clearFlagsOnPath(t, path) })
 		got, err := getIoctlFlags(int(f.Fd()))
 		require.NoError(t, err)
 		require.Equal(t, fsImmutableFl, got)
 		require.NoError(t, f.Close())
-		t.Cleanup(func() { clearFlagsOnPath(t, path) })
+		fClosed = true
 
 		verifyImmutable(t, path)
 	})
@@ -91,12 +116,19 @@ func TestE2E_Ioctl(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("line 1\n"), 0o644))
 		f, err := os.Open(path)
 		require.NoError(t, err)
+		fClosed := false
+		defer func() {
+			if !fClosed {
+				_ = f.Close()
+			}
+		}()
 		require.NoError(t, setIoctlFlags(int(f.Fd()), fsAppendFl))
+		t.Cleanup(func() { clearFlagsOnPath(t, path) })
 		got, err := getIoctlFlags(int(f.Fd()))
 		require.NoError(t, err)
 		require.Equal(t, fsAppendFl, got)
 		require.NoError(t, f.Close())
-		t.Cleanup(func() { clearFlagsOnPath(t, path) })
+		fClosed = true
 
 		af, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
 		require.NoError(t, err)
@@ -118,6 +150,7 @@ func TestE2E_Ioctl(t *testing.T) {
 		f, err := os.OpenFile(path, os.O_RDWR, 0)
 		require.NoError(t, err)
 		defer f.Close()
+		t.Cleanup(func() { clearFlagsOnPath(t, path) })
 
 		require.NoError(t, setIoctlFlags(int(f.Fd()), fsImmutableFl|fsAppendFl))
 		got, err := getIoctlFlags(int(f.Fd()))
@@ -132,7 +165,7 @@ func TestE2E_Ioctl(t *testing.T) {
 		require.Zero(t, cleared)
 
 		require.ErrorIs(t, setIoctlFlags(int(f.Fd()), 0x40), syscall.EOPNOTSUPP)
-		_, err = unix.IoctlGetInt(int(f.Fd()), unix.TIOCGWINSZ)
+		_, err = ioctlGetIntEINTR(int(f.Fd()), unix.TIOCGWINSZ)
 		require.ErrorIs(t, err, syscall.ENOTTY)
 	})
 
