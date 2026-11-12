@@ -15,6 +15,7 @@ const diskUsageHelp = `用法:
 
 可用子命令:
   create      创建新的虚拟磁盘实例
+  fork        基于已有虚拟磁盘零拷贝派生新实例
   list        分页列出虚拟磁盘实例
   get         查看指定虚拟磁盘详情
   update      更新虚拟磁盘名称或配额容量 (别名: resize)
@@ -27,14 +28,15 @@ const diskUsageHelp = `用法:
 
 // diskJSON 定义磁盘实体在 --json 模式下的结构化输出格式。
 type diskJSON struct {
-	DiskID     string `json:"disk_id"`
-	Name       string `json:"name"`
-	RootIno    uint64 `json:"root_ino"`
-	MaxBytes   uint64 `json:"max_bytes"`
-	UsedBytes  uint64 `json:"used_bytes"`
-	UsedInodes uint64 `json:"used_inodes"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
+	DiskID       string `json:"disk_id"`
+	ParentDiskID string `json:"parent_disk_id,omitempty"`
+	Name         string `json:"name"`
+	RootIno      uint64 `json:"root_ino"`
+	MaxBytes     uint64 `json:"max_bytes"`
+	UsedBytes    uint64 `json:"used_bytes"`
+	UsedInodes   uint64 `json:"used_inodes"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 func toDiskJSON(d *storagev1.Disk) diskJSON {
@@ -46,14 +48,15 @@ func toDiskJSON(d *storagev1.Disk) diskJSON {
 		updatedAt = d.GetUpdatedAt().AsTime().UTC().Format(time.RFC3339)
 	}
 	return diskJSON{
-		DiskID:     d.GetDiskId(),
-		Name:       d.GetName(),
-		RootIno:    d.GetRootIno(),
-		MaxBytes:   d.GetMaxBytes(),
-		UsedBytes:  d.GetUsedBytes(),
-		UsedInodes: d.GetUsedInodes(),
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		DiskID:       d.GetDiskId(),
+		ParentDiskID: d.GetParentDiskId(),
+		Name:         d.GetName(),
+		RootIno:      d.GetRootIno(),
+		MaxBytes:     d.GetMaxBytes(),
+		UsedBytes:    d.GetUsedBytes(),
+		UsedInodes:   d.GetUsedInodes(),
+		CreatedAt:    createdAt,
+		UpdatedAt:    updatedAt,
 	}
 }
 
@@ -65,6 +68,9 @@ func printDiskDetail(w io.Writer, d *storagev1.Disk) {
 		usagePct = float64(dj.UsedBytes) * 100.0 / float64(dj.MaxBytes)
 	}
 	fmt.Fprintf(w, "Disk ID:      %s\n", dj.DiskID)
+	if dj.ParentDiskID != "" {
+		fmt.Fprintf(w, "Parent Disk:  %s\n", dj.ParentDiskID)
+	}
 	fmt.Fprintf(w, "Name:         %s\n", dj.Name)
 	fmt.Fprintf(w, "Root Ino:     %d\n", dj.RootIno)
 	fmt.Fprintf(w, "Max Bytes:    %d (%s)\n", dj.MaxBytes, FormatSize(dj.MaxBytes))
@@ -108,6 +114,8 @@ func executeDisk(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "create":
 		return executeDiskCreate(args[1:], stdout, stderr)
+	case "fork":
+		return executeDiskFork(args[1:], stdout, stderr)
 	case "list":
 		return executeDiskList(args[1:], stdout, stderr)
 	case "get":

@@ -57,8 +57,14 @@ func TestShouldRetry_DialFailuresVsMidFlightTransportFailures(t *testing.T) {
 	connectSysErr := &os.SyscallError{Syscall: "connect", Err: errors.New("refused")}
 	wrappedRefused := fmt.Errorf("dial storage: %w", syscall.ECONNREFUSED)
 
+	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceCreateDiskProcedure))
+	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceForkDiskProcedure))
+
 	require.True(t, shouldRetry(storagev1connect.StorageServiceCreateProcedure, dialOpErr))
 	require.True(t, shouldRetry(storagev1connect.StorageServiceCreateDiskProcedure, connectSysErr))
+	require.True(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, dialOpErr))
+	require.True(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, connectSysErr))
+	require.True(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, wrappedRefused))
 	require.True(t, shouldRetry(storagev1connect.StorageServiceWriteProcedure, wrappedRefused))
 	require.True(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, dialOpErr))
 
@@ -72,6 +78,12 @@ func TestShouldRetry_DialFailuresVsMidFlightTransportFailures(t *testing.T) {
 	require.False(t, shouldRetry(storagev1connect.StorageServiceWriteProcedure, io.ErrUnexpectedEOF))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceUnlinkProcedure, syscall.ECONNRESET))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceCreateDiskProcedure, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, connect.NewError(connect.CodeUnavailable, nil)))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, io.EOF))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, io.ErrUnexpectedEOF))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, syscall.ECONNRESET))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}))
+	require.False(t, shouldRetry(storagev1connect.StorageServiceForkDiskProcedure, syscall.EPIPE))
 
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, errors.New("unknown failure")))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, connect.NewError(connect.CodeInternal, nil)))
