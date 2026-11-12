@@ -8,11 +8,11 @@
 
 ### Issue tracker
 
-Tracked in Linear (Team: `StarSrc`, Project: `Bowl`) via `ACE_linear` MCP. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+Tracked in GitHub Issues (`starsrc/Bowl`) via the `gh` CLI. See [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
 ### Triage labels
 
-Canonical triage roles mapped to Linear labels. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+Default five canonical triage labels on GitHub Issues. See [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
 
 ### Domain docs
 

@@ -22,7 +22,7 @@ func requireParseSizeError(t *testing.T, name, raw string) {
 	t.Helper()
 	t.Run(name, func(t *testing.T) {
 		_, err := cli.ParseSize(raw)
-		require.Error(t, err, "expected error for input %q", raw)
+		require.Error(t, err, "非法容量输入 %q 必须返回错误", raw)
 	})
 }
 

@@ -1,0 +1,147 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - e2e
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      # 将本项目内部包单独分组在第三方库下方
+      local-prefixes:
+        - github.com/starsrc/bowl
+  exclusions:
+    generated: lax
+    paths:
+      - .worktrees
+      - vendor
+      - gen
+
+linters:
+  # 显式声明使用标准默认集 (包含 errcheck, govet, ineffassign, staticcheck, unused)
+  default: standard
+  enable:
+    - bodyclose     # 检查 HTTP response body 是否正确关闭
+    - copyloopvar   # 检查不必要的循环变量赋值 (Go 1.22+)
+    - depguard      # 依赖包准入与架构分层边界检查
+    - errorlint     # 检查 Go 1.13+ 错误包装与比较规范
+    - forbidigo     # 禁用特定函数或类型调用（开启类型分析）
+    - gocritic      # 高阶代码异味、性能与风格检查
+    - misspell      # 常见英文拼写错误检查
+    - modernize     # Go 现代标准库与语法特性升级检查
+    - nilerr        # 拦截 if err != nil { return nil } 逻辑漏洞
+    - nolintlint    # 规范 //nolint 指令（禁止裸写，必须指定 linter 与注释）
+    - perfsprint    # 优化可替换为更快方法的 fmt.Sprintf 调用
+    - revive        # 替代 golint 的代码规范检查
+    - testifylint   # 规范 testify/require 与 assert 断言用法
+    - unconvert     # 移除多余的类型转换
+
+  settings:
+    depguard:
+      rules:
+        all:
+          deny:
+            - pkg: "io/ioutil"
+              desc: "io/ioutil 自 Go 1.16 起已废弃，请使用 io 与 os 标准库"
+            - pkg: "math/rand$"
+              desc: "请使用 math/rand/v2 替代旧版 math/rand"
+            - pkg: "github.com/pkg/errors"
+              desc: "请使用标准库 errors 与 fmt.Errorf(%w)"
+            - pkg: "golang.org/x/exp/slices"
+              desc: "请使用标准库 slices"
+            - pkg: "golang.org/x/exp/maps"
+              desc: "请使用标准库 maps"
+        non_test:
+          files:
+            - "!$test"
+            - "!**/e2e/testutil/**"
+          deny:
+            - pkg: "github.com/stretchr/testify"
+              desc: "生产代码禁止引入测试断言库 testify"
+            - pkg: "github.com/starsrc/bowl/e2e/testutil"
+              desc: "生产代码禁止引入 E2E 测试辅助包"
+        pkg_layer:
+          files:
+            - "**/pkg/**"
+          deny:
+            - pkg: "github.com/starsrc/bowl/services"
+              desc: "公共基础包 pkg/ 禁止反向依赖具体微服务"
+            - pkg: "github.com/starsrc/bowl/client"
+              desc: "公共基础包 pkg/ 禁止反向依赖客户端模块"
+            - pkg: "github.com/starsrc/bowl/e2e"
+              desc: "公共基础包 pkg/ 禁止依赖 E2E 测试模块"
+        store_layer:
+          files:
+            - "**/internal/store/**"
+            - "**/internal/pebblekv/**"
+            - "**/internal/readbuf/**"
+          deny:
+            - pkg: "github.com/starsrc/bowl/services/storage/internal/meta"
+              desc: "底层存储引擎包禁止反向依赖上层 meta 领域层"
+            - pkg: "github.com/starsrc/bowl/services/storage/internal/server"
+              desc: "底层存储引擎包禁止反向依赖上层 RPC server 层"
+            - pkg: "github.com/starsrc/bowl/services/storage/internal/db"
+              desc: "底层存储引擎包禁止依赖 PostgreSQL 控制面 db 层"
+        client_isolation:
+          files:
+            - "**/client/**"
+          deny:
+            - pkg: "github.com/starsrc/bowl/services"
+              desc: "client 模块禁止直接依赖服务端内部实现，仅允许通过 gen/go 契约交互"
+    errcheck:
+      check-type-assertions: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^fmt\.Print.*$'
+          msg: "禁止使用 fmt.Print* 调试打印，服务端请使用结构化日志，CLI 请显式写入目标 io.Writer (如 fmt.Fprintln)"
+        - pattern: '^(print|println)$'
+          msg: "禁止使用内置 print/println 调试函数"
+        - pattern: '^pgxpool\.New(WithConfig)?$'
+          pkg: '^github\.com/jackc/pgx/v5/pgxpool$'
+          msg: "禁止直接调用 pgxpool.New/NewWithConfig，生产代码请通过 tx.OpenPool 创建连接池，测试代码请统一调用 setupMetaTestDB(t)"
+    govet:
+      enable:
+        - nilness   # 检查潜在的 nil 指针解引用
+        - shadow    # 检查意外的变量遮蔽 (如 err 被内层 := 覆盖)
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    testifylint:
+      enable-all: true
+
+  exclusions:
+    generated: lax
+    warn-unused: true
+    presets:
+      - common-false-positives
+      - std-error-handling
+    paths:
+      - .worktrees
+      - vendor
+      - gen
+    rules:
+      - path: '_test\.go$'
+        linters:
+          - revive
+        text: "context-as-argument:"
+      - path: 'testdb_helper_test\.go$'
+        linters:
+          - forbidigo
+        text: "pgxpool\\.New"
+
+issues:
+  # 解除单个 linter 报出问题的数量上限（默认 50），避免在 CI 中掩盖问题
+  max-issues-per-linter: 0
+  max-same-issues: 0

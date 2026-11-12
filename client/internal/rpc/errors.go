@@ -72,7 +72,7 @@ func MapErrorWithCancel(err error, cancel <-chan struct{}) syscall.Errno {
 // 若 err 为 nil，返回 0（成功）。
 // 若 err 因内核中断信号取消（ErrKernelInterrupted 或 context.Canceled），返回 syscall.EINTR。
 // 若 err 携带 google.rpc.ErrorInfo（Domain == "bowl.storage" 或非空 Reason），
-// 严格按 24 类 Reason 契约映射为对应 syscall.Errno。
+// 严格按 25 类 Reason 契约映射为对应 syscall.Errno。
 // 若未携带匹配 ErrorInfo，按 Connect 状态码确定性兜底映射（其余未知或普通传输错误一律兜底为 syscall.EIO）。
 func MapError(err error) syscall.Errno {
 	if err == nil {
@@ -83,8 +83,7 @@ func MapError(err error) syscall.Errno {
 		return syscall.EINTR
 	}
 
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 		for _, detail := range connectErr.Details() {
 			msg, detailErr := detail.Value()
 			if detailErr != nil {
@@ -141,6 +140,8 @@ func MapError(err error) syscall.Errno {
 						return syscall.EIO
 					case "EROFS":
 						return syscall.EROFS
+					case "EBUSY":
+						return syscall.EBUSY
 					}
 				}
 			}
@@ -156,6 +157,8 @@ func MapError(err error) syscall.Errno {
 			return syscall.EACCES
 		case connect.CodeInvalidArgument:
 			return syscall.EINVAL
+		case connect.CodeFailedPrecondition:
+			return syscall.EBUSY
 		case connect.CodeUnimplemented:
 			return syscall.EOPNOTSUPP
 		case connect.CodeResourceExhausted:

@@ -1,3 +1,4 @@
+// Package db 封装 Storage 控制面 PostgreSQL 连接池、事务与 sqlc 查询。
 package db
 
 import (
@@ -7,8 +8,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
-	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/tx"
+
 	"github.com/starsrc/bowl/services/storage/internal/config"
 )
 
@@ -69,9 +71,9 @@ func OpenPool(cfg config.DBPoolConfig) (*pgxpool.Pool, error) {
 // PoolParams 包含连接池所需依赖。
 type PoolParams struct {
 	fx.In
+	Ready     observability.Ready `optional:"true"`
 	Lifecycle fx.Lifecycle
 	Config    config.DBPoolConfig
-	Ready     telemetry.Ready `optional:"true"`
 }
 
 // ProvidePool 创建连接池并注册生命周期。

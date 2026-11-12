@@ -1,6 +1,7 @@
 package fusefs
 
 import (
+	"context"
 	"syscall"
 
 	"connectrpc.com/connect"
@@ -9,30 +10,63 @@ import (
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
-// lookupInode 查找目录项；跨机 RPC 在锁外并发执行。
-func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string) (cachedInode, fuse.Status) {
-	if ino, ok := fs.cache.entry(parent, name); ok {
-		if ino == 0 {
-			return cachedInode{}, fuse.ENOENT
-		}
-		if cached, ok := fs.cache.inode(ino); ok {
-			return cached, fuse.OK
-		}
-	}
+func (fs *RawFS) lookupInodeWithContext(parentCtx context.Context, cancel <-chan struct{}, parent uint64, name string) (cachedInode, fuse.Status) {
 	parentIno, status := fs.ToServerIno(parent)
 	if status != fuse.OK {
 		return cachedInode{}, status
 	}
+	if len(name) > MaxFilenameBytes {
+		return cachedInode{}, fuse.Status(syscall.ENAMETOOLONG)
+	}
+	cached, childIno, negative, ok := fs.cache.lookupReadOnly(parent, name)
+	return fs.lookupInodeAfterCache(parentCtx, cancel, parent, parentIno, name, cached, childIno, negative, ok)
+}
+
+func (fs *RawFS) lookupInodeAfterCache(
+	parentCtx context.Context,
+	cancel <-chan struct{},
+	parent, parentIno uint64,
+	name string,
+	cached cachedInode,
+	childIno uint64,
+	negative, ok bool,
+) (cachedInode, fuse.Status) {
+	if ok {
+		if negative {
+			return cachedInode{}, fuse.ENOENT
+		}
+		if fs.cfg.AttrTimeoutSeconds <= 0 {
+			if serverIno, st := fs.ToServerIno(childIno); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
+				fs.writeBehind.BarrierInode(parentCtx, serverIno)
+				if fresh, hit := fs.cache.inodeReadOnly(childIno); hit {
+					return fresh, fuse.OK
+				}
+			}
+		}
+		return cached, fuse.OK
+	} else if childIno != 0 {
+		if serverIno, st := fs.ToServerIno(childIno); st == fuse.OK && fs.writeBehind.HasPending(serverIno) {
+			fs.writeBehind.BarrierInode(parentCtx, serverIno)
+			if fresh, hit := fs.cache.inodeReadOnly(childIno); hit {
+				return fresh, fuse.OK
+			}
+		}
+	}
 	epoch, generation := fs.cache.snapshot()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(parentCtx, cancel)
 	defer cancelFunc()
-	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{ParentIno: parentIno, Name: []byte(name), SessionId: fs.currentSession()}))
+	resp, err := fs.client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		ParentIno: parentIno,
+		Name:      []byte(name),
+		DiskId:    fs.cfg.DiskID,
+	}))
 	if fs.cache.version() != epoch {
 		return cachedInode{}, fuse.Status(syscall.ESTALE)
 	}
 	if err != nil {
 		status := fs.ToStatus(err, cancel)
 		if status == fuse.ENOENT {
+			fs.metrics.incNSCacheMiss(nsCacheNegativeEntry)
 			fs.cache.putEntryAtIf(generation, epoch, parent, name, 0)
 		}
 		return cachedInode{}, status
@@ -42,27 +76,50 @@ func (fs *RawFS) lookupInode(cancel <-chan struct{}, parent uint64, name string)
 		return cachedInode{}, fuse.EIO
 	}
 	ino := fs.ToKernelIno(inode.GetIno())
-	cached := cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
+	if fs.writeBehind.HasPending(inode.GetIno()) {
+		fs.writeBehind.BarrierInode(parentCtx, inode.GetIno())
+		if fresh, ok := fs.cache.inodeReadOnly(ino); ok {
+			fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
+			return fresh, fuse.OK
+		}
+	}
+	cached = cachedInode{inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds()}
 	fs.cache.putEntryAtIf(generation, epoch, parent, name, ino)
 	fs.cache.putInodeAtIf(generation, epoch, ino, inode, cached.entryTimeout, cached.attrTimeout)
 	return cached, fuse.OK
 }
 
-func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse.Status) {
+func (fs *RawFS) getInodeWithContext(parentCtx context.Context, cancel <-chan struct{}, ino uint64) (cachedInode, fuse.Status) {
 	if inode, ok := fs.tmpMgr.LocalInode(ino); ok {
 		return cachedInode{inode: inode}, fuse.OK
-	}
-	if cached, ok := fs.cache.inode(ino); ok {
-		return cached, fuse.OK
 	}
 	serverIno, status := fs.ToServerIno(ino)
 	if status != fuse.OK {
 		return cachedInode{}, status
 	}
+	if fs.cfg.AttrTimeoutSeconds <= 0 && fs.writeBehind.HasPending(serverIno) {
+		fs.writeBehind.BarrierInode(parentCtx, serverIno)
+	}
+	if cached, ok := fs.cache.inodeReadOnly(ino); ok {
+		return cached, fuse.OK
+	}
+	return fs.getInodeMissWithContext(parentCtx, cancel, ino, serverIno)
+}
+
+func (fs *RawFS) getInodeMissWithContext(parentCtx context.Context, cancel <-chan struct{}, ino, serverIno uint64) (cachedInode, fuse.Status) {
+	if fs.writeBehind.HasPending(serverIno) {
+		fs.writeBehind.BarrierInode(parentCtx, serverIno)
+		if cached, ok := fs.cache.inodeReadOnly(ino); ok {
+			return cached, fuse.OK
+		}
+	}
 	epoch, generation := fs.cache.snapshot()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(parentCtx, cancel)
 	defer cancelFunc()
-	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{Ino: serverIno, SessionId: fs.currentSession()}))
+	resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
+		Ino:    serverIno,
+		DiskId: fs.cfg.DiskID,
+	}))
 	if fs.cache.version() != epoch {
 		return cachedInode{}, fuse.Status(syscall.ESTALE)
 	}
@@ -79,25 +136,98 @@ func (fs *RawFS) getInode(cancel <-chan struct{}, ino uint64) (cachedInode, fuse
 }
 
 // Lookup 在缓存命中时直接返回目录项。
-func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) fuse.Status {
-	if _, status := fs.ToServerIno(header.NodeId); status != fuse.OK {
-		return status
+func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) (status fuse.Status) {
+	if !fs.isVirtualStatsName(header.NodeId, name) && len(name) <= MaxFilenameBytes && fs.cfg.AttrTimeoutSeconds > 0 {
+		if parentIno, st := fs.ToServerIno(header.NodeId); st == fuse.OK {
+			fs.lifecycleMu.RLock()
+			cached, childIno, negative, ok := fs.cache.lookupReadOnly(header.NodeId, name)
+			if ok && !negative {
+				fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
+				out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
+				out.Ino = out.NodeId
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			opCtx, endSpan := fs.startFuseOp(OpLookup)
+			cached, status = fs.lookupInodeAfterCache(opCtx, cancel, header.NodeId, parentIno, name, cached, childIno, negative, ok)
+			if status == fuse.OK {
+				fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
+				out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
+				out.Ino = out.NodeId
+			}
+			fs.lifecycleMu.RUnlock()
+			endSpan(status)
+			return status
+		}
+	}
+
+	opCtx, endSpan := fs.startFuseOp(OpLookup)
+	defer func() { endSpan(status) }()
+
+	if fs.isVirtualStatsName(header.NodeId, name) {
+		fs.fillVirtualStatsEntryOut(out)
+		return fuse.OK
+	}
+	if _, st := fs.ToServerIno(header.NodeId); st != fuse.OK {
+		return st
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	cached, status := fs.lookupInode(cancel, header.NodeId, name)
+	cached, status := fs.lookupInodeWithContext(opCtx, cancel, header.NodeId, name)
 	if status == fuse.OK {
 		fs.FillEntryOut(out, cached.inode, cached.entryTimeout, cached.attrTimeout)
 		out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
-		out.Attr.Ino = out.NodeId
+		out.Ino = out.NodeId
 	}
 	return status
 }
 
 // GetAttr 在缓存命中时直接返回节点属性。
-func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut) fuse.Status {
-	if _, status := fs.ToServerIno(in.NodeId); status != fuse.OK {
-		return status
+func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	if !fs.isVirtualStatsIno(in.NodeId) && fs.cfg.AttrTimeoutSeconds > 0 {
+		if serverIno, st := fs.ToServerIno(in.NodeId); st == fuse.OK {
+			fs.lifecycleMu.RLock()
+			if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
+				fs.FillAttrOut(out, inode, 0)
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			if handled, tmpSt := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
+				out.SetTimeout(0)
+				fs.lifecycleMu.RUnlock()
+				if tmpSt != fuse.OK {
+					_, endSpan := fs.startFuseOp(OpGetAttr)
+					endSpan(tmpSt)
+				}
+				return tmpSt
+			}
+			if cached, ok := fs.cache.inodeReadOnly(in.NodeId); ok {
+				fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
+				fs.lifecycleMu.RUnlock()
+				return fuse.OK
+			}
+			opCtx, endSpan := fs.startFuseOp(OpGetAttr)
+			var cached cachedInode
+			cached, status = fs.getInodeMissWithContext(opCtx, cancel, in.NodeId, serverIno)
+			if status == fuse.OK {
+				fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
+			}
+			fs.lifecycleMu.RUnlock()
+			endSpan(status)
+			return status
+		}
+	}
+
+	opCtx, endSpan := fs.startFuseOp(OpGetAttr)
+	defer func() { endSpan(status) }()
+
+	if fs.isVirtualStatsIno(in.NodeId) {
+		out.SetTimeout(0)
+		fs.fillVirtualStatsAttr(&out.Attr)
+		return fuse.OK
+	}
+	if _, st := fs.ToServerIno(in.NodeId); st != fuse.OK {
+		return st
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
@@ -105,11 +235,11 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 		fs.FillAttrOut(out, inode, 0)
 		return fuse.OK
 	}
-	if handled, status := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
+	if handled, st := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
 		out.SetTimeout(0)
-		return status
+		return st
 	}
-	cached, status := fs.getInode(cancel, in.NodeId)
+	cached, status := fs.getInodeWithContext(opCtx, cancel, in.NodeId)
 	if status == fuse.OK {
 		fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
 	}
@@ -117,19 +247,29 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 }
 
 // StatFs 实现文件系统容量与 Inode 配额统计查询，对应 Linux FUSE FUSE_STATFS 协议。
-func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.StatfsOut) fuse.Status {
+func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.StatfsOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpStatFs)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
+	if fs.isVirtualStatsIno(in.NodeId) {
+		inCopy := *in
+		inCopy.NodeId = fuse.FUSE_ROOT_ID
+		in = &inCopy
+	}
 	ino, status := fs.ToServerIno(in.NodeId)
 	if status != fuse.OK {
 		return status
 	}
+	fs.writeBehind.BarrierAll(opCtx)
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{
-		Ino: ino, SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)

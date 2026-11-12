@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "bowl-storage"
+    static_configs:
+      - targets: ["storage-service:9090"]
+        labels:
+          service: "storage-service"
+          env: "production"
+
+  - job_name: "bowl-alloy"
+    static_configs:
+      - targets: ["alloy:12345"]
+        labels:
+          service: "alloy"
+          env: "production"
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -1,3 +1,4 @@
+// Package main 启动 bowl 客户端命令行程序。
 package main
 
 import (

@@ -1,0 +1,102 @@
+name: bowl
+
+services:
+  # ==============================================================================
+  # Database Service (PostgreSQL 18)
+  # ==============================================================================
+  postgres:
+    image: postgres:18-alpine
+    container_name: bowl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bowl
+    ports:
+      - "${POSTGRES_PORT:-9432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bowl"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Database Migration Service (Goose)
+  # ==============================================================================
+  migration:
+    image: bowl-storage-migration:latest
+    build:
+      context: ../..
+      dockerfile: services/storage/Dockerfile.migration
+    container_name: bowl-storage-migration
+    command: ["-dir", "/migrations", "postgres", "postgres://postgres:postgres@postgres:5432/bowl?sslmode=disable", "up"]
+    volumes:
+      - ../../services/storage/db/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Storage Service (ConnectRPC)
+  # ==============================================================================
+  storage-service:
+    image: ${STORAGE_IMAGE_NAME:-bowl-storage}:${TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: services/storage/Dockerfile
+    container_name: bowl-storage-service
+    restart: unless-stopped
+    env_file:
+      - ./storage.env
+    ports:
+      - "${STORAGE_PORT:-9000}:9000"
+      - "127.0.0.1:${STORAGE_ADMIN_PORT:-9090}:9090"
+    volumes:
+      - storage_data:/var/lib/bowl/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9000 || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Tracing Backend (Jaeger All-In-One — http://127.0.0.1:9686)
+  # ==============================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: bowl-jaeger
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-9686}:16686"
+      - "127.0.0.1:${JAEGER_OTLP_GRPC_PORT:-9317}:4317"
+      - "127.0.0.1:${JAEGER_OTLP_HTTP_PORT:-9318}:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - bowl-net
+
+volumes:
+  postgres_data:
+  storage_data:
+
+networks:
+  bowl-net:
+    driver: bridge

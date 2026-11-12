@@ -19,9 +19,18 @@ const (
 )
 
 // Rename 实现目录项重命名、跨目录移动与双向原子交换操作（支持 Linux FUSE_RENAME2 协议标志位）。
-func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName string, newName string) fuse.Status {
+func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName, newName string) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpRename)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(input.NodeId, oldName) || fs.isVirtualStatsName(input.Newdir, newName) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) || fs.isVirtualStatsIno(input.Newdir) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	oldParentIno, st := fs.ToServerIno(input.NodeId)
@@ -36,33 +45,57 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	var source, target uint64
+
+	source, _ := fs.cache.entry(input.NodeId, oldName)
+	target, targetKnown := fs.cache.entry(input.Newdir, newName)
 	var targetAttr *storagev1.Inode
-	if fs.handles.AnyOpen() {
-		old, oldStatus := fs.lookupInode(cancel, input.NodeId, oldName)
+	if target != 0 {
+		if cached, ok := fs.cache.peekInode(target); ok {
+			targetAttr = cached.inode
+		}
+	}
+
+	needLookup := fs.handles.AnyOpen() || fs.writeBehind.HasAnyPending() ||
+		(input.Flags&(renameExchange|renameNoReplace) == 0 && fs.hasDirtyInodes() && (!targetKnown || (target != 0 && (targetAttr == nil || targetAttr.GetAttr() == nil))))
+	if needLookup {
+		old, oldStatus := fs.lookupInodeWithContext(opCtx, cancel, input.NodeId, oldName)
 		if oldStatus != fuse.OK {
 			return oldStatus
 		}
 		source = fs.ToKernelIno(old.inode.GetIno())
-		cached, targetStatus := fs.lookupInode(cancel, input.Newdir, newName)
+		cached, targetStatus := fs.lookupInodeWithContext(opCtx, cancel, input.Newdir, newName)
 		if targetStatus != fuse.OK && targetStatus != fuse.ENOENT {
 			return targetStatus
 		}
 		if targetStatus == fuse.OK {
 			targetAttr = cached.inode
 			target = fs.ToKernelIno(targetAttr.GetIno())
+		} else {
+			target = 0
+			targetAttr = nil
 		}
-	} else {
-		source, _ = fs.cache.entry(input.NodeId, oldName)
-		target, _ = fs.cache.entry(input.Newdir, newName)
 	}
+
+	if source != 0 {
+		if sourceServerIno, sSt := fs.ToServerIno(source); sSt == fuse.OK {
+			fs.writeBehind.BarrierInode(opCtx, sourceServerIno)
+		}
+	}
+	var targetServerIno uint64
+	var hasTargetServerIno bool
 	if target != 0 {
+		if tIno, tSt := fs.ToServerIno(target); tSt == fuse.OK {
+			targetServerIno = tIno
+			hasTargetServerIno = true
+			if target != source {
+				fs.writeBehind.BarrierInode(opCtx, targetServerIno)
+			}
+		}
 		// 与并发 Release 按 Inode 串行，避免目标节点孤儿标记与最后句柄关闭互相错过。
 		unlock := fs.inodeLocks.lock(target)
 		defer unlock()
 	}
 	targetOpen := target != 0 && fs.handles.IsOpen(target)
-	sid := fs.currentSession()
 
 	var protoFlags uint32
 	if (input.Flags & renameNoReplace) != 0 {
@@ -79,7 +112,7 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		protoFlags |= unknown
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	epoch := fs.cache.version()
@@ -89,8 +122,9 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 		NewParentIno:       newParentIno,
 		NewName:            []byte(newName),
 		Flags:              protoFlags,
-		SessionId:          sid,
 		TargetOpenInClient: &targetOpen,
+		DiskId:             fs.cfg.DiskID,
+		Epoch:              fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -150,8 +184,15 @@ func (fs *RawFS) Rename(cancel <-chan struct{}, input *fuse.RenameIn, oldName st
 	if target != 0 && target != source {
 		fs.cache.invalidateInode(target)
 	}
-	if targetOpen && target != source && input.Flags&renameExchange == 0 && targetAttr != nil && targetAttr.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(target, sid)
+	if target != 0 && target != source && input.Flags&renameExchange == 0 &&
+		targetAttr != nil && targetAttr.GetAttr() != nil && targetAttr.GetAttr().GetNlink() == 1 {
+		if targetOpen {
+			fs.markOrphanWithContext(opCtx, target)
+		} else if hasTargetServerIno {
+			fs.writeBehind.RemoveInode(opCtx, targetServerIno)
+			fs.readAhead.InvalidateInode(targetServerIno)
+			fs.clearDirty(targetServerIno)
+		}
 	}
 	return fuse.OK
 }

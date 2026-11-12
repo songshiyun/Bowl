@@ -1,7 +1,6 @@
 package fusefs
 
 import (
-	"context"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -45,7 +44,7 @@ func ToHostLockType(protoType uint32) (uint32, fuse.Status) {
 }
 
 // NormalizeLockRange 校验 POSIX 区间，并将 flock 归一化为整个文件。
-func NormalizeLockRange(lkFlags uint32, start, end uint64) (uint64, uint64, fuse.Status) {
+func NormalizeLockRange(lkFlags uint32, start, end uint64) (normStart, normEnd uint64, status fuse.Status) {
 	if lkFlags&fuse.FUSE_LK_FLOCK != 0 {
 		return 0, ^uint64(0), fuse.OK
 	}
@@ -60,7 +59,7 @@ func (fs *RawFS) prepareLock(input *fuse.LkIn, get bool) (fuse.LkIn, fuse.Status
 	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
 		return fuse.LkIn{}, status
 	}
-	if _, _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, false); status != fuse.OK {
 		return fuse.LkIn{}, status
 	}
 	if _, status := ToProtoLockType(input.Lk.Typ); status != fuse.OK {
@@ -79,7 +78,10 @@ func (fs *RawFS) prepareLock(input *fuse.LkIn, get bool) (fuse.LkIn, fuse.Status
 }
 
 // GetLk 在本地查询冲突文件锁。
-func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fuse.Status {
+func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) (status fuse.Status) {
+	_, endSpan := fs.startFuseOp(OpGetLk)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, true)
@@ -91,7 +93,10 @@ func (fs *RawFS) GetLk(_ <-chan struct{}, input *fuse.LkIn, out *fuse.LkOut) fus
 }
 
 // SetLk 在本地非阻塞设置文件锁。
-func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) fuse.Status {
+func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) (status fuse.Status) {
+	_, endSpan := fs.startFuseOp(OpSetLk)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, false)
@@ -102,12 +107,15 @@ func (fs *RawFS) SetLk(_ <-chan struct{}, input *fuse.LkIn) fuse.Status {
 }
 
 // SetLkw 在本地阻塞设置文件锁。
-func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) fuse.Status {
+func (fs *RawFS) SetLkw(cancel <-chan struct{}, input *fuse.LkIn) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpSetLkw)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	in, status := fs.prepareLock(input, false)
 	if status != fuse.OK {
 		return status
 	}
-	return fs.locks.SetLkw(context.Background(), cancel, &in)
+	return fs.locks.SetLkw(opCtx, cancel, &in)
 }

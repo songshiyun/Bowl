@@ -1,11 +1,13 @@
 package fusefs
 
 import (
+	"context"
 	"sync"
 	"syscall"
 
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // FileHandle 记录一个本地句柄的目标节点、打开标志和类型。
@@ -31,13 +33,26 @@ type HandleTable struct {
 	next        uint64
 	handles     map[uint64]FileHandle
 	counts      map[uint64]int
+	openFiles   int
+	openDirs    int
 	orphans     map[uint64]struct{}
 	removedDirs map[uint64]*storagev1.Inode
-	onOrphan    func(uint64)
+	onOrphan    func(context.Context, uint64)
 }
 
 // NewHandleTable 创建本地句柄表。
 func NewHandleTable(onOrphan func(uint64)) *HandleTable {
+	var fn func(context.Context, uint64)
+	if onOrphan != nil {
+		fn = func(_ context.Context, ino uint64) {
+			onOrphan(ino)
+		}
+	}
+	return NewHandleTableWithContext(fn)
+}
+
+// NewHandleTableWithContext 创建支持透传调用链 Context 至孤儿回收回调的本地句柄表。
+func NewHandleTableWithContext(onOrphan func(context.Context, uint64)) *HandleTable {
 	return &HandleTable{
 		handles:     make(map[uint64]FileHandle),
 		counts:      make(map[uint64]int),
@@ -45,6 +60,12 @@ func NewHandleTable(onOrphan func(uint64)) *HandleTable {
 		removedDirs: make(map[uint64]*storagev1.Inode),
 		onOrphan:    onOrphan,
 	}
+}
+
+func (t *HandleTable) stats() (openFiles, openDirs int) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.openFiles, t.openDirs
 }
 
 // Open 分配与其他活动句柄不同的本地标识。
@@ -69,6 +90,11 @@ func (t *HandleTable) Open(ino uint64, flags uint32, isDir bool) (uint64, error)
 	}
 	t.handles[t.next] = FileHandle{Ino: ino, Flags: flags, IsDir: isDir}
 	t.counts[ino]++
+	if isDir {
+		t.openDirs++
+	} else {
+		t.openFiles++
+	}
 	return t.next, nil
 }
 
@@ -82,6 +108,11 @@ func (t *HandleTable) Get(fh uint64) (FileHandle, bool) {
 
 // Release 释放一个句柄；重复释放不会减少引用数。
 func (t *HandleTable) Release(fh uint64) (FileHandle, bool) {
+	return t.ReleaseContext(context.Background(), fh)
+}
+
+// ReleaseContext 释放一个句柄，并在触发最后句柄孤儿回收时透传 ctx。
+func (t *HandleTable) ReleaseContext(ctx context.Context, fh uint64) (FileHandle, bool) {
 	t.mu.Lock()
 	handle, ok := t.handles[fh]
 	if !ok {
@@ -89,6 +120,11 @@ func (t *HandleTable) Release(fh uint64) (FileHandle, bool) {
 		return FileHandle{}, false
 	}
 	delete(t.handles, fh)
+	if handle.IsDir {
+		t.openDirs--
+	} else {
+		t.openFiles--
+	}
 	t.counts[handle.Ino]--
 	reclaim := false
 	if t.counts[handle.Ino] == 0 {
@@ -99,7 +135,10 @@ func (t *HandleTable) Release(fh uint64) (FileHandle, bool) {
 	}
 	t.mu.Unlock()
 	if reclaim && t.onOrphan != nil {
-		t.onOrphan(handle.Ino)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		t.onOrphan(ctx, handle.Ino)
 	}
 	return handle, true
 }
@@ -119,6 +158,11 @@ func (t *HandleTable) IsOpen(ino uint64) bool {
 // MarkOrphan 记录已解链的服务端节点；若句柄已全部关闭则立即触发回收。
 // 调用方须在服务端确认节点没有目录项后调用，并协调新句柄打开与回收。
 func (t *HandleTable) MarkOrphan(ino uint64) {
+	t.MarkOrphanContext(context.Background(), ino)
+}
+
+// MarkOrphanContext 记录已解链的服务端节点；若句柄已全部关闭则携带 ctx 立即触发回收。
+func (t *HandleTable) MarkOrphanContext(ctx context.Context, ino uint64) {
 	t.mu.Lock()
 	if t.counts[ino] != 0 {
 		t.orphans[ino] = struct{}{}
@@ -127,7 +171,10 @@ func (t *HandleTable) MarkOrphan(ino uint64) {
 	}
 	t.mu.Unlock()
 	if t.onOrphan != nil {
-		t.onOrphan(ino)
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		t.onOrphan(ctx, ino)
 	}
 }
 
@@ -143,6 +190,8 @@ func (t *HandleTable) clear() {
 	defer t.mu.Unlock()
 	clear(t.handles)
 	clear(t.counts)
+	t.openFiles = 0
+	t.openDirs = 0
 	clear(t.orphans)
 	clear(t.removedDirs)
 }

@@ -11,9 +11,15 @@ import (
 
 // SetXAttr 实现设置扩展属性请求，透传属性名、属性值与创建/替换标志位。
 // 在只读挂载模式下直接拦截返回 EROFS。
-func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr string, data []byte) fuse.Status {
-	if status := fs.CheckWritable(); status != fuse.OK {
+func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr string, data []byte) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpSetXAttr)
+	defer func() { endSpan(status) }()
+
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
 	}
 
 	ino, status := fs.ToServerIno(input.NodeId)
@@ -23,19 +29,21 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	fs.writeBehind.BarrierInode(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	_, err := fs.client.SetXattr(ctx, connect.NewRequest(&storagev1.SetXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		Value:     data,
-		Flags:     input.Flags,
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		Value:  data,
+		Flags:  input.Flags,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}))
 	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	if attr == securityCapabilityXattr {
 		fs.caps.markPresent(input.NodeId)
@@ -45,7 +53,13 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 }
 
 // GetXAttr 实现读取扩展属性请求，支持零长度探测与 ERANGE 缓冲区过小语义。
-func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (uint32, fuse.Status) {
+func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (sz uint32, status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpGetXAttr)
+	defer func() { endSpan(status) }()
+
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return 0, fuse.Status(syscall.ENODATA)
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
@@ -55,17 +69,18 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 	if attr == securityCapabilityXattr && fs.caps.knownAbsent(header.NodeId) {
 		return 0, fuse.Status(syscall.ENODATA)
 	}
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.GetXattr(ctx, connect.NewRequest(&storagev1.GetXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
-		status := fs.ToStatusWithSession(err, cancel)
+		status = fs.ToStatus(err, cancel)
 		if attr == securityCapabilityXattr && status == fuse.Status(syscall.ENODATA) {
 			fs.caps.markAbsent(header.NodeId)
 		}
@@ -90,23 +105,30 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 }
 
 // ListXAttr 实现列出扩展属性名称请求，组装以 '\x00' 结尾的连续字节序列。
-func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest []byte) (uint32, fuse.Status) {
+func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest []byte) (sz uint32, status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpListXAttr)
+	defer func() { endSpan(status) }()
+
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return 0, fuse.OK
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, status := fs.ToServerIno(header.NodeId)
 	if status != fuse.OK {
 		return 0, status
 	}
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.ListXattr(ctx, connect.NewRequest(&storagev1.ListXattrRequest{
-		Ino:       ino,
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
 	}))
 	if err != nil {
-		return 0, fs.ToStatusWithSession(err, cancel)
+		return 0, fs.ToStatus(err, cancel)
 	}
 
 	names := resp.Msg.GetNames()
@@ -136,9 +158,15 @@ func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest [
 
 // RemoveXAttr 实现删除指定扩展属性请求。
 // 在只读挂载模式下直接拦截返回 EROFS。
-func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string) fuse.Status {
-	if status := fs.CheckWritable(); status != fuse.OK {
+func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpRemoveXAttr)
+	defer func() { endSpan(status) }()
+
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.EACCES
 	}
 
 	ino, status := fs.ToServerIno(header.NodeId)
@@ -148,17 +176,19 @@ func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	fs.writeBehind.BarrierInode(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	_, err := fs.client.RemoveXattr(ctx, connect.NewRequest(&storagev1.RemoveXattrRequest{
-		Ino:       ino,
-		Name:      []byte(attr),
-		SessionId: fs.currentSession(),
+		Ino:    ino,
+		Name:   []byte(attr),
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}))
 	fs.cache.invalidateInode(header.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	if attr == securityCapabilityXattr {
 		fs.caps.markAbsent(header.NodeId)

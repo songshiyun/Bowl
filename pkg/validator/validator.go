@@ -1,3 +1,4 @@
+// Package validator 提供 Storage RPC 请求参数的业务校验器。
 package validator
 
 import (
@@ -27,16 +28,8 @@ const (
 // storageMessages 汇总 StorageService 全部现有的请求与响应消息，用于启动期预编译校验规则。
 var storageMessages = []proto.Message{
 	// 请求消息 (Requests)
+	&storagev1.MountDiskRequest{},
 	&storagev1.ReclaimOrphanRequest{},
-	&storagev1.ListBranchesRequest{},
-	&storagev1.DeleteBranchRequest{},
-	&storagev1.CommitRequest{},
-	&storagev1.RollbackRequest{},
-	&storagev1.MergeRequest{},
-	&storagev1.ResolveMergeRequest{},
-	&storagev1.AbortMergeRequest{},
-	&storagev1.DiffRequest{},
-	&storagev1.CreateBranchRequest{},
 	&storagev1.LookupRequest{},
 	&storagev1.GetAttrRequest{},
 	&storagev1.SetAttrRequest{},
@@ -60,8 +53,6 @@ var storageMessages = []proto.Message{
 	&storagev1.GetXattrRequest{},
 	&storagev1.ListXattrRequest{},
 	&storagev1.RemoveXattrRequest{},
-	&storagev1.RenewSessionRequest{},
-	&storagev1.CloseSessionRequest{},
 	&storagev1.CreateDiskRequest{},
 	&storagev1.GetDiskRequest{},
 	&storagev1.ListDisksRequest{},
@@ -70,16 +61,8 @@ var storageMessages = []proto.Message{
 	&storagev1.StatFSRequest{},
 
 	// 响应消息 (Responses)
+	&storagev1.MountDiskResponse{},
 	&storagev1.ReclaimOrphanResponse{},
-	&storagev1.ListBranchesResponse{},
-	&storagev1.DeleteBranchResponse{},
-	&storagev1.CommitResponse{},
-	&storagev1.RollbackResponse{},
-	&storagev1.MergeResponse{},
-	&storagev1.ResolveMergeResponse{},
-	&storagev1.AbortMergeResponse{},
-	&storagev1.DiffResponse{},
-	&storagev1.CreateBranchResponse{},
 	&storagev1.LookupResponse{},
 	&storagev1.GetAttrResponse{},
 	&storagev1.SetAttrResponse{},
@@ -103,8 +86,6 @@ var storageMessages = []proto.Message{
 	&storagev1.GetXattrResponse{},
 	&storagev1.ListXattrResponse{},
 	&storagev1.RemoveXattrResponse{},
-	&storagev1.RenewSessionResponse{},
-	&storagev1.CloseSessionResponse{},
 	&storagev1.CreateDiskResponse{},
 	&storagev1.GetDiskResponse{},
 	&storagev1.ListDisksResponse{},
@@ -113,10 +94,6 @@ var storageMessages = []proto.Message{
 	&storagev1.StatFSResponse{},
 
 	// 嵌套与共享消息
-	&storagev1.Branch{},
-	&storagev1.CommitInfo{},
-	&storagev1.MergeConflict{},
-	&storagev1.DiffEntry{},
 	&storagev1.DirEntry{},
 	&storagev1.DirEntryPlus{},
 	&storagev1.Inode{},
@@ -170,8 +147,7 @@ func (v *storageValidator) Validate(msg proto.Message, options ...protovalidate.
 	if err == nil {
 		return nil
 	}
-	var valErr *protovalidate.ValidationError
-	if errors.As(err, &valErr) {
+	if valErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		reason, domain := translateValidation(valErr, ErrorDomain)
 		return &ValidationError{
 			err:    valErr,
@@ -199,12 +175,10 @@ func ErrnoReason(err error) (string, bool) {
 	if err == nil {
 		return "", false
 	}
-	var storageValErr *ValidationError
-	if errors.As(err, &storageValErr) {
+	if storageValErr, ok := errors.AsType[*ValidationError](err); ok {
 		return storageValErr.Reason(), true
 	}
-	var protoValErr *protovalidate.ValidationError
-	if errors.As(err, &protoValErr) {
+	if protoValErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		return translateValidationReason(protoValErr), true
 	}
 	return "", false
@@ -220,12 +194,10 @@ func ToStatus(err error) *status.Status {
 	if s, ok := status.FromError(err); ok {
 		return s
 	}
-	var storageValErr *ValidationError
-	if errors.As(err, &storageValErr) {
+	if storageValErr, ok := errors.AsType[*ValidationError](err); ok {
 		return buildInvalidArgumentStatus(err.Error(), storageValErr.Reason(), storageValErr.Domain())
 	}
-	var protoValErr *protovalidate.ValidationError
-	if errors.As(err, &protoValErr) {
+	if protoValErr, ok := errors.AsType[*protovalidate.ValidationError](err); ok {
 		reason, domain := translateValidation(protoValErr, ErrorDomain)
 		return buildInvalidArgumentStatus(err.Error(), reason, domain)
 	}
@@ -262,7 +234,7 @@ func translateValidationReason(valErr *protovalidate.ValidationError) string {
 	return reason
 }
 
-func translateValidation(valErr *protovalidate.ValidationError, defaultDomain string) (string, string) {
+func translateValidation(valErr *protovalidate.ValidationError, defaultDomain string) (reason, domain string) {
 	bestPriority := 100
 	bestReason := ReasonInvalidArgument
 	bestDomain := defaultDomain
@@ -271,12 +243,12 @@ func translateValidation(valErr *protovalidate.ValidationError, defaultDomain st
 	}
 
 	for _, v := range valErr.Violations {
-		priority, reason, domain := classifyViolation(v)
+		priority, vReason, vDomain := classifyViolation(v)
 		if priority < bestPriority {
 			bestPriority = priority
-			bestReason = reason
-			if domain != "" {
-				bestDomain = domain
+			bestReason = vReason
+			if vDomain != "" {
+				bestDomain = vDomain
 			}
 		}
 	}
@@ -284,14 +256,14 @@ func translateValidation(valErr *protovalidate.ValidationError, defaultDomain st
 	return bestReason, bestDomain
 }
 
-func classifyViolation(v *protovalidate.Violation) (int, string, string) {
-	priority, reason := classifyViolationInternal(v)
+func classifyViolation(v *protovalidate.Violation) (priority int, reason, domain string) {
+	priority, reason = classifyViolationInternal(v)
 	fullName := ""
 	if v != nil && v.FieldDescriptor != nil {
 		fullName = string(v.FieldDescriptor.FullName())
 	}
 
-	domain := ""
+	domain = ""
 	if strings.HasPrefix(fullName, "storage.v1.") {
 		domain = ErrorDomain
 	} else if fullName == "" {
@@ -301,7 +273,7 @@ func classifyViolation(v *protovalidate.Violation) (int, string, string) {
 	return priority, reason, domain
 }
 
-func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
+func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason string) {
 	if v == nil || v.Proto == nil {
 		return 60, ReasonInvalidArgument
 	}
@@ -326,22 +298,48 @@ func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
 
 	switch fullName {
 	// 第 1 优先级：基础整型/标识符与模式/标志字段校验 -> EINVAL
-	case "storage.v1.LookupRequest.session_id",
-		"storage.v1.GetAttrRequest.session_id",
-		"storage.v1.MknodRequest.session_id",
-		"storage.v1.MkdirRequest.session_id",
-		"storage.v1.SymlinkRequest.session_id",
-		"storage.v1.ReadlinkRequest.session_id",
-		"storage.v1.LinkRequest.session_id",
-		"storage.v1.UnlinkRequest.session_id",
-		"storage.v1.RmdirRequest.session_id",
-		"storage.v1.RenameRequest.session_id",
-		"storage.v1.SetXattrRequest.session_id",
-		"storage.v1.GetXattrRequest.session_id",
-		"storage.v1.ListXattrRequest.session_id",
-		"storage.v1.RemoveXattrRequest.session_id",
-		"storage.v1.StatFSRequest.session_id",
-		"storage.v1.ReclaimOrphanRequest.session_id",
+	case "storage.v1.MountDiskRequest.disk_id",
+		"storage.v1.LookupRequest.disk_id",
+		"storage.v1.GetAttrRequest.disk_id",
+		"storage.v1.SetAttrRequest.disk_id",
+		"storage.v1.SetAttrRequest.epoch",
+		"storage.v1.MknodRequest.disk_id",
+		"storage.v1.MknodRequest.epoch",
+		"storage.v1.MkdirRequest.disk_id",
+		"storage.v1.MkdirRequest.epoch",
+		"storage.v1.SymlinkRequest.disk_id",
+		"storage.v1.SymlinkRequest.epoch",
+		"storage.v1.ReadlinkRequest.disk_id",
+		"storage.v1.LinkRequest.disk_id",
+		"storage.v1.LinkRequest.epoch",
+		"storage.v1.UnlinkRequest.disk_id",
+		"storage.v1.UnlinkRequest.epoch",
+		"storage.v1.RmdirRequest.disk_id",
+		"storage.v1.RmdirRequest.epoch",
+		"storage.v1.RenameRequest.disk_id",
+		"storage.v1.RenameRequest.epoch",
+		"storage.v1.CreateRequest.disk_id",
+		"storage.v1.CreateRequest.epoch",
+		"storage.v1.ReadRequest.disk_id",
+		"storage.v1.WriteRequest.disk_id",
+		"storage.v1.WriteRequest.epoch",
+		"storage.v1.FsyncRequest.disk_id",
+		"storage.v1.FsyncRequest.epoch",
+		"storage.v1.FsyncDirRequest.disk_id",
+		"storage.v1.FsyncDirRequest.epoch",
+		"storage.v1.ReadDirRequest.disk_id",
+		"storage.v1.ReadDirPlusRequest.disk_id",
+		"storage.v1.FallocateRequest.disk_id",
+		"storage.v1.FallocateRequest.epoch",
+		"storage.v1.SetXattrRequest.disk_id",
+		"storage.v1.SetXattrRequest.epoch",
+		"storage.v1.GetXattrRequest.disk_id",
+		"storage.v1.ListXattrRequest.disk_id",
+		"storage.v1.RemoveXattrRequest.disk_id",
+		"storage.v1.RemoveXattrRequest.epoch",
+		"storage.v1.StatFSRequest.disk_id",
+		"storage.v1.ReclaimOrphanRequest.disk_id",
+		"storage.v1.ReclaimOrphanRequest.epoch",
 		"storage.v1.ReclaimOrphanRequest.ino",
 		"storage.v1.LookupRequest.parent_ino",
 		"storage.v1.GetAttrRequest.ino",
@@ -351,7 +349,6 @@ func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
 		"storage.v1.SetAttrRequest.gid",
 		"storage.v1.SetAttrRequest.size",
 		"storage.v1.SetAttrRequest.fh",
-		"storage.v1.SetAttrRequest.session_id",
 		"storage.v1.SetAttrRequest.flags",
 		"storage.v1.MknodRequest.parent_ino",
 		"storage.v1.MknodRequest.mode",
@@ -378,50 +375,40 @@ func classifyViolationInternal(v *protovalidate.Violation) (int, string) {
 		"storage.v1.CreateRequest.uid",
 		"storage.v1.CreateRequest.gid",
 		"storage.v1.CreateRequest.flags",
-		"storage.v1.CreateRequest.session_id",
 		"storage.v1.ReadRequest.ino",
 		"storage.v1.ReadRequest.fh",
 		"storage.v1.ReadRequest.offset",
 		"storage.v1.ReadRequest.size",
-		"storage.v1.ReadRequest.session_id",
 		"storage.v1.WriteRequest.ino",
 		"storage.v1.WriteRequest.fh",
 		"storage.v1.WriteRequest.offset",
 		"storage.v1.WriteRequest.data",
-		"storage.v1.WriteRequest.session_id",
 		"storage.v1.WriteResponse.size",
 		"storage.v1.WriteResponse.inode",
 		"storage.v1.FsyncRequest.ino",
 		"storage.v1.FsyncRequest.fh",
 		"storage.v1.FsyncRequest.datasync",
-		"storage.v1.FsyncRequest.session_id",
 		"storage.v1.FsyncDirRequest.ino",
 		"storage.v1.FsyncDirRequest.fh",
 		"storage.v1.FsyncDirRequest.datasync",
-		"storage.v1.FsyncDirRequest.session_id",
 		"storage.v1.ReadDirRequest.ino",
 		"storage.v1.ReadDirRequest.fh",
 		"storage.v1.ReadDirRequest.offset",
 		"storage.v1.ReadDirRequest.limit",
-		"storage.v1.ReadDirRequest.session_id",
 		"storage.v1.ReadDirPlusRequest.ino",
 		"storage.v1.ReadDirPlusRequest.fh",
 		"storage.v1.ReadDirPlusRequest.offset",
 		"storage.v1.ReadDirPlusRequest.limit",
-		"storage.v1.ReadDirPlusRequest.session_id",
 		"storage.v1.FallocateRequest.ino",
 		"storage.v1.FallocateRequest.fh",
 		"storage.v1.FallocateRequest.offset",
 		"storage.v1.FallocateRequest.length",
 		"storage.v1.FallocateRequest.mode",
-		"storage.v1.FallocateRequest.session_id",
 		"storage.v1.SetXattrRequest.ino",
 		"storage.v1.SetXattrRequest.flags",
 		"storage.v1.GetXattrRequest.ino",
 		"storage.v1.ListXattrRequest.ino",
 		"storage.v1.RemoveXattrRequest.ino",
-		"storage.v1.RenewSessionRequest.session_id",
-		"storage.v1.CloseSessionRequest.session_id",
 		"storage.v1.DirEntry.ino",
 		"storage.v1.DirEntryPlus.ino",
 		"storage.v1.Inode.ino",

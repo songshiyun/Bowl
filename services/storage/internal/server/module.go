@@ -1,9 +1,23 @@
 package server
 
-import "go.uber.org/fx"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/fx"
 
-// Module 提供 Server 构造并在 Fx 容器中完成生命周期装配。
+	"github.com/starsrc/pkg/observability/obsfx"
+)
+
+func provideHTTPMetricsCollector(m *HTTPMetrics) prometheus.Collector {
+	return m
+}
+
+// Module 提供 Server 构造、外层 HTTP 指标采集器与精细桶 OTel MeterProvider 装配。
 var Module = fx.Module("server",
-	fx.Provide(New),
+	fx.Provide(
+		NewHTTPMetrics,
+		obsfx.AsCollector(provideHTTPMetricsCollector),
+		ConfigureFineBucketMeterProvider,
+		New,
+	),
 	fx.Invoke(func(*Server) {}),
 )

@@ -1,8 +1,8 @@
 version: '3'
 
 vars:
-  COMPOSE_FILE: docker-compose.yaml
-  COMPOSE_EXAMPLE: docker-compose.yaml.example
+  ENV: '{{.ENV | default "dev"}}'
+  COMPOSE_FILE: 'deploy/{{.ENV}}/docker-compose.yaml'
   STORAGE_DOCKERFILE: services/storage/Dockerfile
   STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME | default "bowl-storage"}}'
   TAG: '{{.TAG | default "latest"}}'
@@ -24,32 +24,29 @@ tasks:
     cmds:
       - task --list
 
-  init:
-    desc: "Ensure docker-compose.yaml exists (copies from example if missing)"
-    status:
-      - test -f {{.COMPOSE_FILE}}
-    cmds:
-      - cp {{.COMPOSE_EXAMPLE}} {{.COMPOSE_FILE}}
-      - echo "Created {{.COMPOSE_FILE}} from {{.COMPOSE_EXAMPLE}}."
-
   vendor:storage:
     desc: "Vendor dependencies for storage service (ensures offline docker build)"
     internal: true
     cmds:
       - go -C services/storage mod vendor
 
+  vendor:client:
+    desc: "Vendor dependencies for client CLI (ensures offline docker build and test)"
+    internal: true
+    cmds:
+      - go -C client mod vendor
+
   run:
-    desc: "Start all services in background via docker compose (supports TAG=xxx, e.g. task run TAG=test)"
-    deps: [init]
+    desc: "Start services via docker compose (ENV=dev|prod, default dev; supports TAG=xxx)"
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} up -d {{.CLI_ARGS}}
+      - docker compose -f {{.COMPOSE_FILE}} up -d --remove-orphans {{.CLI_ARGS}}
 
   build:
-    desc: "Build new docker image(s) via docker compose (supports TAG=xxx, e.g. task build TAG=test)"
-    deps: [init, vendor:storage]
+    desc: "Build docker image(s) via docker compose (ENV=dev|prod, default dev; supports TAG=xxx)"
+    deps: [vendor:storage]
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'
@@ -68,17 +65,17 @@ tasks:
       - docker build -t {{.CLIENT_TEST_IMAGE}}:{{.TAG}} -f {{.CLIENT_DOCKERFILE}} client {{.CLI_ARGS}}
 
   down:
-    desc: "Stop and remove docker compose containers and networks"
+    desc: "Stop and remove docker compose containers and networks (ENV=dev|prod)"
     cmds:
-      - docker compose -f {{.COMPOSE_FILE}} down {{.CLI_ARGS}}
+      - docker compose -f {{.COMPOSE_FILE}} down --remove-orphans {{.CLI_ARGS}}
 
   logs:
-    desc: "Follow docker compose service logs"
+    desc: "Follow docker compose service logs (ENV=dev|prod)"
     cmds:
       - docker compose -f {{.COMPOSE_FILE}} logs -f {{.CLI_ARGS}}
 
   ps:
-    desc: "Show status of docker compose services"
+    desc: "Show status of docker compose services (ENV=dev|prod)"
     cmds:
       - docker compose -f {{.COMPOSE_FILE}} ps
 
@@ -110,8 +107,8 @@ tasks:
       - go -C client mod tidy {{.CLI_ARGS}}
 
   test:client:
-    desc: "Run client static checks, build, and unit tests inside Linux Docker container"
-    deps: [build:client:test]
+    desc: "Build client and run unit tests inside Linux Docker container"
+    deps: [vendor:client, build:client:test]
     cmds:
       - docker run --rm
         -v bowl-go-mod-cache:/go/pkg/mod
@@ -120,11 +117,11 @@ tasks:
         -w /workspace/client
         -e GOWORK=off
         {{.CLIENT_TEST_IMAGE}}:{{.TAG}}
-        sh -c 'test -z "$(gofmt -s -l .)" && go vet ./... && CGO_ENABLED=0 GOOS=linux go build -o /tmp/bowl ./cmd/bowl && /tmp/bowl version && go test -v -count=1 ./... {{.CLI_ARGS}}'
+        sh -c 'CGO_ENABLED=0 GOOS=linux go build -o /tmp/bowl ./cmd/bowl && /tmp/bowl version && go test -v -count=1 ./... {{.CLI_ARGS}}'
 
   test:client:e2e:
     desc: "Run Linux FUSE client black-box E2E tests inside privileged test container"
-    deps: [init, vendor:storage, build:client:test]
+    deps: [vendor:storage, vendor:client, build:client:test]
     cmds:
       - defer: sh -c 'if [ "${KEEP_E2E_ENV:-0}" != "1" ]; then docker compose -f {{.COMPOSE_FILE}} down --remove-orphans; fi'
       - docker compose -f {{.COMPOSE_FILE}} up -d --build --wait storage-service
@@ -145,7 +142,7 @@ tasks:
 
   test:e2e:
     desc: "Run cross-service E2E tests against live docker compose services"
-    deps: [init, vendor:storage]
+    deps: [vendor:storage]
     env:
       STORAGE_IMAGE_NAME: '{{.STORAGE_IMAGE_NAME}}'
       TAG: '{{.TAG}}'
@@ -154,31 +151,18 @@ tasks:
       - docker compose -f {{.COMPOSE_FILE}} up -d --build --wait storage-service
       - go test -tags=e2e -v -count=1 ./e2e/... {{.CLI_ARGS}}
 
+  hooks:install:
+    desc: "Configure Git core.hooksPath to .githooks (shared across main repo and worktrees)"
+    cmds:
+      - git config core.hooksPath .githooks
+
   lint:
-    desc: "Run buf lint, gofmt check, and go vet across all modules"
+    desc: "Run buf lint and golangci-lint across all modules"
     cmds:
       - buf lint
-      - test -z "$(gofmt -s -l . | grep -Ev '^(\.worktrees/|(.*/)?vendor/)')"
-      - >-
-        sh -c '
-        for f in services/storage/internal/meta/*_test.go; do
-          base=$(basename "$f");
-          if [ "$base" != "testdb_helper_test.go" ] && [ "$base" != "disk_test.go" ]; then
-            if grep -Eq "STORAGE_DB_DSN|STORAGE_TEST_DSN|TEST_DB_DSN|BOWL_TEST_POSTGRES_DSN|:(5432|9432)/bowl" "$f"; then
-              echo "lint error: $f 私自解析或硬编码数据库 DSN，请统一调用 setupMetaTestDB(t)" >&2;
-              exit 1;
-            fi;
-            if grep -Eq "pgxpool\.New(WithConfig)?\(" "$f" && ! grep -Eq "resolveAndConnectTestDB|getStorageTestDSN" "$f"; then
-              echo "lint error: $f 绕过统一辅助函数直接调用 pgxpool.New，请统一调用 setupMetaTestDB(t)" >&2;
-              exit 1;
-            fi;
-          fi;
-        done'
-      - go vet ./...
-      - go -C services/storage vet ./...
-      - GOOS=linux CGO_ENABLED=0 go -C client vet ./...
-      - GOOS=linux CGO_ENABLED=0 go -C client vet -tags=e2e ./e2e/...
-      - go vet -tags=e2e ./e2e/...
+      - golangci-lint run ./...
+      - cd services/storage && golangci-lint run --config ../../.golangci.yml ./...
+      - cd client && GOOS=linux CGO_ENABLED=0 golangci-lint run --config ../.golangci.yml ./...
 
   goose:storage:up:
     desc: "执行 storage 服务的 goose 向上迁移 (Up)"

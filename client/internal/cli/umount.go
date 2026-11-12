@@ -19,10 +19,13 @@ const umountUsageHelp = `用法:
   -h, --help      查看帮助信息
 `
 
-// runCommand 执行系统卸载工具并返回合并输出。
-func runCommand(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).CombinedOutput()
-}
+// runCommand 与 lookPath 允许在单元测试中替身注入系统卸载命令。
+var (
+	lookPath   = exec.LookPath
+	runCommand = func(name string, args ...string) ([]byte, error) {
+		return exec.Command(name, args...).CombinedOutput()
+	}
+)
 
 // executeUmount 解析 umount / unmount 命令参数并调用系统卸载工具。
 func executeUmount(args []string, stdout, stderr io.Writer) int {
@@ -32,7 +35,7 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	)
 
 	var posArgs []string
-	for i := 0; i < len(args); i++ {
+	for i := range args {
 		arg := args[i]
 		if arg == "--" {
 			posArgs = append(posArgs, args[i+1:]...)
@@ -84,7 +87,7 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 
 	// 2. 按优先级查找并执行系统卸载工具
 	// 优先级 1: fusermount3 (-u, force: -uz)
-	if path, err := exec.LookPath("fusermount3"); err == nil {
+	if path, err := lookPath("fusermount3"); err == nil {
 		cmdArgs := []string{"-u", absMountpoint}
 		if force {
 			cmdArgs = []string{"-uz", absMountpoint}
@@ -97,7 +100,7 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 优先级 2: fusermount (-u, force: -uz)
-	if path, err := exec.LookPath("fusermount"); err == nil {
+	if path, err := lookPath("fusermount"); err == nil {
 		cmdArgs := []string{"-u", absMountpoint}
 		if force {
 			cmdArgs = []string{"-uz", absMountpoint}
@@ -110,7 +113,7 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 优先级 3: umount (常规 <mp>, force: -l <mp>)
-	if path, err := exec.LookPath("umount"); err == nil {
+	if path, err := lookPath("umount"); err == nil {
 		var cmdArgs []string
 		if force {
 			cmdArgs = []string{"-l", absMountpoint}

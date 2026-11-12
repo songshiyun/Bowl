@@ -1,22 +1,30 @@
 package fusefs
 
 import (
+	"context"
 	"syscall"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
+	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 // OpenDir 在本地检查节点类型并分配目录句柄。
-func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
-	if _, status := fs.ToServerIno(input.NodeId); status != fuse.OK {
-		return status
+func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpOpenDir)
+	defer func() { endSpan(status) }()
+
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
+	}
+	if _, st := fs.ToServerIno(input.NodeId); st != fuse.OK {
+		return st
 	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	cached, status := fs.getInode(cancel, input.NodeId)
+	cached, status := fs.getInodeWithContext(opCtx, cancel, input.NodeId)
 	if status != fuse.OK {
 		return status
 	}
@@ -31,10 +39,12 @@ func (fs *RawFS) OpenDir(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.O
 }
 
 // readDirEntries 获取完整目录流；超出容量的目录按页读取且不进入缓存。
-func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*storagev1.DirEntryPlus, fuse.Status) {
-	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, true)
-	if status != fuse.OK {
+func (fs *RawFS) readDirEntries(parentCtx context.Context, cancel <-chan struct{}, input *fuse.ReadIn) ([]*storagev1.DirEntryPlus, fuse.Status) {
+	if _, status := fs.checkedHandle(input.NodeId, input.Fh, true); status != fuse.OK {
 		return nil, status
+	}
+	if fs.writeBehind.HasAnyPending() {
+		fs.writeBehind.BarrierAll(parentCtx)
 	}
 	if entries, ok := fs.cache.dir(input.NodeId); ok {
 		return entries, fuse.OK
@@ -44,19 +54,28 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 		return nil, status
 	}
 	epoch, generation := fs.cache.snapshot()
-	ctx, done := fs.RPCContext(cancel)
+	ctx, done := fs.RPCContextFrom(parentCtx, cancel)
 	defer done()
 	offset := input.Offset
 	var entries []*storagev1.DirEntryPlus
+	firstPage := true
 	for {
-		resp, err := fs.client.ReadDirPlus(ctx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
-			Ino: ino, Offset: offset, Limit: 512, SessionId: optionalSession(sid),
+		reqCtx := ctx
+		if !firstPage {
+			reqCtx = rpc.WithRequestID(ctx, fs.NextRequestID())
+		}
+		firstPage = false
+		resp, err := fs.client.ReadDirPlus(reqCtx, connect.NewRequest(&storagev1.ReadDirPlusRequest{
+			Ino:    ino,
+			Offset: offset,
+			Limit:  512,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if fs.cache.version() != epoch {
 			return nil, fuse.Status(syscall.ESTALE)
 		}
 		if err != nil {
-			return nil, fs.ToStatusWithSession(err, cancel)
+			return nil, fs.ToStatus(err, cancel)
 		}
 		page := resp.Msg.GetEntries()
 		for _, e := range page {
@@ -78,10 +97,13 @@ func (fs *RawFS) readDirEntries(cancel <-chan struct{}, input *fuse.ReadIn) ([]*
 }
 
 // ReadDir 返回目录项及其续读位置。
-func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
+func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpReadDir)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	entries, status := fs.readDirEntries(cancel, input)
+	entries, status := fs.readDirEntries(opCtx, cancel, input)
 	if status != fuse.OK {
 		return status
 	}
@@ -101,10 +123,13 @@ func (fs *RawFS) ReadDir(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.D
 }
 
 // ReadDirPlus 返回目录项和属性；点目录项不增加内核引用计数。
-func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) fuse.Status {
+func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fuse.DirEntryList) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpReadDirPlus)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	entries, status := fs.readDirEntries(cancel, input)
+	entries, status := fs.readDirEntries(opCtx, cancel, input)
 	if status != fuse.OK {
 		return status
 	}
@@ -126,19 +151,21 @@ func (fs *RawFS) ReadDirPlus(cancel <-chan struct{}, input *fuse.ReadIn, out *fu
 		} else {
 			fs.FillEntryOut(eo, entry.GetInode(), entry.GetEntryTimeoutSeconds(), entry.GetAttrTimeoutSeconds())
 			eo.NodeId = fs.tmpMgr.ObserveKernelLookup(entry.GetIno())
-			eo.Attr.Ino = eo.NodeId
+			eo.Ino = eo.NodeId
 		}
 	}
 	return fuse.OK
 }
 
 // FsyncDir 等待服务端完成目录持久化。
-func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Status {
+func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpFsyncDir)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	_, sid, status := fs.checkedHandle(input.NodeId, input.Fh, true)
-	if status != fuse.OK {
-		return status
+	if _, st := fs.checkedHandle(input.NodeId, input.Fh, true); st != fuse.OK {
+		return st
 	}
 	if _, removed := fs.handles.RemovedDir(input.NodeId); removed {
 		// Rmdir 已同步持久化，已删除目录没有待同步的服务端状态。
@@ -148,16 +175,23 @@ func (fs *RawFS) FsyncDir(cancel <-chan struct{}, input *fuse.FsyncIn) fuse.Stat
 	if status != fuse.OK {
 		return status
 	}
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 	_, err := fs.client.FsyncDir(ctx, connect.NewRequest(&storagev1.FsyncDirRequest{
-		Ino: ino, Fh: 0, Datasync: input.FsyncFlags&1 != 0, SessionId: optionalSession(sid),
+		Ino:      ino,
+		Fh:       0,
+		Datasync: input.FsyncFlags&1 != 0,
+		DiskId:   fs.cfg.DiskID,
+		Epoch:    fs.cfg.Epoch,
 	}))
-	return fs.ToStatusWithSession(err, cancel)
+	return fs.ToStatus(err, cancel)
 }
 
 // ReleaseDir 只释放本地目录句柄。
 func (fs *RawFS) ReleaseDir(input *fuse.ReleaseIn) {
+	_, endSpan := fs.startFuseOp(OpReleaseDir)
+	defer endSpan(fuse.OK)
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	h, ok := fs.handles.Get(input.Fh)
@@ -166,7 +200,4 @@ func (fs *RawFS) ReleaseDir(input *fuse.ReleaseIn) {
 	}
 	fs.locks.ForgetHandle(input.Fh)
 	fs.handles.Release(input.Fh)
-	if fs.sessions != nil {
-		fs.sessions.UnbindHandle(input.Fh)
-	}
 }

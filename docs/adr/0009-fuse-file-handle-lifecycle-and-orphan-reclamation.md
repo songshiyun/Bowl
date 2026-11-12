@@ -1,7 +1,7 @@
 # 0009. FUSE 文件打开句柄（FileHandle）数据库表、打开时截断文件与孤儿文件回收
 
 ## 状态
-已采纳 (accepted)
+部分被 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 与 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 (partially superseded by ADR-0029 and ADR-0032) — 服务端 `file_handles` 表与句柄 RPC 已迁为客户端本地 `FileHandle`、`ReclaimOrphan` 及 `Epoch` 递增孤儿清扫，打开截断与孤儿延迟回收语义保留
 
 ## 背景
 Storage 元数据引擎在完成目录树增删改查（`Lookup`、`GetAttr`、`SetAttr`、`Mknod`、`Mkdir`、`Symlink`、`Readlink`、`Link`、`Unlink`、`Rmdir`、`Rename`）后，需要实现文件打开到关闭的五个接口：`Create`、`Open`、`Flush`、`Fsync` 和 `Release`。在按照 POSIX 和 Linux FUSE 协议实现这些接口时，需要决定四个问题：

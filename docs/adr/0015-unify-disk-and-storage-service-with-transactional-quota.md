@@ -1,7 +1,7 @@
 # 0015. 将 Disk 管理合并进 Storage 服务并在同一个数据库事务内更新配额
 
 ## 状态
-已采纳 (accepted) — 替代 [ADR-0014](0014-disk-service-and-quota-ledger.md)，演进 [ADR-0002](0002-disk-concept-and-client-root-inode-mapping.md)
+部分被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md) 与 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 — 单一 `StorageService` 服务边界保留，PostgreSQL 事务配额账本已迁至单盘 `StoreActor` Pebble `"sys:stat"`（原替代 [ADR-0014](0014-disk-service-and-quota-ledger.md)，演进 [ADR-0002](0002-disk-concept-and-client-root-inode-mapping.md)）
 
 ## 背景
 在 [ADR-0014](0014-disk-service-and-quota-ledger.md) 中，我们曾经把 `Disk` 磁盘管理、容量配额统计（`UpdateDiskUsage`）和 `StatFS` 拆成了一个单独的 `DiskService`（`services/disk`），而文件的 `Inode` 大小修改和孤儿节点（`Orphan Inode`）清理则放在 `StorageService`（`services/storage`）里。

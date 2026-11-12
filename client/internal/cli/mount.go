@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -18,7 +21,6 @@ import (
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
 	"github.com/starsrc/bowl/client/internal/rpc"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -31,38 +33,89 @@ const mountUsageHelp = `用法:
   <mountpoint>    本地挂载点目录路径（必填，已存在的目录）
 
 标志:
-  --endpoint string    StorageService 基础地址 (默认读取 $BOWL_STORAGE_ENDPOINT 或 http://127.0.0.1:9000)
-  --token string       访问令牌 (默认读取 $BOWL_TOKEN)
-  -f, --foreground     前台阻塞模式运行，输出日志到标准错误并响应 SIGINT/SIGTERM 退出
-  --log-file string    日志文件路径 (仅用于后台守护模式)
-  --allow-other        允许本机其他非 root 用户访问挂载点
-  --ro                 只读挂载
-  --branch string      挂载指定分支（分支磁盘默认 main）
-  --commit string      挂载不可变提交 UUID（需要 --ro）
-  --direct-io          绕过内核页缓存直通数据
-  --debug              开启调试日志
-  -h, --help           查看帮助信息
+  --endpoint string              StorageService 基础地址 (默认读取 $BOWL_STORAGE_ENDPOINT 或 http://127.0.0.1:9000)
+  --token string                 访问令牌 (默认读取 $BOWL_TOKEN)
+  -f, --foreground               前台阻塞模式运行，输出日志到标准错误并响应 SIGINT/SIGTERM 退出
+  --log-file string              日志文件路径 (仅用于后台守护模式)
+  --allow-other                  允许本机其他非 root 用户访问挂载点
+  --ro                           只读挂载
+  --direct-io                    绕过内核页缓存直通数据
+  --debug                        开启 FUSE 协议调试日志
+  --admin-addr string            本地管理面 HTTP 监听地址，"off" 关闭 (默认读取 $BOWL_ADMIN_ADDR/$OBS_ADMIN_ADDR 或 127.0.0.1:0)
+  --stats-file                   在挂载根目录暴露隐藏虚拟文件 .stats (juicefs bench 兼容)
+  --log-level string             日志级别: debug|info|warn|error (默认读取 $BOWL_LOG_LEVEL/$LOG_LEVEL 或 info)
+  --log-format string            日志格式: json|text (默认读取 $BOWL_LOG_FORMAT/$LOG_FORMAT 或 json)
+  --trace-sample-ratio float     链路采样率 [0,1] (默认读取 $OTEL_TRACES_SAMPLER_ARG 或 0.001)
+  -h, --help                     查看帮助信息
 `
 
-func mountSessionConfig(cfg fusefs.Config) session.Config {
-	return session.Config{DiskID: cfg.DiskID, BranchName: cfg.BranchName, ReadOnly: cfg.ReadOnly, CommitID: cfg.CommitID}
+const (
+	defaultAdminAddr        = "127.0.0.1:0"
+	adminAddrOff            = "off"
+	defaultTraceSampleRatio = 0.001
+)
+
+// mountOptions 汇总 mount 命令解析后的非 fusefs 参数（daemon 子进程通过原样透传 argv 获得同一组值）。
+type mountOptions struct {
+	endpoint         string
+	token            string
+	logFile          string
+	adminAddr        string
+	logLevel         string
+	logFormat        string
+	traceSampleRatio float64
 }
 
-// runForegroundMount 是默认的前台挂载执行器。
-func runForegroundMount(ctx context.Context, client storagev1connect.StorageServiceClient, cfg fusefs.Config, mountpoint string, stdout, stderr io.Writer) error {
-	sessionMgr, err := session.New(ctx, client, mountSessionConfig(cfg))
+type mountFlagPresence struct {
+	adminAddr        bool
+	logLevel         bool
+	logFormat        bool
+	traceSampleRatio bool
+}
+
+// serveFUSE 是 FUSE 服务的测试接缝：ready 必须在内核挂载就绪后调用一次。
+var serveFUSE = defaultServeFUSE
+
+// mountHandshake 向服务端发起单次 MountDisk 握手，返回注入了权威 Epoch、RootIno 与缓存超时配置的 fusefs.Config。
+func mountHandshake(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg *fusefs.Config) (*fusefs.Config, error) {
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer rpcCancel()
+
+	resp, err := client.MountDisk(rpcCtx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   baseCfg.DiskID,
+		ReadOnly: baseCfg.ReadOnly,
+	}))
 	if err != nil {
-		return fmt.Errorf("初始化客户端会话失败: %w", err)
-	}
-	defer sessionMgr.Close()
-	if err := sessionMgr.Start(ctx); err != nil {
-		return fmt.Errorf("启动客户端会话保活失败: %w", err)
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok && connectErr.Code() == connect.CodeNotFound {
+			return nil, fmt.Errorf("磁盘不存在: %s", baseCfg.DiskID)
+		}
+		return nil, fmt.Errorf("挂载磁盘握手失败: %w", err)
 	}
 
-	rawFS := fusefs.NewRawFS(client, sessionMgr, cfg)
-	opts := fusefs.BuildMountOptions(cfg)
+	rootInode := resp.Msg.GetRootInode()
+	if rootInode == nil || rootInode.GetIno() == 0 {
+		return nil, errors.New("服务端返回无效的磁盘根目录元数据")
+	}
 
-	server, err := fuse.NewServer(rawFS, mountpoint, opts)
+	epoch := resp.Msg.GetEpoch()
+	if !baseCfg.ReadOnly && epoch == 0 {
+		return nil, errors.New("服务端未返回有效的写挂载世代号")
+	}
+
+	cfg := *baseCfg
+	cfg.Epoch = epoch
+	cfg.RootIno = rootInode.GetIno()
+	cfg.RootInode = rootInode
+	cfg.EntryTimeoutSeconds = resp.Msg.GetEntryTimeoutSeconds()
+	cfg.AttrTimeoutSeconds = resp.Msg.GetAttrTimeoutSeconds()
+	return &cfg, nil
+}
+
+// defaultServeFUSE 启动 FUSE 服务，就绪后调用 ready，并阻塞到卸载（信号或 ctx 取消触发）。
+func defaultServeFUSE(ctx context.Context, fs *fusefs.InstrumentedRawFS, cfg *fusefs.Config, mountpoint string, ready func()) error {
+	opts := fusefs.BuildMountOptions(*cfg)
+
+	server, err := fuse.NewServer(fs, mountpoint, opts)
 	if err != nil {
 		return fmt.Errorf("创建 FUSE 服务失败: %w", err)
 	}
@@ -73,11 +126,13 @@ func runForegroundMount(ctx context.Context, client storagev1connect.StorageServ
 		server.Serve()
 	}()
 
-	if err := server.WaitMount(); err != nil {
+	if waitErr := server.WaitMount(); waitErr != nil {
 		_ = server.Unmount()
 		<-serveDone
-		return fmt.Errorf("等待挂载就绪失败: %w", err)
+		return fmt.Errorf("等待挂载就绪失败: %w", waitErr)
 	}
+	fs.BindMountpoint(mountpoint)
+	ready()
 
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -99,21 +154,195 @@ func runForegroundMount(ctx context.Context, client storagev1connect.StorageServ
 	return nil
 }
 
+// runMount 装配可观测性运行时、RPC 客户端、管理面与 FUSE 服务，执行单次 MountDisk 握手后阻塞到卸载。
+// logWriter 为结构化日志输出目标；onReady 在挂载就绪且发现元数据写入后调用（daemon 用于回传握手）。
+func runMount(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, mountpoint string, logWriter io.Writer, onReady func()) error {
+	obs, err := setupObservability(ctx, opts, logWriter)
+	if err != nil {
+		return err
+	}
+	logger := obs.Logger()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if shutdownErr := obs.Shutdown(shutdownCtx); shutdownErr != nil {
+			logger.Warn("observability_shutdown_failed", slog.String("error", shutdownErr.Error()))
+		}
+	}()
+
+	rpcMetrics := rpc.NewMetrics()
+	client, err := rpc.NewClientFromConfig(rpc.ClientConfig{
+		Endpoint: opts.endpoint,
+		Token:    opts.token,
+		Logger:   logger,
+		Metrics:  rpcMetrics,
+	})
+	if err != nil {
+		return fmt.Errorf("创建 RPC 客户端失败: %w", err)
+	}
+
+	cfg, err := mountHandshake(ctx, client, baseCfg)
+	if err != nil {
+		return err
+	}
+	cfg.Logger = logger
+	cfg.Metrics = fusefs.NewMetrics()
+	cfg.TracerProvider = obs.TracerProvider()
+
+	instFS := fusefs.NewInstrumentedRawFS(fusefs.NewRawFS(client, *cfg))
+	if regErr := obs.RegisterCollector(rpcMetrics, instFS.Collector()); regErr != nil {
+		return fmt.Errorf("注册指标收集器失败: %w", regErr)
+	}
+
+	admin, err := startAdminServer(opts.adminAddr, obs, instFS)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		admin.shutdown(shutdownCtx)
+	}()
+
+	var (
+		metaPath  string
+		startedAt time.Time
+		selfPID   = os.Getpid()
+	)
+	ready := func() {
+		startedAt = time.Now().UTC()
+		meta := mountMeta{
+			Mountpoint: mountpoint,
+			PID:        selfPID,
+			DiskID:     cfg.DiskID,
+			AdminAddr:  admin.addr(),
+			StartedAt:  startedAt,
+		}
+		path, werr := writeMountMeta(&meta)
+		if werr != nil {
+			logger.Warn("mount_meta_write_failed", slog.String("mountpoint", mountpoint), slog.String("error", werr.Error()))
+		}
+		metaPath = path
+		logger.Info("mount_ready",
+			slog.String("mountpoint", mountpoint),
+			slog.String("server_addr", opts.endpoint),
+			slog.String("disk_id", cfg.DiskID),
+			slog.Uint64("epoch", cfg.Epoch),
+			slog.Uint64("root_ino", cfg.RootIno),
+			slog.String("admin_addr", admin.addr()),
+			slog.Int("pid", selfPID),
+		)
+		if onReady != nil {
+			onReady()
+		}
+	}
+
+	serveErr := serveFUSE(ctx, instFS, cfg, mountpoint, ready)
+	if metaPath != "" {
+		_ = os.Remove(metaPath)
+	}
+	if serveErr != nil {
+		return serveErr
+	}
+	var uptimeMs int64
+	if !startedAt.IsZero() {
+		uptimeMs = time.Since(startedAt).Milliseconds()
+	}
+	logger.Info("unmount_complete",
+		slog.String("mountpoint", mountpoint),
+		slog.String("server_addr", opts.endpoint),
+		slog.String("disk_id", cfg.DiskID),
+		slog.Uint64("epoch", cfg.Epoch),
+		slog.Int("pid", selfPID),
+		slog.Int64("uptime_ms", uptimeMs),
+	)
+	return nil
+}
+
+// takeFlagValue 读取 "--name=value" 或 "--name value" 形式的标志取值。
+func takeFlagValue(args []string, i *int, name, val string, hasVal bool) (string, error) {
+	if hasVal {
+		return val, nil
+	}
+	if *i+1 < len(args) {
+		*i++
+		return args[*i], nil
+	}
+	return "", fmt.Errorf("--%s 需要指定参数值", name)
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// applyEnvAndValidateOptions 应用环境变量兜底并校验可观测性相关标志。
+func applyEnvAndValidateOptions(o *mountOptions, set mountFlagPresence) error {
+	if !set.adminAddr {
+		if env := firstNonEmptyEnv("BOWL_ADMIN_ADDR", "OBS_ADMIN_ADDR"); env != "" {
+			o.adminAddr = env
+		}
+	}
+	if !set.logLevel {
+		if env := firstNonEmptyEnv("BOWL_LOG_LEVEL", "LOG_LEVEL"); env != "" {
+			o.logLevel = env
+		}
+	}
+	if !set.logFormat {
+		if env := firstNonEmptyEnv("BOWL_LOG_FORMAT", "LOG_FORMAT"); env != "" {
+			o.logFormat = env
+		}
+	}
+	if !set.traceSampleRatio {
+		if env := firstNonEmptyEnv("OTEL_TRACES_SAMPLER_ARG"); env != "" {
+			parsed, err := strconv.ParseFloat(env, 64)
+			if err != nil {
+				return fmt.Errorf("无效的环境变量 OTEL_TRACES_SAMPLER_ARG=%q: %w", env, err)
+			}
+			o.traceSampleRatio = parsed
+		}
+	}
+	if err := validateAdminAddr(o.adminAddr); err != nil {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(o.logLevel)) {
+	case "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("无效的 --log-level \"%s\"，可选 debug|info|warn|error", o.logLevel)
+	}
+	switch strings.ToLower(strings.TrimSpace(o.logFormat)) {
+	case "json", "text":
+	default:
+		return fmt.Errorf("无效的 --log-format \"%s\"，可选 json|text", o.logFormat)
+	}
+	if math.IsNaN(o.traceSampleRatio) || math.IsInf(o.traceSampleRatio, 0) || o.traceSampleRatio < 0 || o.traceSampleRatio > 1 {
+		return fmt.Errorf("无效的 --trace-sample-ratio %v，取值范围 [0,1]", o.traceSampleRatio)
+	}
+	return nil
+}
+
 // executeMount 解析 mount 命令参数并启动挂载流程。
 func executeMount(args []string, stdout, stderr io.Writer) int {
 	var (
-		endpoint   string
-		token      string
 		foreground bool
-		logFile    string
 		allowOther bool
 		ro         bool
-		branchName string
-		commitID   string
 		directIO   bool
 		debug      bool
+		statsFile  bool
 		help       bool
+		set        mountFlagPresence
 	)
+	opts := mountOptions{
+		adminAddr:        defaultAdminAddr,
+		logLevel:         "info",
+		logFormat:        "json",
+		traceSampleRatio: defaultTraceSampleRatio,
+	}
 
 	var posArgs []string
 	for i := 0; i < len(args); i++ {
@@ -122,78 +351,58 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 			posArgs = append(posArgs, args[i+1:]...)
 			break
 		}
-		if strings.HasPrefix(arg, "-") {
-			name := strings.TrimLeft(arg, "-")
-			hasVal := strings.Contains(name, "=")
-			var val string
-			if hasVal {
-				parts := strings.SplitN(name, "=", 2)
-				name = parts[0]
-				val = parts[1]
-			}
-			switch name {
-			case "h", "help":
-				help = true
-			case "f", "foreground":
-				foreground = true
-			case "allow-other":
-				allowOther = true
-			case "ro":
-				ro = true
-			case "direct-io":
-				directIO = true
-			case "debug":
-				debug = true
-			case "branch", "commit":
-				if !hasVal {
-					if i+1 >= len(args) {
-						fmt.Fprintf(stderr, "错误: --%s 需要指定参数值\n", name)
-						return 2
-					}
-					i++
-					val = args[i]
-				}
-				if name == "branch" {
-					branchName = val
-				} else {
-					commitID = val
-				}
-			case "endpoint":
-				if hasVal {
-					endpoint = val
-				} else if i+1 < len(args) {
-					i++
-					endpoint = args[i]
-				} else {
-					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
-					return 2
-				}
-			case "token":
-				if hasVal {
-					token = val
-				} else if i+1 < len(args) {
-					i++
-					token = args[i]
-				} else {
-					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
-					return 2
-				}
-			case "log-file":
-				if hasVal {
-					logFile = val
-				} else if i+1 < len(args) {
-					i++
-					logFile = args[i]
-				} else {
-					fmt.Fprintln(stderr, "错误: --log-file 需要指定参数值")
-					return 2
-				}
-			default:
-				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, mountUsageHelp)
-				return 2
-			}
-		} else {
+		if !strings.HasPrefix(arg, "-") {
 			posArgs = append(posArgs, arg)
+			continue
+		}
+		name, val, hasVal := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		var err error
+		switch name {
+		case "h", "help":
+			help = true
+		case "f", "foreground":
+			foreground = true
+		case "allow-other":
+			allowOther = true
+		case "ro":
+			ro = true
+		case "direct-io":
+			directIO = true
+		case "debug":
+			debug = true
+		case "stats-file":
+			statsFile = true
+			if hasVal {
+				statsFile, err = strconv.ParseBool(val)
+			}
+		case "endpoint":
+			opts.endpoint, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "token":
+			opts.token, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "log-file":
+			opts.logFile, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "admin-addr":
+			set.adminAddr = true
+			opts.adminAddr, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "log-level":
+			set.logLevel = true
+			opts.logLevel, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "log-format":
+			set.logFormat = true
+			opts.logFormat, err = takeFlagValue(args, &i, name, val, hasVal)
+		case "trace-sample-ratio":
+			set.traceSampleRatio = true
+			var raw string
+			if raw, err = takeFlagValue(args, &i, name, val, hasVal); err == nil {
+				opts.traceSampleRatio, err = strconv.ParseFloat(raw, 64)
+			}
+		default:
+			fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, mountUsageHelp)
+			return 2
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "错误: 标志 \"%s\" 取值无效: %v\n", arg, err)
+			return 2
 		}
 	}
 
@@ -207,6 +416,11 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	if valErr := applyEnvAndValidateOptions(&opts, set); valErr != nil {
+		fmt.Fprintf(stderr, "错误: %v\n", valErr)
+		return 2
+	}
+
 	diskIDStr := posArgs[0]
 	mountpoint := posArgs[1]
 
@@ -214,25 +428,6 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	parsedUUID, err := uuid.Parse(diskIDStr)
 	if err != nil || parsedUUID == uuid.Nil {
 		fmt.Fprintf(stderr, "错误: 无效的 disk-id \"%s\"，必须为合法的非 Nil UUID\n", diskIDStr)
-		return 2
-	}
-	if branchName != "" && commitID != "" {
-		fmt.Fprintln(stderr, "错误: --branch and --commit are mutually exclusive")
-		return 2
-	}
-	if commitID != "" {
-		if !ro {
-			fmt.Fprintln(stderr, "错误: --commit requires --ro (read-only snapshot mount)")
-			return 2
-		}
-		parsedCommit, err := uuid.Parse(commitID)
-		if err != nil || parsedCommit == uuid.Nil {
-			fmt.Fprintln(stderr, "错误: --commit 必须为有效的非 Nil UUID")
-			return 2
-		}
-	}
-	if branchName != "" && !validBranchName(branchName) {
-		fmt.Fprintln(stderr, "错误: --branch 分支名称无效")
 		return 2
 	}
 
@@ -266,70 +461,31 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 3. 解析 endpoint 与 token
-	resolvedEndpoint, err := rpc.ResolveEndpoint(endpoint)
+	opts.endpoint, err = rpc.ResolveEndpoint(opts.endpoint)
 	if err != nil {
 		fmt.Fprintf(stderr, "错误: 无效的 endpoint: %v\n", err)
 		return 2
 	}
-	resolvedToken := rpc.ResolveToken(token)
+	opts.token = rpc.ResolveToken(opts.token)
 
-	// 4. 创建 StorageClient 并校验远端 Disk
-	client, err := rpc.NewClientFromConfig(rpc.ClientConfig{
-		Endpoint: resolvedEndpoint,
-		Token:    resolvedToken,
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "错误: 创建 RPC 客户端失败: %v\n", err)
-		return 1
+	baseCfg := fusefs.Config{
+		DiskID:          diskIDStr,
+		ReadOnly:        ro,
+		DirectIO:        directIO,
+		AllowOther:      allowOther,
+		Debug:           debug,
+		EnableStatsFile: statsFile,
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer rpcCancel()
-
-	diskResp, err := client.GetDisk(rpcCtx, connect.NewRequest(&storagev1.GetDiskRequest{
-		DiskId: diskIDStr,
-	}))
-	if err != nil {
-		var connectErr *connect.Error
-		if errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
-			fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)
-		} else {
-			fmt.Fprintf(stderr, "错误: 获取磁盘元数据失败: %v\n", err)
-		}
-		return 1
-	}
-
-	disk := diskResp.Msg.GetDisk()
-	if disk == nil || disk.GetRootIno() == 0 {
-		fmt.Fprintf(stderr, "错误: 服务端返回无效的磁盘元数据\n")
-		return 1
-	}
-
-	cfg := fusefs.Config{
-		DiskID:     diskIDStr,
-		RootIno:    disk.GetRootIno(),
-		ReadOnly:   ro,
-		DirectIO:   directIO,
-		AllowOther: allowOther,
-		Debug:      debug,
-	}
-	if commitID != "" {
-		cfg.CommitID = commitID
-		cfg.RootIno = 1
-	} else if branchName != "" || len(disk.GetBranches()) != 0 {
-		if branchName == "" {
-			branchName = "main"
-		}
-		cfg.BranchName = branchName
-		cfg.RootIno = 1
-	}
+	// 4. 归一化 OTLP 环境变量（对缺 http:///https:// 的裸 host:port 自动补齐 http://，确保守护子进程同享）
+	normalizeOTLPEnv()
 
 	// 5. 模式选择：检测是否为内部后台工作子进程
 	if os.Getenv("BOWL_DAEMON_WORKER") == "1" {
-		return runDaemonWorker(context.Background(), client, cfg, absMountpoint, logFile)
+		return runDaemonWorker(context.Background(), &opts, &baseCfg, absMountpoint)
 	}
 
-	// 若未指定 -f / --foreground，执行默认后台守护派生与就绪握手
+	// 若未指定 -f / --foreground，执行默认后台守护派生与就绪握手（原样透传 argv，子进程重新解析同一组标志）
 	if !foreground {
 		return spawnDaemonProcess(args, stderr)
 	}
@@ -337,22 +493,10 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
 	defer runnerCancel()
 
-	if err := runForegroundMount(runnerCtx, client, cfg, absMountpoint, stdout, stderr); err != nil {
-		fmt.Fprintf(stderr, "错误: 挂载执行失败: %v\n", err)
+	if mountErr := runMount(runnerCtx, &opts, &baseCfg, absMountpoint, stderr, nil); mountErr != nil {
+		fmt.Fprintf(stderr, "错误: 挂载执行失败: %v\n", mountErr)
 		return 1
 	}
 
 	return 0
-}
-
-func validBranchName(name string) bool {
-	if len(name) > 255 || name == "." || name == ".." {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		if name[i] == '/' || name[i] < 0x20 || name[i] == 0x7f {
-			return false
-		}
-	}
-	return true
 }

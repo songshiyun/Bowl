@@ -42,24 +42,14 @@ const (
 	StorageService_GetXattr_FullMethodName      = "/storage.v1.StorageService/GetXattr"
 	StorageService_ListXattr_FullMethodName     = "/storage.v1.StorageService/ListXattr"
 	StorageService_RemoveXattr_FullMethodName   = "/storage.v1.StorageService/RemoveXattr"
-	StorageService_RenewSession_FullMethodName  = "/storage.v1.StorageService/RenewSession"
-	StorageService_CloseSession_FullMethodName  = "/storage.v1.StorageService/CloseSession"
+	StorageService_MountDisk_FullMethodName     = "/storage.v1.StorageService/MountDisk"
 	StorageService_CreateDisk_FullMethodName    = "/storage.v1.StorageService/CreateDisk"
 	StorageService_GetDisk_FullMethodName       = "/storage.v1.StorageService/GetDisk"
 	StorageService_ListDisks_FullMethodName     = "/storage.v1.StorageService/ListDisks"
 	StorageService_UpdateDisk_FullMethodName    = "/storage.v1.StorageService/UpdateDisk"
 	StorageService_DeleteDisk_FullMethodName    = "/storage.v1.StorageService/DeleteDisk"
 	StorageService_StatFS_FullMethodName        = "/storage.v1.StorageService/StatFS"
-	StorageService_CreateBranch_FullMethodName  = "/storage.v1.StorageService/CreateBranch"
 	StorageService_ReclaimOrphan_FullMethodName = "/storage.v1.StorageService/ReclaimOrphan"
-	StorageService_ListBranches_FullMethodName  = "/storage.v1.StorageService/ListBranches"
-	StorageService_DeleteBranch_FullMethodName  = "/storage.v1.StorageService/DeleteBranch"
-	StorageService_Commit_FullMethodName        = "/storage.v1.StorageService/Commit"
-	StorageService_Rollback_FullMethodName      = "/storage.v1.StorageService/Rollback"
-	StorageService_Merge_FullMethodName         = "/storage.v1.StorageService/Merge"
-	StorageService_ResolveMerge_FullMethodName  = "/storage.v1.StorageService/ResolveMerge"
-	StorageService_AbortMerge_FullMethodName    = "/storage.v1.StorageService/AbortMerge"
-	StorageService_Diff_FullMethodName          = "/storage.v1.StorageService/Diff"
 )
 
 // StorageServiceClient is the client API for StorageService service.
@@ -192,15 +182,10 @@ type StorageServiceClient interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(ctx context.Context, in *RemoveXattrRequest, opts ...grpc.CallOption) (*RemoveXattrResponse, error)
-	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
-	// 续期成功返回刷新后的租约截止时间 expires_at。
-	RenewSession(ctx context.Context, in *RenewSessionRequest, opts ...grpc.CallOption) (*RenewSessionResponse, error)
-	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标会话已不存在或已过期，按幂等成功返回。
-	CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error)
+	// MountDisk 执行单盘挂载握手。
+	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
+	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
+	MountDisk(ctx context.Context, in *MountDiskRequest, opts ...grpc.CallOption) (*MountDiskResponse, error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -218,35 +203,16 @@ type StorageServiceClient interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(ctx context.Context, in *UpdateDiskRequest, opts ...grpc.CallOption) (*UpdateDiskResponse, error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(ctx context.Context, in *DeleteDiskRequest, opts ...grpc.CallOption) (*DeleteDiskResponse, error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
-	// 接收目标节点的 uint64 ino，按 root_ino O(1) 查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
+	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(ctx context.Context, in *StatFSRequest, opts ...grpc.CallOption) (*StatFSResponse, error)
-	// CreateBranch 从已有分支或快照派生逻辑分支。
-	CreateBranch(ctx context.Context, in *CreateBranchRequest, opts ...grpc.CallOption) (*CreateBranchResponse, error)
 	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
 	ReclaimOrphan(ctx context.Context, in *ReclaimOrphanRequest, opts ...grpc.CallOption) (*ReclaimOrphanResponse, error)
-	// ListBranches 列出磁盘中的逻辑分支。
-	ListBranches(ctx context.Context, in *ListBranchesRequest, opts ...grpc.CallOption) (*ListBranchesResponse, error)
-	// DeleteBranch 删除指定逻辑分支。
-	DeleteBranch(ctx context.Context, in *DeleteBranchRequest, opts ...grpc.CallOption) (*DeleteBranchResponse, error)
-	// Commit 将分支工作区定格为快照。
-	Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error)
-	// Rollback 在目标分支无活跃写端时回档。
-	Rollback(ctx context.Context, in *RollbackRequest, opts ...grpc.CallOption) (*RollbackResponse, error)
-	// Merge 在目标分支无活跃写端时执行三路合并。
-	Merge(ctx context.Context, in *MergeRequest, opts ...grpc.CallOption) (*MergeResponse, error)
-	// ResolveMerge 完成冲突物化后的合并。
-	ResolveMerge(ctx context.Context, in *ResolveMergeRequest, opts ...grpc.CallOption) (*ResolveMergeResponse, error)
-	// AbortMerge 放弃合并并恢复目标分支。
-	AbortMerge(ctx context.Context, in *AbortMergeRequest, opts ...grpc.CallOption) (*AbortMergeResponse, error)
-	// Diff 比较两个分支或快照的文件与数据块变化。
-	Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffResponse, error)
 }
 
 type storageServiceClient struct {
@@ -487,20 +453,10 @@ func (c *storageServiceClient) RemoveXattr(ctx context.Context, in *RemoveXattrR
 	return out, nil
 }
 
-func (c *storageServiceClient) RenewSession(ctx context.Context, in *RenewSessionRequest, opts ...grpc.CallOption) (*RenewSessionResponse, error) {
+func (c *storageServiceClient) MountDisk(ctx context.Context, in *MountDiskRequest, opts ...grpc.CallOption) (*MountDiskResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RenewSessionResponse)
-	err := c.cc.Invoke(ctx, StorageService_RenewSession_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) CloseSession(ctx context.Context, in *CloseSessionRequest, opts ...grpc.CallOption) (*CloseSessionResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CloseSessionResponse)
-	err := c.cc.Invoke(ctx, StorageService_CloseSession_FullMethodName, in, out, cOpts...)
+	out := new(MountDiskResponse)
+	err := c.cc.Invoke(ctx, StorageService_MountDisk_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -567,100 +523,10 @@ func (c *storageServiceClient) StatFS(ctx context.Context, in *StatFSRequest, op
 	return out, nil
 }
 
-func (c *storageServiceClient) CreateBranch(ctx context.Context, in *CreateBranchRequest, opts ...grpc.CallOption) (*CreateBranchResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CreateBranchResponse)
-	err := c.cc.Invoke(ctx, StorageService_CreateBranch_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *storageServiceClient) ReclaimOrphan(ctx context.Context, in *ReclaimOrphanRequest, opts ...grpc.CallOption) (*ReclaimOrphanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReclaimOrphanResponse)
 	err := c.cc.Invoke(ctx, StorageService_ReclaimOrphan_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) ListBranches(ctx context.Context, in *ListBranchesRequest, opts ...grpc.CallOption) (*ListBranchesResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListBranchesResponse)
-	err := c.cc.Invoke(ctx, StorageService_ListBranches_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) DeleteBranch(ctx context.Context, in *DeleteBranchRequest, opts ...grpc.CallOption) (*DeleteBranchResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteBranchResponse)
-	err := c.cc.Invoke(ctx, StorageService_DeleteBranch_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) Commit(ctx context.Context, in *CommitRequest, opts ...grpc.CallOption) (*CommitResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CommitResponse)
-	err := c.cc.Invoke(ctx, StorageService_Commit_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) Rollback(ctx context.Context, in *RollbackRequest, opts ...grpc.CallOption) (*RollbackResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RollbackResponse)
-	err := c.cc.Invoke(ctx, StorageService_Rollback_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) Merge(ctx context.Context, in *MergeRequest, opts ...grpc.CallOption) (*MergeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(MergeResponse)
-	err := c.cc.Invoke(ctx, StorageService_Merge_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) ResolveMerge(ctx context.Context, in *ResolveMergeRequest, opts ...grpc.CallOption) (*ResolveMergeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ResolveMergeResponse)
-	err := c.cc.Invoke(ctx, StorageService_ResolveMerge_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) AbortMerge(ctx context.Context, in *AbortMergeRequest, opts ...grpc.CallOption) (*AbortMergeResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AbortMergeResponse)
-	err := c.cc.Invoke(ctx, StorageService_AbortMerge_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *storageServiceClient) Diff(ctx context.Context, in *DiffRequest, opts ...grpc.CallOption) (*DiffResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DiffResponse)
-	err := c.cc.Invoke(ctx, StorageService_Diff_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -797,15 +663,10 @@ type StorageServiceServer interface {
 	// 若扩展属性不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENODATA)。
 	// 若对 user.* 属性操作非常规文件、非目录或非套接字节点，直接返回 gRPC 标准状态码 PermissionDenied (映射至 POSIX EPERM)。
 	RemoveXattr(context.Context, *RemoveXattrRequest) (*RemoveXattrResponse, error)
-	// RenewSession 显式延长客户端会话租约有效期并顺带回收孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// disk_id 必填；若关联磁盘不存在返回 NotFound (ENOENT)。
-	// 续期成功返回刷新后的租约截止时间 expires_at。
-	RenewSession(context.Context, *RenewSessionRequest) (*RenewSessionResponse, error)
-	// CloseSession 注销客户端会话租约，并回收无活跃写端的孤儿节点。
-	// 若 session_id 超出范围 (<= 0 或 > 9223372036854775807)，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
-	// 若目标会话已不存在或已过期，按幂等成功返回。
-	CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error)
+	// MountDisk 执行单盘挂载握手。
+	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
+	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
+	MountDisk(context.Context, *MountDiskRequest) (*MountDiskResponse, error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -823,35 +684,16 @@ type StorageServiceServer interface {
 	// 若参数校验不通过（如 disk_id 格式非法、name 与 max_bytes 均未传、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL)。
 	UpdateDisk(context.Context, *UpdateDiskRequest) (*UpdateDiskResponse, error)
 	// DeleteDisk 级联删除指定虚拟磁盘实体并强制回收其全部元数据节点。
-	// 在没有活跃会话时删除磁盘控制面记录及其分支、快照存储目录。
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
-	// 接收目标节点的 uint64 ino，按 root_ino O(1) 查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
+	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 ino 为 0 或超出 int64 正数最大值，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	StatFS(context.Context, *StatFSRequest) (*StatFSResponse, error)
-	// CreateBranch 从已有分支或快照派生逻辑分支。
-	CreateBranch(context.Context, *CreateBranchRequest) (*CreateBranchResponse, error)
 	// ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
 	ReclaimOrphan(context.Context, *ReclaimOrphanRequest) (*ReclaimOrphanResponse, error)
-	// ListBranches 列出磁盘中的逻辑分支。
-	ListBranches(context.Context, *ListBranchesRequest) (*ListBranchesResponse, error)
-	// DeleteBranch 删除指定逻辑分支。
-	DeleteBranch(context.Context, *DeleteBranchRequest) (*DeleteBranchResponse, error)
-	// Commit 将分支工作区定格为快照。
-	Commit(context.Context, *CommitRequest) (*CommitResponse, error)
-	// Rollback 在目标分支无活跃写端时回档。
-	Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error)
-	// Merge 在目标分支无活跃写端时执行三路合并。
-	Merge(context.Context, *MergeRequest) (*MergeResponse, error)
-	// ResolveMerge 完成冲突物化后的合并。
-	ResolveMerge(context.Context, *ResolveMergeRequest) (*ResolveMergeResponse, error)
-	// AbortMerge 放弃合并并恢复目标分支。
-	AbortMerge(context.Context, *AbortMergeRequest) (*AbortMergeResponse, error)
-	// Diff 比较两个分支或快照的文件与数据块变化。
-	Diff(context.Context, *DiffRequest) (*DiffResponse, error)
 	mustEmbedUnimplementedStorageServiceServer()
 }
 
@@ -931,11 +773,8 @@ func (UnimplementedStorageServiceServer) ListXattr(context.Context, *ListXattrRe
 func (UnimplementedStorageServiceServer) RemoveXattr(context.Context, *RemoveXattrRequest) (*RemoveXattrResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveXattr not implemented")
 }
-func (UnimplementedStorageServiceServer) RenewSession(context.Context, *RenewSessionRequest) (*RenewSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method RenewSession not implemented")
-}
-func (UnimplementedStorageServiceServer) CloseSession(context.Context, *CloseSessionRequest) (*CloseSessionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CloseSession not implemented")
+func (UnimplementedStorageServiceServer) MountDisk(context.Context, *MountDiskRequest) (*MountDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MountDisk not implemented")
 }
 func (UnimplementedStorageServiceServer) CreateDisk(context.Context, *CreateDiskRequest) (*CreateDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateDisk not implemented")
@@ -955,35 +794,8 @@ func (UnimplementedStorageServiceServer) DeleteDisk(context.Context, *DeleteDisk
 func (UnimplementedStorageServiceServer) StatFS(context.Context, *StatFSRequest) (*StatFSResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StatFS not implemented")
 }
-func (UnimplementedStorageServiceServer) CreateBranch(context.Context, *CreateBranchRequest) (*CreateBranchResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CreateBranch not implemented")
-}
 func (UnimplementedStorageServiceServer) ReclaimOrphan(context.Context, *ReclaimOrphanRequest) (*ReclaimOrphanResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReclaimOrphan not implemented")
-}
-func (UnimplementedStorageServiceServer) ListBranches(context.Context, *ListBranchesRequest) (*ListBranchesResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListBranches not implemented")
-}
-func (UnimplementedStorageServiceServer) DeleteBranch(context.Context, *DeleteBranchRequest) (*DeleteBranchResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeleteBranch not implemented")
-}
-func (UnimplementedStorageServiceServer) Commit(context.Context, *CommitRequest) (*CommitResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Commit not implemented")
-}
-func (UnimplementedStorageServiceServer) Rollback(context.Context, *RollbackRequest) (*RollbackResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Rollback not implemented")
-}
-func (UnimplementedStorageServiceServer) Merge(context.Context, *MergeRequest) (*MergeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Merge not implemented")
-}
-func (UnimplementedStorageServiceServer) ResolveMerge(context.Context, *ResolveMergeRequest) (*ResolveMergeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ResolveMerge not implemented")
-}
-func (UnimplementedStorageServiceServer) AbortMerge(context.Context, *AbortMergeRequest) (*AbortMergeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AbortMerge not implemented")
-}
-func (UnimplementedStorageServiceServer) Diff(context.Context, *DiffRequest) (*DiffResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method Diff not implemented")
 }
 func (UnimplementedStorageServiceServer) mustEmbedUnimplementedStorageServiceServer() {}
 func (UnimplementedStorageServiceServer) testEmbeddedByValue()                        {}
@@ -1420,38 +1232,20 @@ func _StorageService_RemoveXattr_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _StorageService_RenewSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RenewSessionRequest)
+func _StorageService_MountDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MountDiskRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(StorageServiceServer).RenewSession(ctx, in)
+		return srv.(StorageServiceServer).MountDisk(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: StorageService_RenewSession_FullMethodName,
+		FullMethod: StorageService_MountDisk_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).RenewSession(ctx, req.(*RenewSessionRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_CloseSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CloseSessionRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).CloseSession(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_CloseSession_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).CloseSession(ctx, req.(*CloseSessionRequest))
+		return srv.(StorageServiceServer).MountDisk(ctx, req.(*MountDiskRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1564,24 +1358,6 @@ func _StorageService_StatFS_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
-func _StorageService_CreateBranch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateBranchRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).CreateBranch(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_CreateBranch_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).CreateBranch(ctx, req.(*CreateBranchRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _StorageService_ReclaimOrphan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReclaimOrphanRequest)
 	if err := dec(in); err != nil {
@@ -1596,150 +1372,6 @@ func _StorageService_ReclaimOrphan_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(StorageServiceServer).ReclaimOrphan(ctx, req.(*ReclaimOrphanRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_ListBranches_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListBranchesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).ListBranches(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_ListBranches_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).ListBranches(ctx, req.(*ListBranchesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_DeleteBranch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteBranchRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).DeleteBranch(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_DeleteBranch_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).DeleteBranch(ctx, req.(*DeleteBranchRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_Commit_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CommitRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).Commit(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_Commit_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).Commit(ctx, req.(*CommitRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_Rollback_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RollbackRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).Rollback(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_Rollback_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).Rollback(ctx, req.(*RollbackRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_Merge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(MergeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).Merge(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_Merge_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).Merge(ctx, req.(*MergeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_ResolveMerge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ResolveMergeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).ResolveMerge(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_ResolveMerge_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).ResolveMerge(ctx, req.(*ResolveMergeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_AbortMerge_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AbortMergeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).AbortMerge(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_AbortMerge_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).AbortMerge(ctx, req.(*AbortMergeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _StorageService_Diff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DiffRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StorageServiceServer).Diff(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StorageService_Diff_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StorageServiceServer).Diff(ctx, req.(*DiffRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1844,12 +1476,8 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StorageService_RemoveXattr_Handler,
 		},
 		{
-			MethodName: "RenewSession",
-			Handler:    _StorageService_RenewSession_Handler,
-		},
-		{
-			MethodName: "CloseSession",
-			Handler:    _StorageService_CloseSession_Handler,
+			MethodName: "MountDisk",
+			Handler:    _StorageService_MountDisk_Handler,
 		},
 		{
 			MethodName: "CreateDisk",
@@ -1876,44 +1504,8 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StorageService_StatFS_Handler,
 		},
 		{
-			MethodName: "CreateBranch",
-			Handler:    _StorageService_CreateBranch_Handler,
-		},
-		{
 			MethodName: "ReclaimOrphan",
 			Handler:    _StorageService_ReclaimOrphan_Handler,
-		},
-		{
-			MethodName: "ListBranches",
-			Handler:    _StorageService_ListBranches_Handler,
-		},
-		{
-			MethodName: "DeleteBranch",
-			Handler:    _StorageService_DeleteBranch_Handler,
-		},
-		{
-			MethodName: "Commit",
-			Handler:    _StorageService_Commit_Handler,
-		},
-		{
-			MethodName: "Rollback",
-			Handler:    _StorageService_Rollback_Handler,
-		},
-		{
-			MethodName: "Merge",
-			Handler:    _StorageService_Merge_Handler,
-		},
-		{
-			MethodName: "ResolveMerge",
-			Handler:    _StorageService_ResolveMerge_Handler,
-		},
-		{
-			MethodName: "AbortMerge",
-			Handler:    _StorageService_AbortMerge_Handler,
-		},
-		{
-			MethodName: "Diff",
-			Handler:    _StorageService_Diff_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -1,7 +1,7 @@
 # 0025. 客户端单向心跳保活、移除随路续约与断网超期即時清理自愈
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0021](0021-disk-cli-session-liveness-and-safe-delete.md) 与 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md)
+已被 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 (superseded by ADR-0032) — `ClientSession` 15s 单向心跳与过期自动清理已全面收缩为单次 `MountDisk` 握手与无会话 `Epoch` 世代号栅栏
 
 ## 背景
 在 [ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0021](0021-disk-cli-session-liveness-and-safe-delete.md) 与 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md) 的演进过程中，`ClientSession` 的保活与探活机制叠加了四层复杂逻辑：

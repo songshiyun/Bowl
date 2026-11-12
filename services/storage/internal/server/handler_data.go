@@ -2,48 +2,82 @@ package server
 
 import (
 	"context"
+	"math"
 
 	"connectrpc.com/connect"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/services/storage/internal/meta"
+	"github.com/starsrc/bowl/services/storage/internal/store"
 )
+
+const maxReadWriteSize = 4 << 20 // 4 MiB 单次读写上限
 
 // Read 读取指定文件的数据块内容（对接 Linux FUSE FUSE_READ 协议）。
 func (s *Server) Read(ctx context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
 	msg := req.Msg
-	res, err := s.metaManager.Read(ctx, &meta.ReadRequest{
-		Ino:       msg.Ino,
-		Fh:        msg.Fh,
-		Offset:    msg.Offset,
-		Size:      msg.Size,
-		SessionID: msg.SessionId,
-	})
+	if msg.Fh > math.MaxInt64 || msg.Size > maxReadWriteSize {
+		return nil, toConnectError(store.ErrInvalid)
+	}
+	actor, err := s.control.Actor(ctx, msg.DiskId)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, toConnectError(ctxErr)
+	}
+	if msg.Size == 0 {
+		data, rErr := actor.Read(ctx, msg.Ino, msg.Offset, 0)
+		if rErr != nil {
+			return nil, toConnectError(rErr)
+		}
+		return connect.NewResponse(&storagev1.ReadResponse{Data: data}), nil
+	}
 
-	return connect.NewResponse(&storagev1.ReadResponse{
-		Data: res.Data,
-	}), nil
+	leased := acquireReadPayloadBuf()
+	data, err := actor.ReadInto(ctx, msg.Ino, msg.Offset, msg.Size, leased[:0])
+	if err != nil {
+		recycleReadPayloadBuf(leased)
+		return nil, toConnectError(err)
+	}
+	if len(data) == 0 {
+		recycleReadPayloadBuf(leased)
+		return connect.NewResponse(&storagev1.ReadResponse{}), nil
+	}
+
+	respMsg := &storagev1.ReadResponse{
+		Data: data,
+	}
+	if &data[0] == &leased[0] {
+		registerLeasedReadPayload(respMsg, leased)
+	} else {
+		recycleReadPayloadBuf(leased)
+	}
+	return connect.NewResponse(respMsg), nil
 }
 
 // Write 向指定文件写入数据块内容（对接 Linux FUSE FUSE_WRITE 协议）。
 func (s *Server) Write(ctx context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
 	msg := req.Msg
-	res, err := s.metaManager.Write(ctx, &meta.WriteRequest{
-		Ino:       msg.Ino,
-		Fh:        msg.Fh,
-		Offset:    msg.Offset,
-		Data:      msg.Data,
-		SessionID: msg.SessionId,
-	})
+	if err := validateWriteEpoch(msg.Epoch); err != nil {
+		return nil, toConnectError(err)
+	}
+	if msg.Fh > math.MaxInt64 || len(msg.Data) > maxReadWriteSize {
+		return nil, toConnectError(store.ErrInvalid)
+	}
+	actor, err := s.control.Actor(ctx, msg.DiskId)
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, toConnectError(ctxErr)
+	}
+	written, attr, err := actor.Write(ctx, msg.Ino, msg.Offset, msg.Data, msg.Epoch)
 	if err != nil {
 		return nil, toConnectError(err)
 	}
 
 	return connect.NewResponse(&storagev1.WriteResponse{
-		Size:  res.Size,
-		Inode: toProtoInode(res.Inode),
+		Size:  written,
+		Inode: toProtoInode(&attr),
 	}), nil
 }

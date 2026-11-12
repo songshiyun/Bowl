@@ -1,7 +1,7 @@
 # 0029. 单盘逻辑分支树（Branch Tree）与整树去重逻辑配额、Pebble Checkpoint 分支存储后端、单分支 SWMR 客户端闭环 POSIX 与控制面三路 Merge
 
 ## 状态
-已采纳 (accepted) — 取代并重构 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0014](0014-disk-service-and-quota-ledger.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0027](0027-4mib-chunk-boundary-and-single-worker-compaction-gc.md) 与 [ADR-0028](0028-single-statement-atomic-cte-async-wal-and-smart-keep-cache.md)
+部分被 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 取代（逻辑分支树与 `ClientSession` 租约表已收缩为单盘 `StoreActor` 与无会话 `Epoch` 栅栏） — 原取代并重构 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0014](0014-disk-service-and-quota-ledger.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0027](0027-4mib-chunk-boundary-and-single-worker-compaction-gc.md) 与 [ADR-0028](0028-single-statement-atomic-cte-async-wal-and-smart-keep-cache.md)
 
 ## 背景
 Bowl 面向 MicroVM Sandbox 提供支持随时打断点（`Commit`）、开分支（`Fork`）、分支合并（`Merge`）、版本回档（`Rollback`）与差异对比（`Diff`）的云端根文件系统（rootfs）。原架构将服务端定位为「多写多读（MWMR）实时 POSIX 裁决器」，把全局控制面账本与高频文件系统状态（`inodes`、`entries`、`inode_xattrs`、`chunks`、`slice_refs`、`file_handles`、`file_locks`）混装在集中式 PostgreSQL 中，配合自定义 `Chunk -> Slice -> Block` 切块与后台轮询 Compaction/GC；而初版 0029 草案又存在三个方向偏差：

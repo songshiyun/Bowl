@@ -11,26 +11,12 @@ import (
 )
 
 type Querier interface {
-	CompareAndSetDiskBranches(ctx context.Context, arg CompareAndSetDiskBranchesParams) ([]byte, error)
-	CreateCommit(ctx context.Context, arg CreateCommitParams) (Commit, error)
-	CreateDisk(ctx context.Context, arg CreateDiskParams) (CreateDiskRow, error)
+	CreateDisk(ctx context.Context, arg CreateDiskParams) (Disk, error)
 	DeleteDisk(ctx context.Context, diskID pgtype.UUID) (int64, error)
-	GetActiveBranchWriter(ctx context.Context, arg GetActiveBranchWriterParams) (ClientSession, error)
-	GetCommit(ctx context.Context, commitID pgtype.UUID) (Commit, error)
-	GetDisk(ctx context.Context, diskID pgtype.UUID) (GetDiskRow, error)
-	GetDiskControlPlane(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneRow, error)
-	GetDiskControlPlaneForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskControlPlaneForUpdateRow, error)
-	GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (GetDiskForUpdateRow, error)
-	ListActiveCommitSessions(ctx context.Context, arg ListActiveCommitSessionsParams) ([]ClientSession, error)
-	ListActiveSessionIDsByDisk(ctx context.Context, diskID pgtype.UUID) ([]int64, error)
-	ListCommitAncestors(ctx context.Context, arg ListCommitAncestorsParams) ([]Commit, error)
-	ListCommitsByBranch(ctx context.Context, arg ListCommitsByBranchParams) ([]Commit, error)
-	ListDisks(ctx context.Context, arg ListDisksParams) ([]ListDisksRow, error)
-	// 写端冲突返回 23505（uq_client_sessions_managed_writer）；租期单位为微秒。
-	// 活跃会话不能更换绑定，错误绑定或非正租期返回零行。
-	RenewControlPlaneSession(ctx context.Context, arg RenewControlPlaneSessionParams) (ClientSession, error)
-	SetDiskStorageDir(ctx context.Context, arg SetDiskStorageDirParams) (SetDiskStorageDirRow, error)
-	UpdateDisk(ctx context.Context, arg UpdateDiskParams) (UpdateDiskRow, error)
+	GetDisk(ctx context.Context, diskID pgtype.UUID) (Disk, error)
+	GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (Disk, error)
+	ListDisks(ctx context.Context, arg ListDisksParams) ([]Disk, error)
+	UpdateDisk(ctx context.Context, arg UpdateDiskParams) (Disk, error)
 }
 
 var _ Querier = (*Queries)(nil)

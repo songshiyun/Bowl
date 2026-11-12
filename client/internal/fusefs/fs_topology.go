@@ -1,6 +1,8 @@
 package fusefs
 
 import (
+	"syscall"
+
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
@@ -8,9 +10,18 @@ import (
 )
 
 // Mkdir 实现创建子目录操作，校验只读挂载、重写父 Inode，透传模式位与调用进程 UID/GID。
-func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string, out *fuse.EntryOut) fuse.Status {
+func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string, out *fuse.EntryOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpMkdir)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(input.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(input.NodeId)
@@ -22,16 +33,17 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 	defer fs.lifecycleMu.RUnlock()
 
 	epoch := fs.cache.version()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mkdir(ctx, connect.NewRequest(&storagev1.MkdirRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
 		Gid:       input.Gid,
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -43,18 +55,27 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 		child := fs.ToKernelIno(inode.GetIno())
 		fs.cache.putEntryAt(epoch, input.NodeId, name, child)
 		fs.cache.putInodeAt(epoch, child, inode, resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
-		// 新建目录在本次会话内为空：登记为权威完整目录，目录内首次 Create/Mkdir 的
-		// Lookup 可直接返回 ENOENT，无需一次必然失败的网络 RPC。
-		fs.cache.markNewDirAt(epoch, child)
+		// 新建目录在本次会话内为空：登记为权威完整目录并记录其父目录，目录内首次 Create/Mkdir 的
+		// Lookup 可直接返回 ENOENT，且后续冷读 ReadDirPlus 可直接从本地缓存合成完整目录流。
+		fs.cache.markNewDirWithParentAt(epoch, child, input.NodeId)
 	}
 	fs.FillEntryOut(out, resp.Msg.GetInode(), resp.Msg.GetEntryTimeoutSeconds(), resp.Msg.GetAttrTimeoutSeconds())
 	return fuse.OK
 }
 
 // Mknod 实现非目录特殊节点（如 FIFO 命名管道、设备节点、普通文件）的创建操作。
-func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string, out *fuse.EntryOut) fuse.Status {
+func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string, out *fuse.EntryOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpMknod)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(input.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(input.NodeId)
@@ -66,17 +87,18 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 	defer fs.lifecycleMu.RUnlock()
 
 	epoch := fs.cache.version()
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	resp, err := fs.client.Mknod(ctx, connect.NewRequest(&storagev1.MknodRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
 		Mode:      input.Mode,
 		Uid:       input.Uid,
 		Gid:       input.Gid,
 		Rdev:      input.Rdev,
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -95,9 +117,15 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 }
 
 // Rmdir 移除指定父目录下的空目录项。
-func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name string) fuse.Status {
+func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name string) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpRmdir)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(header.NodeId, name) || fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(header.NodeId)
@@ -108,24 +136,24 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
 	child, _ := fs.cache.entry(header.NodeId, name)
 	var inode *storagev1.Inode
 	if fs.handles.AnyOpen() {
-		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+		cached, st := fs.lookupInodeWithContext(opCtx, cancel, header.NodeId, name)
 		if st != fuse.OK {
 			return st
 		}
 		inode = cached.inode
 		child = fs.ToKernelIno(inode.GetIno())
 	}
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 	epoch := fs.cache.version()
 	_, err := fs.client.Rmdir(ctx, connect.NewRequest(&storagev1.RmdirRequest{
 		ParentIno: parentIno,
-		SessionId: fs.currentSession(),
 		Name:      []byte(name),
+		DiskId:    fs.cfg.DiskID,
+		Epoch:     fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -144,9 +172,18 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 }
 
 // Unlink 删除指定父目录下的非目录项（解链）。
-func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name string) fuse.Status {
+func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name string) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpUnlink)
+	defer func() { endSpan(status) }()
+
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
+	}
+	if fs.isVirtualStatsName(header.NodeId, name) {
+		return fuse.EACCES
+	}
+	if fs.isVirtualStatsIno(header.NodeId) {
+		return fuse.Status(syscall.ENOTDIR)
 	}
 
 	parentIno, status := fs.ToServerIno(header.NodeId)
@@ -157,32 +194,46 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
 	child, _ := fs.cache.entry(header.NodeId, name)
 	var inode *storagev1.Inode
-	if fs.handles.AnyOpen() {
-		cached, st := fs.lookupInode(cancel, header.NodeId, name)
+	if child != 0 {
+		if cached, ok := fs.cache.peekInode(child); ok {
+			inode = cached.inode
+		}
+	}
+	needLookup := fs.handles.AnyOpen() || fs.writeBehind.HasAnyPending() ||
+		(fs.hasDirtyInodes() && (child == 0 || inode == nil || inode.GetAttr() == nil))
+	if needLookup {
+		cached, st := fs.lookupInodeWithContext(opCtx, cancel, header.NodeId, name)
 		if st != fuse.OK {
 			return st
 		}
 		inode = cached.inode
 		child = fs.ToKernelIno(inode.GetIno())
 	}
+
+	var childServerIno uint64
+	var hasChildServerIno bool
 	if child != 0 {
+		if sIno, st := fs.ToServerIno(child); st == fuse.OK {
+			childServerIno = sIno
+			hasChildServerIno = true
+			fs.writeBehind.BarrierInode(opCtx, childServerIno)
+		}
 		// 与并发 Release 的最后一个句柄关闭按 Inode 串行，保证孤儿标记不会互相错过。
 		unlock := fs.inodeLocks.lock(child)
 		defer unlock()
 	}
 	open := child != 0 && fs.handles.IsOpen(child)
-	sid := fs.currentSession()
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 	epoch := fs.cache.version()
 	_, err := fs.client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
 		ParentIno:    parentIno,
 		Name:         []byte(name),
 		OpenInClient: &open,
-		SessionId:    sid,
+		DiskId:       fs.cfg.DiskID,
+		Epoch:        fs.cfg.Epoch,
 	}))
 	if err != nil {
 		return fs.ToStatus(err, cancel)
@@ -198,8 +249,14 @@ func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name stri
 	if child != 0 {
 		fs.cache.invalidateInode(child)
 	}
-	if open && inode != nil && inode.GetAttr().GetNlink() == 1 {
-		fs.markOrphan(child, sid)
+	if inode != nil && inode.GetAttr() != nil && inode.GetAttr().GetNlink() == 1 {
+		if open {
+			fs.markOrphanWithContext(opCtx, child)
+		} else if hasChildServerIno {
+			fs.writeBehind.RemoveInode(opCtx, childServerIno)
+			fs.readAhead.InvalidateInode(childServerIno)
+			fs.clearDirty(childServerIno)
+		}
 	}
 	return fuse.OK
 }

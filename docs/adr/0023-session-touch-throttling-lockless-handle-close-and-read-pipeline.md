@@ -1,7 +1,7 @@
 # 0023. 减少会话续期写库频率、关闭普通文件免加行锁、Lookup 合并为单条查询与 Read 顺序预读
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0003](0003-posix-lookup-validation-and-derived-attributes.md)、[ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)
+已被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md)、[ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 与 [ADR-0033](0033-client-write-behind-multi-window-readahead-and-local-dir-synthesis.md) 替代 (superseded by ADR-0030, ADR-0032, and ADR-0033)
 
 ## 背景
 在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 的服务端批量写入提交和 `Compaction` 跳过已规整大块优化后，大文件并发写速度已经达到云盘物理上限（`174.70 MiB/s` vs 物理上限 `172.74 MiB/s`）。但对比同机器的 `JuiceFS + PostgreSQL 16` 测试结果（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)），排除掉测试环境里 `rclone serve s3` 未开启 `fsync` 以及 `juicefs bench` 未清理本地缓存 `/var/jfsCache` 的外部差异后，Bowl 在 **高并发小文件操作（`mdtest` 创建、读取、查属性）** 与 **大文件顺序读速度（`56.05 ~ 87.43 MiB/s`）** 上仍然存在四个明显的性能瓶颈：

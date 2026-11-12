@@ -11,6 +11,8 @@ import (
 )
 
 // Linux ioctl 文件系统标志位命令号（兼容 64 位与 32 位 ABI，以及 VFS fileattr 扩展属性桥接）。
+//
+//revive:disable:var-naming
 const (
 	FS_IOC_GETFLAGS   uint32 = 0x80086601
 	FS_IOC32_GETFLAGS uint32 = 0x80046601
@@ -32,6 +34,8 @@ const (
 	FS_XFLAG_APPEND    uint32 = 0x00000010
 )
 
+//revive:enable:var-naming
+
 // 服务端协议标志位常量（对应 storage.proto / meta.Flag*）。
 const (
 	ProtoFlagImmutable uint32 = 0x1
@@ -39,13 +43,30 @@ const (
 )
 
 // Ioctl 实现 FUSE_IOCTL 请求处理，将 Linux 标准 FS_IOC_GETFLAGS / FS_IOC_SETFLAGS 双向桥接至 StorageService RPC。
-func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) fuse.Status {
+func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpIoctl)
+	defer func() { endSpan(status) }()
+
+	// 在加锁与写回屏障前先短路不支持的命令（如终端探测 TCGETS 等），避免触发无谓的 BarrierInode 同步刷盘；
+	// 严格返回 ENOTTY，切勿返回 ENOSYS 导致整挂载点禁用合法 FS_IOC_* 命令。
+	switch input.Cmd {
+	case FS_IOC_GETFLAGS, FS_IOC32_GETFLAGS,
+		FS_IOC_SETFLAGS, FS_IOC32_SETFLAGS,
+		FS_IOC_FSGETXATTR, FS_IOC_FSSETXATTR:
+	default:
+		return fuse.Status(syscall.ENOTTY)
+	}
+
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.Status(syscall.ENOTTY)
+	}
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	ino, st := fs.ToServerIno(input.NodeId)
 	if st != fuse.OK {
 		return st
 	}
+	fs.writeBehind.BarrierInode(opCtx, ino)
 
 	switch input.Cmd {
 	case FS_IOC_GETFLAGS, FS_IOC32_GETFLAGS:
@@ -53,11 +74,12 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			return fuse.Status(syscall.EINVAL)
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino, SessionId: fs.currentSession(),
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -89,11 +111,12 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			return fuse.Status(syscall.EINVAL)
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		resp, err := fs.client.GetAttr(ctx, connect.NewRequest(&storagev1.GetAttrRequest{
-			Ino: ino, SessionId: fs.currentSession(),
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
@@ -146,17 +169,20 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			protoFlags |= ProtoFlagAppend
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:       ino,
-			Flags:     &protoFlags,
-			SessionId: fs.currentSession(),
+			Ino:    ino,
+			Flags:  &protoFlags,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
 		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {
@@ -187,17 +213,20 @@ func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte
 			protoFlags |= ProtoFlagAppend
 		}
 
-		ctx, cancelFunc := fs.RPCContext(cancel)
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
+		ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 		defer cancelFunc()
 
 		_, err := fs.client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
-			Ino:       ino,
-			Flags:     &protoFlags,
-			SessionId: fs.currentSession(),
+			Ino:    ino,
+			Flags:  &protoFlags,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
 		}))
 		if err != nil {
 			return fs.ToStatus(err, cancel)
 		}
+		fs.writeBehind.ResetInodeStream(opCtx, ino)
 		fs.cache.invalidateInode(input.NodeId)
 
 		if output != nil {

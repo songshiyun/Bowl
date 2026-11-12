@@ -18,15 +18,15 @@ func requireReasonMapping(t *testing.T, reason string, expected syscall.Errno) {
 	detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: reason, Domain: "bowl.storage"})
 	require.NoError(t, err)
 	connErr.AddDetail(detail)
-	require.Equal(t, expected, MapError(connErr), "Reason %s must map to %v", reason, expected)
+	require.Equal(t, expected, MapError(connErr), "Reason %s 必须映射为 %v", reason, expected)
 }
 
 func requireCodeMapping(t *testing.T, code connect.Code, expected syscall.Errno) {
 	t.Helper()
-	require.Equal(t, expected, MapError(connect.NewError(code, nil)), "code %s must map to %v", code, expected)
+	require.Equal(t, expected, MapError(connect.NewError(code, nil)), "状态码 %s 必须映射为 %v", code, expected)
 }
 
-func TestMapError_All24ErrorInfos(t *testing.T) {
+func TestMapError_All25ErrorInfos(t *testing.T) {
 	requireReasonMapping(t, "EINVAL", syscall.EINVAL)
 	requireReasonMapping(t, "ENAMETOOLONG", syscall.ENAMETOOLONG)
 	requireReasonMapping(t, "ERANGE", syscall.ERANGE)
@@ -51,10 +51,11 @@ func TestMapError_All24ErrorInfos(t *testing.T) {
 	requireReasonMapping(t, "EXDEV", syscall.EXDEV)
 	requireReasonMapping(t, "EIO", syscall.EIO)
 	requireReasonMapping(t, "EROFS", syscall.EROFS)
+	requireReasonMapping(t, "EBUSY", syscall.EBUSY)
 }
 
 func TestMapError_ErrorInfoDomainAndReason(t *testing.T) {
-	t.Run("empty reason in ErrorInfo falls through", func(t *testing.T) {
+	t.Run("空Reason降级按Connect状态码兜底", func(t *testing.T) {
 		connErr := connect.NewError(connect.CodeNotFound, nil)
 		detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "", Domain: "bowl.storage"})
 		require.NoError(t, err)
@@ -62,7 +63,7 @@ func TestMapError_ErrorInfoDomainAndReason(t *testing.T) {
 		require.Equal(t, syscall.ENOENT, MapError(connErr))
 	})
 
-	t.Run("non-bowl domain with valid reason", func(t *testing.T) {
+	t.Run("自定义Domain携带合法Reason仍正常映射", func(t *testing.T) {
 		connErr := connect.NewError(connect.CodeInvalidArgument, nil)
 		detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EEXIST", Domain: "custom.domain"})
 		require.NoError(t, err)
@@ -84,79 +85,43 @@ func TestMapError_ConnectCodeFallback(t *testing.T) {
 	requireCodeMapping(t, connect.CodeDeadlineExceeded, syscall.EIO)
 	requireCodeMapping(t, connect.CodeUnknown, syscall.EIO)
 	requireCodeMapping(t, connect.CodeAborted, syscall.EIO)
-	requireCodeMapping(t, connect.CodeFailedPrecondition, syscall.EIO)
+	requireCodeMapping(t, connect.CodeFailedPrecondition, syscall.EBUSY)
 	requireCodeMapping(t, connect.CodeOutOfRange, syscall.EIO)
 	requireCodeMapping(t, connect.CodeDataLoss, syscall.EIO)
 	requireCodeMapping(t, connect.CodeUnauthenticated, syscall.EIO)
 }
 
 func TestMapError_TransportAndNil(t *testing.T) {
-	t.Run("nil error returns 0", func(t *testing.T) {
-		require.Equal(t, syscall.Errno(0), MapError(nil))
-	})
-
-	t.Run("io.EOF maps to EIO", func(t *testing.T) {
-		require.Equal(t, syscall.EIO, MapError(io.EOF))
-	})
-
-	t.Run("arbitrary network error maps to EIO", func(t *testing.T) {
-		require.Equal(t, syscall.EIO, MapError(errors.New("connection reset by peer")))
-	})
-
-	t.Run("CodeCanceled wrapping ECONNRESET maps to EIO", func(t *testing.T) {
-		require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.ECONNRESET)))
-	})
-
-	t.Run("CodeCanceled wrapping EPIPE maps to EIO", func(t *testing.T) {
-		require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.EPIPE)))
-	})
+	require.Equal(t, syscall.Errno(0), MapError(nil))
+	require.Equal(t, syscall.EIO, MapError(io.EOF))
+	require.Equal(t, syscall.EIO, MapError(errors.New("connection reset by peer")))
+	require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.ECONNRESET)))
+	require.Equal(t, syscall.EIO, MapError(connect.NewError(connect.CodeCanceled, syscall.EPIPE)))
 }
 
-func TestContextWithCancelChan_CancelTriggered(t *testing.T) {
-	cancel := make(chan struct{})
-	ctx, cancelFn := ContextWithCancelChan(context.Background(), cancel)
-	defer cancelFn()
+func TestContextWithCancelChanAndPriority(t *testing.T) {
+	closedCancel := make(chan struct{})
+	close(closedCancel)
+	interruptedCtx, cancelInterrupted := ContextWithCancelChan(context.Background(), closedCancel)
+	defer cancelInterrupted()
+	require.ErrorIs(t, interruptedCtx.Err(), context.Canceled)
+	require.ErrorIs(t, context.Cause(interruptedCtx), ErrKernelInterrupted)
+	require.Equal(t, syscall.EINTR, MapError(context.Cause(interruptedCtx)))
 
-	require.NoError(t, ctx.Err())
-	close(cancel)
-	<-ctx.Done()
-	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	require.ErrorIs(t, context.Cause(ctx), ErrKernelInterrupted)
-	require.Equal(t, syscall.EINTR, MapError(context.Cause(ctx)))
-}
+	openCancel := make(chan struct{})
+	normalCtx, cancelNormal := ContextWithCancelChan(context.Background(), openCancel)
+	cancelNormal()
+	<-normalCtx.Done()
+	require.ErrorIs(t, normalCtx.Err(), context.Canceled)
+	require.NotErrorIs(t, context.Cause(normalCtx), ErrKernelInterrupted)
 
-func TestContextWithCancelChan_NormalCancel(t *testing.T) {
-	cancel := make(chan struct{})
-	ctx, cancelFn := ContextWithCancelChan(context.Background(), cancel)
+	nilChanCtx, cancelNil := ContextWithCancelChan(context.Background(), nil)
+	require.NoError(t, nilChanCtx.Err())
+	cancelNil()
+	<-nilChanCtx.Done()
+	require.ErrorIs(t, nilChanCtx.Err(), context.Canceled)
 
-	cancelFn()
-	<-ctx.Done()
-	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	require.False(t, errors.Is(context.Cause(ctx), ErrKernelInterrupted))
-}
-
-func TestContextWithCancelChan_NilChan(t *testing.T) {
-	ctx, cancelFn := ContextWithCancelChan(context.Background(), nil)
-	require.NoError(t, ctx.Err())
-	cancelFn()
-	<-ctx.Done()
-	require.ErrorIs(t, ctx.Err(), context.Canceled)
-}
-
-func TestMapErrorWithCancel(t *testing.T) {
-	t.Run("prioritize EINTR when cancel chan is closed", func(t *testing.T) {
-		cancel := make(chan struct{})
-		close(cancel)
-		connErr := connect.NewError(connect.CodeInternal, errors.New("internal server failure"))
-		require.Equal(t, syscall.EINTR, MapErrorWithCancel(connErr, cancel))
-	})
-
-	t.Run("fallback to regular mapping when cancel chan is open", func(t *testing.T) {
-		cancel := make(chan struct{})
-		require.Equal(t, syscall.ENOENT, MapErrorWithCancel(connect.NewError(connect.CodeNotFound, nil), cancel))
-	})
-
-	t.Run("handle nil cancel chan normally", func(t *testing.T) {
-		require.Equal(t, syscall.EACCES, MapErrorWithCancel(connect.NewError(connect.CodePermissionDenied, nil), nil))
-	})
+	require.Equal(t, syscall.EINTR, MapErrorWithCancel(connect.NewError(connect.CodeInternal, errors.New("boom")), closedCancel))
+	require.Equal(t, syscall.ENOENT, MapErrorWithCancel(connect.NewError(connect.CodeNotFound, nil), openCancel))
+	require.Equal(t, syscall.EACCES, MapErrorWithCancel(connect.NewError(connect.CodePermissionDenied, nil), nil))
 }

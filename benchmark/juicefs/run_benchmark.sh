@@ -2,21 +2,21 @@
 # ==============================================================================
 # Bowl vs JuiceFS - Aliyun Silicon Valley (us-west-1) Dual-ECS Benchmark Suite
 # ==============================================================================
-# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
-# 存储引擎：每个 (disk_id, branch_name) 独立 Pebble（常驻句柄池复用句柄与缓存），
-# DataKey 仅保存 12 字节 BlobRef 索引；文件数据落在 blobs/<shard>/<blob_id>.blob
-# 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后
-# os.Remove 即时回收旧块，Checkpoint/Fork 以硬链接共享块。
-# 服务端并发与持久化：分支锁收敛为拓扑生命周期 RLock，按 (disk,branch,ino) 的
-# 细粒度 inodeMu 串行元数据；完整 1 MiB 块在锁外并行落盘；GetAttr/GetXattr/
-# Readlink 单键点查免 Snapshot；读路径 atime 先登记内存、按 1 秒周期与持久化
-# 屏障合并；常规批次 pebble.NoSync 异步 WAL，后台 1 秒刷盘与 WALBytesPerSync
-# 4 MiB 兜底（MemTableSize 16 MiB）。
-# 客户端写入与缓存：1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
-# 避免 4 KiB 脏页回写与写前尺寸核对）+ FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV
-# 负缓存（写批次内清除 security.capability）+ 写后 AttrTimeout=1.0s +
-# MaxBackground=64 / CongestionThreshold=48。Flush 不触发跨机 Fsync RPC，
-# 仅显式 Fsync/Sync 请求服务端持久化屏障。
+# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# - 部署与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 容器化部署
+#   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger + Prometheus + Loki + Alloy + Grafana。
+# - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
+#   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
+#   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
+# - 数据层：BlobStore 采用扁平 64 MiB Append-Only .pack 封包文件、256 KiB 逻辑块网格、
+#   常驻句柄池与 64 MiB 分片热块缓存（AppendBlocks 整块顺序写跳过用户态冗余缓存拷贝），
+#   支持活跃包末尾同块 ExtendTail 顺延扩展、8 MiB SyncFileRange 渐进异步回写、相邻物理连续块合并单次 pread 无锁并发 Read、
+#   WriteRequest/ReadResponse 池化零分配编解码、服务端 128 MiB H2C 连接窗口、
+#   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及后台异步全死封口包回收。
+# - 客户端：无会话 RawFS FUSE 客户端，禁用 CAP_WRITEBACK_CACHE（保留 FOPEN_KEEP_CACHE 与 CAP_HANDLE_KILLPRIV），
+#   配备 1+8 H2C 多连接条带池（32 MiB 元数据连接 + 8×64 MiB 数据连接，单流 8 MiB）与 MarshalAppend 零分配编码、
+#   WriteBehindCoordinator（4 MiB × W*=4 并发写流水线，2 MiB 同步探测 + Create 预热与 <=256 KiB 小块连续写内存聚合）、
+#   ReadAheadCoordinator 单飞有序槽位预读（W_read=4, ReadAheadMaxGlobalInflight=32）、completeDirs 本地目录流合成 + OTLP 全链路追踪与 bowl stats；Flush 不触发跨机 Fsync RPC。
 set -euo pipefail
 export GOWORK=off
 
@@ -24,17 +24,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
+# shellcheck source=../common/prod_stack.sh
+source "${REPO_ROOT}/benchmark/common/prod_stack.sh"
 
-# Aliyun Configuration (Silicon Valley us-west-1a)
+# Aliyun Configuration (Silicon Valley us-west-1a, Local NVMe SSD ecs.i5.xlarge)
 REGION_ID="${REGION_ID:-us-west-1}"
 ZONE_ID="${ZONE_ID:-us-west-1a}"
-VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
-VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
-INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.c9i.xlarge}"
+VPC_ID="${VPC_ID:?VPC_ID is required}"
+VSWITCH_ID="${VSWITCH_ID:?VSWITCH_ID is required}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:?SECURITY_GROUP_ID is required}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.i5.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
 SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
-SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-120}"
+SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-40}"
 KEEP_INSTANCES="${KEEP_INSTANCES:-0}"
 TARGETS_TO_RUN="${TARGETS_TO_RUN:-bowl jfs_pg jfs_redis}"
 
@@ -47,11 +49,47 @@ KEY_CREATED=0
 INSTANCES_CREATED_AT=""
 INSTANCES_DELETED_AT=""
 REMAINING_INSTANCES=0
+TELEMETRY_FETCHED=0
 
 mkdir -p "${RESULTS_DIR}"
 
 log() {
   printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+TEST_START_EPOCH=""
+TEST_END_EPOCH=""
+
+fetch_telemetry_archive() {
+  if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
+    return 0
+  fi
+  TELEMETRY_FETCHED=1
+
+  local old_opts
+  old_opts="$(set +o)"
+  set +e
+
+  CLIENT_SSH_CMD_ARR=()
+  SERVER_SSH_CMD_ARR=()
+  if [[ -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    CLIENT_SSH_CMD_ARR=(ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}")
+  fi
+  if [[ -n "${SERVER_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    SERVER_SSH_CMD_ARR=(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}")
+  fi
+
+  log "Collecting and distilling deploy/prod telemetry into ${RESULTS_DIR}/telemetry/ ..."
+  collect_and_process_bench_telemetry \
+    "${REPO_ROOT}" \
+    "${WORK_DIR}" \
+    "${RESULTS_DIR}" \
+    "juicefs" \
+    "${TEST_START_EPOCH:-}" \
+    "${TEST_END_EPOCH:-}"
+
+  eval "${old_opts}"
+  return 0
 }
 
 cleanup() {
@@ -61,12 +99,9 @@ cleanup() {
   # 失败时先回传原始输出，避免释放实例后丢失失败证据。
   if [[ "${exit_code}" != "0" && -n "${CLIENT_SSH_HOST:-}" ]]; then
     scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/*" "${RESULTS_DIR}/" 2>/dev/null
-    ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat /var/log/bowl-mount.log" > "${RESULTS_DIR}/bowl-mount.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u bowl-storage --no-pager" > "${RESULTS_DIR}/bowl-storage.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -u postgresql -u postgresql@16-main --no-pager -n 200" > "${RESULTS_DIR}/postgresql.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "journalctl -k --no-pager | grep -Ei 'out of memory|oom-kill|killed process' || true" > "${RESULTS_DIR}/kernel-oom.log" 2>/dev/null
-    ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "free -m; df -h /var/lib/bowl/data; systemctl is-active postgresql@16-main || true" > "${RESULTS_DIR}/server-state.log" 2>/dev/null
   fi
+
+  fetch_telemetry_archive
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
@@ -131,11 +166,11 @@ trap cleanup EXIT
 if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
   log "Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64..."
   GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-w -s" \
+    go -C "${REPO_ROOT}/services/storage" build -mod=mod -trimpath \
     -o "${WORK_DIR}/storage-service" ./cmd
 
   GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
+    go -C "${REPO_ROOT}/client" build -mod=mod -trimpath \
     -o "${WORK_DIR}/bowl" ./cmd/bowl
 
   GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
@@ -154,9 +189,9 @@ if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
   fi
   cp "${GOOSE_CACHE_BIN}" "${WORK_DIR}/goose"
   chmod +x "${WORK_DIR}/storage-service" "${WORK_DIR}/bowl" "${WORK_DIR}/goose"
-  tar -czf "${WORK_DIR}/server-bins.tar.gz" -C "${WORK_DIR}" storage-service goose
-  tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl
-  log "Compiled and compressed binaries ready in ${WORK_DIR}"
+  prepare_prod_bundle "${REPO_ROOT}" "${WORK_DIR}"
+  COPYFILE_DISABLE=1 tar -czf "${WORK_DIR}/client-bins.tar.gz" -C "${WORK_DIR}" bowl
+  log "Compiled binaries and deploy/prod bundle ready in ${WORK_DIR}"
 else
   log "Step 1/6: Skipping Bowl binary cross-compilation (TARGETS_TO_RUN=${TARGETS_TO_RUN})"
 fi
@@ -277,34 +312,47 @@ scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ss
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
 
 # ==============================================================================
-# 第 3 步：在服务端部署 Storage、PostgreSQL、Redis 与 rclone S3。
+# 第 3 步：在服务端挂载本地 NVMe SSD，部署 deploy/prod 栈及 JuiceFS 对比组后端。
 # ==============================================================================
-log "Step 3/6: Deploying PostgreSQL 16, Redis 7, Rclone S3/WebDAV, and bowl-storage on Server (${SERVER_PRIV_IP})..."
-ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis"
+log "Step 3/6: Mounting local NVMe SSD and deploying deploy/prod stack (Bowl + Observability) & JuiceFS backends on Server (${SERVER_PRIV_IP})..."
 if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
-  scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/server-bins.tar.gz" "root@${SERVER_SSH_HOST}:/tmp/server-bins.tar.gz"
-  scp "${SERVER_SSH_OPTS[@]}" "${REPO_ROOT}"/services/storage/db/migrations/*.sql "root@${SERVER_SSH_HOST}:/opt/bowl/migrations/"
+  scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/prod-bundle.tar.gz" "root@${SERVER_SSH_HOST}:/tmp/prod-bundle.tar.gz"
 fi
 
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "TARGETS_TO_RUN='${TARGETS_TO_RUN}' bash -s" <<'EOF'
 set -euo pipefail
-if [[ -f /tmp/server-bins.tar.gz ]]; then
-  tar -xzf /tmp/server-bins.tar.gz -C /usr/local/bin/
-  chmod +x /usr/local/bin/storage-service /usr/local/bin/goose
-  rm -f /tmp/server-bins.tar.gz
+
+# 0. Detect, format, and mount the 894 GiB local NVMe SSD (local_ssd_pro)
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Server!" >&2
+  lsblk >&2
+  exit 1
 fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
+mkdir -p /mnt/nvme/postgresql /mnt/nvme/minio/data/jfs-pg /mnt/nvme/minio/data/jfs-redis /mnt/nvme/redis
+mkdir -p /var/lib/postgresql /var/lib/minio /var/lib/redis
+mount --bind /mnt/nvme/postgresql /var/lib/postgresql
+mount --bind /mnt/nvme/minio /var/lib/minio
+mount --bind /mnt/nvme/redis /var/lib/redis
 
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq postgresql redis-server iperf3 fio jq curl unzip
+apt-get install -y -qq postgresql redis-server iperf3 fio jq curl unzip python3 ca-certificates
 
 # Install rclone v1.68.2 (with native `rclone serve s3` and `rclone serve webdav` support)
 curl -fsSL https://github.com/rclone/rclone/releases/download/v1.68.2/rclone-v1.68.2-linux-amd64.deb -o /tmp/rclone.deb
 dpkg -i /tmp/rclone.deb
 rm -f /tmp/rclone.deb
 
-# 1. Configure PostgreSQL 16 (listen on 0.0.0.0 for jfs_pg, local for bowl)
+# 1. Configure host PostgreSQL 16 (exclusively for jfs_pg comparison target on :5432)
 systemctl enable --now postgresql
 PG_CONF_FILE="$(sudo -u postgres psql -tAc 'SHOW config_file;' | xargs)"
 PG_HBA_FILE="$(sudo -u postgres psql -tAc 'SHOW hba_file;' | xargs)"
@@ -312,17 +360,11 @@ grep -q "^listen_addresses = '\*'" "${PG_CONF_FILE}" || echo "listen_addresses =
 grep -q "172.16.0.0/12" "${PG_HBA_FILE}" || echo "host all all 172.16.0.0/12 md5" >> "${PG_HBA_FILE}"
 
 sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
-for db in bowl jfs_pg; do
-  sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = '${db}'" | grep -q 1 || \
-    sudo -u postgres psql -c "CREATE DATABASE ${db};"
-done
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'jfs_pg'" | grep -q 1 || \
+  sudo -u postgres psql -c "CREATE DATABASE jfs_pg;"
 sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '300';"
 sudo -u postgres psql -c "ALTER SYSTEM SET shared_buffers = '2GB';"
 systemctl restart postgresql
-
-if [[ -x /usr/local/bin/goose ]]; then
-  /usr/local/bin/goose -dir /opt/bowl/migrations postgres "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable" up
-fi
 
 # 2. Configure Redis 7 (AOF everysec, bind 0.0.0.0)
 sed -i 's/^bind /# bind /' /etc/redis/redis.conf
@@ -335,7 +377,7 @@ REDIS_EOF
 systemctl enable --now redis-server
 systemctl restart redis-server
 
-# 3. Start S3 (:9001) & WebDAV (:9002) Object Storage Servers via rclone on Server node cloud_essd
+# 3. Start S3 (:9001) & WebDAV (:9002) Object Storage Servers via rclone on Server node local NVMe SSD
 mkdir -p /var/lib/minio/data/jfs-pg /var/lib/minio/data/jfs-redis
 
 cat >/etc/systemd/system/jfs-s3.service <<'UNIT'
@@ -347,7 +389,7 @@ After=network.target
 Type=simple
 ExecStart=/usr/bin/rclone serve s3 /var/lib/minio/data --addr 0.0.0.0:9001 --auth-key minioadmin,minioadmin
 Restart=always
-LimitNOFILE=65536
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
@@ -362,7 +404,7 @@ After=network.target
 Type=simple
 ExecStart=/usr/bin/rclone serve webdav /var/lib/minio/data --addr 0.0.0.0:9002
 Restart=always
-LimitNOFILE=65536
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
@@ -370,38 +412,6 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable --now jfs-s3 jfs-webdav
-
-if [[ -x /usr/local/bin/storage-service ]]; then
-  cat >/etc/systemd/system/bowl-storage.service <<'UNIT'
-[Unit]
-Description=Bowl Storage Service
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-Environment="SERVER_HOST=0.0.0.0"
-Environment="SERVER_PORT=9000"
-Environment="SERVER_READ_MAX_BYTES=16777216"
-Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
-Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
-Environment="DB_MAX_CONNS=64"
-Environment="DB_MIN_CONNS=8"
-Environment="STORAGE_ATIME_MODE=noatime"
-Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="STORAGE_ATTR_TIMEOUT_SECONDS=1.0"
-Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=1.0"
-Environment="LOG_LEVEL=warn"
-Environment="OTEL_ENABLED=false"
-ExecStart=/usr/local/bin/storage-service
-Restart=always
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-  systemctl daemon-reload
-  systemctl enable --now bowl-storage
-fi
 
 for i in {1..30}; do
   if ss -tln | grep -q ':9001 ' && ss -tln | grep -q ':9002 ' && ss -tln | grep -q ':6379 '; then
@@ -412,32 +422,53 @@ done
 if ! (ss -tln | grep -q ':9001 ' && ss -tln | grep -q ':9002 ' && ss -tln | grep -q ':6379 '); then
   echo "ERROR: Some server ports failed to listen:"
   ss -tlnp
-  journalctl -u bowl-storage -u jfs-s3 -u jfs-webdav -u redis-server -n 30 --no-pager || true
+  journalctl -u jfs-s3 -u jfs-webdav -u redis-server -n 30 --no-pager || true
   exit 1
 fi
 
 pkill -f "iperf3 -s" || true
 iperf3 -s -D
 EOF
-log "Server node (${SERVER_PRIV_IP}) services (Bowl:9000, rclone S3:9001, PG:5432, Redis:6379) are up and healthy."
 
-# Measure Server local cloud_essd disk baseline + Server system info
-log "Measuring Server local cloud_essd disk baseline..."
+if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
+  log "Initializing Bowl deploy/prod Docker Compose stack on Server (${SERVER_PRIV_IP})..."
+  remote_setup_prod_stack "${SERVER_PRIV_IP}" "${CLIENT_PRIV_IP}" "prod" \
+    | ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s"
+  ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl up"
+fi
+log "Server node (${SERVER_PRIV_IP}) services (Bowl deploy/prod:9000 + Jaeger/Prometheus/Loki, rclone S3:9001, PG:5432, Redis:6379) are ready on local NVMe SSD."
+
+# Measure Server local NVMe SSD disk baseline + Server system info
+log "Measuring Server local NVMe SSD disk baseline..."
 SERVER_INFO_JSON="$(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
-mkdir -p /var/lib/bowl/disk_bench
-WRITE_BW_BPS="$(fio --name=disk-base-w --directory=/var/lib/bowl/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
-READ_BW_BPS="$(fio --name=disk-base-w --directory=/var/lib/bowl/disk_bench --rw=read --bs=4M --size=2G --direct=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
-rm -rf /var/lib/bowl/disk_bench
+mkdir -p /mnt/nvme/disk_bench
+WRITE_BW_BPS="$(fio --name=nvme-seq-w --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
+READ_BW_BPS="$(fio --name=nvme-seq-r --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --direct=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
+RANDW_IOPS="$(fio --name=nvme-rand-w --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --lat_percentiles=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.iops // 0')"
+RANDR_IOPS="$(fio --name=nvme-rand-r --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --lat_percentiles=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.iops // 0')"
+FSYNC_JSON="$(fio --name=nvme-fsync-w --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --lat_percentiles=1 --output-format=json | sed -n '/^{/,$p')"
+FSYNC_IOPS="$(echo "${FSYNC_JSON}" | jq -r '.jobs[0].write.iops // 0')"
+FSYNC_P99_US="$(echo "${FSYNC_JSON}" | jq -r '((.jobs[0].sync.lat_ns.percentile["99.000000"] // 0) + (.jobs[0].write.clat_ns.percentile["99.000000"] // 0)) / 1000.0')"
+rm -rf /mnt/nvme/disk_bench
+
 WRITE_MIB="$(awk -v b="${WRITE_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
 READ_MIB="$(awk -v b="${READ_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+RANDW_IOPS_FMT="$(awk -v v="${RANDW_IOPS}" 'BEGIN {printf "%.0f", v}')"
+RANDR_IOPS_FMT="$(awk -v v="${RANDR_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_IOPS_FMT="$(awk -v v="${FSYNC_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_P99_FMT="$(awk -v v="${FSYNC_P99_US}" 'BEGIN {printf "%.1f", v}')"
 
+NVME_DEV="$(cat /etc/bowl_nvme_dev)"
+NVME_SIZE_GIB="$(lsblk -dbno SIZE "${NVME_DEV}" | awk '{printf "%.0f", $1 / (1024*1024*1024)}')"
 CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
 VCPU="$(nproc)"
 MEM_GIB="$(awk '/MemTotal/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo)"
 OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
 KERNEL="$(uname -r)"
 PG_VER="$(psql --version | head -n1)"
+BOWL_PG_VER="$(/usr/local/bin/bowl-prod-ctl pg-version 2>/dev/null | head -n1 || echo 'postgres (PostgreSQL) 18 (alpine)')"
+DOCKER_VER="$(docker --version 2>/dev/null | head -n1 || echo 'n/a')"
 REDIS_VER="$(redis-server --version | awk '{print $1, $2, $3}')"
 RCLONE_VER="$(rclone --version | head -n1)"
 
@@ -448,13 +479,28 @@ jq -n \
   --arg os "${OS_REL}" \
   --arg kernel "${KERNEL}" \
   --arg pg "${PG_VER}" \
+  --arg bowl_pg "${BOWL_PG_VER}" \
+  --arg docker_ver "${DOCKER_VER}" \
   --arg redis "${REDIS_VER}" \
   --arg rclone "${RCLONE_VER}" \
+  --arg nvme_dev "${NVME_DEV}" \
+  --argjson nvme_gib "${NVME_SIZE_GIB}" \
   --arg disk_w "${WRITE_MIB}" \
   --arg disk_r "${READ_MIB}" \
+  --arg randw_iops "${RANDW_IOPS_FMT}" \
+  --arg randr_iops "${RANDR_IOPS_FMT}" \
+  --arg fsync_iops "${FSYNC_IOPS_FMT}" \
+  --arg fsync_p99_us "${FSYNC_P99_FMT}" \
   '{
-    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, redis_version: $redis, rclone_version: $rclone},
-    disk_baseline: {local_seq_write_mib_s: $disk_w, local_seq_read_mib_s: $disk_r}
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, bowl_pg_version: $bowl_pg, docker_version: $docker_ver, redis_version: $redis, rclone_version: $rclone, data_disk_device: $nvme_dev, data_disk_size_gib: $nvme_gib},
+    disk_baseline: {
+      local_seq_write_mib_s: ($disk_w|tonumber),
+      local_seq_read_mib_s: ($disk_r|tonumber),
+      local_randwrite_4k_iops: ($randw_iops|tonumber),
+      local_randread_4k_iops: ($randr_iops|tonumber),
+      local_fsync_4k_iops: ($fsync_iops|tonumber),
+      local_fsync_4k_p99_us: ($fsync_p99_us|tonumber)
+    }
   }'
 EOF
 )"
@@ -463,13 +509,31 @@ log "Server baseline: $(echo "${SERVER_INFO_JSON}" | jq -c '.')"
 # ==============================================================================
 # Step 4: Deploy Bowl FUSE Client, JuiceFS CLI, fio, and mdtest on Client Node
 # ==============================================================================
-log "Step 4/6: Installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (${CLIENT_PRIV_IP})..."
+log "Step 4/6: Mounting local NVMe SSD and installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (${CLIENT_PRIV_IP})..."
 if [[ " ${TARGETS_TO_RUN} " == *" bowl "* ]]; then
   scp "${CLIENT_SSH_OPTS[@]}" "${WORK_DIR}/client-bins.tar.gz" "root@${CLIENT_SSH_HOST}:/tmp/client-bins.tar.gz"
 fi
 
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
+
+# Mount local NVMe SSD on Client and bind-mount /var/jfsCache
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Client!" >&2
+  lsblk >&2
+  exit 1
+fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
+mkdir -p /mnt/nvme/jfsCache /var/jfsCache
+mount --bind /mnt/nvme/jfsCache /var/jfsCache
+
 if [[ -f /tmp/client-bins.tar.gz ]]; then
   tar -xzf /tmp/client-bins.tar.gz -C /usr/local/bin/
   chmod +x /usr/local/bin/bowl
@@ -493,7 +557,9 @@ fi
 
 # Build mdtest from hpc/ior
 if [[ ! -x /usr/local/bin/mdtest ]]; then
-  rm -rf /opt/ior
+  rm -rf /opt/ior /mnt/nvme/ior
+  mkdir -p /mnt/nvme/ior /opt/ior
+  mount --bind /mnt/nvme/ior /opt/ior
   git clone --depth 1 --branch 3.3.0 https://github.com/hpc/ior.git /opt/ior || git clone --depth 1 https://github.com/hpc/ior.git /opt/ior
   cd /opt/ior
   ./bootstrap
@@ -557,7 +623,10 @@ log "Client info & VPC network baseline: $(echo "${CLIENT_INFO_JSON}" | jq -c '.
 # ==============================================================================
 # Step 5: Execute Full Benchmark Suites on Bowl, JuiceFS (PG), JuiceFS (Redis)
 # ==============================================================================
+emit_client_telemetry_helper | ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "mkdir -p /opt/bowl && cat >/opt/bowl/client_telemetry.sh && chmod +x /opt/bowl/client_telemetry.sh"
+
 TEST_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TEST_START_EPOCH="$(date +%s)"
 log "Step 5/6: Running benchmark suites (${TARGETS_TO_RUN}) on Client -> Server..."
 
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "cat >/tmp/run_client_bench.sh && chmod +x /tmp/run_client_bench.sh" <<'BENCH_EOF'
@@ -571,6 +640,30 @@ TIMINGS_FILE="${OUT_DIR}/stage_timings.jsonl"
 : > "${TIMINGS_FILE}"
 
 SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+"${SSH_SRV[@]}" "mkdir -p /tmp/bowl-telemetry/server/logs /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble" || true
+
+capture_target_snapshot() {
+  local target="$1"
+  local phase="$2"
+  [[ "${target}" == "bowl" ]] || return 0
+  capture_bowl_snapshot "${phase}"
+}
+
+start_target_cpu_profile() {
+  local target="$1"
+  local stage="$2"
+  local sec="${3:-10}"
+  [[ "${target}" == "bowl" ]] || return 0
+  start_bowl_cpu_profile "${stage}" "${sec}" 0
+}
+
+finish_target_stage_profiles() {
+  local target="$1"
+  local stage="$2"
+  [[ "${target}" == "bowl" ]] || return 0
+  finish_bowl_stage_profiles "${stage}"
+}
 
 drop_all_caches() {
   sync
@@ -599,11 +692,13 @@ run_suites_on_mount() {
   # 1. juicefs bench -p 4
   echo "[${target}] [1/3] Running juicefs bench ${mp} -p 4 ..."
   drop_all_caches
+  capture_target_snapshot "${target}" "juicefs_bench_pre"
   local t0
   t0="$(date +%s.%N)"
   /usr/local/bin/juicefs bench "${mp}" -p 4 </dev/null 2>&1 | tee "${OUT_DIR}/bench_${target}.log"
   local t1
   t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "juicefs_bench_post"
   record_timing "${target}" "juicefs_bench" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2. fio suite (8 workloads)
@@ -613,48 +708,83 @@ run_suites_on_mount() {
   mkdir -p "${fio_dir}"
 
   t0="$(date +%s.%N)"
+  local sub_t0 sub_t1
 
   # 2.1 seq_write_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_write_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
-  fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
+  capture_target_snapshot "${target}" "fio_seq_write_1job_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "fio_seq_write_1job" 10
+  fio --name=seq1 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=4G --numjobs=1 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_1job.json"
+  finish_target_stage_profiles "${target}" "fio_seq_write_1job"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_seq_write_1job_post"
+  record_timing "${target}" "fio_seq_write_1job" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.2 seq_read_1job (4M, 4G, 1 job)
   echo "  -> [${target}] fio seq_read_1job (bs=4M, size=4G, numjobs=1)"
   drop_all_caches
-  fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
+  capture_target_snapshot "${target}" "fio_seq_read_1job_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "fio_seq_read_1job" 10
+  fio --name=seq1 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=4G --numjobs=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_1job.json"
+  finish_target_stage_profiles "${target}" "fio_seq_read_1job"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_seq_read_1job_post"
+  record_timing "${target}" "fio_seq_read_1job" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -f "${fio_dir}"/seq1*
 
-  # 2.3 seq_write_16jobs (4M, 1G x 16 = 16GiB)
+  # 2.3 & 2.4 seq_16jobs (4M, 1G x 16 = 16GiB write + read)
   echo "  -> [${target}] fio seq_write_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
-  fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
+  capture_target_snapshot "${target}" "fio_seq_16jobs_pre"
+  sub_t0="$(date +%s.%N)"
+  fio --name=seq16 --directory="${fio_dir}" --rw=write --refill_buffers --bs=4M --size=1G --numjobs=16 --end_fsync=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_write_16jobs.json"
 
-  # 2.4 seq_read_16jobs (4M, 1G x 16 = 16GiB)
   echo "  -> [${target}] fio seq_read_16jobs (bs=4M, size=1G, numjobs=16)"
   drop_all_caches
-  fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
+  fio --name=seq16 --directory="${fio_dir}" --rw=read --refill_buffers --bs=4M --size=1G --numjobs=16 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_seq_read_16jobs.json"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_seq_16jobs_post"
+  record_timing "${target}" "fio_seq_16jobs" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -f "${fio_dir}"/seq16*
 
-  # 2.5 direct_write_4jobs (1M, 1G x 4 = 4GiB, direct=1)
+  # 2.5 & 2.6 direct_seq (1M, 1G x 4 = 4GiB, direct=1 write + read)
   echo "  -> [${target}] fio direct_write_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
+  capture_target_snapshot "${target}" "fio_direct_seq_pre"
+  sub_t0="$(date +%s.%N)"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=write --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_write_4jobs.json"
 
-  # 2.6 direct_read_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_read_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=read --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_read_4jobs.json"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_seq_post"
+  record_timing "${target}" "fio_direct_seq" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.7 direct_randwrite_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randwrite_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
+  capture_target_snapshot "${target}" "fio_direct_randwrite_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "fio_direct_randwrite" 10
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randwrite --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randwrite_4jobs.json"
+  finish_target_stage_profiles "${target}" "fio_direct_randwrite"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_randwrite_post"
+  record_timing "${target}" "fio_direct_randwrite" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   # 2.8 direct_randread_4jobs (1M, 1G x 4 = 4GiB, direct=1)
   echo "  -> [${target}] fio direct_randread_4jobs (bs=1m, size=1g, numjobs=4, direct=1)"
   drop_all_caches
-  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
+  capture_target_snapshot "${target}" "fio_direct_randread_pre"
+  sub_t0="$(date +%s.%N)"
+  fio --name=direct4 --directory="${fio_dir}" --ioengine=libaio --rw=randread --bs=1m --size=1g --numjobs=4 --direct=1 --lat_percentiles=1 --group_reporting --output-format=json </dev/null > "${OUT_DIR}/fio_${target}_direct_randread_4jobs.json"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "fio_direct_randread_post"
+  record_timing "${target}" "fio_direct_randread" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
 
   rm -rf "${fio_dir}"
   t1="$(date +%s.%N)"
@@ -664,11 +794,25 @@ run_suites_on_mount() {
   echo "[${target}] [3/3] Running mdtest suite on ${mp} ..."
   t0="$(date +%s.%N)"
   drop_all_caches
+  capture_target_snapshot "${target}" "mdtest_1p_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "mdtest_1p" 10
   /usr/local/bin/mdtest -d "${mp}/mdtest_1p" -b 6 -I 8 -z 4 </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_1proc.log"
+  finish_target_stage_profiles "${target}" "mdtest_1p"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "mdtest_1p_post"
+  record_timing "${target}" "mdtest_1p" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -rf "${mp}/mdtest_1p"
 
   drop_all_caches
+  capture_target_snapshot "${target}" "mdtest_4p_pre"
+  sub_t0="$(date +%s.%N)"
+  start_target_cpu_profile "${target}" "mdtest_4p" 10
   mpirun --allow-run-as-root --oversubscribe -np 4 /usr/local/bin/mdtest -d "${mp}/mdtest_4p" -b 3 -z 2 -I 20 -u </dev/null 2>&1 | tee "${OUT_DIR}/mdtest_${target}_4proc.log"
+  finish_target_stage_profiles "${target}" "mdtest_4p"
+  sub_t1="$(date +%s.%N)"
+  capture_target_snapshot "${target}" "mdtest_4p_post"
+  record_timing "${target}" "mdtest_4p" "$(awk -v a="${sub_t0}" -v b="${sub_t1}" 'BEGIN {printf "%.3f", b - a}')"
   rm -rf "${mp}/mdtest_4p"
   t1="$(date +%s.%N)"
   record_timing "${target}" "mdtest" "$(awk -v a="${t0}" -v b="${t1}" 'BEGIN {printf "%.3f", b - a}')"
@@ -679,25 +823,41 @@ has_target() {
 }
 
 # ------------------------------------------------------------------------------
-# 对象 1：Bowl（PostgreSQL 控制面 + Pebble 分支存储）
+# 对象 1：Bowl（deploy/prod 容器栈：PostgreSQL 18 + StoreActor 单盘 Pebble + 64 MiB Pack + 全栈可观测）
 # ------------------------------------------------------------------------------
 if has_target "bowl"; then
+  "${SSH_SRV[@]}" "systemctl stop postgresql redis-server jfs-s3 jfs-webdav 2>/dev/null || true; date +%s > /var/run/bowl-prod-started.epoch; /usr/local/bin/bowl-prod-ctl up"
   ENDPOINT="http://${SERVER_PRIV_IP}:9000"
   CREATE_JSON="$(/usr/local/bin/bowl disk create --size 2PiB --name "jfs-bench-disk" --endpoint "${ENDPOINT}" --json)"
   DISK_ID="$(echo "${CREATE_JSON}" | jq -r '.disk_id')"
   echo "${CREATE_JSON}" > "${OUT_DIR}/bowl_disk.json"
 
   mkdir -p /mnt/bowl
-  /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+  OTEL_SERVICE_NAME=bowl-client \
+  OTEL_EXPORTER_OTLP_ENDPOINT="http://${SERVER_PRIV_IP}:4317" \
+  OTEL_EXPORTER_OTLP_INSECURE=true \
+  /usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
+    --endpoint "${ENDPOINT}" \
+    --allow-other \
+    --admin-addr 0.0.0.0:9567 \
+    --stats-file \
+    --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
+    --log-format json \
+    --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.10}" \
+    --log-file /var/log/bowl-mount.log
+  BOWL_PHASE_START="$(date +%s)"
   run_suites_on_mount "bowl" "/mnt/bowl"
-  /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
-  "${SSH_SRV[@]}" "systemctl stop bowl-storage && rm -rf /var/lib/bowl/data/* && mkdir -p /var/lib/bowl/data"
+  BOWL_PHASE_END="$(date +%s)"
+  jq -nc --argjson s "${BOWL_PHASE_START}" --argjson e "${BOWL_PHASE_END}" '{start_epoch: $s, end_epoch: $e}' > "${OUT_DIR}/bowl_window.json"
+  harvest_bowl_before_and_after_umount /mnt/bowl
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${BOWL_PHASE_START}' '${BOWL_PHASE_END}' && /usr/local/bin/bowl-prod-ctl stop-storage"
 fi
 
 # ------------------------------------------------------------------------------
 # Target 2: JuiceFS + PostgreSQL 16 (jfs_pg)
 # ------------------------------------------------------------------------------
 if has_target "jfs_pg"; then
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop-storage 2>/dev/null || true; systemctl stop redis-server 2>/dev/null || true; systemctl start postgresql jfs-s3 jfs-webdav"
   export AWS_ACCESS_KEY_ID=minioadmin
   export AWS_SECRET_ACCESS_KEY=minioadmin
   export MINIO_ACCESS_KEY=minioadmin
@@ -733,6 +893,7 @@ fi
 # Target 3: JuiceFS + Redis 7 (jfs_redis)
 # ------------------------------------------------------------------------------
 if has_target "jfs_redis"; then
+  "${SSH_SRV[@]}" "/usr/local/bin/bowl-prod-ctl stop-storage 2>/dev/null || true; systemctl stop postgresql 2>/dev/null || true; systemctl start redis-server jfs-s3 jfs-webdav"
   export AWS_ACCESS_KEY_ID=minioadmin
   export AWS_SECRET_ACCESS_KEY=minioadmin
   export MINIO_ACCESS_KEY=minioadmin
@@ -764,9 +925,10 @@ if has_target "jfs_redis"; then
 fi
 BENCH_EOF
 
-ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' TARGETS_TO_RUN='${TARGETS_TO_RUN}' bash /tmp/run_client_bench.sh </dev/null"
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' TARGETS_TO_RUN='${TARGETS_TO_RUN}' BOWL_BENCH_LOG_LEVEL='${BOWL_BENCH_LOG_LEVEL}' BOWL_BENCH_TRACE_SAMPLE_RATIO='${BOWL_BENCH_TRACE_SAMPLE_RATIO}' bash /tmp/run_client_bench.sh </dev/null"
 
 TEST_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TEST_END_EPOCH="$(date +%s)"
 log "Benchmark targets (${TARGETS_TO_RUN}) completed at ${TEST_COMPLETED_AT}. Fetching results..."
 
 if [[ -f "${RESULTS_DIR}/stage_timings.jsonl" ]]; then
@@ -776,6 +938,10 @@ scp -r "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/bench_results/"* "$
 if [[ -f "${WORK_DIR}/prev_stage_timings.jsonl" ]]; then
   cat "${RESULTS_DIR}/stage_timings.jsonl" "${WORK_DIR}/prev_stage_timings.jsonl" | jq -sc 'unique_by(.target + ":" + .suite) | .[]' > "${WORK_DIR}/merged_timings.jsonl"
   mv "${WORK_DIR}/merged_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
+fi
+if [[ -f "${RESULTS_DIR}/bowl_window.json" ]]; then
+  TEST_START_EPOCH="$(jq -r '.start_epoch // empty' "${RESULTS_DIR}/bowl_window.json")"
+  TEST_END_EPOCH="$(jq -r '.end_epoch // empty' "${RESULTS_DIR}/bowl_window.json")"
 fi
 if [[ -f "${RESULTS_DIR}/bowl_disk.json" ]]; then
   BOWL_DISK_JSON="$(cat "${RESULTS_DIR}/bowl_disk.json")"
@@ -789,6 +955,8 @@ fi
 # ==============================================================================
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
 # ==============================================================================
+fetch_telemetry_archive
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl down-volumes" >/dev/null 2>&1 || true
 log "Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md..."
 if [[ "${KEEP_INSTANCES}" != "1" ]]; then
   aliyun ecs DeleteInstances \
@@ -819,22 +987,25 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
 fi
 
 BOWL_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain -- services client 2>/dev/null)" ]]; then
+  BOWL_GIT_COMMIT="${BOWL_GIT_COMMIT}-dirty"
+fi
 
 jq -n \
   --arg test_started_at "${TEST_STARTED_AT}" \
   --arg test_completed_at "${TEST_COMPLETED_AT}" \
   --arg region_id "${REGION_ID}" \
   --arg zone_id "${ZONE_ID}" \
-  --arg vpc_id "${VPC_ID}" \
-  --arg vswitch_id "${VSWITCH_ID}" \
-  --arg sg_id "${SECURITY_GROUP_ID}" \
+  --arg vpc_id "vpc-<redacted>" \
+  --arg vswitch_id "vsw-<redacted>" \
+  --arg sg_id "sg-<redacted>" \
   --arg instance_type "${INSTANCE_TYPE}" \
   --arg image_id "${IMAGE_ID}" \
   --arg disk_cat "${SYSTEM_DISK_CATEGORY}" \
   --argjson disk_size "${SYSTEM_DISK_SIZE}" \
-  --arg server_id "${SERVER_ID}" \
+  --arg server_id "i-<redacted-server>" \
   --arg server_priv_ip "${SERVER_PRIV_IP}" \
-  --arg client_id "${CLIENT_ID}" \
+  --arg client_id "i-<redacted-client>" \
   --arg client_priv_ip "${CLIENT_PRIV_IP}" \
   --arg bowl_commit "${BOWL_GIT_COMMIT}" \
   --arg key_pair "${KEY_PAIR_NAME}" \
@@ -859,7 +1030,9 @@ jq -n \
       instance_charge_type: "PostPaid (按量计费)",
       image_id: $image_id,
       system_disk_category: $disk_cat,
-      system_disk_size_gib: $disk_size
+      system_disk_size_gib: $disk_size,
+      data_disk_category: "local_ssd_pro (NVMe)",
+      data_disk_size_gib: $srv.server.data_disk_size_gib
     },
     server_node: ($srv.server + {instance_id: $server_id, private_ip: $server_priv_ip}),
     server_disk_baseline: $srv.disk_baseline,
@@ -867,20 +1040,26 @@ jq -n \
     network_baseline: $cli.network,
     bowl_config: {
       bowl_git_commit: $bowl_commit,
-      storage_engine: "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
-      blob_layout: "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
-      blob_size_bytes: 1048576,
-      blob_ref_bytes: 12,
+      deploy_profile: "deploy/prod (docker-compose.yaml + storage.env)",
+      observability_stack: "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=\(env.BOWL_BENCH_TRACE_SAMPLE_RATIO // "0.10")) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      telemetry_dir: "results/telemetry",
+      storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
+      blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
+      blob_size_bytes: 262144,
+      pack_max_bytes: 67108864,
+      blob_ref_bytes: 16,
+      write_behind_chunk_bytes: 4194304,
+      write_behind_max_inflight: 4,
+      http2_stream_window_bytes: 8388608,
+      http2_conn_window_bytes: 33554432,
       kernel_writeback_cache: false,
       open_keep_cache: true,
       handle_killpriv: true,
       max_background: 64,
       congestion_threshold: 48,
       flush_issues_fsync_rpc: false,
-      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
-      branch_lock: "拓扑生命周期 RLock + 按 inode 细粒度锁",
-      parallel_blob_write: "1 MiB 块在 Inode 锁外并行落盘",
-      point_lookup_snapshot_free: true,
+      wal_sync_mode: "pebble.NoSync Group Commit + Fsync/FsyncDir 双层并行落盘屏障 (fdatasync + LogData)",
+      concurrency_model: "单盘独立 StoreActor 串行 Phase A 内存校验 + WriterEpoch 世代号栅栏 + 无锁并发 Read",
       disk_id: $bowl_disk.disk_id,
       root_ino: $bowl_disk.root_ino,
       disk_size: "2PiB",
@@ -890,7 +1069,7 @@ jq -n \
       dir_entry_timeout: "1.0s"
     },
     juicefs_config: {
-      storage_backend: "rclone S3 (Server node cloud_essd)",
+      storage_backend: "rclone S3 (Server node local NVMe SSD)",
       trash_days: 0,
       block_size: "4MiB (default)",
       chunk_size: "64MiB (default)"

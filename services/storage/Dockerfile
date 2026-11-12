@@ -16,11 +16,10 @@ COPY gen ./gen
 COPY pkg ./pkg
 COPY services/storage ./services/storage
 
-# 编译静态二进制文件（CGO_ENABLED=0，剥离调试符号减小体积）
+# 编译静态二进制文件（CGO_ENABLED=0，保留符号表支持 pprof 在线剖析）
 WORKDIR /src/services/storage
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-w -s" \
     -o /bin/storage-service \
     ./cmd
 
@@ -48,7 +47,7 @@ COPY --from=builder /bin/storage-service /app/storage-service
 # 切换至非 root 用户
 USER appuser:appgroup
 
-# 声明监听端口
-EXPOSE 9000
+# 声明业务与内网管理监听端口
+EXPOSE 9000 9090
 
 ENTRYPOINT ["/app/storage-service"]

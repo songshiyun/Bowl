@@ -1,7 +1,7 @@
 # 0020. Linux FUSE 客户端直接转发请求、会话过期自动重建与独立测试容器
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0002](0002-disk-concept-and-client-root-inode-mapping.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0017](0017-storage-service-fx-bootstrap-and-e2e-boundary.md) 与 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)
+部分被 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md)、[ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 与 [ADR-0033](0033-client-write-behind-multi-window-readahead-and-local-dir-synthesis.md) 替代 — `bowl mount`/`umount` 守护进程与 Linux 容器测试机制保留，无缓存直通与会话自动重建已演进为单次 `MountDisk` 静态 `Epoch` 握手、本地命名空间缓存与异步读写流水线
 
 ## 背景
 在 `StorageService` 完成了 38 个 POSIX 元数据接口、磁盘配额管理以及基于 `Chunk-Slice-Block` 的数据读写功能（ADR-0001 至 ADR-0019）后，我们需要开发运行在 Linux 上的 `bowl` 命令行客户端，通过 FUSE 把指定的 `Disk` 挂载成本地目录（并且支持多台机器同时挂载同一块 `Disk`）。在设计客户端时，需要解决以下五个问题：

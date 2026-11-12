@@ -1,7 +1,7 @@
 # 0028. 单语句原子 CTE、全数据面异步 WAL、Read 单查询合并与客户端无锁 Flush 短路
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0014](0014-disk-service-and-quota-ledger.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)、[ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md)、[ADR-0024](0024-deferred-block-sync-and-fsync-durability-barrier.md)、[ADR-0026](0026-page-cache-block-persistence-and-wal-only-fsync.md) 与 [ADR-0027](0027-4mib-chunk-boundary-and-single-worker-compaction-gc.md)
+部分被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md)、[ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 与 [ADR-0033](0033-client-write-behind-multi-window-readahead-and-local-dir-synthesis.md) 替代 — PostgreSQL CTE 与同步直通写已被 `StoreActor` Pebble 引擎及客户端 `Write-Behind` 取代；客户端非截断 `Open`/`Create` 置位 `FOPEN_KEEP_CACHE` 与 `Flush` 免物理 `Fsync` 策略保留
 
 ## 背景
 Bowl 的核心架构定位是**强一致「多写多读（MWMR）」无状态直通 + 服务端权威裁决**：客户端不在本地做破坏跨机一致性的脏写缓冲或伪造句柄，所有文件生命周期 RPC 实时直通服务端与 PostgreSQL。在同可用区 VPC 内网下，单次 RPC 的纯网络开销不足 `0.1 ms`。然而在演进前实现中，小文件读写全链路在服务端与客户端存在以下性能瓶颈：

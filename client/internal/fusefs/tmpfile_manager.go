@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"math"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -51,6 +51,7 @@ type managedTmpFile struct {
 	parent    uint64
 	lookups   uint64
 	serverIno uint64
+	uploaded  atomic.Bool
 }
 
 // TmpFileManager 封装本地匿名文件（TmpFile）的 4 KiB 稀疏页缓冲、
@@ -62,6 +63,7 @@ type TmpFileManager struct {
 	files         map[uint64]*managedTmpFile
 	serverToLocal map[uint64]uint64
 	nextTmp       atomic.Uint64
+	metrics       atomic.Pointer[Metrics]
 }
 
 // NewTmpFileManager 创建并初始化 TmpFileManager。
@@ -71,6 +73,28 @@ func NewTmpFileManager(rootIno uint64) *TmpFileManager {
 		files:         make(map[uint64]*managedTmpFile),
 		serverToLocal: make(map[uint64]uint64),
 	}
+}
+
+func (m *TmpFileManager) bindMetrics(metrics *Metrics) {
+	m.metrics.Store(metrics)
+}
+
+func (m *TmpFileManager) activeLocalFiles() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var count int
+	for _, f := range m.files {
+		if !f.uploaded.Load() {
+			count++
+		}
+	}
+	return count
+}
+
+// HasPendingSync 报告该内核 Inode 是否为尚未上云的本地匿名文件，避免常规文件 Flush 无谓构造 RPCContext。
+func (m *TmpFileManager) HasPendingSync(ino uint64) bool {
+	tmp := m.getFile(ino)
+	return tmp != nil && !tmp.uploaded.Load()
 }
 
 func (m *TmpFileManager) getFile(ino uint64) *managedTmpFile {
@@ -128,7 +152,7 @@ func (m *TmpFileManager) Create(parent uint64, uid, gid, mode, flags uint32) (ui
 	now := timestamppb.Now()
 	inode := &storagev1.Inode{
 		Ino:        ino,
-		Generation: 0,
+		Generation: 1,
 		Attr: &storagev1.InodeAttribute{
 			Mode:    syscall.S_IFREG | (mode & 0o7777),
 			Uid:     uid,
@@ -233,7 +257,7 @@ func (m *TmpFileManager) GetAttr(ino uint64, out *fuse.Attr) (bool, fuse.Status)
 }
 
 // Read 从尚未上云的本地匿名文件稀疏页缓冲中读取数据，未分配的空洞区间自动零填充，超出 EOF 自动截断。
-func (m *TmpFileManager) Read(ino, offset uint64, dest []byte) (int, bool, fuse.Status) {
+func (m *TmpFileManager) Read(ino, offset uint64, dest []byte) (n int, handled bool, status fuse.Status) {
 	tmp := m.getFile(ino)
 	if tmp == nil {
 		return 0, false, fuse.OK
@@ -261,7 +285,7 @@ func (m *TmpFileManager) Read(ino, offset uint64, dest []byte) (int, bool, fuse.
 }
 
 // Write 将数据按 4 KiB 稀疏页写入尚未上云的本地匿名文件缓冲。
-func (m *TmpFileManager) Write(ino, offset uint64, data []byte, appendMode bool) (uint32, bool, fuse.Status) {
+func (m *TmpFileManager) Write(ino, offset uint64, data []byte, appendMode bool) (written uint32, handled bool, status fuse.Status) {
 	tmp := m.getFile(ino)
 	if tmp == nil {
 		return 0, false, fuse.OK
@@ -277,6 +301,7 @@ func (m *TmpFileManager) Write(ino, offset uint64, data []byte, appendMode bool)
 	if offset > math.MaxInt64 || uint64(len(data)) > math.MaxInt64-offset {
 		return 0, true, fuse.Status(syscall.EFBIG)
 	}
+	var addedPages int64
 	for pos := 0; pos < len(data); {
 		at := offset + uint64(pos)
 		index, within := at/tmpSparsePageSize, at%tmpSparsePageSize
@@ -285,9 +310,13 @@ func (m *TmpFileManager) Write(ino, offset uint64, data []byte, appendMode bool)
 		if page == nil {
 			page = make([]byte, tmpSparsePageSize)
 			tmp.pages[index] = page
+			addedPages++
 		}
 		copy(page[within:within+uint64(n)], data[pos:pos+n])
 		pos += n
+	}
+	if addedPages > 0 {
+		m.metrics.Load().addTmpResidentPages(addedPages)
 	}
 	if len(data) != 0 {
 		tmp.inode.Attr.Size = max(tmp.inode.Attr.Size, offset+uint64(len(data)))
@@ -331,6 +360,7 @@ func (m *TmpFileManager) SetAttr(ino uint64, input *fuse.SetAttrIn, checkHandle 
 			return nil, true, fuse.Status(syscall.EFBIG)
 		}
 		if input.Size < a.Size {
+			before := len(tmp.pages)
 			for index, page := range tmp.pages {
 				start := index * tmpSparsePageSize
 				if start >= input.Size {
@@ -341,6 +371,9 @@ func (m *TmpFileManager) SetAttr(ino uint64, input *fuse.SetAttrIn, checkHandle 
 						delete(tmp.pages, index)
 					}
 				}
+			}
+			if removed := before - len(tmp.pages); removed > 0 {
+				m.metrics.Load().addTmpResidentPages(-int64(removed))
 			}
 		}
 		a.Size = input.Size
@@ -401,6 +434,7 @@ func (m *TmpFileManager) Allocate(ino, offset, length uint64, mode uint32) (bool
 	}
 	punch := mode&fallocFlPunchHole != 0
 	if punch {
+		before := len(tmp.pages)
 		holeEnd := min(end, a.Size)
 		for pos := offset; pos < holeEnd; {
 			index := pos / tmpSparsePageSize
@@ -416,6 +450,9 @@ func (m *TmpFileManager) Allocate(ino, offset, length uint64, mode uint32) (bool
 			}
 			pos += n
 		}
+		if removed := before - len(tmp.pages); removed > 0 {
+			m.metrics.Load().addTmpResidentPages(-int64(removed))
+		}
 		a.Mode &^= syscall.S_ISUID | syscall.S_ISGID
 	}
 	a.Blocks = uint64(len(tmp.pages)) * (tmpSparsePageSize / 512)
@@ -428,8 +465,12 @@ func (m *TmpFileManager) Allocate(ino, offset, length uint64, mode uint32) (bool
 }
 
 func (m *TmpFileManager) installAliasLocked(localIno uint64, tmp *managedTmpFile, serverIno uint64) {
+	if pages := len(tmp.pages); pages > 0 {
+		m.metrics.Load().addTmpResidentPages(-int64(pages))
+	}
 	tmp.serverIno = serverIno
 	tmp.pages = nil
+	tmp.uploaded.Store(true)
 	m.mu.Lock()
 	m.serverToLocal[serverIno] = localIno
 	m.mu.Unlock()
@@ -437,9 +478,9 @@ func (m *TmpFileManager) installAliasLocked(localIno uint64, tmp *managedTmpFile
 
 // uploadTmpLocked 创建目录项、按最大 1 MiB 聚合连续 4 KiB 稀疏页写入服务端并提交属性，失败时回滚新目录项且不破坏本地缓冲。
 // 调用方须持有 tmp.mu。
-func (m *TmpFileManager) uploadTmpLocked(ctx context.Context, tmp *managedTmpFile, parentServerIno uint64, filename string, mat TmpMaterializer) (*storagev1.Inode, float64, float64, fuse.Status) {
+func (m *TmpFileManager) uploadTmpLocked(ctx context.Context, tmp *managedTmpFile, parentServerIno uint64, filename string, mat TmpMaterializer) (inode *storagev1.Inode, entryTimeout, attrTimeout float64, status fuse.Status) {
 	attr := tmp.inode.Attr
-	inode, entryTimeout, attrTimeout, status := mat.CreateTmpInode(ctx, parentServerIno, filename, attr.Mode, attr.Uid, attr.Gid)
+	inode, entryTimeout, attrTimeout, status = mat.CreateTmpInode(ctx, parentServerIno, filename, attr.Mode, attr.Uid, attr.Gid)
 	if status != fuse.OK {
 		return nil, 0, 0, status
 	}
@@ -454,7 +495,7 @@ func (m *TmpFileManager) uploadTmpLocked(ctx context.Context, tmp *managedTmpFil
 			indices = append(indices, index)
 		}
 	}
-	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
+	slices.Sort(indices)
 
 	for i := 0; i < len(indices); {
 		startIdx := indices[i]
@@ -502,25 +543,40 @@ func (m *TmpFileManager) uploadTmpLocked(ctx context.Context, tmp *managedTmpFil
 	return inode, entryTimeout, attrTimeout, fuse.OK
 }
 
+// TmpLinkResult 承载匿名文件具名化成功后的服务端属性与超时信息。
+type TmpLinkResult struct {
+	ServerIno    uint64
+	FirstUpload  bool
+	Inode        *storagev1.Inode
+	EntryTimeout float64
+	AttrTimeout  float64
+}
+
 // Link 将匿名文件具名化（首次上云或将已通过 Sync 上云的孤儿节点链接到目标目录），已具名化或 O_EXCL 的匿名节点拒绝再次 Link。
-func (m *TmpFileManager) Link(ctx context.Context, ino, newParentKernelIno uint64, name string, isOpen bool, mat TmpMaterializer, out *fuse.EntryOut) (serverIno uint64, firstUpload bool, inode *storagev1.Inode, entryTimeout, attrTimeout float64, handled bool, status fuse.Status) {
+func (m *TmpFileManager) Link(ctx context.Context, ino, newParentKernelIno uint64, name string, isOpen bool, mat TmpMaterializer, out *fuse.EntryOut) (res TmpLinkResult, handled bool, status fuse.Status) {
 	tmp := m.getFile(ino)
 	if tmp == nil {
-		return 0, false, nil, 0, 0, false, fuse.OK
+		return TmpLinkResult{}, false, fuse.OK
 	}
 	parentServerIno, st := m.ToServerIno(newParentKernelIno)
 	if st != fuse.OK {
-		return 0, false, nil, 0, 0, true, st
+		return TmpLinkResult{}, true, st
 	}
 	tmp.mu.Lock()
 	defer tmp.mu.Unlock()
 	if tmp.exclusive || tmp.named || !isOpen {
-		return 0, false, nil, 0, 0, true, fuse.ENOENT
+		return TmpLinkResult{}, true, fuse.ENOENT
 	}
+	var (
+		inode                     *storagev1.Inode
+		entryTimeout, attrTimeout float64
+		serverIno                 uint64
+		firstUpload               bool
+	)
 	if tmp.serverIno == 0 {
 		inode, entryTimeout, attrTimeout, st = m.uploadTmpLocked(ctx, tmp, parentServerIno, name, mat)
 		if st != fuse.OK {
-			return 0, false, nil, 0, 0, true, st
+			return TmpLinkResult{}, true, st
 		}
 		serverIno = inode.GetIno()
 		m.installAliasLocked(ino, tmp, serverIno)
@@ -528,18 +584,25 @@ func (m *TmpFileManager) Link(ctx context.Context, ino, newParentKernelIno uint6
 	} else {
 		inode, entryTimeout, attrTimeout, st = mat.LinkInode(ctx, tmp.serverIno, parentServerIno, name)
 		if st != fuse.OK {
-			return 0, false, nil, 0, 0, true, st
+			return TmpLinkResult{}, true, st
 		}
 		if inode == nil || inode.GetAttr() == nil {
-			return 0, false, nil, 0, 0, true, fuse.EIO
+			return TmpLinkResult{}, true, fuse.EIO
 		}
 		serverIno = tmp.serverIno
 		firstUpload = false
 	}
 	tmp.named = true
 	tmp.lookups++
+	m.metrics.Load().incTmpPromote()
 	m.fillEntryOut(out, inode, entryTimeout, attrTimeout)
-	return serverIno, firstUpload, inode, entryTimeout, attrTimeout, true, fuse.OK
+	return TmpLinkResult{
+		ServerIno:    serverIno,
+		FirstUpload:  firstUpload,
+		Inode:        inode,
+		EntryTimeout: entryTimeout,
+		AttrTimeout:  attrTimeout,
+	}, true, fuse.OK
 }
 
 // Sync 将尚未上云的匿名文件以临时隐藏名称上云并立即解链为服务端打开孤儿节点，供 Flush / Fsync / Fallocate 完成持久化。
@@ -584,18 +647,26 @@ func (m *TmpFileManager) dropIfUnused(ino uint64, orphan bool, hasOpenHandles fu
 		return false
 	}
 	tmp.mu.Lock()
-	serverIno, lookups := tmp.serverIno, tmp.lookups
-	tmp.mu.Unlock()
+	serverIno, lookups, pageCount := tmp.serverIno, tmp.lookups, len(tmp.pages)
 	if !orphan && lookups != 0 {
+		tmp.mu.Unlock()
 		return false
 	}
 	m.mu.Lock()
-	delete(m.files, ino)
+	_, existed := m.files[ino]
+	if existed {
+		delete(m.files, ino)
+		tmp.pages = nil
+	}
 	if serverIno != 0 && m.serverToLocal[serverIno] == ino {
 		delete(m.serverToLocal, serverIno)
 	}
 	m.mu.Unlock()
-	return true
+	tmp.mu.Unlock()
+	if existed && pageCount > 0 {
+		m.metrics.Load().addTmpResidentPages(-int64(pageCount))
+	}
+	return existed
 }
 
 // OnForget 递减内核 nlookup 引用计数，并在 nlookup 与打开句柄双重归零时回收内存页与双向 Inode 别名。
@@ -622,7 +693,22 @@ func (m *TmpFileManager) OnHandleReleased(ino uint64, orphan bool, hasOpenHandle
 // Clear 清空全部匿名文件页缓冲与双向 Inode 别名映射（供卸载时调用）。
 func (m *TmpFileManager) Clear() {
 	m.mu.Lock()
+	detached := make([]*managedTmpFile, 0, len(m.files))
+	for _, f := range m.files {
+		detached = append(detached, f)
+	}
 	clear(m.files)
 	clear(m.serverToLocal)
 	m.mu.Unlock()
+
+	var releasedPages int64
+	for _, f := range detached {
+		f.mu.Lock()
+		releasedPages += int64(len(f.pages))
+		f.pages = nil
+		f.mu.Unlock()
+	}
+	if releasedPages > 0 {
+		m.metrics.Load().addTmpResidentPages(-releasedPages)
+	}
 }

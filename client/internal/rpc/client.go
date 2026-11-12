@@ -1,18 +1,25 @@
+// Package rpc 封装 StorageService ConnectRPC 客户端、重试拦截器与错误映射。
 package rpc
 
 import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
+	"github.com/starsrc/pkg/serverx"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
-	"golang.org/x/net/http2"
 )
 
 const (
@@ -24,6 +31,25 @@ const (
 
 	// EnvToken 为配置鉴权访问令牌的环境变量名。
 	EnvToken = "BOWL_TOKEN"
+
+	// HTTP2MaxReadFrameSize 为客户端 HTTP/2 接收帧大小上限 (1 MiB)。
+	HTTP2MaxReadFrameSize = 1 << 20
+
+	// HTTP2MaxReceiveBufferPerStream 为客户端单流 HTTP/2 接收流控窗口上限 (8 MiB)，
+	// 确保单次 4 MiB + Protobuf 信封载荷无需流级 WINDOW_UPDATE 停顿即可完整接收。
+	HTTP2MaxReceiveBufferPerStream = 8 << 20
+
+	// HTTP2MaxReceiveBufferPerConnection 为单连接最大 HTTP/2 接收流控窗口基准上限 (128 MiB)。
+	HTTP2MaxReceiveBufferPerConnection = 128 << 20
+
+	// HTTP2MetaMaxReceiveBufferPerConnection 为专用元数据/控制面轻量连接的 HTTP/2 接收流控窗口上限 (32 MiB)。
+	HTTP2MetaMaxReceiveBufferPerConnection = 32 << 20
+
+	// HTTP2DataMaxReceiveBufferPerConnection 为每条大块数据条带连接的 HTTP/2 接收流控窗口上限 (64 MiB)。
+	HTTP2DataMaxReceiveBufferPerConnection = 64 << 20
+
+	// HTTP2DataConnectionShards 为客户端并发大块读写（Read/Write）条带化的独立 H2C/TLS 连接数。
+	HTTP2DataConnectionShards = 8
 )
 
 // ClientConfig 定义 StorageServiceClient 的连接配置。
@@ -44,6 +70,12 @@ type ClientConfig struct {
 
 	// RetryConfig 为可选的重试策略配置。若为 nil 则默认使用 30s 有界指数退避策略。
 	RetryConfig *RetryConfig
+
+	// Logger 为可选的结构化日志记录器。若为 nil 则静默不输出；配置后输出关键异常与慢调用结构化日志。
+	Logger *slog.Logger
+
+	// Metrics 为可选的客户端 RPC 自定义指标收集器。对 nil 安全。
+	Metrics *Metrics
 }
 
 // ResolveEndpoint 按照显式参数 -> BOWL_STORAGE_ENDPOINT -> 默认 http://127.0.0.1:9000 的回退链解析 endpoint，
@@ -81,6 +113,134 @@ func ResolveToken(token string) string {
 	return strings.TrimSpace(os.Getenv(EnvToken))
 }
 
+// newHTTPTransport 根据已校验的 endpoint URL scheme 与指定连接级接收窗口构建独立 HTTP/2 Transport。
+func newHTTPTransport(endpoint string, tlsConfig *tls.Config, maxRecvBufPerConn int) (*http.Transport, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+	}
+	if maxRecvBufPerConn <= 0 {
+		maxRecvBufPerConn = HTTP2DataMaxReceiveBufferPerConnection
+	}
+
+	h2Cfg := &http.HTTP2Config{
+		MaxReadFrameSize:              HTTP2MaxReadFrameSize,
+		MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,
+		MaxReceiveBufferPerConnection: maxRecvBufPerConn,
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	if strings.EqualFold(u.Scheme, "http") {
+		// 明文 HTTP/2 (h2c) 并发多路复用传输：显式开启 TCP_NODELAY 并合并单次 Unary 请求的 HEADERS+DATA 帧，
+		// 消除 Go h2 双次 Flush 在 Linux tcp_autocorking + virtio-net + Delayed ACK 下触发的 ~10ms 死锁。
+		var protocols http.Protocols
+		protocols.SetUnencryptedHTTP2(true)
+		return &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, dialErr := dialer.DialContext(ctx, network, addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				if tc, ok := conn.(*net.TCPConn); ok {
+					_ = tc.SetNoDelay(true)
+				}
+				return newH2CoalesceConn(conn), nil
+			},
+			Protocols: &protocols,
+			HTTP2:     h2Cfg,
+		}, nil
+	}
+
+	// 标准 TLS HTTP/2 传输
+	tlsTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, dialErr := dialer.DialContext(ctx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			if tc, ok := conn.(*net.TCPConn); ok {
+				_ = tc.SetNoDelay(true)
+			}
+			return conn, nil
+		},
+		ForceAttemptHTTP2: true,
+		HTTP2:             h2Cfg,
+	}
+	if tlsConfig != nil {
+		tlsTransport.TLSClientConfig = tlsConfig
+	}
+	return tlsTransport, nil
+}
+
+// isBulkDataProcedure 判断请求路径是否为大块数据面 RPC（Read / Write）。
+func isBulkDataProcedure(urlPath string) bool {
+	return urlPath == storagev1connect.StorageServiceReadProcedure ||
+		urlPath == storagev1connect.StorageServiceWriteProcedure ||
+		strings.HasSuffix(urlPath, storagev1connect.StorageServiceReadProcedure) ||
+		strings.HasSuffix(urlPath, storagev1connect.StorageServiceWriteProcedure)
+}
+
+type idleConnCloser interface {
+	CloseIdleConnections()
+}
+
+// shardedRoundTripper 将客户端传输物理隔离为 1 条专用元数据/控制轻量连接与 8 条独立大块数据连接：
+//   - Read / Write 大块流量通过原子轮询均匀打散到 8 条独立 H2C/TLS 连接，消除单连接 readLoop / writeSched 串行瓶颈；
+//   - Lookup / GetAttr / Create / Unlink / Fsync / ReadDirPlus 等元数据与屏障 RPC 走专用 metaTransport，彻底杜绝 4 MiB DATA 帧队头阻塞。
+type shardedRoundTripper struct {
+	metaTransport  http.RoundTripper
+	dataTransports [HTTP2DataConnectionShards]http.RoundTripper
+	nextDataShard  atomic.Uint64
+}
+
+func newShardedRoundTripper(endpoint string, tlsConfig *tls.Config) (*shardedRoundTripper, error) {
+	metaTr, err := newHTTPTransport(endpoint, tlsConfig, HTTP2MetaMaxReceiveBufferPerConnection)
+	if err != nil {
+		return nil, err
+	}
+	rt := &shardedRoundTripper{
+		metaTransport: metaTr,
+	}
+	for i := range HTTP2DataConnectionShards {
+		dataTr, trErr := newHTTPTransport(endpoint, tlsConfig, HTTP2DataMaxReceiveBufferPerConnection)
+		if trErr != nil {
+			rt.CloseIdleConnections()
+			return nil, trErr
+		}
+		rt.dataTransports[i] = dataTr
+	}
+	return rt, nil
+}
+
+func (rt *shardedRoundTripper) selectTransport(req *http.Request) http.RoundTripper {
+	if req != nil && req.URL != nil && isBulkDataProcedure(req.URL.Path) {
+		idx := (rt.nextDataShard.Add(1) - 1) % HTTP2DataConnectionShards
+		return rt.dataTransports[idx]
+	}
+	return rt.metaTransport
+}
+
+func (rt *shardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return rt.selectTransport(req).RoundTrip(req)
+}
+
+// CloseIdleConnections 转发空闲连接清理至全部底层元数据与大块数据 Transport。
+func (rt *shardedRoundTripper) CloseIdleConnections() {
+	if closer, ok := rt.metaTransport.(idleConnCloser); ok {
+		closer.CloseIdleConnections()
+	}
+	for _, tr := range rt.dataTransports {
+		if closer, ok := tr.(idleConnCloser); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
 // NewClientFromConfig 根据传入的 ClientConfig 构建 StorageServiceClient。
 // 支持 h2c (明文 HTTP/2) 与 HTTPS TLS 传输，并在 token 非空时注入 Bearer 鉴权头。
 // 底层 http.Client 不设置固定 Timeout，连接生命周期完全由 context.Context 控制。
@@ -94,52 +254,41 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		u, err := url.Parse(endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+		tr, trErr := newShardedRoundTripper(endpoint, cfg.TLSConfig)
+		if trErr != nil {
+			return nil, trErr
 		}
-
-		if strings.EqualFold(u.Scheme, "http") {
-			// 明文 HTTP/2 (h2c) 并发多路复用传输
-			h2cTransport := &http2.Transport{
-				AllowHTTP: true,
-				// 协商 256 KiB 接收帧，降低大响应的帧处理开销。
-				MaxReadFrameSize: 256 * 1024,
-				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, network, addr)
-				},
-			}
-			httpClient = &http.Client{
-				Transport: h2cTransport,
-			}
-		} else {
-			// 标准 TLS HTTP/2 传输
-			tlsTransport := &http.Transport{
-				Proxy:             http.ProxyFromEnvironment,
-				ForceAttemptHTTP2: true,
-			}
-			if cfg.TLSConfig != nil {
-				tlsTransport.TLSClientConfig = cfg.TLSConfig
-			}
-			httpClient = &http.Client{
-				Transport: tlsTransport,
-			}
+		httpClient = &http.Client{
+			Transport: tr,
 		}
 	}
 
 	var interceptors []connect.Interceptor
 
-	// 1. 默认装配重试拦截器（位于最外层，包裹鉴权与底层网络传输）
+	// 1. 最外层装配重试与逻辑总耗时拦截器（包裹在 otelconnect 外层，使每次网络重试独立计入单次尝试 Span 与客户端延迟分布，
+	// 同时在最外层记录含退避睡眠的逻辑调用总耗时 bowl_client_rpc_logical_duration_seconds）
 	retryCfg := RetryConfig{}
 	if cfg.RetryConfig != nil {
 		retryCfg = *cfg.RetryConfig
 	}
-	if !retryCfg.Disable {
-		interceptors = append(interceptors, NewRetryInterceptor(retryCfg))
-	}
+	interceptors = append(interceptors,
+		newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics),
+		newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold),
+	)
 
-	// 2. 装配 Bearer 令牌鉴权拦截器
+	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并以亚毫秒桶采集客户端 RPC 指标）
+	// 4. 错误原因标注拦截器（提取服务端 ErrorInfo.Reason 同步写入客户端 Span rpc.error_reason 与 otelconnect.Labeler）
+	otelInterceptor, err := otelconnect.NewInterceptor(
+		otelconnect.WithDurationHistogramOptions(
+			metric.WithExplicitBucketBoundaries(SubMillisecondDurationBuckets...),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create otelconnect interceptor: %w", err)
+	}
+	interceptors = append(interceptors, otelInterceptor, serverx.NewErrorReasonInterceptor())
+
+	// 5. Bearer 令牌鉴权拦截器与 Accept-Encoding: identity 拦截器
 	if token != "" {
 		authInterceptor := connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
 			return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -159,7 +308,9 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 		}
 	}))
 
-	var clientOpts []connect.ClientOption
+	clientOpts := []connect.ClientOption{
+		connect.WithCodec(newProtoBinaryCodec()),
+	}
 	if len(interceptors) > 0 {
 		clientOpts = append(clientOpts, connect.WithInterceptors(interceptors...))
 	}

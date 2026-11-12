@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math/rand"
+	"log/slog"
+	"math/rand/v2"
 	"net"
 	"os"
 	"syscall"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const (
@@ -68,26 +70,24 @@ func (c RetryConfig) withDefaults() RetryConfig {
 	return c
 }
 
-// idempotentProcedures 记录 15 个只读与幂等 RPC 白名单集合。
+// idempotentProcedures 记录 13 个只读与幂等 RPC 白名单集合。
 var idempotentProcedures = map[string]struct{}{
-	storagev1connect.StorageServiceGetDiskProcedure:      {},
-	storagev1connect.StorageServiceListDisksProcedure:    {},
-	storagev1connect.StorageServiceLookupProcedure:       {},
-	storagev1connect.StorageServiceGetAttrProcedure:      {},
-	storagev1connect.StorageServiceReadlinkProcedure:     {},
-	storagev1connect.StorageServiceReadProcedure:         {},
-	storagev1connect.StorageServiceFsyncProcedure:        {},
-	storagev1connect.StorageServiceFsyncDirProcedure:     {},
-	storagev1connect.StorageServiceReadDirProcedure:      {},
-	storagev1connect.StorageServiceReadDirPlusProcedure:  {},
-	storagev1connect.StorageServiceGetXattrProcedure:     {},
-	storagev1connect.StorageServiceListXattrProcedure:    {},
-	storagev1connect.StorageServiceStatFSProcedure:       {},
-	storagev1connect.StorageServiceRenewSessionProcedure: {},
-	storagev1connect.StorageServiceCloseSessionProcedure: {},
+	storagev1connect.StorageServiceGetDiskProcedure:     {},
+	storagev1connect.StorageServiceListDisksProcedure:   {},
+	storagev1connect.StorageServiceLookupProcedure:      {},
+	storagev1connect.StorageServiceGetAttrProcedure:     {},
+	storagev1connect.StorageServiceReadlinkProcedure:    {},
+	storagev1connect.StorageServiceReadProcedure:        {},
+	storagev1connect.StorageServiceFsyncProcedure:       {},
+	storagev1connect.StorageServiceFsyncDirProcedure:    {},
+	storagev1connect.StorageServiceReadDirProcedure:     {},
+	storagev1connect.StorageServiceReadDirPlusProcedure: {},
+	storagev1connect.StorageServiceGetXattrProcedure:    {},
+	storagev1connect.StorageServiceListXattrProcedure:   {},
+	storagev1connect.StorageServiceStatFSProcedure:      {},
 }
 
-// IsIdempotentProcedure 判定指定 procedure 是否属于 15 个只读与幂等 RPC 白名单。
+// IsIdempotentProcedure 判定指定 procedure 是否属于 13 个只读与幂等 RPC 白名单。
 func IsIdempotentProcedure(procedure string) bool {
 	_, ok := idempotentProcedures[procedure]
 	return ok
@@ -96,8 +96,7 @@ func IsIdempotentProcedure(procedure string) bool {
 // hasErrorInfo 检查错误是否解包出非空业务 ErrorInfo。
 // 任何携带业务 ErrorInfo 的错误表明服务端已明确处理并拒绝，必须绝不重试。
 func hasErrorInfo(err error) bool {
-	var connectErr *connect.Error
-	if errors.As(err, &connectErr) {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 		for _, detail := range connectErr.Details() {
 			msg, detailErr := detail.Value()
 			if detailErr != nil {
@@ -140,15 +139,13 @@ func isDialError(err error) bool {
 		return true
 	}
 
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
+	if opErr, ok := errors.AsType[*net.OpError](err); ok {
 		if opErr.Op == "dial" {
 			return true
 		}
 	}
 
-	var sysErr *os.SyscallError
-	if errors.As(err, &sysErr) {
+	if sysErr, ok := errors.AsType[*os.SyscallError](err); ok {
 		if sysErr.Syscall == "connect" {
 			return true
 		}
@@ -171,11 +168,7 @@ func isTransportError(err error) bool {
 	}
 
 	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &opErr)
 }
 
 // shouldRetry 根据 procedure 与捕获的错误决定是否允许重试。
@@ -202,7 +195,7 @@ func shouldRetry(procedure string, err error) bool {
 		return true
 	}
 
-	// 4. 针对 15 个只读与幂等 RPC 白名单：
+	// 4. 针对 13 个只读与幂等 RPC 白名单：
 	// 在遇到 CodeUnavailable（且未携带 ErrorInfo）或底层传输错误时允许重试
 	if IsIdempotentProcedure(procedure) {
 		if connectErr != nil && connectErr.Code() == connect.CodeUnavailable {
@@ -250,17 +243,65 @@ func wrapBudgetExceededError(err error) error {
 
 // NewRetryInterceptor 创建遵循有界指数退避策略的 ConnectRPC 客户端一元拦截器。
 func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
+	return newRetryInterceptor(cfg, nil, nil)
+}
+
+func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics) connect.UnaryInterceptorFunc {
 	config := cfg.withDefaults()
+	retryWarnLimiter := newLogRateLimiter(defaultLogRateLimitInterval)
 
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		return func(ctx context.Context, req connect.AnyRequest) (resp connect.AnyResponse, retErr error) {
+			procedure := req.Spec().Procedure
+			startTime := time.Now()
+			if metrics != nil {
+				defer func() {
+					code := "ok"
+					if retErr != nil {
+						code = connect.CodeOf(retErr).String()
+					}
+					metrics.observeLogicalDuration(procedure, code, time.Since(startTime))
+				}()
+			}
+
 			if config.Disable {
 				return next(ctx, req)
 			}
 
-			startTime := time.Now()
+			ctx, reqID := ensureRequestID(ctx)
 			interval := config.InitialInterval
-			var lastErr error
+			var (
+				lastErr          error
+				lastRetryableErr error
+			)
+			attempts := 0
+			retryCount := 0
+
+			exhaustBudget := func(cause error) error {
+				wrapped := wrapBudgetExceededError(cause)
+				if !hasErrorInfo(cause) {
+					metrics.incRetryExhausted(procedure)
+					if logger != nil {
+						traceID := extractTraceID(ctx, req, cause)
+						errMsg := wrapped.Error()
+						if cause != nil {
+							errMsg = cause.Error()
+						}
+						logger.LogAttrs(
+							context.Background(),
+							slog.LevelError,
+							"rpc_retry_exhausted_eio",
+							slog.String("procedure", procedure),
+							slog.Int("attempts", attempts),
+							slog.Int64("elapsed_ms", time.Since(startTime).Milliseconds()),
+							slog.Uint64("req_id", reqID),
+							slog.String("trace_id", traceID),
+							slog.String("err", errMsg),
+						)
+					}
+				}
+				return wrapped
+			}
 
 			attemptCtx := ctx
 			if config.MaxElapsedTime > 0 {
@@ -274,12 +315,16 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 					return nil, err
 				}
 				if err := attemptCtx.Err(); err != nil {
-					if lastErr != nil {
-						return nil, wrapBudgetExceededError(lastErr)
+					if lastRetryableErr != nil {
+						return nil, exhaustBudget(lastRetryableErr)
 					}
-					return nil, wrapBudgetExceededError(err)
+					if lastErr != nil {
+						return nil, exhaustBudget(lastErr)
+					}
+					return nil, exhaustBudget(err)
 				}
 
+				attempts++
 				resp, err := next(attemptCtx, req)
 				if err == nil {
 					return resp, nil
@@ -292,26 +337,48 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 					return nil, err
 				}
 
-				// 若父上下文未取消但重试总预算上下文已耗尽，停止重试并返回错误（映射为 EIO）
+				// 若父上下文未取消但重试总预算上下文已耗尽，停止重试并返回错误（映射为 EIO）；
+				// 若本次尝试因预算到期被本地截断且此前已有真实可重试故障，保留真实故障作为根因以便排障留痕。
 				if attemptCtx.Err() != nil {
-					return nil, wrapBudgetExceededError(err)
+					if !hasErrorInfo(err) && lastRetryableErr != nil {
+						return nil, exhaustBudget(lastRetryableErr)
+					}
+					return nil, exhaustBudget(err)
 				}
 
 				// 若不满足重试条件，立即终止并返回原始错误
-				if !shouldRetry(req.Spec().Procedure, err) {
+				if !shouldRetry(procedure, err) {
 					return nil, err
 				}
+				lastRetryableErr = err
 
 				// 计算已过去的总耗时，若超出总预算则终止重试
 				elapsed := time.Since(startTime)
 				if elapsed >= config.MaxElapsedTime {
-					return nil, wrapBudgetExceededError(lastErr)
+					return nil, exhaustBudget(lastErr)
 				}
 
 				sleepDuration := computeJitteredInterval(interval, config.RandFloat64)
 				remaining := config.MaxElapsedTime - elapsed
 				if sleepDuration > remaining {
 					sleepDuration = remaining
+				}
+
+				retryCount++
+				metrics.incRetry(procedure)
+				if retryCount == 1 && logger != nil && retryWarnLimiter.allow(time.Now()) {
+					traceID := extractTraceID(ctx, req, err)
+					logger.LogAttrs(
+						context.Background(),
+						slog.LevelWarn,
+						"rpc_retry_triggered",
+						slog.String("procedure", procedure),
+						slog.Int("attempt", attempts),
+						slog.Int64("backoff_ms", sleepDuration.Milliseconds()),
+						slog.Uint64("req_id", reqID),
+						slog.String("trace_id", traceID),
+						slog.String("err", err.Error()),
+					)
 				}
 
 				timer := time.NewTimer(sleepDuration)
@@ -323,10 +390,7 @@ func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
 				}
 
 				// 指数退避增长并钳位在 MaxInterval
-				interval = time.Duration(float64(interval) * config.Multiplier)
-				if interval > config.MaxInterval {
-					interval = config.MaxInterval
-				}
+				interval = min(time.Duration(float64(interval)*config.Multiplier), config.MaxInterval)
 			}
 		}
 	}

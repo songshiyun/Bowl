@@ -1,7 +1,7 @@
 # 0016. 用内存参考模型对比测试元数据与文件锁的随机操作序列
 
 ## 状态
-已采纳 (accepted) — 配套验证 [ADR-0008](0008-fuse-directory-topology-locking-and-orphan-lifecycle.md)、[ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0012](0012-fuse-file-locks-and-session-lease-semantics.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md)
+已被 [ADR-0035](0035-zero-alloc-observability-dual-admin-plane-and-seam-contract-testing.md) 替代 (superseded by ADR-0035) — 内部白盒内存参考状态机已裁撤并收敛至公开契约接缝黑盒测试（`tests/contract`、`e2e` 与 `pjdfstest`）
 
 ## 背景
 Storage 元数据引擎已经实现了目录树增删改、硬链接计数（`nlink`）、匿名临时文件（`TmpFile`）转正式文件、孤儿节点（`Orphan Inode`）延迟清理、客户端会话过期回收、文件锁（POSIX 字节区间锁和 BSD `flock`）以及磁盘配额统计（`Disk`）等一整套功能。为了验证这些功能组合在一起时不会出错，我们面临三个实际问题：

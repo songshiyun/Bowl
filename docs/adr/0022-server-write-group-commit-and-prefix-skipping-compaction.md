@@ -1,7 +1,7 @@
 # 0022. 服务端写入批量合并提交（Group Commit）、Compaction 跳过已规整大块与客户端保持同步直通
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 与 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)
+已被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md)、[ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 与 [ADR-0033](0033-client-write-behind-multi-window-readahead-and-local-dir-synthesis.md) 替代 (superseded by ADR-0030, ADR-0031, and ADR-0033)
 
 ## 背景
 在阿里云双机内网测试（[`benchmark/juicefs/REPORT.md`](../../benchmark/juicefs/REPORT.md)）中，面对硬件顺序写上限为 `174.36 MiB/s` 的 `cloud_essd` 云盘，Bowl 在单流顺序写、16 并发顺序写及 Direct I/O 写入下的速度都被卡在 `85 ~ 88.8 MiB/s`（只有云盘硬件上限的一半），而且 16 并发写入完全没有比单流更快。排查代码后定位到三个具体瓶颈和一个关于客户端缓存的取舍问题：

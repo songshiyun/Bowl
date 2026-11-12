@@ -41,7 +41,7 @@ var lockOpSpecs = map[string]struct {
 	"get":    {typ: unix.F_WRLCK, cmd: unix.F_GETLK, before: func() {}},
 	"wait": {typ: unix.F_WRLCK, cmd: unix.F_SETLKW, before: func() {
 		runtime.LockOSThread()
-		fmt.Printf("WAITING %d\n", syscall.Gettid())
+		_, _ = fmt.Fprintf(os.Stdout, "WAITING %d\n", syscall.Gettid())
 	}},
 }
 
@@ -99,9 +99,9 @@ func runLockInterruptHelper() {
 	fd, openErr := unix.Open(path, unix.O_RDWR, 0)
 	defer func() { _ = unix.Close(fd) }()
 	runtime.LockOSThread()
-	fmt.Printf("READY_TO_LOCK %d\n", syscall.Gettid())
+	_, _ = fmt.Fprintf(os.Stdout, "READY_TO_LOCK %d\n", syscall.Gettid())
 	fl := unix.Flock_t{Type: unix.F_WRLCK}
-	fmt.Printf("%s open=%v\n", interruptOutcomes[unix.FcntlFlock(uintptr(fd), unix.F_SETLKW, &fl)], openErr)
+	_, _ = fmt.Fprintf(os.Stdout, "%s open=%v\n", interruptOutcomes[unix.FcntlFlock(uintptr(fd), unix.F_SETLKW, &fl)], openErr)
 }
 
 type lockResult struct {
@@ -127,12 +127,12 @@ func readLockResult(t *testing.T, path string) lockResult {
 }
 
 // startLockHelper 启动持有独立 POSIX 锁主体的子进程，并返回其进程句柄与结果文件路径。
-func startLockHelper(t *testing.T, path, op string, start, length int64) (*exec.Cmd, string) {
+func startLockHelper(t *testing.T, path, op string, start, length int64) (cmd *exec.Cmd, resultPath string) {
 	t.Helper()
-	resultPath := filepath.Join(t.TempDir(), "lock-result")
+	resultPath = filepath.Join(t.TempDir(), "lock-result")
 	ctx, cancel := context.WithTimeout(context.Background(), helperProcessTimeout)
 	t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
+	cmd = exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(),
 		lockHelperEnv+"="+op,
 		lockTargetEnv+"="+path,
@@ -206,7 +206,7 @@ func TestE2E_Lock(t *testing.T) {
 	mp := t.TempDir()
 	cmd, _, _ := startBowlMount(t, getStorageEndpoint(), disk.GetDiskId(), mp)
 	waitForMount(t, mp)
-	defer stopBowlMountGracefully(t, cmd, mp)
+	t.Cleanup(func() { stopBowlMountGracefully(t, cmd, mp) })
 
 	t.Run("进程锁冲突分裂和关闭释放", func(t *testing.T) {
 		path := filepath.Join(mp, "posix.txt")

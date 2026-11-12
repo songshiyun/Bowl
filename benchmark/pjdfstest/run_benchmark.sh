@@ -2,21 +2,22 @@
 # ==============================================================================
 # Bowl - Aliyun Silicon Valley (us-west-1) Dual-ECS Internal Network pjdfstest
 # ==============================================================================
-# ADR-0029：PostgreSQL 16 仅维护 disks、commits、client_sessions 控制面表。
-# 存储引擎：每个 (disk_id, branch_name) 独立 Pebble（常驻句柄池复用句柄与缓存），
-# DataKey 仅保存 12 字节 BlobRef 索引；文件数据落在 blobs/<shard>/<blob_id>.blob
-# 的 1 MiB 不可变块文件中，整块直写、局部写 CoW，截断/打洞/删除在提交后
-# os.Remove 即时回收旧块，Checkpoint/Fork 以硬链接共享块。
-# 服务端并发与持久化：分支锁收敛为拓扑生命周期 RLock，按 (disk,branch,ino) 的
-# 细粒度 inodeMu 串行元数据；完整 1 MiB 块在锁外并行落盘；GetAttr/GetXattr/
-# Readlink 单键点查免 Snapshot；读路径 atime 先登记内存、按 1 秒周期与持久化
-# 屏障合并；常规批次 pebble.NoSync 异步 WAL，后台 1 秒刷盘与 WALBytesPerSync
-# 4 MiB 兜底（MemTableSize 16 MiB）。
-# 客户端写入与缓存：1 MiB Write-Through 直通写（禁用 CAP_WRITEBACK_CACHE，
-# 避免 4 KiB 脏页回写与写前尺寸核对）+ FOPEN_KEEP_CACHE + CAP_HANDLE_KILLPRIV
-# 负缓存（写批次内清除 security.capability）+ 写后 AttrTimeout=1.0s +
-# MaxBackground=64 / CongestionThreshold=48。Flush 不触发跨机 Fsync RPC，
-# 仅显式 Fsync/Sync 请求服务端持久化屏障。
+# ADR-0030 / ADR-0031 / ADR-0032 + deploy/prod 生产编排栈：
+# - 控制面与可观测性：默认基于 deploy/prod/docker-compose.yaml + deploy/prod/storage.env 容器化部署
+#   PostgreSQL 18 控制面、Goose 迁移、storage-service 及 Jaeger (OTLP 默认 10% + 慢链路分层抓取) + Prometheus (2s 双端抓取) + Loki + Alloy + Grafana；
+#   仅针对 POSIX 合规断言覆写 STORAGE_ATIME_MODE=strictatime 与 0s 缓存 TTL。
+# - 元数据与并发：每块磁盘独立 StoreActor（单盘 Pebble + 共享 128 MiB Block Cache），
+#   双缓冲 MPSC Group Commit 循环（Phase A 内存校验与 WriterEpoch 栅栏 + SetDeferred 零拷贝编码，
+#   Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 BlobRef（PackID + Offset + Length）。
+# - 数据层：BlobStore 采用扁平 64 MiB Append-Only .pack 封包文件、256 KiB 逻辑块网格、
+#   常驻句柄池与 64 MiB 分片热块缓存（AppendBlocks 整块顺序写跳过用户态冗余缓存拷贝），
+#   支持活跃包末尾同块 ExtendTail 顺延扩展、8 MiB SyncFileRange 渐进异步回写、相邻物理连续块合并单次 pread 无锁并发 Read、
+#   WriteRequest/ReadResponse 池化零分配编解码、服务端 128 MiB H2C 连接窗口、
+#   Fsync/FsyncDir 双层并行落盘屏障（脏 .pack fdatasync + Pebble LogData 并发同步）及后台异步全死封口包回收。
+# - 客户端：无会话 RawFS FUSE 客户端，禁用 CAP_WRITEBACK_CACHE（保留 FOPEN_KEEP_CACHE 与 CAP_HANDLE_KILLPRIV），
+#   配备 1+8 H2C 多连接条带池（32 MiB 元数据连接 + 8×64 MiB 数据连接，单流 8 MiB）与 MarshalAppend 零分配编码、
+#   WriteBehindCoordinator（4 MiB × W*=4 并发写流水线，2 MiB 同步探测 + Create 预热与 <=256 KiB 小块连续写内存聚合）、
+#   ReadAheadCoordinator 单飞有序槽位预读（W_read=4, ReadAheadMaxGlobalInflight=32）与 completeDirs 本地目录流合成；Flush 不触发跨机 Fsync RPC。
 set -euo pipefail
 export GOWORK=off
 
@@ -24,14 +25,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
+# shellcheck source=../common/prod_stack.sh
+source "${REPO_ROOT}/benchmark/common/prod_stack.sh"
 
-# Aliyun Configuration (Silicon Valley us-west-1a)
+# Aliyun Configuration (Silicon Valley us-west-1a, Local NVMe SSD ecs.i5.xlarge)
 REGION_ID="${REGION_ID:-us-west-1}"
 ZONE_ID="${ZONE_ID:-us-west-1a}"
-VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
-VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
-INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.c9i.xlarge}"
+VPC_ID="${VPC_ID:?VPC_ID is required}"
+VSWITCH_ID="${VSWITCH_ID:?VSWITCH_ID is required}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:?SECURITY_GROUP_ID is required}"
+INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.i5.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
 SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
 SYSTEM_DISK_SIZE="${SYSTEM_DISK_SIZE:-40}"
@@ -46,6 +49,7 @@ KEY_CREATED=0
 INSTANCES_CREATED_AT=""
 INSTANCES_DELETED_AT=""
 REMAINING_INSTANCES=0
+TELEMETRY_FETCHED=0
 
 mkdir -p "${RESULTS_DIR}"
 
@@ -53,9 +57,51 @@ log() {
   printf "[%s] %s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
 }
 
+TEST_START_EPOCH=""
+TEST_END_EPOCH=""
+
+fetch_telemetry_archive() {
+  if [[ "${TELEMETRY_FETCHED:-0}" == "1" ]]; then
+    return 0
+  fi
+  TELEMETRY_FETCHED=1
+
+  local old_opts
+  old_opts="$(set +o)"
+  set +e
+
+  CLIENT_SSH_CMD_ARR=()
+  SERVER_SSH_CMD_ARR=()
+  if [[ -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    CLIENT_SSH_CMD_ARR=(ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}")
+  fi
+  if [[ -n "${SERVER_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    SERVER_SSH_CMD_ARR=(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}")
+  fi
+
+  log "Collecting and distilling deploy/prod telemetry into ${RESULTS_DIR}/telemetry/ ..."
+  collect_and_process_bench_telemetry \
+    "${REPO_ROOT}" \
+    "${WORK_DIR}" \
+    "${RESULTS_DIR}" \
+    "pjdfstest" \
+    "${TEST_START_EPOCH:-}" \
+    "${TEST_END_EPOCH:-}"
+
+  eval "${old_opts}"
+  return 0
+}
+
 cleanup() {
   local exit_code=$?
   set +e
+
+  if [[ "${exit_code}" != "0" && -n "${CLIENT_SSH_HOST:-}" && -f "${SSH_KEY_FILE}" ]]; then
+    scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log" 2>/dev/null
+    scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl" 2>/dev/null
+  fi
+
+  fetch_telemetry_archive
 
   if [[ "${KEEP_INSTANCES}" == "1" ]]; then
     log "KEEP_INSTANCES=1 is set; skipping automatic deletion of ECS instances and keypair."
@@ -120,11 +166,11 @@ trap cleanup EXIT
 # ==============================================================================
 log "Step 1/6: Cross-compiling storage-service, bowl CLI, and goose for linux/amd64..."
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/services/storage" build -trimpath -ldflags="-w -s" \
+  go -C "${REPO_ROOT}/services/storage" build -mod=mod -trimpath \
   -o "${WORK_DIR}/storage-service" ./cmd
 
 GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go -C "${REPO_ROOT}/client" build -trimpath -ldflags="-w -s" \
+  go -C "${REPO_ROOT}/client" build -mod=mod -trimpath \
   -o "${WORK_DIR}/bowl" ./cmd/bowl
 
 GOOSE_CACHE_BIN="/tmp/bowl-bench-goose-linux-amd64"
@@ -143,7 +189,8 @@ if [[ ! -x "${GOOSE_CACHE_BIN}" ]]; then
 fi
 cp "${GOOSE_CACHE_BIN}" "${WORK_DIR}/goose"
 chmod +x "${WORK_DIR}/storage-service" "${WORK_DIR}/bowl" "${WORK_DIR}/goose"
-log "Compiled binaries ready in ${WORK_DIR}"
+prepare_prod_bundle "${REPO_ROOT}" "${WORK_DIR}"
+log "Compiled binaries and deploy/prod bundle ready in ${WORK_DIR}"
 
 # ==============================================================================
 # Step 2: Provision 2 Pay-As-You-Go ECS Instances in us-west-1a
@@ -255,92 +302,83 @@ elif [[ "${SERVER_OK}" == "0" && "${CLIENT_OK}" == "0" ]]; then
   exit 1
 fi
 
+# Allow Client root SSH into Server over VPC private IP for Server localhost (:9090) telemetry scrapes
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "mkdir -p /root/.ssh && chmod 700 /root/.ssh"
+scp "${CLIENT_SSH_OPTS[@]}" "${SSH_KEY_FILE}" "root@${CLIENT_SSH_HOST}:/root/.ssh/id_rsa"
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "chmod 600 /root/.ssh/id_rsa"
+
 # ==============================================================================
-# Step 3: Deploy Storage Service + PostgreSQL on Server Node
+# Step 3: Deploy Bowl `deploy/prod` Stack on Server Node (Local NVMe SSD)
 # ==============================================================================
-log "Step 3/6: Deploying PostgreSQL, Goose migrations, and storage-service on Server (${SERVER_PRIV_IP})..."
-ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "mkdir -p /opt/bowl/migrations /var/lib/bowl/data"
-scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/storage-service" "${WORK_DIR}/goose" "root@${SERVER_SSH_HOST}:/usr/local/bin/"
-scp "${SERVER_SSH_OPTS[@]}" "${REPO_ROOT}"/services/storage/db/migrations/*.sql "root@${SERVER_SSH_HOST}:/opt/bowl/migrations/"
+log "Step 3/6: Mounting local NVMe SSD and deploying Bowl deploy/prod stack (pjdfstest POSIX mode) on Server (${SERVER_PRIV_IP})..."
+scp "${SERVER_SSH_OPTS[@]}" "${WORK_DIR}/prod-bundle.tar.gz" "root@${SERVER_SSH_HOST}:/tmp/prod-bundle.tar.gz"
 
 ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
+
+# 1. Detect, format, and mount the 894 GiB local NVMe SSD (local_ssd_pro)
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Server!" >&2
+  lsblk >&2
+  exit 1
+fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq postgresql iperf3 jq
-
-systemctl enable --now postgresql
-sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'bowl'" | grep -q 1 || \
-  sudo -u postgres psql -c "CREATE DATABASE bowl;"
-sudo -u postgres psql -c "ALTER SYSTEM SET max_connections = '200';"
-systemctl restart postgresql
-
-/usr/local/bin/goose -dir /opt/bowl/migrations postgres "postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable" up
-
-cat >/etc/systemd/system/bowl-storage.service <<'UNIT'
-[Unit]
-Description=Bowl Storage Service
-After=network.target postgresql.service
-
-[Service]
-Type=simple
-Environment="SERVER_HOST=0.0.0.0"
-Environment="SERVER_PORT=9000"
-Environment="SERVER_READ_MAX_BYTES=16777216"
-Environment="STORAGE_DATA_DIR=/var/lib/bowl/data"
-Environment="DB_DSN=postgres://postgres:postgres@127.0.0.1:5432/bowl?sslmode=disable"
-Environment="DB_MAX_CONNS=64"
-Environment="DB_MIN_CONNS=8"
-Environment="STORAGE_ATIME_MODE=strictatime"
-Environment="STORAGE_ENTRY_TIMEOUT_SECONDS=0"
-Environment="STORAGE_ATTR_TIMEOUT_SECONDS=0"
-Environment="STORAGE_DIR_ENTRY_TIMEOUT_SECONDS=0"
-Environment="LOG_LEVEL=warn"
-Environment="OTEL_ENABLED=false"
-ExecStart=/usr/local/bin/storage-service
-Restart=always
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-systemctl daemon-reload
-systemctl enable --now bowl-storage
-
-for i in {1..30}; do
-  if ss -tln | grep -q ':9000 '; then
-    break
-  fi
-  sleep 1
-done
-ss -tln | grep -q ':9000 '
+apt-get install -y -qq iperf3 fio python3 jq curl ca-certificates
 
 # Start iperf3 daemon for internal network benchmark
 pkill -f "iperf3 -s" || true
 iperf3 -s -D
 EOF
-log "Server node (${SERVER_PRIV_IP}:9000) is up and healthy."
+
+remote_setup_prod_stack "${SERVER_PRIV_IP}" "${CLIENT_PRIV_IP}" "pjdfstest" \
+  | ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s"
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl up"
+log "Server node (${SERVER_PRIV_IP}:9000 + Jaeger/Prometheus/Loki) is up and healthy on local NVMe SSD."
 
 # ==============================================================================
 # Step 4: Deploy Bowl FUSE Client & Build pjdfstest on Client Node
 # ==============================================================================
-log "Step 4/6: Preparing Client (${CLIENT_PRIV_IP}), building pjdfstest, and mounting Bowl over VPC internal network..."
+log "Step 4/6: Preparing Client (${CLIENT_PRIV_IP}), mounting local NVMe SSD, building pjdfstest, and mounting Bowl over VPC internal network..."
 scp "${CLIENT_SSH_OPTS[@]}" "${WORK_DIR}/bowl" "root@${CLIENT_SSH_HOST}:/usr/local/bin/bowl"
 
 ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "bash -s" <<'EOF'
 set -euo pipefail
+
+# Mount local NVMe SSD on Client
+ROOT_PART="$(findmnt -n -o SOURCE /)"
+ROOT_DISK="/dev/$(lsblk -ndo pkname "${ROOT_PART}" 2>/dev/null || basename "${ROOT_PART}")"
+NVME_DEV="$(lsblk -dbpno NAME,SIZE,TYPE | awk -v root="${ROOT_DISK}" '$3 == "disk" && $1 != root {print $2, $1}' | sort -rn | head -n1 | awk '{print $2}')"
+if [[ -z "${NVME_DEV}" ]]; then
+  echo "ERROR: Local NVMe SSD device not found on Client!" >&2
+  lsblk >&2
+  exit 1
+fi
+echo "${NVME_DEV}" > /etc/bowl_nvme_dev
+mkfs.ext4 -F -E lazy_itable_init=0,lazy_journal_init=0 "${NVME_DEV}" >/dev/null
+mkdir -p /mnt/nvme
+mount -o noatime,nodiratime "${NVME_DEV}" /mnt/nvme
+
 while fuser /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock >/dev/null 2>&1; do sleep 2; done
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y -qq
-apt-get install -y -qq fuse3 libfuse3-dev iperf3 git build-essential autoconf automake libtool pkg-config perl python3 jq
+apt-get install -y -qq fuse3 libfuse3-dev iperf3 git build-essential autoconf automake libtool pkg-config perl python3 jq curl ca-certificates
 
 grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
 
 if [[ ! -x /opt/pjdfstest/pjdfstest ]]; then
-  rm -rf /opt/pjdfstest
+  rm -rf /opt/pjdfstest /mnt/nvme/pjdfstest
+  mkdir -p /mnt/nvme/pjdfstest /opt/pjdfstest
+  mount --bind /mnt/nvme/pjdfstest /opt/pjdfstest
   git clone --depth 1 https://github.com/pjd/pjdfstest.git /opt/pjdfstest
   cd /opt/pjdfstest
   autoreconf -ifs
@@ -350,15 +388,36 @@ if [[ ! -x /opt/pjdfstest/pjdfstest ]]; then
 fi
 EOF
 
-# Collect server & client metadata + internal VPC network baseline
-log "Measuring internal VPC RTT and throughput (${CLIENT_PRIV_IP} -> ${SERVER_PRIV_IP})..."
+# Collect server & client metadata + internal VPC network & NVMe baseline
+log "Measuring Server local NVMe SSD baseline and internal VPC RTT/throughput (${CLIENT_PRIV_IP} -> ${SERVER_PRIV_IP})..."
 SERVER_INFO_JSON="$(ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "bash -s" <<'EOF'
+set -euo pipefail
+mkdir -p /mnt/nvme/disk_bench
+WRITE_BW_BPS="$(fio --name=nvme-seq-w --directory=/mnt/nvme/disk_bench --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.bw_bytes // 0')"
+READ_BW_BPS="$(fio --name=nvme-seq-r --directory=/mnt/nvme/disk_bench --rw=read --bs=4M --size=2G --direct=1 --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.bw_bytes // 0')"
+RANDW_IOPS="$(fio --name=nvme-rand-w --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randwrite --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].write.iops // 0')"
+RANDR_IOPS="$(fio --name=nvme-rand-r --directory=/mnt/nvme/disk_bench --ioengine=libaio --rw=randread --bs=4k --size=1G --numjobs=4 --iodepth=32 --direct=1 --runtime=5 --time_based=1 --group_reporting --output-format=json | sed -n '/^{/,$p' | jq -r '.jobs[0].read.iops // 0')"
+FSYNC_JSON="$(fio --name=nvme-fsync-w --directory=/mnt/nvme/disk_bench --ioengine=psync --rw=write --bs=4k --size=64M --numjobs=1 --direct=1 --fsync=1 --runtime=5 --time_based=1 --output-format=json | sed -n '/^{/,$p')"
+FSYNC_IOPS="$(echo "${FSYNC_JSON}" | jq -r '.jobs[0].write.iops // 0')"
+FSYNC_P99_US="$(echo "${FSYNC_JSON}" | jq -r '((.jobs[0].sync.lat_ns.percentile["99.000000"] // 0) + (.jobs[0].write.clat_ns.percentile["99.000000"] // 0)) / 1000.0')"
+rm -rf /mnt/nvme/disk_bench
+
+WRITE_MIB="$(awk -v b="${WRITE_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+READ_MIB="$(awk -v b="${READ_BW_BPS}" 'BEGIN {printf "%.2f", b / 1048576.0}')"
+RANDW_IOPS_FMT="$(awk -v v="${RANDW_IOPS}" 'BEGIN {printf "%.0f", v}')"
+RANDR_IOPS_FMT="$(awk -v v="${RANDR_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_IOPS_FMT="$(awk -v v="${FSYNC_IOPS}" 'BEGIN {printf "%.0f", v}')"
+FSYNC_P99_FMT="$(awk -v v="${FSYNC_P99_US}" 'BEGIN {printf "%.1f", v}')"
+
+NVME_DEV="$(cat /etc/bowl_nvme_dev)"
+NVME_SIZE_GIB="$(lsblk -dbno SIZE "${NVME_DEV}" | awk '{printf "%.0f", $1 / (1024*1024*1024)}')"
 CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
 VCPU="$(nproc)"
 MEM_GIB="$(awk '/MemTotal/ {printf "%.1f GiB", $2/1024/1024}' /proc/meminfo)"
 OS_REL="$(. /etc/os-release && echo "${PRETTY_NAME}")"
 KERNEL="$(uname -r)"
-PG_VER="$(psql --version | head -n1)"
+PG_VER="$(/usr/local/bin/bowl-prod-ctl pg-version 2>/dev/null | head -n1 || echo 'postgres (PostgreSQL) 18 (alpine)')"
+DOCKER_VER="$(docker --version 2>/dev/null | head -n1 || echo 'n/a')"
 jq -n \
   --arg cpu "${CPU_MODEL}" \
   --arg vcpu "${VCPU}" \
@@ -366,11 +425,32 @@ jq -n \
   --arg os "${OS_REL}" \
   --arg kernel "${KERNEL}" \
   --arg pg "${PG_VER}" \
-  '{cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg}'
+  --arg docker_ver "${DOCKER_VER}" \
+  --arg nvme_dev "${NVME_DEV}" \
+  --argjson nvme_gib "${NVME_SIZE_GIB}" \
+  --arg disk_w "${WRITE_MIB}" \
+  --arg disk_r "${READ_MIB}" \
+  --arg randw_iops "${RANDW_IOPS_FMT}" \
+  --arg randr_iops "${RANDR_IOPS_FMT}" \
+  --arg fsync_iops "${FSYNC_IOPS_FMT}" \
+  --arg fsync_p99_us "${FSYNC_P99_FMT}" \
+  '{
+    server: {cpu_model: $cpu, vcpu: $vcpu, memory_gib: $mem, os_release: $os, kernel: $kernel, pg_version: $pg, bowl_pg_version: $pg, docker_version: $docker_ver, data_disk_device: $nvme_dev, data_disk_size_gib: $nvme_gib},
+    disk_baseline: {
+      local_seq_write_mib_s: ($disk_w|tonumber),
+      local_seq_read_mib_s: ($disk_r|tonumber),
+      local_randwrite_4k_iops: ($randw_iops|tonumber),
+      local_randread_4k_iops: ($randr_iops|tonumber),
+      local_fsync_4k_iops: ($fsync_iops|tonumber),
+      local_fsync_4k_p99_us: ($fsync_p99_us|tonumber)
+    }
+  }'
 EOF
 )"
 
-CLIENT_MOUNT_JSON="$(ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP=${SERVER_PRIV_IP} bash -s" <<'EOF'
+emit_client_telemetry_helper | ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "mkdir -p /opt/bowl && cat >/opt/bowl/client_telemetry.sh && chmod +x /opt/bowl/client_telemetry.sh"
+
+CLIENT_MOUNT_JSON="$(ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' BOWL_BENCH_LOG_LEVEL='${BOWL_BENCH_LOG_LEVEL}' BOWL_BENCH_TRACE_SAMPLE_RATIO='${BOWL_BENCH_TRACE_SAMPLE_RATIO}' bash -s" <<'EOF'
 set -euo pipefail
 ENDPOINT="http://${SERVER_PRIV_IP}:9000"
 
@@ -391,7 +471,19 @@ mkdir -p /mnt/bowl
 if grep -q " /mnt/bowl " /proc/self/mountinfo; then
   /usr/local/bin/bowl umount /mnt/bowl || umount -l /mnt/bowl || true
 fi
-/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl --endpoint "${ENDPOINT}" --allow-other --log-file /var/log/bowl-mount.log
+# 注意：pjdfstest 不传 --stats-file（避免在根目录下注入虚拟 .stats 节点干扰 POSIX 目录项断言），
+# 全量 9 大子系统指标仍通过 :9567/debug/stats?format=json|text 精确导出。
+OTEL_SERVICE_NAME=bowl-client \
+OTEL_EXPORTER_OTLP_ENDPOINT="http://${SERVER_PRIV_IP}:4317" \
+OTEL_EXPORTER_OTLP_INSECURE=true \
+/usr/local/bin/bowl mount "${DISK_ID}" /mnt/bowl \
+  --endpoint "${ENDPOINT}" \
+  --allow-other \
+  --admin-addr 0.0.0.0:9567 \
+  --log-level "${BOWL_BENCH_LOG_LEVEL:-warn}" \
+  --log-format json \
+  --trace-sample-ratio "${BOWL_BENCH_TRACE_SAMPLE_RATIO:-0.10}" \
+  --log-file /var/log/bowl-mount.log
 mkdir -p /mnt/bowl/work
 
 CPU_MODEL="$(lscpu | awk -F: '/Model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}')"
@@ -428,11 +520,14 @@ log "Client mounted /mnt/bowl over VPC internal network: $(echo "${CLIENT_MOUNT_
 # Step 5: Execute Full pjdfstest Suite over Internal Network
 # ==============================================================================
 TEST_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TEST_START_EPOCH="$(date +%s)"
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "date +%s > /var/run/bowl-prod-started.epoch"
 log "Step 5/6: Running full pjdfstest suite on /mnt/bowl/work..."
 
-ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "python3 -u -" <<'PYEOF'
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' python3 -u -" <<'PYEOF'
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -444,6 +539,86 @@ work_dir.mkdir(parents=True, exist_ok=True)
 
 log_path = Path("/tmp/pjdfstest.log")
 timings_path = Path("/tmp/stage_timings.jsonl")
+server_priv_ip = os.environ.get("SERVER_PRIV_IP", "")
+
+cli_telem = Path("/tmp/bowl-telemetry/client")
+for sub in ("logs", "metrics", "stats", "diskstats", "pprof"):
+    (cli_telem / sub).mkdir(parents=True, exist_ok=True)
+
+ssh_srv_base = [
+    "ssh",
+    "-n",
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "UserKnownHostsFile=/dev/null",
+    "-o", "IdentitiesOnly=yes",
+    "-i", "/root/.ssh/id_rsa",
+    f"root@{server_priv_ip}",
+]
+
+
+def capture_snapshot(phase: str) -> None:
+    (cli_telem / "stats" / f"{phase}.epoch").write_text(f"{time.time():.6f}\n", encoding="utf-8")
+    subprocess.run(
+        [
+            "sh",
+            "-c",
+            f"tmp='{cli_telem}/metrics/{phase}.prom.tmp'; if curl -fsS --max-time 5 http://127.0.0.1:9567/metrics > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/metrics/{phase}.prom'; else rm -f \"$tmp\"; fi; "
+            f"tmp='{cli_telem}/stats/{phase}.json.tmp'; if curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=json' > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/stats/{phase}.json'; else rm -f \"$tmp\"; fi; "
+            f"tmp='{cli_telem}/stats/{phase}.txt.tmp'; if curl -fsS --max-time 5 'http://127.0.0.1:9567/debug/stats?format=text' > \"$tmp\" 2>/dev/null && [ -s \"$tmp\" ]; then mv \"$tmp\" '{cli_telem}/stats/{phase}.txt'; else rm -f \"$tmp\"; fi",
+        ],
+        check=False,
+    )
+    try:
+        shutil.copyfile("/proc/diskstats", cli_telem / "diskstats" / f"{phase}.txt")
+    except OSError:
+        pass
+    if server_priv_ip:
+        subprocess.run(
+            ssh_srv_base + [
+                "mkdir -p /tmp/bowl-telemetry/server/metrics /tmp/bowl-telemetry/server/diskstats /tmp/bowl-telemetry/server/pprof /tmp/bowl-telemetry/server/pebble && "
+                f"curl -fsS --max-time 5 http://127.0.0.1:9090/metrics > '/tmp/bowl-telemetry/server/metrics/{phase}.prom' 2>/dev/null || true; "
+                f"cat /proc/diskstats > '/tmp/bowl-telemetry/server/diskstats/{phase}.txt' 2>/dev/null || true"
+            ],
+            check=False,
+        )
+
+
+def start_cpu_profile(stage: str, sec: int = 10) -> list[subprocess.Popen]:
+    procs: list[subprocess.Popen] = []
+    procs.append(
+        subprocess.Popen(
+            ["sh", "-c", f"curl -fsS --max-time 25 'http://127.0.0.1:9567/debug/pprof/profile?seconds={sec}' -o '{cli_telem}/pprof/{stage}_cpu.pb.gz' 2>/dev/null || true"]
+        )
+    )
+    if server_priv_ip:
+        procs.append(
+            subprocess.Popen(
+                ssh_srv_base + [
+                    f"mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 25 'http://127.0.0.1:9090/debug/pprof/profile?seconds={sec}' -o '/tmp/bowl-telemetry/server/pprof/{stage}_cpu.pb.gz' 2>/dev/null || true"
+                ]
+            )
+        )
+    return procs
+
+
+def finish_stage_profiles(stage: str, procs: list[subprocess.Popen]) -> None:
+    for p in procs:
+        try:
+            p.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    subprocess.run(
+        ["sh", "-c", f"curl -fsS --max-time 10 'http://127.0.0.1:9567/debug/pprof/heap' -o '{cli_telem}/pprof/{stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9567/debug/pprof/mutex' -o '{cli_telem}/pprof/{stage}_mutex.pb.gz' 2>/dev/null || true"],
+        check=False,
+    )
+    if server_priv_ip:
+        subprocess.run(
+            ssh_srv_base + [
+                f"mkdir -p /tmp/bowl-telemetry/server/pprof && curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/heap' -o '/tmp/bowl-telemetry/server/pprof/{stage}_heap.pb.gz' 2>/dev/null || true; curl -fsS --max-time 10 'http://127.0.0.1:9090/debug/pprof/mutex' -o '/tmp/bowl-telemetry/server/pprof/{stage}_mutex.pb.gz' 2>/dev/null || true"
+            ],
+            check=False,
+        )
+
 
 env = os.environ.copy()
 env["PATH"] = f"/opt/pjdfstest:/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')}"
@@ -451,9 +626,16 @@ env["PATH"] = f"/opt/pjdfstest:/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')
 subdirs = sorted([d.name for d in tests_root.iterdir() if d.is_dir()])
 print(f"[pjdfstest-runner] Discovered {len(subdirs)} syscall directories: {', '.join(subdirs)}", flush=True)
 
+capture_snapshot("suite_pre")
+slow_dirs = {"chmod", "chown", "ftruncate", "link", "open", "rename", "truncate", "unlink"}
+profile_dirs = {"chown", "rename"}
+
 with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encoding="utf-8") as tim_f:
     for idx, dname in enumerate(subdirs, 1):
         target_dir = tests_root / dname
+        if dname in slow_dirs:
+            capture_snapshot(f"{dname}_pre")
+        prof_procs = start_cpu_profile(dname, 10) if dname in profile_dirs else []
         t0 = time.monotonic()
         print(f"[{idx:02d}/{len(subdirs):02d}] Running prove --timer -rv {target_dir} ...", flush=True)
         proc = subprocess.run(
@@ -466,6 +648,10 @@ with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encod
             errors="replace",
         )
         elapsed = round(time.monotonic() - t0, 3)
+        if dname in profile_dirs:
+            finish_stage_profiles(dname, prof_procs)
+        if dname in slow_dirs:
+            capture_snapshot(f"{dname}_post")
         log_f.write(f"# === DIRECTORY: {dname} (rc={proc.returncode}, duration_sec={elapsed}) ===\n")
         log_f.write(proc.stdout)
         if not proc.stdout.endswith("\n"):
@@ -485,15 +671,26 @@ with log_path.open("w", encoding="utf-8") as log_f, timings_path.open("w", encod
             "duration_sec": elapsed,
         }) + "\n")
         tim_f.flush()
+
+capture_snapshot("suite_post")
 PYEOF
 
 TEST_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+TEST_END_EPOCH="$(date +%s)"
 log "pjdfstest execution finished at ${TEST_COMPLETED_AT}."
 
-# Unmount cleanly and fetch logs
-ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "/usr/local/bin/bowl umount /mnt/bowl || umount /mnt/bowl || true"
+# 卸载前采集双端 final 快照与活跃 Prometheus targets，卸载并等待守护进程完整刷盘退出后再拉取完整 bowl-mount.log 与服务端遥测
+ssh "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}" "SERVER_PRIV_IP='${SERVER_PRIV_IP}' bash -s" <<'EOF_PJDFS_HARVEST'
+set -euo pipefail
+SSH_SRV=(ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentitiesOnly=yes -i /root/.ssh/id_rsa "root@${SERVER_PRIV_IP}")
+source /opt/bowl/client_telemetry.sh
+harvest_bowl_before_and_after_umount /mnt/bowl
+EOF_PJDFS_HARVEST
+TEST_END_EPOCH="$(date +%s)"
+ssh "${SERVER_SSH_OPTS[@]}" "root@${SERVER_SSH_HOST}" "/usr/local/bin/bowl-prod-ctl export-telemetry /tmp/bowl-telemetry/server '${TEST_START_EPOCH}' '${TEST_END_EPOCH}' && /usr/local/bin/bowl-prod-ctl down-volumes"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/pjdfstest.log" "${RESULTS_DIR}/pjdfstest.log"
 scp "${CLIENT_SSH_OPTS[@]}" "root@${CLIENT_SSH_HOST}:/tmp/stage_timings.jsonl" "${RESULTS_DIR}/stage_timings.jsonl"
+fetch_telemetry_archive
 
 # ==============================================================================
 # Step 6: Destroy Cloud Instances, Audit Cleanup & Generate REPORT.md
@@ -528,22 +725,25 @@ if [[ "${KEEP_INSTANCES}" != "1" ]]; then
 fi
 
 BOWL_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD)"
+if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain -- services client 2>/dev/null)" ]]; then
+  BOWL_GIT_COMMIT="${BOWL_GIT_COMMIT}-dirty"
+fi
 
 jq -n \
   --arg test_started_at "${TEST_STARTED_AT}" \
   --arg test_completed_at "${TEST_COMPLETED_AT}" \
   --arg region_id "${REGION_ID}" \
   --arg zone_id "${ZONE_ID}" \
-  --arg vpc_id "${VPC_ID}" \
-  --arg vswitch_id "${VSWITCH_ID}" \
-  --arg sg_id "${SECURITY_GROUP_ID}" \
+  --arg vpc_id "vpc-<redacted>" \
+  --arg vswitch_id "vsw-<redacted>" \
+  --arg sg_id "sg-<redacted>" \
   --arg instance_type "${INSTANCE_TYPE}" \
   --arg image_id "${IMAGE_ID}" \
   --arg disk_cat "${SYSTEM_DISK_CATEGORY}" \
   --argjson disk_size "${SYSTEM_DISK_SIZE}" \
-  --arg server_id "${SERVER_ID}" \
+  --arg server_id "i-<redacted-server>" \
   --arg server_priv_ip "${SERVER_PRIV_IP}" \
-  --arg client_id "${CLIENT_ID}" \
+  --arg client_id "i-<redacted-client>" \
   --arg client_priv_ip "${CLIENT_PRIV_IP}" \
   --arg bowl_commit "${BOWL_GIT_COMMIT}" \
   --arg key_pair "${KEY_PAIR_NAME}" \
@@ -567,30 +767,38 @@ jq -n \
       instance_charge_type: "PostPaid (按量计费)",
       image_id: $image_id,
       system_disk_category: $disk_cat,
-      system_disk_size_gib: $disk_size
+      system_disk_size_gib: $disk_size,
+      data_disk_category: "local_ssd_pro (NVMe)",
+      data_disk_size_gib: $srv.server.data_disk_size_gib
     },
-    server_node: ($srv + {instance_id: $server_id, private_ip: $server_priv_ip}),
+    server_node: ($srv.server + {instance_id: $server_id, private_ip: $server_priv_ip}),
+    server_disk_baseline: $srv.disk_baseline,
     client_node: ($cli.client + {instance_id: $client_id, private_ip: $client_priv_ip}),
     network_baseline: $cli.network,
     bowl_config: ($cli.bowl + {
       bowl_git_commit: $bowl_commit,
-      storage_engine: "Pebble per branch (常驻句柄池 + 12B BlobRef 索引)",
-      blob_layout: "blobs/<shard>/<blob_id>.blob (1 MiB 不可变块文件 + os.Remove 即时回收)",
-      blob_size_bytes: 1048576,
-      blob_ref_bytes: 12,
+      deploy_profile: "deploy/prod (docker-compose.yaml + storage.env + strictatime/0s TTL override)",
+      observability_stack: "Jaeger (OTLP HTTP/gRPC :4317, sample_ratio=\(env.BOWL_BENCH_TRACE_SAMPLE_RATIO // "0.10")) + Prometheus (2s dual-node scrape) + Loki + Alloy + Grafana + bowl stats + pprof",
+      telemetry_dir: "results/telemetry",
+      storage_engine: "StoreActor per disk (Pebble + 128 MiB 共享缓存 + 双缓冲 MPSC Group Commit + 16B BlobRef + WriteRequest 池化零分配解码)",
+      blob_layout: "packs/<pack_id_hex16>.pack (64 MiB Append-Only Pack + 256 KiB 块网格 + 尾块分片热缓存 + AppendBlocks 零冗余拷贝 + ExtendTail)",
+      blob_size_bytes: 262144,
+      pack_max_bytes: 67108864,
+      blob_ref_bytes: 16,
+      write_behind_chunk_bytes: 4194304,
+      write_behind_max_inflight: 4,
+      http2_stream_window_bytes: 8388608,
+      http2_conn_window_bytes: 33554432,
       kernel_writeback_cache: false,
       open_keep_cache: true,
       handle_killpriv: true,
       max_background: 64,
       congestion_threshold: 48,
       flush_issues_fsync_rpc: false,
-      wal_sync_mode: "pebble.NoSync + 1s 后台刷盘 (WALBytesPerSync=4 MiB, MemTableSize=16 MiB)",
-      branch_lock: "拓扑生命周期 RLock + 按 inode 细粒度锁",
-      parallel_blob_write: "1 MiB 块在 Inode 锁外并行落盘",
-      point_lookup_snapshot_free: true,
+      wal_sync_mode: "pebble.NoSync Group Commit + Fsync/FsyncDir 双层并行落盘屏障 (fdatasync + LogData)",
+      concurrency_model: "单盘独立 StoreActor 串行 Phase A 内存校验 + WriterEpoch 世代号栅栏 + 无锁并发 Read",
       disk_size: "2PiB",
       atime_mode: "strictatime",
-      atime_writeback: "内存延迟登记 + 1s 周期合并",
       entry_timeout: "0",
       attr_timeout: "0",
       dir_entry_timeout: "0"

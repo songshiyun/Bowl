@@ -6,13 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+COMMON_DIR = Path(__file__).resolve().parent.parent / "common"
+if str(COMMON_DIR) not in sys.path:
+    sys.path.insert(0, str(COMMON_DIR))
+
+from collect_telemetry import load_telemetry_overview, render_report_telemetry_section  # noqa: E402
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 TARGETS = [
-    ("bowl", "Bowl (PG 16 控制面 + Pebble)"),
+    ("bowl", "Bowl (PostgreSQL 控制面 + Pebble)"),
     ("jfs_pg", "JuiceFS (PG 16 + rclone S3)"),
     ("jfs_redis", "JuiceFS (Redis 7 + rclone S3)"),
 ]
@@ -138,11 +145,29 @@ def parse_fio_json(json_path: Path, direction: str) -> dict[str, Any]:
     runtime_ms = int(stat.get("runtime", job.get("job_runtime", 0)))
     io_bytes = int(stat.get("io_bytes", 0))
 
-    clat = stat.get("clat_ns", {}) or stat.get("lat_ns", {})
-    mean_ms = round(float(clat.get("mean", 0.0)) / 1e6, 3)
-    pct = clat.get("percentile", {}) or {}
-    p95_ms = round(float(pct.get("95.000000", 0.0)) / 1e6, 3)
-    p99_ms = round(float(pct.get("99.000000", 0.0)) / 1e6, 3)
+    lat_ns = stat.get("lat_ns") or {}
+    slat_ns = stat.get("slat_ns") or {}
+    clat_ns = stat.get("clat_ns") or {}
+
+    slat_mean = float(slat_ns.get("mean", 0.0))
+    clat_mean = float(clat_ns.get("mean", 0.0))
+    lat_mean = float(lat_ns.get("mean", 0.0))
+    total_mean_ns = lat_mean if lat_mean > 0 else (slat_mean + clat_mean)
+    mean_ms = round(total_mean_ns / 1e6, 3)
+
+    lat_pct = lat_ns.get("percentile") or {}
+    if lat_pct:
+        p95_ms = round(float(lat_pct["95.000000"]) / 1e6, 3) if "95.000000" in lat_pct else None
+        p99_ms = round(float(lat_pct["99.000000"]) / 1e6, 3) if "99.000000" in lat_pct else None
+    elif slat_mean > clat_mean:
+        # 旧版 fio JSON 未开启 --lat_percentiles=1，且 libaio+direct=1 下真实耗时落在 slat_ns，
+        # 严禁用微秒级 clat_ns 分位数冒充总延迟。
+        p95_ms = None
+        p99_ms = None
+    else:
+        clat_pct = clat_ns.get("percentile") or {}
+        p95_ms = round(float(clat_pct["95.000000"]) / 1e6, 3) if "95.000000" in clat_pct else None
+        p99_ms = round(float(clat_pct["99.000000"]) / 1e6, 3) if "99.000000" in clat_pct else None
 
     return {
         "bw_mib_s": bw_mib_s,
@@ -221,7 +246,7 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
             if line.strip():
                 stage_timings.append(json.loads(line))
 
-    return {
+    out: dict[str, Any] = {
         "env_metadata": env_meta,
         "juicefs_bench": bench_data,
         "fio": fio_data,
@@ -229,6 +254,10 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
         "mdtest_4proc": mdtest_4proc,
         "stage_timings": stage_timings,
     }
+    telem = load_telemetry_overview(results_dir)
+    if telem:
+        out["telemetry_overview"] = telem
+    return out
 
 
 def render_report(summary: dict[str, Any]) -> str:
@@ -255,30 +284,42 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("## 1. 执行摘要（Executive Summary）")
     lines.append("")
     lines.append(
-        "本报告记录了 **Bowl** 与 **JuiceFS** 在阿里云硅谷地域（`us-west-1a`）使用按量计费双机环境"
-        "（1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下运行 "
+        "本报告记录了 **Bowl** 与 **JuiceFS** 在阿里云硅谷地域（`us-west-1a`）使用按量计费本地 NVMe SSD 双机环境"
+        "（`ecs.i5.xlarge` × 2，1 台服务端存储与元数据节点 + 1 台 Linux FUSE 客户端节点），在同可用区 VPC 私网下运行 "
         "[JuiceFS 官方常规测试套件](https://juicefs.com/docs/zh/community/benchmark/)（涵盖 **`juicefs bench` 基础测试**、"
         "**`fio` 顺序/随机大文件吞吐量测试**、**`mdtest` 元数据 IOPS 压测**）的实测对比结果。"
     )
     lines.append("")
-    lines.append("本次评测采用同规格双机、VPC 私网与 120 GiB `cloud_essd` 云盘，依次运行以下三组目标：")
+    lines.append("本次评测采用同规格双机（4 vCPU / 32 GiB 内存）、VPC 私网与 894 GiB `local_ssd_pro` 本地 NVMe SSD 数据盘，服务端按目标隔离运行以下三组存储栈：")
     lines.append("")
+    bowl_pg_ver = srv.get("bowl_pg_version") or srv.get("pg_version", "")
+    bowl_deploy_desc = (
+        "deploy/prod 容器栈（PostgreSQL 18 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack + Jaeger/Prometheus/Loki 全栈可观测）"
+        if bowl_cfg.get("deploy_profile")
+        else "PostgreSQL 16 控制面 + StoreActor 单盘 Pebble + 64 MiB Pack"
+    )
+
     lines.append(
-        "1. **Bowl（PostgreSQL 16 控制面 + Pebble）**：PostgreSQL 仅保存 `disks`、`commits`、`client_sessions`；"
-        "每个 `(disk, branch)` 使用常驻 Pebble 句柄池保存 Inode、Entry、Xattr、Orphan 与 12 字节 `BlobRef` 索引，"
-        "文件数据落在 `blobs/<shard>/<blob_id>.blob` 的 1 MiB 不可变块文件中；整块直写、局部写 CoW，"
-        "截断/打洞/删除在提交后 `os.Remove` 即时回收旧块，Checkpoint 与 Fork 以硬链接共享块。"
-        "服务端分支锁降为拓扑生命周期 `RLock`，完整 1 MiB 块在 Inode 锁外并行落盘，单键点查免 Snapshot，"
-        "读路径 atime 先登记内存再按 1 秒周期合并；常规写批次以 `pebble.NoSync` 提交异步 WAL，"
-        "后台 1 秒刷盘与 `WALBytesPerSync=4 MiB` 兜底（`MemTableSize=16 MiB`）。"
+        f"1. **Bowl（{bowl_deploy_desc}）**："
+        "采用 ADR-0030 / ADR-0031 / ADR-0032 架构，PostgreSQL 仅保存单张 `disks` 表，客户端 `MountDisk` 握手原子递增 `WriterEpoch` 世代号；"
+        "每块磁盘对应独立 `StoreActor`（单盘 Pebble + 共享 `128 MiB` Block Cache），采用双缓冲 MPSC Group Commit 循环"
+        "（Phase A 内存校验、`WriterEpoch` 栅栏与零拷贝 `SetDeferred` 编码，Phase B 批量提交 Pebble WAL），DataKey 保存 16 字节 `BlobRef`（`PackID + Offset + Length`）；"
+        "文件数据落在本地 NVMe SSD 的 `packs/<pack_id_hex16>.pack` `64 MiB` Append-Only 封包文件中，采用 `256 KiB` 逻辑块网格、"
+        "常驻句柄池与 `64 MiB` 分片热块缓存（`AppendBlocks` 整块顺序写跳过用户态冗余拷贝），配合服务端 `128 MiB` H2C 连接窗口、"
+        "`WriteRequest`/`ReadResponse` 池化零分配编解码、活跃包末尾同块 `ExtendTail` 顺延扩展、`8 MiB` `SyncFileRange` 渐进异步回写、"
+        "相邻物理连续块合并单次 `pread` 无锁并发 `Read`、"
+        "`Fsync`/`FsyncDir` 双层并行落盘屏障（脏 `.pack` `fdatasync` + Pebble `LogData` 并发同步）及后台异步全死封口包回收。"
     )
     lines.append(
-        "   客户端采用 1 MiB Write-Through 直通写：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，"
-        "声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`，写后回填 `AttrTimeout=1.0s`，"
-        "并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不再触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
+        "   客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保留 `FOPEN_KEEP_CACHE`，"
+        "声明 `CAP_HANDLE_KILLPRIV` 在写批次内清除 `security.capability`；"
+        "配备客户端 `1+8` H2C 多连接条带池（`32 MiB` 元数据连接 + `8×64 MiB` 数据连接，单流 `8 MiB`）与 `MarshalAppend` 零分配编码、"
+        "`WriteBehindCoordinator`（大块流式写经 `2 MiB` 同步探测后激活 `4 MiB` 聚批与 `W*=4` 并发 Write RPC 流水线，小块连续写经首笔探针或 `Create` 预热后内存聚合）、"
+        "`ReadAheadCoordinator` 单飞有序槽位预读（`W_read=4`、`ReadAheadMaxGlobalInflight=32`）与 `completeDirs` 本地目录流合成，"
+        "写后回填 `AttrTimeout=1.0s`，并配置 `MaxBackground=64` / `CongestionThreshold=48`。Flush 不触发跨机 Fsync RPC，仅显式 Fsync/Sync 请求服务端持久化屏障。"
     )
-    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块 `cloud_essd` 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
-    lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`）作为元数据引擎 + Server 节点 rclone S3 存储（`--trash-days 0`）。")
+    lines.append("2. **JuiceFS + PostgreSQL 16 (`jfs_pg`)**：使用 PostgreSQL 16 作为元数据引擎，数据块通过 VPC 内网写入 Server 节点同块本地 NVMe SSD 上的 rclone S3 服务（关闭回收站 `--trash-days 0`）。")
+    lines.append("3. **JuiceFS + Redis 7 (`jfs_redis`)**：采用 JuiceFS 官方常规测试默认的 Redis 7 内存数据库（`appendonly yes`, `appendfsync everysec`，AOF 落本地 NVMe SSD）作为元数据引擎 + Server 节点本地 NVMe SSD rclone S3 存储（`--trash-days 0`）。")
     lines.append("")
 
     # Core Headline Summary Table
@@ -431,23 +472,25 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("")
     lines.append("### 2.1 双机云服务器配置（按量计费实测节点）")
     lines.append("")
-    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 系统盘 | 操作系统与内核 | VPC 私网 IP |")
-    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+    lines.append("| 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 数据盘 (本地 NVMe SSD) | 系统盘 | 操作系统与内核 | VPC 私网 IP |")
+    lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
     lines.append(
         f"| **Server 服务端** (`bowl-bench-server`) | `{srv.get('instance_id', '')}` | `{cloud.get('instance_type', '')}` | "
         f"{srv.get('cpu_model', '')} | {srv.get('vcpu', '')} vCPU / {srv.get('memory_gib', '')} | "
+        f"`{cloud.get('data_disk_category', 'local_ssd_pro')}` ({cloud.get('data_disk_size_gib', 894)} GiB `{srv.get('data_disk_device', '/dev/nvme1n1')}`) | "
         f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) | "
         f"{srv.get('os_release', '')} (`{srv.get('kernel', '')}`) | `{srv.get('private_ip', '')}` |"
     )
     lines.append(
         f"| **Client 客户端** (`bowl-bench-client`) | `{cli.get('instance_id', '')}` | `{cloud.get('instance_type', '')}` | "
         f"{cli.get('cpu_model', '')} | {cli.get('vcpu', '')} vCPU / {cli.get('memory_gib', '')} | "
+        f"`{cloud.get('data_disk_category', 'local_ssd_pro')}` ({cloud.get('data_disk_size_gib', 894)} GiB) | "
         f"`{cloud.get('system_disk_category', '')}` ({cloud.get('system_disk_size_gib', '')} GiB) | "
         f"{cli.get('os_release', '')} (`{cli.get('kernel', '')}`) | `{cli.get('private_ip', '')}` |"
     )
     lines.append("")
 
-    lines.append("### 2.2 同可用区 VPC 内网与 Server 节点云盘物理基线")
+    lines.append("### 2.2 同可用区 VPC 内网与 Server 节点本地 NVMe SSD 物理基线")
     lines.append("")
     lines.append("| 基线指标 | 实测数值 | 采集方式与说明 |")
     lines.append("| :--- | :--- | :--- |")
@@ -461,11 +504,18 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **内网单流 TCP 吞吐带宽** | `{net.get('iperf3_gbps', '')}` Gbps | `iperf3 -c {srv.get('private_ip', '')} -t 5` |"
     )
     lines.append(
-        f"| **Server 节点 `cloud_essd` (120 GiB) 本地顺序写基线** | `{disk_base.get('local_seq_write_mib_s', '')}` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |"
+        f"| **Server 本地 NVMe SSD (894 GiB) 顺序写基线** | `{disk_base.get('local_seq_write_mib_s', '')}` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |"
     )
     lines.append(
-        f"| **Server 节点 `cloud_essd` (120 GiB) 本地顺序读基线** | `{disk_base.get('local_seq_read_mib_s', '')}` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |"
+        f"| **Server 本地 NVMe SSD (894 GiB) 顺序读基线** | `{disk_base.get('local_seq_read_mib_s', '')}` MiB/s | Server 本地 `fio --rw=read --bs=4M --size=2G --direct=1` |"
     )
+    if disk_base.get("local_randwrite_4k_iops") is not None:
+        lines.append(
+            f"| **Server 本地 NVMe SSD 4 KiB 随机写 / 读 IOPS** | `{disk_base.get('local_randwrite_4k_iops', '')}` / `{disk_base.get('local_randread_4k_iops', '')}` IOPS | Server 本地 `fio --bs=4k --numjobs=4 --iodepth=32 --direct=1` |"
+        )
+        lines.append(
+            f"| **Server 本地 NVMe SSD 4 KiB 单流 `fsync` 写** | `{disk_base.get('local_fsync_4k_iops', '')}` IOPS (P99 `{disk_base.get('local_fsync_4k_p99_us', '')}` µs) | Server 本地 `fio --bs=4k --numjobs=1 --direct=1 --fsync=1` |"
+        )
     lines.append("")
 
     lines.append("### 2.3 软件版本与三组存储栈配置矩阵")
@@ -476,19 +526,23 @@ def render_report(summary: dict[str, Any]) -> str:
         f"| **客户端版本** | Bowl `{bowl_cfg.get('bowl_git_commit', '')}` (`fusermount3` {cli.get('fusermount_version', '')}) | `{cli.get('juicefs_version', '')}` | `{cli.get('juicefs_version', '')}` |"
     )
     lines.append(
-        f"| **控制面 / 文件元数据** | {srv.get('pg_version', '')} 控制面 / Pebble 分支存储 | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
+        f"| **控制面 / 文件元数据** | {bowl_pg_ver} 控制面 / 单盘 `StoreActor` Pebble | {srv.get('pg_version', '')} (`jfs_pg` 库) | {srv.get('redis_version', '')} (`AOF everysec`) |"
     )
+    if bowl_cfg.get("deploy_profile"):
+        lines.append(
+            f"| **部署编排与可观测性栈** | `{bowl_cfg.get('deploy_profile')}` · `{bowl_cfg.get('observability_stack', '')}` | systemd (`postgresql` + `jfs-s3`) | systemd (`redis-server` + `jfs-s3`) |"
+        )
     lines.append(
-        f"| **数据块存储 (Server 节点)** | 每分支 Pebble 元数据 + `blobs/<shard>/<blob_id>.blob` 1 MiB 块文件 (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
+        f"| **数据块存储 (Server 节点本地 NVMe SSD)** | 单盘 Pebble + `packs/<pack_id_hex16>.pack` `64 MiB` 封包文件 (`/var/lib/bowl/data`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-pg`) | rclone S3 (`http://{srv.get('private_ip', '')}:9001/jfs-redis`) |"
     )
     lines.append(
         f"| **FUSE 内核属性/目录项缓存** | `entry=1.0s, attr=1.0s, direntry=1.0s` (生产默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) | `attr-cache=1s, entry-cache=1s, dir-entry-cache=1s` (默认) |"
     )
     lines.append(
-        f"| **回写缓存与持久化路径** | 1 MiB Write-Through 直通写（`writeback_cache=false`）+ `FOPEN_KEEP_CACHE` + `CAP_HANDLE_KILLPRIV` 负缓存；`pebble.NoSync` 异步 WAL + 后台 1 秒刷盘，Flush 不触发 Fsync RPC | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |"
+        f"| **回写缓存与持久化路径** | `WriteBehindCoordinator`（`4 MiB × 4` 并发写流水线 + 小块连续写聚合，`writeback_cache=false`）+ 客户端 `1+8` H2C 池 (`32M/8×64M`) / 服务端 `128M` 窗口 + 零分配编解码；Group Commit `pebble.NoSync` + `8 MiB` `SyncFileRange` 渐进回写 + Fsync 双层并行落盘屏障 | 客户端回写缓存 + 对象存储上传 | 客户端回写缓存 + 对象存储上传 |"
     )
     lines.append(
-        f"| **数据分片** | `1 MiB`（对齐 FUSE `MaxWrite`）不可变块文件 `blobs/<shard>/<blob_id>.blob`，整块直写、局部 CoW、删除即时 `os.Remove` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |"
+        f"| **数据分片** | `64 MiB` `.pack` Append-Only 封包 + `256 KiB` 逻辑块网格 + 连续块合并单次 `pread` + `AppendBlocks` 零冗余拷贝 + `64 MiB` 热块缓存 + `ExtendTail` | `4 MiB` block / `64 MiB` chunk (默认) | `4 MiB` block / `64 MiB` chunk (默认) |"
     )
     lines.append(
         f"| **访问时间策略 / 回收站** | `STORAGE_ATIME_MODE=noatime` | `--trash-days 0` (关闭回收站) | `--trash-days 0` (关闭回收站) |"
@@ -566,9 +620,14 @@ def render_report(summary: dict[str, Any]) -> str:
         frd = rd_fio.get(case_key, {})
 
         def fmt_lat(d: dict) -> str:
-            if not d:
+            if not d or d.get("lat_mean_ms") is None:
                 return "—"
-            return f"{d.get('lat_mean_ms', 0):.2f} / {d.get('lat_p95_ms', 0):.2f} / {d.get('lat_p99_ms', 0):.2f} ms"
+            mean_str = f"{d['lat_mean_ms']:.2f}"
+            p95_val = d.get("lat_p95_ms")
+            p99_val = d.get("lat_p99_ms")
+            p95_str = f"{p95_val:.2f}" if p95_val is not None else "N/A"
+            p99_str = f"{p99_val:.2f}" if p99_val is not None else "N/A"
+            return f"{mean_str} / {p95_str} / {p99_str} ms"
 
         lines.append(f"| **{case_label}** | `{fmt_lat(fb)}` | `{fmt_lat(fpg)}` | `{fmt_lat(frd)}` |")
     lines.append("")
@@ -602,7 +661,7 @@ def render_report(summary: dict[str, Any]) -> str:
 
     lines.append("### 5.2 4 进程 MPI 并发元数据压测（`mpirun -np 4 mdtest -b 3 -z 2 -I 20 -u`）")
     lines.append("")
-    lines.append("匹配 `ecs.c9i.xlarge` 的 4 vCPU 并发能力，开启 4 个 MPI 进程并发创建、查询、读取和删除各自独立目录树下的目录与文件（单位：`ops/sec`）：")
+    lines.append("匹配 `ecs.i5.xlarge` 的 4 vCPU 并发能力，开启 4 个 MPI 进程并发创建、查询、读取和删除各自独立目录树下的目录与文件（单位：`ops/sec`）：")
     lines.append("")
     lines.append("| 元数据操作 (`Operation`) | Bowl (Pebble) 4 并发 | JuiceFS (PG 16) 4 并发 | JuiceFS (Redis 7) 4 并发 | Bowl vs JFS(PG) | Bowl vs JFS(Redis) |")
     lines.append("| :--- | ---: | ---: | ---: | ---: | ---: |")
@@ -634,7 +693,7 @@ def render_report(summary: dict[str, Any]) -> str:
         if value is not None and other is not None:
             lines.append(f"- Bowl {label}：`{value:.2f} MiB/s`；同轮 JuiceFS(PG) 为 `{other:.2f} MiB/s`。")
     lines.append("")
-    lines.append("服务端顺序读写物理基线、请求大小与并发数见第 2、4 节。不同请求大小与持久化路径的吞吐不能直接解释为云盘利用率。")
+    lines.append("服务端本地 NVMe SSD 顺序读写与 4K IOPS 物理基线、请求大小与并发数见第 2、4 节。每个子测试前均执行 Client 与 Server 双端 `sync && echo 3 > /proc/sys/vm/drop_caches`（及清理 `/var/jfsCache`），且三组存储栈服务端进程按目标隔离启停。")
     lines.append("")
     bench_write = get_bench_val(b_bench, "Write big file")
     fio_write = get_fio_bw(b_fio, "seq_write_1job")
@@ -648,20 +707,31 @@ def render_report(summary: dict[str, Any]) -> str:
             + verdict
         )
         lines.append("")
-    lines.append("Bowl 的写入和同步路径使用 Pebble；本套件未测试整机断电恢复，吞吐结果不能证明断电后的数据完整性。各存储栈的缓存与持久化路径不同，性能数值应结合各自配置解读。")
+    lines.append("Bowl 的写入和同步路径使用单盘 `StoreActor` Pebble 与 `64 MiB` `.pack` 封包文件；本套件未测试整机断电恢复，吞吐结果不能证明断电后的数据完整性。各存储栈的缓存与持久化路径不同，性能数值应结合各自配置解读。")
     lines.append("")
-    lines.append("`juicefs bench` 内部清理内核页缓存，但不清理 JuiceFS 客户端本地块缓存；同轮小文件与大文件读取包含缓存行为差异。套件之间的缓存清理不能改变这一边界。")
+    lines.append("`juicefs bench` 内部清理客户端内核页缓存，但不清理 JuiceFS 客户端本地块缓存与服务端页缓存；同轮小文件与大文件读取包含缓存行为差异。套件之间的双端缓存清理不能改变 `juicefs bench` 单次运行内部这一边界。")
     lines.append("")
     lines.append("`mdtest` 4 进程的属性查询包含 FUSE 缓存命中。该测试与单进程树测试规模不同，不能仅按两者吞吐比推导并发扩展能力。")
     lines.append("")
 
-    lines.append('ADR-0029 同时改变服务端存储和客户端状态管理；单轮数据不能将变化归因于其中某一项。')
+    lines.append('ADR-0030 / ADR-0031 / ADR-0032 同时改变控制面协议、单盘 Actor 并发模型与 64 MiB Pack 数据层；单轮数据不能将变化归因于其中某一项。')
     lines.append("")
 
-    # Section 7: Cloud Resource Audit
+    telem_overview = summary.get("telemetry_overview") or {}
+    if telem_overview:
+        lines.extend(
+            render_report_telemetry_section(
+                telem_overview, "## 7. 生产可观测性与慢路径遥测诊断（`deploy/prod` Telemetry）"
+            )
+        )
+        audit_sec_no = 8
+    else:
+        audit_sec_no = 7
+
+    # Cloud Resource Audit
     lines.append("---")
     lines.append("")
-    lines.append("## 7. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
+    lines.append(f"## {audit_sec_no}. 阿里云按量资源生命周期与销毁审计（Cloud Resource Audit）")
     lines.append("")
     lines.append("| 审计项 | 记录值 |")
     lines.append("| :--- | :--- |")

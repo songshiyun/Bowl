@@ -1,0 +1,207 @@
+name: bowl
+
+services:
+  # ==============================================================================
+  # Database Service (PostgreSQL 18)
+  # ==============================================================================
+  postgres:
+    image: postgres:18-alpine
+    container_name: bowl-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-bowl}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-9432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-bowl}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Database Migration Service (Goose)
+  # ==============================================================================
+  migration:
+    image: bowl-storage-migration:latest
+    build:
+      context: ../..
+      dockerfile: services/storage/Dockerfile.migration
+    container_name: bowl-storage-migration
+    command:
+      - "-dir"
+      - "/migrations"
+      - "postgres"
+      - "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-bowl}?sslmode=disable"
+      - "up"
+    volumes:
+      - ../../services/storage/db/migrations:/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Storage Service (ConnectRPC)
+  # ==============================================================================
+  storage-service:
+    image: ${STORAGE_IMAGE_NAME:-bowl-storage}:${TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: services/storage/Dockerfile
+    container_name: bowl-storage-service
+    restart: unless-stopped
+    env_file:
+      - ./storage.env
+    environment:
+      DB_DSN: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-bowl}?sslmode=disable"
+    ports:
+      - "${STORAGE_PORT:-9000}:9000"
+      - "127.0.0.1:${STORAGE_ADMIN_PORT:-9090}:9090"
+    volumes:
+      - storage_data:/var/lib/bowl/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9000 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+      jaeger:
+        condition: service_started
+      alloy:
+        condition: service_started
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Tracing Backend (Jaeger — http://127.0.0.1:9686)
+  # ==============================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: bowl-jaeger
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-9686}:16686"
+      - "127.0.0.1:${JAEGER_OTLP_GRPC_PORT:-9317}:4317"
+      - "127.0.0.1:${JAEGER_OTLP_HTTP_PORT:-9318}:4318"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Metrics Backend (Prometheus — http://127.0.0.1:9091)
+  # ==============================================================================
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: bowl-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      storage-service:
+        condition: service_healthy
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Logs Backend (Loki — http://127.0.0.1:9310)
+  # ==============================================================================
+  loki:
+    image: grafana/loki:3.4.2
+    container_name: bowl-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-9310}:3100"
+    volumes:
+      - ./loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki_data:/loki
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Telemetry Collector (Grafana Alloy — http://127.0.0.1:9123)
+  # 1) 采集 bowl 容器日志与 pebble_events.log 推送至 Loki
+  # 2) OTLP 接收链路追踪并执行 >10ms 慢请求 / ERROR Span 尾部保留后推送至 Jaeger
+  # ==============================================================================
+  alloy:
+    image: grafana/alloy:v1.7.1
+    container_name: bowl-alloy
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "--storage.path=/var/lib/alloy/data"
+      - "/etc/alloy/config.alloy"
+    ports:
+      - "127.0.0.1:${ALLOY_PORT:-9123}:12345"
+      - "127.0.0.1:${ALLOY_OTLP_GRPC_PORT:-9417}:4317"
+      - "127.0.0.1:${ALLOY_OTLP_HTTP_PORT:-9418}:4318"
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - storage_data:/var/lib/bowl/data:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
+      - jaeger
+    networks:
+      - bowl-net
+
+  # ==============================================================================
+  # Unified Observability UI (Grafana — http://127.0.0.1:9300)
+  # 预置 Prometheus + Loki + Jaeger 数据源与 TraceID 互跳
+  # ==============================================================================
+  grafana:
+    image: grafana/grafana:11.5.2
+    container_name: bowl-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-9300}:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+    networks:
+      - bowl-net
+
+volumes:
+  postgres_data:
+  storage_data:
+  prometheus_data:
+  loki_data:
+  alloy_data:
+  grafana_data:
+
+networks:
+  bowl-net:
+    driver: bridge

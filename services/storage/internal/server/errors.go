@@ -1,11 +1,17 @@
+// Package server 实现 StorageService 的 ConnectRPC 处理器、拦截器与错误转换。
 package server
 
 import (
+	"context"
+	"errors"
+
+	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/status"
 
-	"github.com/starsrc/Aether/pkg/serverx"
-	"github.com/starsrc/bowl/services/storage/internal/meta"
+	"github.com/starsrc/pkg/serverx"
+
+	"github.com/starsrc/bowl/services/storage/internal/control"
 )
 
 // statusToConnectError 将 gRPC *status.Status（含 google.rpc.ErrorInfo 等 Details）无损转换为 *connect.Error。
@@ -20,12 +26,19 @@ func StatusToConnectError(st *status.Status) error {
 }
 
 // toConnectError 将任意错误（领域哨兵错误、上下文取消/超时或未知内部错误）转换为对应的 *connect.Error。
-// 若 err == nil 返回 nil；其余通过 meta.ToStatus(err) 获得 *status.Status 并委托给 StatusToConnectError。
+// 若 err == nil 返回 nil；上下文取消/超时直接保留原始错误链包装为 *connect.Error；
+// 其余通过 control.ToStatus(err) 获得 *status.Status 并委托给 StatusToConnectError。
 func toConnectError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return StatusToConnectError(meta.ToStatus(err))
+	if errors.Is(err, context.Canceled) {
+		return connect.NewError(connect.CodeCanceled, err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, err)
+	}
+	return StatusToConnectError(control.ToStatus(err))
 }
 
 // ToConnectError 是 toConnectError 的导出版本，供外部包或后续 RPC 实现调用。

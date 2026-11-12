@@ -17,16 +17,22 @@ const (
 )
 
 // SetAttr 实现按需部分更新 Inode 属性或截断文件空间，对应 Linux FUSE FUSE_SETATTR 协议。
-func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) fuse.Status {
-	if status := fs.CheckWritable(); status != fuse.OK {
+func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpSetAttr)
+	defer func() { endSpan(status) }()
+
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
 	}
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
 	epoch := fs.cache.version()
-	if _, local, status := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
-		h, _, st := fs.checkedHandle(input.NodeId, fh, false)
+	if _, local, localSt := fs.tmpMgr.SetAttr(input.NodeId, input, func(fh uint64, needWrite bool) fuse.Status {
+		h, st := fs.checkedHandle(input.NodeId, fh, false)
 		if st != fuse.OK {
 			return st
 		}
@@ -36,7 +42,7 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 		return fuse.OK
 	}, &out.Attr); local {
 		out.SetTimeout(0)
-		return status
+		return localSt
 	}
 	ino, status := fs.ToServerIno(input.NodeId)
 	if status != fuse.OK {
@@ -44,7 +50,9 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	}
 
 	req := &storagev1.SetAttrRequest{
-		Ino: ino, SessionId: fs.currentSession(),
+		Ino:    ino,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}
 	hasUpdate := false
 	valid := input.Valid
@@ -102,26 +110,26 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 	// 当 FATTR_FH 置位时校验本地句柄；服务端请求不携带旧版句柄。
 	if (valid & fuse.FATTR_FH) != 0 {
-		h, sid, st := fs.checkedHandle(input.NodeId, input.Fh, false)
+		h, st := fs.checkedHandle(input.NodeId, input.Fh, false)
 		if st != fuse.OK {
 			return st
 		}
 		if valid&fuse.FATTR_SIZE != 0 && !h.CanWrite() {
 			return fuse.EBADF
 		}
-		req.SessionId = optionalSession(sid)
 	}
 
-	ctx, cancelFunc := fs.RPCContext(cancel)
-	defer cancelFunc()
-
 	if !hasUpdate {
-		cached, st := fs.getInode(cancel, input.NodeId)
+		cached, st := fs.getInodeWithContext(opCtx, cancel, input.NodeId)
 		if st == fuse.OK {
 			fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
 		}
 		return st
 	}
+
+	fs.writeBehind.ResetInodeStream(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
+	defer cancelFunc()
 
 	fs.readAhead.InvalidateInode(ino)
 	defer fs.readAhead.InvalidateInode(ino)
@@ -129,9 +137,6 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 	resp, err := fs.client.SetAttr(ctx, connect.NewRequest(req))
 	if err != nil {
 		fs.cache.invalidateInode(input.NodeId)
-		if req.SessionId != nil {
-			return fs.ToStatusWithSession(err, cancel)
-		}
 		return fs.ToStatus(err, cancel)
 	}
 
@@ -144,11 +149,17 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 }
 
 // Fallocate 实现文件空间预分配与稀疏空洞打洞，对应 Linux FUSE FUSE_FALLOCATE 协议。
-func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse.Status {
+func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) (status fuse.Status) {
+	opCtx, endSpan := fs.startFuseOp(OpFallocate)
+	defer func() { endSpan(status) }()
+
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
-	if status := fs.CheckWritable(); status != fuse.OK {
+	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
+	}
+	if fs.isVirtualStatsIno(input.NodeId) {
+		return fuse.EACCES
 	}
 
 	ino, status := fs.ToServerIno(input.NodeId)
@@ -156,7 +167,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return status
 	}
 
-	handle, sid, status := fs.checkedHandle(input.NodeId, input.Fh, false)
+	handle, status := fs.checkedHandle(input.NodeId, input.Fh, false)
 	if status != fuse.OK {
 		return status
 	}
@@ -172,22 +183,24 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 		return fuse.Status(syscall.EOPNOTSUPP)
 	}
 
-	if local, status := fs.tmpMgr.Allocate(input.NodeId, input.Offset, input.Length, input.Mode); local {
-		if status == fuse.OK {
+	if local, localSt := fs.tmpMgr.Allocate(input.NodeId, input.Offset, input.Length, input.Mode); local {
+		if localSt == fuse.OK {
 			fs.caps.markAbsent(input.NodeId)
 		}
-		return status
+		return localSt
 	}
-	ctx, cancelFunc := fs.RPCContext(cancel)
+	fs.writeBehind.ResetInodeStream(opCtx, ino)
+	ctx, cancelFunc := fs.RPCContextFrom(opCtx, cancel)
 	defer cancelFunc()
 
 	req := &storagev1.FallocateRequest{
-		Ino:       ino,
-		Fh:        0,
-		Offset:    input.Offset,
-		Length:    input.Length,
-		Mode:      input.Mode,
-		SessionId: optionalSession(sid),
+		Ino:    ino,
+		Fh:     0,
+		Offset: input.Offset,
+		Length: input.Length,
+		Mode:   input.Mode,
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
 	}
 
 	fs.readAhead.InvalidateInode(ino)
@@ -196,7 +209,7 @@ func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) fuse
 	_, err := fs.client.Fallocate(ctx, connect.NewRequest(req))
 	fs.cache.invalidateInode(input.NodeId)
 	if err != nil {
-		return fs.ToStatusWithSession(err, cancel)
+		return fs.ToStatus(err, cancel)
 	}
 	fs.caps.markAbsent(input.NodeId)
 

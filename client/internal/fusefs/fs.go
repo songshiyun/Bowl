@@ -1,3 +1,4 @@
+// Package fusefs 实现基于 go-fuse RawFileSystem 的 Bowl 用户态文件系统适配层。
 package fusefs
 
 import (
@@ -5,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -12,9 +14,14 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
-	"github.com/starsrc/bowl/client/internal/session"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -29,28 +36,49 @@ const DefaultRPCTimeout = 30 * time.Second
 // 严禁置 0：置 0 会使内核在连续 write() 前重新发起 GetAttr RPC 核对文件尺寸。
 const DefaultWriteAttrTimeoutSeconds = 1.0
 
+// DefaultOrphanBacklogThreshold 是触发孤儿回收积压告警的默认队列深度阈值。
+const DefaultOrphanBacklogThreshold = 16
+
+const orphanWarnMinInterval = time.Second
+
+var (
+	noopSpanInstance = noop.Span{}
+	noopEndFuseOp    = func(fuse.Status) {}
+	fuseSpanNames    = func() [OpCount]string {
+		var out [OpCount]string
+		for op := range FuseOp(OpCount) {
+			out[op] = "fuse." + op.String()
+		}
+		return out
+	}()
+)
+
 // 确保 RawFS 完整实现 fuse.RawFileSystem 接口。
 var _ fuse.RawFileSystem = (*RawFS)(nil)
 
 // Config 包含 FUSE 文件系统运行所需的所有静态与动态配置。
 type Config struct {
 	DiskID                 string
+	Epoch                  uint64
 	RootIno                uint64
+	RootInode              *storagev1.Inode
+	EntryTimeoutSeconds    float64
+	AttrTimeoutSeconds     float64
 	ReadOnly               bool
 	DirectIO               bool
 	AllowOther             bool
 	Debug                  bool
-	RPCTimeout             time.Duration
-	ReleaseRetryInterval   time.Duration
-	NamespaceCacheCapacity int
-	BranchName             string
-	CommitID               string
-	OnUnmount              func()
+	EnableStatsFile        bool
+	OrphanBacklogThreshold int
+	Logger                 *slog.Logger
+	Metrics                *Metrics
+	TracerProvider         trace.TracerProvider
 }
 
 type reclaimRetryItem struct {
-	ino       uint64
-	sessionID uint64
+	ino      uint64
+	spanCtx  trace.SpanContext
+	attempts int
 }
 
 // RawFS 封装底层 FUSE 请求处理，桥接 Linux 内核 VFS 与 StorageService RPC。
@@ -67,12 +95,15 @@ type RawFS struct {
 	// stateMu 仅保护本地内存态的微秒级读写，绝不包裹跨机 RPC。
 	stateMu        sync.Mutex
 	dirtyInodes    map[uint64]struct{}
-	orphanSessions map[uint64]uint64
+	orphanInodes   map[uint64]struct{}
+	orphanSpans    map[uint64]trace.SpanContext
+	statsSnapshots map[uint64][]byte
 	// inodeLocks 按 Inode 粒度串行化 O_APPEND 定序与 Unlink/Release 孤儿标记。
 	inodeLocks inodeLocks
 	tmpMgr     *TmpFileManager
-	sessions   *session.Manager
 	cfg        Config
+	metrics    *Metrics
+	tracer     trace.Tracer
 	nextReqID  atomic.Uint64
 
 	releaseMu       sync.Mutex
@@ -83,59 +114,234 @@ type RawFS struct {
 	releaseStarted  bool
 	releaseClosed   bool
 
-	readAhead *ReadAheadCoordinator
+	lastOrphanWarnUnixNano atomic.Int64
+	fuseSysfsDir           atomic.Pointer[string]
+
+	readAhead   *ReadAheadCoordinator
+	writeBehind *WriteBehindCoordinator
 }
 
 // NewRawFS 创建并初始化 RawFS 实例。
-func NewRawFS(client storagev1connect.StorageServiceClient, sessions *session.Manager, cfg Config) *RawFS {
-	if cfg.RPCTimeout <= 0 {
-		cfg.RPCTimeout = DefaultRPCTimeout
+//
+//nolint:gocritic // Config 按值传入，RawFS 持有独立副本，避免调用方后续突变
+func NewRawFS(client storagev1connect.StorageServiceClient, cfg Config) *RawFS {
+	if cfg.RootIno == 0 && cfg.RootInode != nil {
+		cfg.RootIno = cfg.RootInode.GetIno()
 	}
-	if cfg.ReleaseRetryInterval <= 0 {
-		cfg.ReleaseRetryInterval = DefaultReleaseRetryInterval
+	if cfg.TracerProvider != nil {
+		if rv := reflect.ValueOf(cfg.TracerProvider); rv.Kind() == reflect.Pointer && rv.IsNil() {
+			cfg.TracerProvider = nil
+		}
+	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = NewMetrics()
 	}
 	releaseCtx, releaseCancel := context.WithCancel(context.Background())
 	fs := &RawFS{
 		RawFileSystem:  fuse.NewDefaultRawFileSystem(),
 		client:         client,
 		locks:          NewLockTable(),
-		cache:          NewNamespaceCache(cfg.NamespaceCacheCapacity),
+		cache:          NewNamespaceCache(DefaultNamespaceCacheCapacity),
 		caps:           newCapabilityCache(),
 		dirtyInodes:    make(map[uint64]struct{}),
+		orphanInodes:   make(map[uint64]struct{}),
+		orphanSpans:    make(map[uint64]trace.SpanContext),
+		statsSnapshots: make(map[uint64][]byte),
 		tmpMgr:         NewTmpFileManager(cfg.RootIno),
-		orphanSessions: make(map[uint64]uint64),
-		sessions:       sessions,
 		cfg:            cfg,
+		metrics:        metrics,
 		releaseCtx:     releaseCtx,
 		releaseCancel:  releaseCancel,
 		readAhead:      NewReadAheadCoordinator(),
 	}
-	fs.handles = NewHandleTable(fs.reclaimOrphan)
-	if sessions != nil {
-		sessions.RegisterOnSessionExpired(fs.onSessionExpired)
+	fs.cache.configure(fuse.FUSE_ROOT_ID, cfg.EntryTimeoutSeconds, cfg.AttrTimeoutSeconds)
+	if cfg.RootInode != nil && cfg.RootInode.GetAttr() != nil {
+		fs.cache.putInode(fuse.FUSE_ROOT_ID, cfg.RootInode, cfg.EntryTimeoutSeconds, cfg.AttrTimeoutSeconds)
 	}
+	var onStage func(nodeID, cacheEpoch, endOffset uint64, ts *timestamppb.Timestamp)
+	if cfg.AttrTimeoutSeconds > 0 {
+		onStage = func(nodeID, cacheEpoch, endOffset uint64, ts *timestamppb.Timestamp) {
+			fs.cache.stageWriteInodeAt(cacheEpoch, nodeID, endOffset, ts)
+		}
+	}
+	fs.writeBehind = NewWriteBehindCoordinator(
+		func(ctx context.Context, ino, offset uint64, data []byte) (uint32, *storagev1.Inode, error) {
+			if fs.client == nil {
+				return 0, nil, syscall.EIO
+			}
+			reqCtx := rpc.WithRequestID(ctx, fs.NextRequestID())
+			resp, err := fs.client.Write(reqCtx, connect.NewRequest(&storagev1.WriteRequest{
+				Ino:    ino,
+				Fh:     0,
+				Offset: offset,
+				Data:   data,
+				DiskId: fs.cfg.DiskID,
+				Epoch:  fs.cfg.Epoch,
+			}))
+			if err != nil {
+				return 0, nil, err
+			}
+			return resp.Msg.GetSize(), resp.Msg.GetInode(), nil
+		},
+		WriteBehindHooks{
+			OnStage: onStage,
+			OnCommit: func(nodeID, ino, cacheEpoch uint64, inode *storagev1.Inode, minSize uint64, refreshAttr bool) {
+				fs.markDirty(ino)
+				if refreshAttr && inode != nil {
+					fs.cache.refreshInodeFromWriteAt(cacheEpoch, nodeID, inode, minSize, DefaultWriteAttrTimeoutSeconds)
+				}
+				fs.caps.markAbsent(nodeID)
+			},
+			OnError: func(nodeID uint64) {
+				fs.cache.invalidateInode(nodeID)
+			},
+		},
+	)
+	fs.handles = NewHandleTableWithContext(fs.reclaimOrphan)
+	fs.bindMetrics(metrics)
+	fs.bindTracerProvider(fs.tracerProvider())
 	return fs
 }
 
-// onSessionExpired 清理旧会话的目录缓存、预读缓存与孤儿回收重试项。
-func (fs *RawFS) onSessionExpired(expiredSID uint64) {
-	if fs == nil {
+func (fs *RawFS) bindMetrics(m *Metrics) {
+	if m == nil {
 		return
 	}
+	fs.metrics = m
+	m.bindProvider(fs)
+	fs.locks.bindMetrics(m)
+	fs.cache.bindMetrics(m)
+	fs.caps.bindMetrics(m)
+	fs.tmpMgr.bindMetrics(m)
+	fs.readAhead.bindMetrics(m)
+	fs.writeBehind.bindMetrics(m)
+	fs.inodeLocks.bindMetrics(m)
+}
 
-	fs.cache.clear()
-	fs.caps.reset()
-	fs.readAhead.InvalidateSession(expiredSID)
-
-	fs.releaseMu.Lock()
-	remaining := fs.releaseQueue[:0]
-	for _, item := range fs.releaseQueue {
-		if expiredSID != 0 && item.sessionID != expiredSID {
-			remaining = append(remaining, item)
-		}
+func (fs *RawFS) tracerProvider() trace.TracerProvider {
+	if fs.cfg.TracerProvider != nil {
+		return fs.cfg.TracerProvider
 	}
-	fs.releaseQueue = remaining
-	fs.releaseMu.Unlock()
+	return noop.NewTracerProvider()
+}
+
+func (fs *RawFS) bindTracerProvider(tp trace.TracerProvider) {
+	if tp == nil {
+		fs.tracer = nil
+	} else if _, isNoop := tp.(noop.TracerProvider); isNoop {
+		fs.tracer = nil
+	} else {
+		fs.tracer = tp.Tracer("bowl/client/fusefs")
+	}
+	fs.readAhead.bindTracerProvider(tp)
+	fs.writeBehind.bindTracerProvider(tp)
+}
+
+// BindMountpoint 在 FUSE 挂载完成后解析并绑定对应的 /sys/fs/fuse/connections/<dev> 目录。
+func (fs *RawFS) BindMountpoint(mountpoint string) {
+	if fs == nil || mountpoint == "" {
+		return
+	}
+	if sysfsDir := resolveFuseSysfsConnectionDir(mountpoint); sysfsDir != "" {
+		fs.setFuseSysfsDir(sysfsDir)
+	}
+}
+
+func (fs *RawFS) setFuseSysfsDir(dir string) {
+	if dir == "" {
+		fs.fuseSysfsDir.Store(nil)
+		return
+	}
+	copied := dir
+	fs.fuseSysfsDir.Store(&copied)
+}
+
+// Metrics 返回绑定的统一指标数据源。
+func (fs *RawFS) Metrics() *Metrics {
+	return fs.metrics
+}
+
+// Collector 返回可直接注册至自定义 prometheus.Registerer 的指标收集器。
+func (fs *RawFS) Collector() prometheus.Collector {
+	return fs.metrics
+}
+
+// Snapshot 抓取当前时刻客户端 FUSE 41 操作与 9 大子系统的结构化一致性快照。
+func (fs *RawFS) Snapshot() Snapshot {
+	return fs.metrics.Snapshot()
+}
+
+func (fs *RawFS) collectSubsystemGauges() subsystemGauges {
+	nsEntries, nsUsed, nsCap := fs.cache.stats()
+	openFiles, openDirs := fs.handles.stats()
+	tmpActive := fs.tmpMgr.activeLocalFiles()
+	pages := max(int64(0), fs.metrics.tmpResidentPages.Load())
+
+	fs.stateMu.Lock()
+	dirtyCount := len(fs.dirtyInodes)
+	orphanCount := len(fs.orphanInodes)
+	fs.stateMu.Unlock()
+
+	var fuseWaiting, fuseCongestion int
+	if dirPtr := fs.fuseSysfsDir.Load(); dirPtr != nil && *dirPtr != "" {
+		fuseWaiting, fuseCongestion = readFuseConnectionGauges(*dirPtr)
+	}
+
+	return subsystemGauges{
+		nsEntries:               nsEntries,
+		nsUsedWeight:            nsUsed,
+		nsCapacity:              nsCap,
+		capEntries:              fs.caps.count(),
+		wbPendingSlots:          fs.writeBehind.PendingSlots(),
+		tmpActiveFiles:          tmpActive,
+		tmpResidentByte:         uint64(pages) * tmpSparsePageSize,
+		openFiles:               openFiles,
+		openDirs:                openDirs,
+		activeLocks:             fs.locks.activeLocks(),
+		inodeLockActive:         fs.inodeLocks.activeEntries(),
+		dirtyInodes:             dirtyCount,
+		orphanInodes:            orphanCount,
+		releaseQueue:            fs.releaseQueueDepth(),
+		fuseWaiting:             fuseWaiting,
+		fuseCongestionThreshold: fuseCongestion,
+	}
+}
+
+func (fs *RawFS) logger() *slog.Logger {
+	if fs.cfg.Logger != nil {
+		return fs.cfg.Logger
+	}
+	return slog.Default()
+}
+
+func (fs *RawFS) startFuseOp(op FuseOp) (opCtx context.Context, endSpan func(fuse.Status)) {
+	if fs.tracer == nil {
+		return context.Background(), noopEndFuseOp
+	}
+	ctx, span := fs.tracer.Start(context.Background(), fuseSpanNames[op])
+	if !span.IsRecording() {
+		return ctx, noopEndFuseOp
+	}
+	return ctx, func(st fuse.Status) {
+		span.SetAttributes(attribute.String("fuse.op", op.String()))
+		if st != fuse.OK {
+			errStr := errnoName(st)
+			span.SetAttributes(
+				attribute.Int("fuse.status_code", int(st)),
+				attribute.String("fuse.errno", errStr),
+			)
+			if st != fuse.ENOENT && st != fuse.Status(syscall.ENODATA) {
+				span.SetStatus(codes.Error, errStr)
+			}
+		}
+		span.End()
+	}
+}
+
+// Config 返回当前 RawFS 绑定的静态与握手配置副本。
+func (fs *RawFS) Config() Config {
+	return fs.cfg
 }
 
 // ToServerIno 将内核传入的 Inode 映射为服务端持久化 Inode。
@@ -158,13 +364,18 @@ func (fs *RawFS) CheckWritable() fuse.Status {
 	return fuse.OK
 }
 
-// RPCContext 包装内核 cancel 信号通道与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
+// RPCContext 包装内核 cancel 信号通道、单调递增 RequestID 与请求超时为派生 context，支持 FUSE_INTERRUPT 及时取消与 30s 超时保护。
 func (fs *RawFS) RPCContext(cancel <-chan struct{}) (context.Context, context.CancelFunc) {
-	timeout := fs.cfg.RPCTimeout
-	if timeout <= 0 {
-		timeout = DefaultRPCTimeout
+	return fs.RPCContextFrom(context.Background(), cancel)
+}
+
+// RPCContextFrom 基于指定父 Context 注入唯一 RequestID、30s 超时预算与可选 FUSE cancel 通道，确保跨阶段 RPC 不断链。
+func (fs *RawFS) RPCContextFrom(parent context.Context, cancel <-chan struct{}) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
 	}
-	baseCtx, cancelTimeout := context.WithTimeout(context.Background(), timeout)
+	reqCtx := rpc.WithRequestID(parent, fs.NextRequestID())
+	baseCtx, cancelTimeout := context.WithTimeout(reqCtx, DefaultRPCTimeout)
 	ctx, cancelChan := rpc.ContextWithCancelChan(baseCtx, cancel)
 	return ctx, func() {
 		cancelChan()
@@ -181,77 +392,25 @@ func (fs *RawFS) ToStatus(err error, cancel <-chan struct{}) fuse.Status {
 	return fuse.Status(errno)
 }
 
-// isServerEBADF 判断服务端返回的错误是否表示句柄或会话已失效（EBADF / FailedPrecondition）。
-func isServerEBADF(err error) bool {
-	if err == nil {
-		return false
-	}
-	if rpc.MapError(err) == syscall.EBADF {
-		return true
-	}
-	var connectErr *connect.Error
-	return errors.As(err, &connectErr) && connectErr.Code() == connect.CodeFailedPrecondition
-}
-
-// ToStatusWithSession 将携带会话的 ConnectRPC 错误解码为 fuse.Status；
-// 若服务端返回 EBADF / FailedPrecondition，立即按需唤醒后台 renewLoop 发起续约/轮换探测。
-func (fs *RawFS) ToStatusWithSession(err error, cancel <-chan struct{}) fuse.Status {
-	if err == nil {
-		return fuse.OK
-	}
-	if isServerEBADF(err) && fs.sessions != nil {
-		fs.sessions.TriggerRenew()
-	}
-	errno := rpc.MapErrorWithCancel(err, cancel)
-	return fuse.Status(errno)
-}
-
-// ResolveHandle 校验本地句柄及其关联会话。
-func (fs *RawFS) ResolveHandle(fh uint64) (uint64, fuse.Status) {
-	if _, ok := fs.handles.Get(fh); !ok {
-		return 0, fuse.EBADF
-	}
-	if fs.sessions == nil {
-		return 0, fuse.OK
-	}
-	sid, err := fs.sessions.ResolveHandleSession(fh)
-	if err != nil {
-		return 0, fuse.EBADF
-	}
-	return sid, fuse.OK
-}
-
-func (fs *RawFS) checkedHandle(ino, fh uint64, dir bool) (FileHandle, uint64, fuse.Status) {
+func (fs *RawFS) checkedHandle(ino, fh uint64, dir bool) (FileHandle, fuse.Status) {
 	h, ok := fs.handles.Get(fh)
 	if !ok || h.Ino != ino || h.IsDir != dir {
-		return FileHandle{}, 0, fuse.EBADF
+		return FileHandle{}, fuse.EBADF
 	}
-	sid, status := fs.ResolveHandle(fh)
-	return h, sid, status
-}
-
-func optionalSession(sid uint64) *uint64 {
-	if sid == 0 {
-		return nil
-	}
-	return &sid
-}
-
-func (fs *RawFS) currentSession() *uint64 {
-	if fs.sessions == nil {
-		return nil
-	}
-	return optionalSession(fs.sessions.CurrentSessionID())
+	return h, fuse.OK
 }
 
 func (fs *RawFS) openHandle(ino uint64, flags uint32, dir bool) (uint64, fuse.Status) {
 	fh, err := fs.handles.Open(ino, flags, dir)
 	if err != nil {
-		return 0, fuse.Status(err.(syscall.Errno))
+		if errno, ok := errors.AsType[syscall.Errno](err); ok {
+			return 0, fuse.Status(errno)
+		}
+		return 0, fuse.EIO
 	}
 	fs.locks.RegisterHandle(fh, flags)
-	if fs.sessions != nil {
-		fs.sessions.BindHandle(fh, fs.sessions.CurrentSessionID())
+	if !dir && ino != VirtualStatsIno {
+		fs.writeBehind.RegisterHandle(fh)
 	}
 	return fh, fuse.OK
 }
@@ -269,15 +428,26 @@ func (fs *RawFS) NextRequestID() uint64 {
 
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
+	opCtx, endSpan := fs.startFuseOp(OpOnUnmount)
+	defer endSpan(fuse.OK)
+
 	fs.locks.Close()
-	// 排他锁等待所有在途请求释放读锁，确保卸载前脏节点全部排空。
+	// 排他锁等待所有在途请求释放读锁，先排空异步写缓冲确保 dirtyInodes 完整，再逐一同步落盘。
 	fs.lifecycleMu.Lock()
+	fs.writeBehind.Clear(opCtx)
 	for _, ino := range fs.takeDirtyInodes() {
-		ctx, done := fs.RPCContext(nil)
-		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{Ino: ino, SessionId: fs.currentSession()}))
+		ctx, done := fs.RPCContextFrom(opCtx, nil)
+		_, err := fs.client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
+			Ino:    ino,
+			DiskId: fs.cfg.DiskID,
+			Epoch:  fs.cfg.Epoch,
+		}))
 		done()
 		if err != nil && connect.CodeOf(err) != connect.CodeUnimplemented {
-			slog.Warn("卸载时同步文件失败", "ino", ino, "error", err)
+			fs.metrics.incDirtyFlushError()
+			fs.logger().WarnContext(ctx, "unmount_fsync_failed", "ino", ino, "error", err)
+		} else {
+			fs.metrics.incDirtyFlushOK()
 		}
 	}
 	fs.handles.clear()
@@ -285,14 +455,13 @@ func (fs *RawFS) OnUnmount() {
 	fs.caps.reset()
 	fs.tmpMgr.Clear()
 	fs.stateMu.Lock()
-	clear(fs.orphanSessions)
+	clear(fs.orphanInodes)
+	clear(fs.orphanSpans)
+	clear(fs.statsSnapshots)
 	fs.stateMu.Unlock()
 	fs.lifecycleMu.Unlock()
 	fs.readAhead.Clear()
 	fs.stopAndDrainReleaseQueue()
-	if fs.cfg.OnUnmount != nil {
-		fs.cfg.OnUnmount()
-	}
 }
 
 func shouldRetryReclaim(err error) bool {
@@ -314,11 +483,18 @@ func (fs *RawFS) markDirty(ino uint64) {
 	fs.stateMu.Unlock()
 }
 
-// clearDirty 在服务端确认落盘后清除脏标记。
+// clearDirty 在服务端确认落盘或节点已彻底删除后清除脏标记。
 func (fs *RawFS) clearDirty(ino uint64) {
 	fs.stateMu.Lock()
 	delete(fs.dirtyInodes, ino)
 	fs.stateMu.Unlock()
+}
+
+func (fs *RawFS) hasDirtyInodes() bool {
+	fs.stateMu.Lock()
+	has := len(fs.dirtyInodes) > 0
+	fs.stateMu.Unlock()
+	return has
 }
 
 // takeDirtyInodes 原子取走并清空全部脏节点，供卸载时排空。
@@ -333,63 +509,134 @@ func (fs *RawFS) takeDirtyInodes() []uint64 {
 	return inodes
 }
 
-// markOrphan 记录解链时使用的会话，避免轮换后误用新会话回收旧节点。
-func (fs *RawFS) markOrphan(ino uint64, sid *uint64) {
-	var sessionID uint64
-	if sid != nil {
-		sessionID = *sid
+func (fs *RawFS) orphanBacklogThreshold() int {
+	if fs.cfg.OrphanBacklogThreshold > 0 {
+		return fs.cfg.OrphanBacklogThreshold
 	}
-	fs.stateMu.Lock()
-	fs.orphanSessions[ino] = sessionID
-	fs.stateMu.Unlock()
-	fs.handles.MarkOrphan(ino)
+	return DefaultOrphanBacklogThreshold
 }
 
-func (fs *RawFS) reclaimOrphan(ino uint64) {
+func (fs *RawFS) releaseQueueDepth() int {
+	fs.releaseMu.Lock()
+	defer fs.releaseMu.Unlock()
+	return len(fs.releaseQueue)
+}
+
+func (fs *RawFS) warnOrphanBacklog(ctx context.Context, ino uint64, attempts, queueDepth int, err error) {
+	now := time.Now().UnixNano()
+	last := fs.lastOrphanWarnUnixNano.Load()
+	if last != 0 && now-last < int64(orphanWarnMinInterval) {
+		return
+	}
+	if !fs.lastOrphanWarnUnixNano.CompareAndSwap(last, now) {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	fs.logger().WarnContext(ctx, "orphan_reclaim_backlogged",
+		"ino", ino,
+		"attempts", attempts,
+		"queue_depth", queueDepth,
+		"error", err,
+	)
+}
+
+// markOrphanWithContext 记录待延迟回收的孤儿节点及其来源 SpanContext。
+func (fs *RawFS) markOrphanWithContext(ctx context.Context, ino uint64) {
+	sc := trace.SpanContextFromContext(ctx)
 	fs.stateMu.Lock()
-	sid := fs.orphanSessions[ino]
-	delete(fs.orphanSessions, ino)
+	fs.orphanInodes[ino] = struct{}{}
+	if sc.IsValid() {
+		fs.orphanSpans[ino] = sc
+	}
 	fs.stateMu.Unlock()
-	if fs.sessions != nil && (sid == 0 || sid != fs.sessions.CurrentSessionID()) {
+	fs.handles.MarkOrphanContext(ctx, ino)
+}
+
+func (fs *RawFS) reclaimOrphan(ctx context.Context, ino uint64) {
+	fs.stateMu.Lock()
+	_, exists := fs.orphanInodes[ino]
+	storedSC := fs.orphanSpans[ino]
+	delete(fs.orphanInodes, ino)
+	delete(fs.orphanSpans, ino)
+	fs.stateMu.Unlock()
+	if !exists {
 		return
 	}
 	serverIno, status := fs.ToServerIno(ino)
-	if status != fuse.OK || fs.client == nil {
+	if status != fuse.OK {
 		return
 	}
-	item := reclaimRetryItem{ino: serverIno, sessionID: sid}
-	if fs.tryReclaim(context.Background(), item) {
+	fs.clearDirty(serverIno)
+	if fs.client == nil {
 		return
 	}
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		sc = storedSC
+	}
+	item := reclaimRetryItem{ino: serverIno, spanCtx: sc}
+	if fs.tryReclaim(ctx, &item, false) {
+		return
+	}
+	item.attempts = 1
 	fs.releaseMu.Lock()
 	if fs.releaseClosed {
 		fs.releaseMu.Unlock()
 		return
 	}
 	fs.releaseQueue = append(fs.releaseQueue, item)
+	qDepth := len(fs.releaseQueue)
 	if !fs.releaseStarted {
 		fs.releaseStarted = true
 		fs.releaseLoopDone = make(chan struct{})
 		go fs.releaseRetryLoop()
 	}
 	fs.releaseMu.Unlock()
+	if qDepth >= fs.orphanBacklogThreshold() {
+		logCtx := ctx
+		if !trace.SpanContextFromContext(logCtx).IsValid() && sc.IsValid() {
+			logCtx = trace.ContextWithSpanContext(context.Background(), sc)
+		}
+		fs.warnOrphanBacklog(logCtx, serverIno, item.attempts, qDepth, nil)
+	}
 }
 
 // tryReclaim 返回 true 表示回收完成或错误不可重试。
-func (fs *RawFS) tryReclaim(parent context.Context, item reclaimRetryItem) bool {
-	ctx, cancel := context.WithTimeout(parent, fs.cfg.RPCTimeout)
+func (fs *RawFS) tryReclaim(parent context.Context, item *reclaimRetryItem, fromQueue bool) bool {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if !trace.SpanContextFromContext(parent).IsValid() && item.spanCtx.IsValid() {
+		parent = trace.ContextWithSpanContext(parent, item.spanCtx)
+	}
+	ctx, cancel := fs.RPCContextFrom(parent, nil)
 	defer cancel()
-	req := &storagev1.ReclaimOrphanRequest{Ino: item.ino, SessionId: item.sessionID, DiskId: fs.cfg.DiskID}
-	if fs.cfg.BranchName != "" {
-		req.BranchName = &fs.cfg.BranchName
+	req := &storagev1.ReclaimOrphanRequest{
+		DiskId: fs.cfg.DiskID,
+		Epoch:  fs.cfg.Epoch,
+		Ino:    item.ino,
 	}
 	_, err := fs.client.ReclaimOrphan(ctx, connect.NewRequest(req))
+	if err == nil {
+		fs.metrics.incOrphanReclaimOK()
+		if fromQueue {
+			fs.metrics.incAsyncReleaseOK()
+		}
+		return true
+	}
+	fs.metrics.incOrphanReclaimError()
+	if fromQueue {
+		fs.metrics.incAsyncReleaseError()
+	}
+	fs.warnOrphanBacklog(ctx, item.ino, item.attempts+1, fs.releaseQueueDepth(), err)
 	return !shouldRetryReclaim(err)
 }
 
 func (fs *RawFS) releaseRetryLoop() {
 	defer close(fs.releaseLoopDone)
-	ticker := time.NewTicker(fs.cfg.ReleaseRetryInterval)
+	ticker := time.NewTicker(DefaultReleaseRetryInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -413,13 +660,19 @@ func (fs *RawFS) drainReleaseQueueOnce(ctx context.Context) {
 			fs.releaseMu.Unlock()
 			continue
 		}
-		if fs.sessions != nil && item.sessionID != fs.sessions.CurrentSessionID() {
-			continue
-		}
-		if !fs.tryReclaim(ctx, item) {
+		if !fs.tryReclaim(ctx, &item, true) {
+			item.attempts++
 			fs.releaseMu.Lock()
 			fs.releaseQueue = append(fs.releaseQueue, item)
+			qDepth := len(fs.releaseQueue)
 			fs.releaseMu.Unlock()
+			if qDepth >= fs.orphanBacklogThreshold() {
+				logCtx := ctx
+				if !trace.SpanContextFromContext(logCtx).IsValid() && item.spanCtx.IsValid() {
+					logCtx = trace.ContextWithSpanContext(context.Background(), item.spanCtx)
+				}
+				fs.warnOrphanBacklog(logCtx, item.ino, item.attempts, qDepth, nil)
+			}
 		}
 	}
 }
@@ -495,6 +748,8 @@ func (fs *RawFS) FillAttrOut(out *fuse.AttrOut, ino *storagev1.Inode, attrTimeou
 }
 
 // BuildMountOptions 根据 Config 构造标准化的 fuse.MountOptions。
+//
+//nolint:gocritic // 既有公开签名按值接收 Config，本任务不变更对外契约
 func BuildMountOptions(cfg Config) *fuse.MountOptions {
 	options := []string{"default_permissions"}
 	if cfg.ReadOnly {

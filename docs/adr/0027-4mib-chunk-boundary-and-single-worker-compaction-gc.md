@@ -1,7 +1,7 @@
 # 0027. 逻辑分块（Chunk）收敛为 4 MiB 边界、满 64 条切片全量合并与后台单线程 Compaction/GC
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)、[ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 与 [ADR-0026](0026-page-cache-block-persistence-and-wal-only-fsync.md)
+已被 [ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 替代 (superseded by ADR-0031) — 数据分块与回收已演进为 `256 KiB` 逻辑 `Blob` 网格、`64 MiB` `.pack` 封包与 `CompactPacks` CAS 搬迁回收
 
 ## 背景
 Bowl 的整体存储架构以**公网对象存储（S3）**保障数据最终持久化安全，同时在存储服务端将**本地大容量 NVMe SSD 作为超级冷热缓存池**：热数据常驻本地 SSD 直接响应读写，后台异步与公网 S3 协同同步。

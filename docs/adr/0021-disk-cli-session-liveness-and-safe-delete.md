@@ -1,7 +1,7 @@
 # 0021. Disk 管理命令行（CLI）、挂载会话绑定磁盘与删除磁盘前的存活检查
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md) 与 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md)
+部分被 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 — `bowl disk` CRUD CLI 与客户端本机挂载点防误删检查保留，`WatchSession` 服务端存活探针已随无会话架构移除
 
 ## 背景
 在 [ADR-0020](0020-linux-fuse-client-passthrough-and-session-lifecycle.md) 完成客户端挂载与卸载命令（`bowl mount` / `bowl umount`）后，客户端预留的 `bowl disk` 命令还需要补齐创建、列表查询、查看详情、修改名称或容量、删除磁盘这五个管理命令。在设计这套命令行与服务端配合方式时，遇到四个实际问题：

@@ -1,0 +1,147 @@
+// =============================================================================
+// 1. 容器标准输出日志与 Pebble 落盘事件采集 -> Loki
+// =============================================================================
+discovery.docker "bowl" {
+	host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "bowl" {
+	targets = discovery.docker.bowl.targets
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = "bowl"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+}
+
+loki.source.docker "bowl" {
+	host       = "unix:///var/run/docker.sock"
+	targets    = discovery.relabel.bowl.output
+	forward_to = [loki.write.local.receiver]
+}
+
+local.file_match "pebble_events" {
+	path_targets = [{
+		__path__   = "/var/lib/bowl/data/disks/*/pebble_events.log",
+		service    = "storage-service",
+		component  = "pebble",
+		log_source = "pebble_events",
+	}]
+}
+
+loki.source.file "pebble_events" {
+	targets    = local.file_match.pebble_events.targets
+	forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+// =============================================================================
+// 2. OTLP 链路追踪接收 -> 慢请求 (>10ms) 与错误 Span 尾部保留 -> Jaeger
+// =============================================================================
+otelcol.receiver.otlp "default" {
+	grpc {
+		endpoint = "0.0.0.0:4317"
+	}
+
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		traces = [otelcol.processor.tail_sampling.default.input]
+	}
+}
+
+otelcol.processor.tail_sampling "default" {
+	decision_wait               = "2s"
+	num_traces                  = 50000
+	expected_new_traces_per_sec = 2000
+
+	policy {
+		name = "keep-errors"
+		type = "status_code"
+
+		status_code {
+			status_codes = ["ERROR"]
+		}
+	}
+
+	policy {
+		name = "keep-slow-10ms"
+		type = "latency"
+
+		latency {
+			threshold_ms = 10
+		}
+	}
+
+	policy {
+		name = "keep-priority-ops"
+		type = "ottl_condition"
+
+		ottl_condition {
+			error_mode = "ignore"
+			span       = [
+				"name == \"fuse.Fsync\"",
+				"name == \"fuse.FsyncDir\"",
+				"name == \"fuse.OnUnmount\"",
+				"name == \"write_behind.FlushChunk\"",
+				"name == \"read_ahead.Prefetch\"",
+				"name == \"control.OpenDiskActor\"",
+				"name == \"storage.v1.StorageService/Fsync\"",
+				"name == \"storage.v1.StorageService/FsyncDir\"",
+				"name == \"storage.v1.StorageService/MountDisk\"",
+			]
+		}
+	}
+
+	policy {
+		name = "baseline-probabilistic"
+		type = "probabilistic"
+
+		probabilistic {
+			sampling_percentage = 10
+		}
+	}
+
+	output {
+		traces = [otelcol.processor.batch.default.input]
+	}
+}
+
+otelcol.processor.batch "default" {
+	timeout         = "1s"
+	send_batch_size = 1024
+
+	output {
+		traces = [otelcol.exporter.otlp.jaeger.input]
+	}
+}
+
+otelcol.exporter.otlp "jaeger" {
+	client {
+		endpoint = "jaeger:4317"
+
+		tls {
+			insecure             = true
+			insecure_skip_verify = true
+		}
+	}
+}

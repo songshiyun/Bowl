@@ -1,7 +1,7 @@
 # 0026. 物理块服务端内核缓存级落盘（Page Cache）与 Fsync 仅刷数据库 WAL
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0019](0019-chunk-slice-block-nvme-data-layer.md)、[ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 与 [ADR-0024](0024-deferred-block-sync-and-fsync-durability-barrier.md)
+已被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md) 与 [ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 替代 (superseded by ADR-0030 and ADR-0031) — 现 `Fsync` 执行 Pebble WAL `Sync` 与脏 `.pack` `fdatasync` 双层并行持久化屏障
 
 ## 背景
 在完成 [ADR-0024](0024-deferred-block-sync-and-fsync-durability-barrier.md) 后，普通 `Write` 请求虽然改为先将物理 `Block` 写入服务端操作系统的页缓存（Page Cache）并以异步提交（`SET LOCAL synchronous_commit = off`）更新 PostgreSQL 元数据，但在最新 Benchmark 压测中仍然暴露出三个由物理块显式刷盘引发的性能瓶颈：

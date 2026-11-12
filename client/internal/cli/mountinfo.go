@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const mountInfoPath = "/proc/self/mountinfo"
+var mountInfoPath = "/proc/self/mountinfo"
 
 type mountPoint struct {
 	path   string
@@ -122,11 +122,11 @@ func IsMountPoint(path string) (bool, error) {
 // 挂载时 FUSE fsname 固定为 "bowl:<disk-id>"（位于 mountinfo "-" 分隔符后的第 2 个字段）。
 // 若处于挂载状态，返回其挂载点路径（unescaped & cleaned）、true, nil。
 // 若 /proc/self/mountinfo 不存在（如非 Linux 环境），返回 "", false, nil。
-func FindDiskMountpoint(diskID string) (string, bool, error) {
+func FindDiskMountpoint(diskID string) (mountpoint string, mounted bool, err error) {
 	points, err := readMountPoints()
 	if err != nil {
 		return "", false, err
 	}
-	mountpoint, mounted := findDiskMountpoint(points, diskID)
+	mountpoint, mounted = findDiskMountpoint(points, diskID)
 	return mountpoint, mounted, nil
 }
