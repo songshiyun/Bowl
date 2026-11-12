@@ -1,14 +1,123 @@
-#!/bin/sh
-# 提交前格式守门：只检查本次暂存的 Go 文件内容（排除 vendor），未格式化则拒绝提交。
-# 启用：git config core.hooksPath .githooks
-bad=""
-for f in $(git diff --cached --name-only --diff-filter=ACMR -- '*.go' | grep -Ev '(^|/)vendor/'); do
-  if [ -n "$(git show ":$f" | gofmt -s -l)" ]; then
-    bad="$bad
-  $f"
+#!/usr/bin/env bash
+# 提交前静态守门：按暂存区变更按需执行 buf lint 与各 Go 模块 golangci-lint（只读检查，不改写工作区文件）。
+# 启用：task hooks:install（即 git config core.hooksPath .githooks，主仓与所有 .worktrees 共享）
+
+set -euo pipefail
+
+# 补充 macOS/Linux GUI 客户端（IDE、Git 客户端）可能缺失的工具路径（置于末尾，优先尊重当前 PATH）
+export PATH="${PATH}:/usr/local/go/bin:/opt/homebrew/bin:/usr/local/bin:${HOME}/go/bin"
+if command -v go >/dev/null 2>&1; then
+  gopath_bin="$(go env GOPATH 2>/dev/null)/bin"
+  if [[ -n "${gopath_bin}" && ":${PATH}:" != *":${gopath_bin}:"* ]]; then
+    export PATH="${PATH}:${gopath_bin}"
   fi
-done
-if [ -n "$bad" ]; then
-  echo "pre-commit: 以下 Go 文件未通过 gofmt -s，请执行 gofmt -s -w 后重新暂存：$bad" >&2
-  exit 1
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "${repo_root}"
+
+run_buf=0
+run_root=0
+run_storage=0
+run_client=0
+lint_files=()
+
+while IFS= read -r f; do
+  [[ -z "${f}" ]] && continue
+  [[ "${f}" == vendor/* || "${f}" == */vendor/* ]] && continue
+
+  case "${f}" in
+    *.proto|buf.yaml|buf.gen.yaml|buf.lock)
+      run_buf=1
+      lint_files+=("${f}")
+      ;;
+    .golangci.yml|go.mod|go.sum)
+      run_root=1
+      run_storage=1
+      run_client=1
+      lint_files+=("${f}")
+      ;;
+    services/storage/*.go|services/storage/go.mod|services/storage/go.sum)
+      run_storage=1
+      lint_files+=("${f}")
+      ;;
+    client/*.go|client/go.mod|client/go.sum)
+      run_client=1
+      lint_files+=("${f}")
+      ;;
+    gen/*.go|pkg/*.go)
+      # 根模块共享契约与公共包被 storage 和 client 通过 replace 引用，变更时联检下游模块
+      run_root=1
+      run_storage=1
+      run_client=1
+      lint_files+=("${f}")
+      ;;
+    *.go)
+      run_root=1
+      lint_files+=("${f}")
+      ;;
+  esac
+done < <(git -c core.quotePath=false diff --cached --name-only)
+
+if [[ ${run_buf} -eq 0 && ${run_root} -eq 0 && ${run_storage} -eq 0 && ${run_client} -eq 0 ]]; then
+  exit 0
+fi
+
+# 若已暂存的目标文件同时存在未暂存修改，提示检查基于工作区当前文件（防止改完忘 git add 造成认知偏差，同时不阻断 git add -p）
+if [[ ${#lint_files[@]} -gt 0 ]]; then
+  unstaged_overlap="$(git -c core.quotePath=false diff --name-only -- "${lint_files[@]}")"
+  if [[ -n "${unstaged_overlap}" ]]; then
+    echo "pre-commit: 提示：以下已暂存文件存在未暂存的工作区修改，静态检查基于工作区当前文件：" >&2
+    while IFS= read -r uf; do
+      [[ -n "${uf}" ]] && echo "  - ${uf}" >&2
+    done <<< "${unstaged_overlap}"
+  fi
+fi
+
+# 清理 Git 钩子注入的索引/目录环境变量，避免切换子模块目录后干扰 Go VCS 探测；强制关闭 go.work 保持主仓与 worktree 一致
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX
+export GOWORK=off
+
+run_step() {
+  local label="$1"
+  shift
+  local out
+  printf "pre-commit: %s ... " "${label}" >&2
+  if out="$("$@" 2>&1)"; then
+    echo "ok" >&2
+  else
+    echo "FAILED" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+}
+
+if [[ ${run_buf} -eq 1 ]]; then
+  if ! command -v buf >/dev/null 2>&1; then
+    echo "pre-commit: 未找到 buf 命令，请先安装 buf (brew install bufbuild/buf/buf)" >&2
+    exit 1
+  fi
+  run_step "buf lint" buf lint
+fi
+
+if [[ ${run_root} -eq 1 || ${run_storage} -eq 1 || ${run_client} -eq 1 ]]; then
+  if ! command -v golangci-lint >/dev/null 2>&1; then
+    echo "pre-commit: 未找到 golangci-lint 命令，请先安装 (https://golangci-lint.run/docs/welcome/install/)" >&2
+    exit 1
+  fi
+fi
+
+if [[ ${run_root} -eq 1 ]]; then
+  run_step "golangci-lint [root]" \
+    golangci-lint run --allow-serial-runners ./...
+fi
+
+if [[ ${run_storage} -eq 1 ]]; then
+  run_step "golangci-lint [services/storage]" \
+    bash -c 'cd services/storage && exec golangci-lint run --allow-serial-runners --config ../../.golangci.yml ./...'
+fi
+
+if [[ ${run_client} -eq 1 ]]; then
+  run_step "golangci-lint [client]" \
+    bash -c 'cd client && GOOS=linux CGO_ENABLED=0 exec golangci-lint run --allow-serial-runners --config ../.golangci.yml ./...'
 fi

@@ -151,6 +151,11 @@ tasks:
       - docker compose -f {{.COMPOSE_FILE}} up -d --build --wait storage-service
       - go test -tags=e2e -v -count=1 ./e2e/... {{.CLI_ARGS}}
 
+  hooks:install:
+    desc: "Configure Git core.hooksPath to .githooks (shared across main repo and worktrees)"
+    cmds:
+      - git config core.hooksPath .githooks
+
   lint:
     desc: "Run buf lint and golangci-lint across all modules"
     cmds:

@@ -20,7 +20,7 @@
 
 ## 提交前守门
 
-[`.githooks/pre-commit`](../../.githooks/pre-commit) 对暂存的 Go 文件执行 `gofmt -s` 检查，新克隆仓库先运行一次 `git config core.hooksPath .githooks` 启用（所有工作树共享）。
+[`.githooks/pre-commit`](../../.githooks/pre-commit) 按暂存区变更按需执行 `buf lint` 与对应 Go 模块（根模块、`services/storage`、`client`）的 `golangci-lint` 只读检查；新克隆仓库先运行一次 `task hooks:install`（即 `git config core.hooksPath .githooks`）启用，主仓与所有 `.worktrees/<ticket>` 自动共享。
 
 ## 常用任务 (`task`)
 
