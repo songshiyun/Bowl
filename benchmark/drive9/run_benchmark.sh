@@ -37,7 +37,7 @@ export GOWORK=off
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-DRIVE9_REPO="${DRIVE9_REPO:-/Users/fanxing/code/other/filesystem/drive9}"
+DRIVE9_REPO="${DRIVE9_REPO:-${REPO_ROOT}/../drive9}"
 RESULTS_DIR="${RESULTS_DIR:-${SCRIPT_DIR}/results}"
 REPORT_FILE="${REPORT_FILE:-${SCRIPT_DIR}/REPORT.md}"
 SUMMARY_JSON="${RESULTS_DIR}/summary.json"
@@ -46,9 +46,9 @@ source "${REPO_ROOT}/benchmark/common/prod_stack.sh"
 
 REGION_ID="${REGION_ID:-${REGION:-us-west-1}}"
 ZONE_ID="${ZONE_ID:-${ZONE:-us-west-1a}}"
-VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
-VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
+VPC_ID="${VPC_ID:?VPC_ID is required}"
+VSWITCH_ID="${VSWITCH_ID:?VSWITCH_ID is required}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:?SECURITY_GROUP_ID is required}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.i5.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
 SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
@@ -1204,18 +1204,16 @@ fi
 jq -n \
   --arg region "${REGION_ID}" \
   --arg zone "${ZONE_ID}" \
-  --arg vpc_id "${VPC_ID}" \
-  --arg vswitch_id "${VSWITCH_ID}" \
-  --arg sg_id "${SECURITY_GROUP_ID}" \
+  --arg vpc_id "vpc-<redacted>" \
+  --arg vswitch_id "vsw-<redacted>" \
+  --arg sg_id "sg-<redacted>" \
   --arg instance_type "${INSTANCE_TYPE}" \
   --arg image_id "${IMAGE_ID}" \
   --arg disk_cat "${SYSTEM_DISK_CATEGORY}" \
   --arg disk_size "${SYSTEM_DISK_SIZE}" \
-  --arg srv_id "${DELETED_SERVER_ID}" \
-  --arg srv_pub "${SERVER_PUB_IP}" \
+  --arg srv_id "i-<redacted-server>" \
   --arg srv_priv "${SERVER_PRIV_IP}" \
-  --arg cli_id "${DELETED_CLIENT_ID}" \
-  --arg cli_pub "${CLIENT_PUB_IP}" \
+  --arg cli_id "i-<redacted-client>" \
   --arg cli_priv "${CLIENT_PRIV_IP}" \
   --arg created_at "${INSTANCES_CREATED_AT}" \
   --arg deleted_at "${INSTANCES_DELETED_AT:-kept}" \
@@ -1244,12 +1242,10 @@ jq -n \
     },
     server_node: ({
       instance_id: $srv_id,
-      public_ip: $srv_pub,
       private_ip: $srv_priv
     } + $srv_meta),
     client_node: ({
       instance_id: $cli_id,
-      public_ip: $cli_pub,
       private_ip: $cli_priv
     } + $cli_meta),
     network_baseline: {

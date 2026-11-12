@@ -2,21 +2,21 @@
 [2026-11-12T05:07:24Z] Compiled binaries and deploy/prod bundle ready in /tmp/bowl-pjdfstest-20261112-050719-fWoq9i
 [2026-11-12T05:07:24Z] Step 2/6: Creating temporary SSH KeyPair bowl-pjdfstest-kp-20261112-050719 in us-west-1...
 [2026-11-12T05:07:26Z] Launching 2 PostPaid ECS instances (ecs.i5.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd) in us-west-1a...
-[2026-11-12T05:07:27Z] Created Server Instance: i-rj947g04pwz6x8nu9fbk, Client Instance: i-rj947g04pwz6x8nu9fbl
+[2026-11-12T05:07:27Z] Created Server Instance: i-<redacted-server>, Client Instance: i-<redacted-client>
 [2026-11-12T05:07:27Z] Waiting for both instances to reach Running state...
-[2026-11-12T05:07:36Z] Server (i-rj947g04pwz6x8nu9fbk): Public=43.110.154.248, Private=172.16.1.200
-[2026-11-12T05:07:36Z] Client (i-rj947g04pwz6x8nu9fbl): Public=43.110.154.255, Private=172.16.1.201
-[2026-11-12T05:07:36Z] Waiting for SSH readiness on Server (43.110.154.248) and Client (43.110.154.255)...
-[2026-11-12T05:07:50Z] Direct SSH ready on bowl-bench-server (43.110.154.248)
-[2026-11-12T05:07:53Z] Direct SSH ready on bowl-bench-client (43.110.154.255)
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+[2026-11-12T05:07:36Z] Server (i-<redacted-server>): Public=<redacted-server-pub-ip>, Private=172.16.1.200
+[2026-11-12T05:07:36Z] Client (i-<redacted-client>): Public=<redacted-client-pub-ip>, Private=172.16.1.201
+[2026-11-12T05:07:36Z] Waiting for SSH readiness on Server (<redacted-server-pub-ip>) and Client (<redacted-client-pub-ip>)...
+[2026-11-12T05:07:50Z] Direct SSH ready on bowl-bench-server (<redacted-server-pub-ip>)
+[2026-11-12T05:07:53Z] Direct SSH ready on bowl-bench-client (<redacted-client-pub-ip>)
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 id_rsa                                          0%    0     0.0KB/s   --:-- ETAid_rsa                                        100% 1680     3.3KB/s   00:00    
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:08:10Z] Step 3/6: Mounting local NVMe SSD and deploying Bowl deploy/prod stack (pjdfstest POSIX mode) on Server (172.16.1.200)...
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 prod-bundle.tar.gz                              0%    0     0.0KB/s   --:-- ETAprod-bundle.tar.gz                              0%    0     0.0KB/s   --:-- ETAprod-bundle.tar.gz                              0%    0     0.0KB/s   --:-- ETAprod-bundle.tar.gz                              0%  255KB 253.1KB/s   02:33 ETAprod-bundle.tar.gz                              0%  255KB 227.8KB/s   02:50 ETAprod-bundle.tar.gz                              0%  255KB 205.0KB/s   03:09 ETAprod-bundle.tar.gz                              0%  255KB 184.5KB/s   03:30 ETAprod-bundle.tar.gz                              0%  255KB 166.1KB/s   03:54 ETAprod-bundle.tar.gz                              0%  255KB 149.4KB/s - stalled -prod-bundle.tar.gz                              0%  255KB 134.5KB/s - stalled -prod-bundle.tar.gz                              0%  255KB 121.1KB/s - stalled -prod-bundle.tar.gz                              0%  255KB 108.9KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  98.1KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  88.2KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  79.4KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  71.5KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  64.3KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  57.9KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  52.1KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  46.9KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  42.2KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  38.0KB/s - stalled -prod-bundle.tar.gz                              0%  255KB  34.2KB/s - stalled -prod-bundle.tar.gz                              1%  765KB  81.3KB/s   07:51 ETAprod-bundle.tar.gz                              6% 2550KB 249.9KB/s   02:26 ETAprod-bundle.tar.gz                             11% 4590KB 427.1KB/s   01:20 ETAprod-bundle.tar.gz                             16% 6375KB 561.4KB/s   00:58 ETAprod-bundle.tar.gz                             22% 8925KB 758.1KB/s   00:39 ETAprod-bundle.tar.gz                             26%   10MB 834.1KB/s   00:34 ETAprod-bundle.tar.gz                             32%   12MB 977.9KB/s   00:26 ETAprod-bundle.tar.gz                             38%   15MB   1.1MB/s   00:21 ETAprod-bundle.tar.gz                             44%   17MB   1.2MB/s   00:17 ETAprod-bundle.tar.gz                             48%   19MB   1.3MB/s   00:15 ETAprod-bundle.tar.gz                             52%   20MB   1.3MB/s   00:14 ETAprod-bundle.tar.gz                             58%   22MB   1.3MB/s   00:11 ETAprod-bundle.tar.gz                             99%   38MB   2.8MB/s   00:00 ETAprod-bundle.tar.gz                            100%   38MB   1.1MB/s   00:35    
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 mke2fs 1.47.0 (5-Feb-2023)
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
@@ -114,7 +114,7 @@ No containers need to be restarted.
 No user sessions are running outdated binaries.
 
 No VM guests are running outdated hypervisor (qemu) binaries on this host.
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 Preconfiguring packages ...
 Selecting previously unselected package pigz.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 85610 files and directories currently installed.)
@@ -218,7 +218,7 @@ DEPRECATED: The legacy builder is deprecated and will be removed in a future rel
             Install the buildx component to build images with BuildKit:
             https://docs.docker.com/go/buildx/
 
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
  postgres Pulling 
  jaeger Pulling 
  grafana Pulling 
@@ -3623,9 +3623,9 @@ Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts
  Container bowl-grafana  Started
 [2026-11-12T05:11:04Z] Server node (172.16.1.200:9000 + Jaeger/Prometheus/Loki) is up and healthy on local NVMe SSD.
 [2026-11-12T05:11:04Z] Step 4/6: Preparing Client (172.16.1.201), mounting local NVMe SSD, building pjdfstest, and mounting Bowl over VPC internal network...
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 bowl                                            0%    0     0.0KB/s   --:-- ETAbowl                                            0%    0     0.0KB/s   --:-- ETAbowl                                            0%  255KB 252.6KB/s   02:40 ETAbowl                                            0%  255KB 227.3KB/s   02:57 ETAbowl                                            0%  255KB 204.6KB/s   03:17 ETAbowl                                            0%  255KB 184.1KB/s   03:39 ETAbowl                                            0%  255KB 165.7KB/s   04:04 ETAbowl                                            0%  255KB 149.2KB/s - stalled -bowl                                            0%  255KB 134.2KB/s - stalled -bowl                                            0%  255KB 120.8KB/s - stalled -bowl                                            2% 1020KB 184.6KB/s   03:34 ETAbowl                                            3% 1530KB 216.7KB/s   03:00 ETAbowl                                           11% 4590KB 498.5KB/s   01:12 ETAbowl                                           13% 5610KB 549.7KB/s   01:03 ETAbowl                                           15% 6375KB 570.6KB/s   01:00 ETAbowl                                           21% 8670KB 741.2KB/s   00:43 ETAbowl                                           26%   11MB 894.6KB/s   00:33 ETAbowl                                           31%   13MB   1.0MB/s   00:27 ETAbowl                                           36%   14MB   1.1MB/s   00:23 ETAbowl                                           40%   16MB   1.1MB/s   00:21 ETAbowl                                           43%   17MB   1.1MB/s   00:19 ETAbowl                                           47%   19MB   1.2MB/s   00:17 ETAbowl                                           52%   21MB   1.2MB/s   00:15 ETAbowl                                           55%   22MB   1.3MB/s   00:14 ETAbowl                                           58%   23MB   1.3MB/s   00:13 ETAbowl                                           97%   39MB   2.7MB/s   00:00 ETAbowl                                          100%   40MB   1.5MB/s   00:25    
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 mke2fs 1.47.0 (5-Feb-2023)
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
@@ -3857,13 +3857,13 @@ mv -f .deps/pjdfstest.Tpo .deps/pjdfstest.Po
 cc -Wall -Werror -g -O2   -o pjdfstest pjdfstest.o  
 make[1]: Leaving directory '/opt/pjdfstest'
 [2026-11-12T05:12:04Z] Measuring Server local NVMe SSD baseline and internal VPC RTT/throughput (172.16.1.201 -> 172.16.1.200)...
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:12:44Z] Client mounted /mnt/bowl over VPC internal network: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"30.7 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0"},"network":{"ping_rtt_ms":"0.040/0.078/0.252/0.054","iperf3_gbps":"21.22"},"bowl":{"disk_id":"01a1ce2c-2e79-7b77-8103-08dd7c6b9f74","root_ino":1,"pjdfstest_git_commit":"85a8aea"}}
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:12:46Z] Step 5/6: Running full pjdfstest suite on /mnt/bowl/work...
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [pjdfstest-runner] Discovered 17 syscall directories: chflags, chmod, chown, ftruncate, granular, link, mkdir, mkfifo, mknod, open, posix_fallocate, rename, rmdir, symlink, truncate, unlink, utimensat
 Warning: Permanently added '172.16.1.200' (ED25519) to the list of known hosts.
 [01/17] Running prove --timer -rv /opt/pjdfstest/tests/chflags ...
@@ -3922,10 +3922,10 @@ Warning: Permanently added '172.16.1.200' (ED25519) to the list of known hosts.
     -> Done utimensat in 1.41s (rc=0): Files=10, Tests=122,  1 wallclock secs ( 0.03 usr  0.00 sys +  0.24 cusr  0.21 csys =  0.48 CPU) Result: PASS
 Warning: Permanently added '172.16.1.200' (ED25519) to the list of known hosts.
 [2026-11-12T05:15:44Z] pjdfstest execution finished at 2026-11-12T05:15:44Z.
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 Warning: Permanently added '172.16.1.200' (ED25519) to the list of known hosts.
 Warning: Permanently added '172.16.1.200' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
  Container bowl-grafana  Stopping
  Container bowl-grafana  Stopped
  Container bowl-grafana  Removing
@@ -3972,12 +3972,12 @@ Warning: Permanently added '43.110.154.248' (ED25519) to the list of known hosts
  Volume bowl_storage_data  Removed
  Volume bowl_postgres_data  Removed
  Network bowl_bowl-net  Removed
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 pjdfstest.log                                   0%    0     0.0KB/s   --:-- ETApjdfstest.log                                 100%   94KB 115.7KB/s   00:00    
-Warning: Permanently added '43.110.154.255' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 stage_timings.jsonl                             0%    0     0.0KB/s   --:-- ETAstage_timings.jsonl                           100%  969     2.5KB/s   00:00    
-[2026-11-12T05:16:11Z] Collecting and distilling deploy/prod telemetry into /Users/fanxing/code/starsrc/bowl/benchmark/pjdfstest/results/telemetry/ ...
+[2026-11-12T05:16:11Z] Collecting and distilling deploy/prod telemetry into <repo_root>/benchmark/pjdfstest/results/telemetry/ ...
 [2026-11-12T05:16:24Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-12T05:16:27Z] Verified both ECS instances (i-rj947g04pwz6x8nu9fbk, i-rj947g04pwz6x8nu9fbl) are deleted (Remaining: 0).
+[2026-11-12T05:16:27Z] Verified both ECS instances (i-<redacted-server>, i-<redacted-client>) are deleted (Remaining: 0).
 [parse_results] Parsed 238 files, 8798/8798 tests passed (100.00%) in 170.78s
-[2026-11-12T05:16:29Z] Benchmark complete! Report written to: /Users/fanxing/code/starsrc/bowl/benchmark/pjdfstest/REPORT.md
+[2026-11-12T05:16:29Z] Benchmark complete! Report written to: <repo_root>/benchmark/pjdfstest/REPORT.md

@@ -3,9 +3,9 @@
     "provider": "Aliyun ECS",
     "region": "us-west-1",
     "zone_id": "us-west-1a",
-    "vpc_id": "vpc-rj9gjwyzzh4v0cn576fhu",
-    "vswitch_id": "vsw-rj9rsvsgpihtsgxej6me5",
-    "security_group_id": "sg-rj97ly79h6cp3mnfpo2q",
+    "vpc_id": "vpc-<redacted>",
+    "vswitch_id": "vsw-<redacted>",
+    "security_group_id": "sg-<redacted>",
     "instance_type": "ecs.i5.xlarge",
     "image_id": "ubuntu_24_04_x64_20G_alibase_20261016.vhd",
     "system_disk_category": "cloud_essd",
@@ -14,8 +14,7 @@
     "data_disk_size_gib": 894
   },
   "server_node": {
-    "instance_id": "i-rj93vq1u38hlqnxjflpy",
-    "public_ip": "43.110.155.208",
+    "instance_id": "i-<redacted-server>",
     "private_ip": "172.16.1.196",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
@@ -36,8 +35,7 @@
     "local_fsync_4k_p99_us": 62.6
   },
   "client_node": {
-    "instance_id": "i-rj93vq1u38hlqnxjflpz",
-    "public_ip": "47.88.21.131",
+    "instance_id": "i-<redacted-client>",
     "private_ip": "172.16.1.197",
     "cpu_model": "Intel(R) Xeon(R) 6982P-C",
     "vcpu": 4,
@@ -93,8 +91,8 @@
   },
   "cleanup_audit": {
     "key_pair_name": "bowl-d9bench-kp-20261112-050638",
-    "server_instance_ids": "i-rj93vq1u38hlqnxjflpy",
-    "client_instance_ids": "i-rj93vq1u38hlqnxjflpz",
+    "server_instance_ids": "i-<redacted-server>",
+    "client_instance_ids": "i-<redacted-client>",
     "instances_created_at": "2026-11-12T05:06:59Z",
     "instances_deleted_at": "2026-11-12T05:32:21Z",
     "remaining_benchmark_instances": 0

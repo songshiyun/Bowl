@@ -35,9 +35,10 @@ Bowl 客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保
 ## 3. 运行方式
 
 ```bash
-# 默认从 /Users/fanxing/code/other/filesystem/drive9 编译 Drive9，可通过 DRIVE9_REPO 指定路径
+# 默认从 ../drive9 编译 Drive9，可通过 DRIVE9_REPO 指定路径
+# 需显式传入阿里云 VPC_ID、VSWITCH_ID、SECURITY_GROUP_ID
 # 支持通过 BOWL_BENCH_TRACE_SAMPLE_RATIO（默认 0.10）与 BOWL_BENCH_LOG_LEVEL（默认 warn）调整遥测采样
-bash benchmark/drive9/run_benchmark.sh
+VPC_ID=vpc-xxx VSWITCH_ID=vsw-xxx SECURITY_GROUP_ID=sg-xxx bash benchmark/drive9/run_benchmark.sh
 ```
 
 ### 基于已有日志重新生成报告

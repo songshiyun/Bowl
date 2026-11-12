@@ -385,37 +385,37 @@
     "created_instances": [
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj947g04pwz6x8nu9fbk",
+        "instance_id": "i-<redacted-server>",
         "role": "server",
         "private_ip": "172.16.1.200"
       },
       {
         "suite": "pjdfstest",
-        "instance_id": "i-rj947g04pwz6x8nu9fbl",
+        "instance_id": "i-<redacted-client>",
         "role": "client",
         "private_ip": "172.16.1.201"
       },
       {
         "suite": "juicefs",
-        "instance_id": "i-rj92npx0idoo4fww70e1",
+        "instance_id": "i-<redacted-server>",
         "role": "server",
         "private_ip": "172.16.1.199"
       },
       {
         "suite": "juicefs",
-        "instance_id": "i-rj92npx0idoo4fww70e2",
+        "instance_id": "i-<redacted-client>",
         "role": "client",
         "private_ip": "172.16.1.198"
       },
       {
         "suite": "drive9",
-        "instance_id": "i-rj93vq1u38hlqnxjflpy",
+        "instance_id": "i-<redacted-server>",
         "role": "server",
         "private_ip": "172.16.1.196"
       },
       {
         "suite": "drive9",
-        "instance_id": "i-rj93vq1u38hlqnxjflpz",
+        "instance_id": "i-<redacted-client>",
         "role": "client",
         "private_ip": "172.16.1.197"
       }
@@ -436,8 +436,8 @@
           "round": "R1-init",
           "suite": "pjdfstest",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj929hjdmkt3zpxx9cy2",
-          "client_instance_id": "i-rj929hjdmkt3zpxx9cy3",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261111-151654",
           "status": "deleted_by_trap"
         },
@@ -445,8 +445,8 @@
           "round": "R1",
           "suite": "pjdfstest",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj9a8tbfprqnfp80ugo3",
-          "client_instance_id": "i-rj9a8tbfprqnfp80ugo4",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261111-152324",
           "status": "deleted_verified"
         },
@@ -454,8 +454,8 @@
           "round": "R1-init",
           "suite": "juicefs",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj92npx0idontt4wby9q",
-          "client_instance_id": "i-rj92npx0idontt4wby9r",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-151722",
           "status": "deleted_by_trap"
         },
@@ -463,8 +463,8 @@
           "round": "R1",
           "suite": "juicefs",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj9i6xhobdt1kvz4d1wb",
-          "client_instance_id": "i-rj9i6xhobdt1kvz4d1wc",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-152434",
           "status": "deleted_verified"
         },
@@ -472,8 +472,8 @@
           "round": "R1-init",
           "suite": "drive9",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj97yvg0p2z68bfjydqq",
-          "client_instance_id": "i-rj97yvg0p2z68bfjydqr",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261111-151712",
           "status": "deleted_by_trap"
         },
@@ -481,8 +481,8 @@
           "round": "R1",
           "suite": "drive9",
           "bowl_commit": "4e977c1",
-          "server_instance_id": "i-rj990ykeh6eh2shtvwld",
-          "client_instance_id": "i-rj990ykeh6eh2shtvwle",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261111-152336",
           "status": "deleted_verified"
         },
@@ -490,8 +490,8 @@
           "round": "R2-init",
           "suite": "pjdfstest",
           "bowl_commit": "a511c9b-dirty",
-          "server_instance_id": "i-rj92npx0idonviautq02",
-          "client_instance_id": "i-rj92npx0idonviautq03",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261111-173047",
           "status": "deleted_by_trap"
         },
@@ -499,8 +499,8 @@
           "round": "R2",
           "suite": "pjdfstest",
           "bowl_commit": "a511c9b-dirty",
-          "server_instance_id": "i-rj97in09cnfnumn9qhjt",
-          "client_instance_id": "i-rj97in09cnfnumn9qhju",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261111-173215",
           "status": "deleted_verified"
         },
@@ -508,8 +508,8 @@
           "round": "R2a",
           "suite": "juicefs",
           "bowl_commit": "a511c9b-dirty",
-          "server_instance_id": "i-rj998w3af0ya3kwl0gzr",
-          "client_instance_id": "i-rj998w3af0ya3kwl0gzs",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-173200",
           "status": "deleted_verified"
         },
@@ -517,8 +517,8 @@
           "round": "R2b",
           "suite": "juicefs",
           "bowl_commit": "8bf2b8b-dirty",
-          "server_instance_id": "i-rj9cy0hbelip01280rwb",
-          "client_instance_id": "i-rj9cy0hbelip01280rwc",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-175426",
           "status": "deleted_verified"
         },
@@ -526,8 +526,8 @@
           "round": "R2",
           "suite": "juicefs",
           "bowl_commit": "8bf2b8b-dirty",
-          "server_instance_id": "i-rj95pept5mkw1r7vhz1c",
-          "client_instance_id": "i-rj95pept5mkw1r7vhz1d",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-181912",
           "status": "deleted_verified"
         },
@@ -535,8 +535,8 @@
           "round": "R2-init",
           "suite": "drive9",
           "bowl_commit": "a511c9b-dirty",
-          "server_instance_id": "i-rj9j5lkmvil2jauv8uir",
-          "client_instance_id": "i-rj9j5lkmvil2jauv8uis",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261111-173046",
           "status": "deleted_by_trap"
         },
@@ -544,8 +544,8 @@
           "round": "R2",
           "suite": "drive9",
           "bowl_commit": "8bf2b8b-dirty",
-          "server_instance_id": "i-rj93t1xcke5wddp5vd4c",
-          "client_instance_id": "i-rj93t1xcke5wddp5vd4d",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261111-174341",
           "status": "deleted_verified"
         },
@@ -553,8 +553,8 @@
           "round": "R3",
           "suite": "pjdfstest",
           "bowl_commit": "8afc63c",
-          "server_instance_id": "i-rj990ykeh6eh5p2guwye",
-          "client_instance_id": "i-rj990ykeh6eh5p2guwyf",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261111-190843",
           "status": "deleted_verified"
         },
@@ -562,8 +562,8 @@
           "round": "R3",
           "suite": "juicefs",
           "bowl_commit": "8afc63c",
-          "server_instance_id": "i-rj929hjdmkt42qgmghox",
-          "client_instance_id": "i-rj929hjdmkt42qgmghoy",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261111-190848",
           "status": "deleted_verified"
         },
@@ -571,8 +571,8 @@
           "round": "R3",
           "suite": "drive9",
           "bowl_commit": "8afc63c",
-          "server_instance_id": "i-rj95goqmagl76j2rt5r4",
-          "client_instance_id": "i-rj95goqmagl76j2rt5r5",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261111-191124",
           "status": "deleted_verified"
         },
@@ -580,8 +580,8 @@
           "round": "R4",
           "suite": "pjdfstest",
           "bowl_commit": "6399122",
-          "server_instance_id": "i-rj947g04pwz6x8nu9fbk",
-          "client_instance_id": "i-rj947g04pwz6x8nu9fbl",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-pjdfstest-kp-20261112-050719",
           "status": "deleted_verified"
         },
@@ -589,8 +589,8 @@
           "round": "R4",
           "suite": "juicefs",
           "bowl_commit": "6399122",
-          "server_instance_id": "i-rj92npx0idoo4fww70e1",
-          "client_instance_id": "i-rj92npx0idoo4fww70e2",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-jfsbench-kp-20261112-050700",
           "status": "deleted_verified"
         },
@@ -598,8 +598,8 @@
           "round": "R4",
           "suite": "drive9",
           "bowl_commit": "6399122",
-          "server_instance_id": "i-rj93vq1u38hlqnxjflpy",
-          "client_instance_id": "i-rj93vq1u38hlqnxjflpz",
+          "server_instance_id": "i-<redacted-server>",
+          "client_instance_id": "i-<redacted-client>",
           "keypair": "bowl-d9bench-kp-20261112-050638",
           "status": "deleted_verified"
         }

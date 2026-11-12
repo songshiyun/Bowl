@@ -38,10 +38,10 @@ Bowl 客户端采用无会话 `RawFS`：禁用内核 `CAP_WRITEBACK_CACHE`，保
 
 ### 2. 一键运行阿里云硅谷双机实测
 ```bash
-bash benchmark/juicefs/run_benchmark.sh
+VPC_ID=vpc-xxx VSWITCH_ID=vsw-xxx SECURITY_GROUP_ID=sg-xxx bash benchmark/juicefs/run_benchmark.sh
 ```
 
-支持通过环境变量覆盖默认云资源与可观测性参数：
+必填网络参数：`VPC_ID`、`VSWITCH_ID`、`SECURITY_GROUP_ID`。支持通过环境变量覆盖默认云资源与可观测性参数：
 - `REGION_ID`（默认 `us-west-1`）
 - `ZONE_ID`（默认 `us-west-1a`）
 - `INSTANCE_TYPE`（默认 `ecs.i5.xlarge`，配备 894 GiB 本地 NVMe SSD `local_ssd_pro`）

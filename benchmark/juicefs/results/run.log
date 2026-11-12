@@ -2,21 +2,21 @@
 [2026-11-12T05:07:06Z] Compiled binaries and deploy/prod bundle ready in /tmp/bowl-jfsbench-20261112-050700-NiLFLL
 [2026-11-12T05:07:06Z] Step 2/6: Creating temporary SSH KeyPair bowl-jfsbench-kp-20261112-050700 in us-west-1...
 [2026-11-12T05:07:08Z] Launching 2 PostPaid ECS instances (ecs.i5.xlarge, ubuntu_24_04_x64_20G_alibase_20261016.vhd, 40GiB cloud_essd) in us-west-1a...
-[2026-11-12T05:07:09Z] Created Server Instance: i-rj92npx0idoo4fww70e1, Client Instance: i-rj92npx0idoo4fww70e2
+[2026-11-12T05:07:09Z] Created Server Instance: i-<redacted-server>, Client Instance: i-<redacted-client>
 [2026-11-12T05:07:09Z] Waiting for both instances to reach Running state...
-[2026-11-12T05:07:17Z] Server (i-rj92npx0idoo4fww70e1): Public=47.88.17.145, Private=172.16.1.199
-[2026-11-12T05:07:17Z] Client (i-rj92npx0idoo4fww70e2): Public=43.110.150.184, Private=172.16.1.198
-[2026-11-12T05:07:17Z] Waiting for SSH readiness on Server (47.88.17.145) and Client (43.110.150.184)...
-[2026-11-12T05:07:29Z] Direct SSH ready on bowl-bench-server (47.88.17.145)
-[2026-11-12T05:07:32Z] Direct SSH ready on bowl-bench-client (43.110.150.184)
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+[2026-11-12T05:07:17Z] Server (i-<redacted-server>): Public=<redacted-server-pub-ip>, Private=172.16.1.199
+[2026-11-12T05:07:17Z] Client (i-<redacted-client>): Public=<redacted-client-pub-ip>, Private=172.16.1.198
+[2026-11-12T05:07:17Z] Waiting for SSH readiness on Server (<redacted-server-pub-ip>) and Client (<redacted-client-pub-ip>)...
+[2026-11-12T05:07:29Z] Direct SSH ready on bowl-bench-server (<redacted-server-pub-ip>)
+[2026-11-12T05:07:32Z] Direct SSH ready on bowl-bench-client (<redacted-client-pub-ip>)
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 id_rsa                                        100% 1676     8.3KB/s   00:00    
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:07:40Z] Step 3/6: Mounting local NVMe SSD and deploying deploy/prod stack (Bowl + Observability) & JuiceFS backends on Server (172.16.1.199)...
-Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 prod-bundle.tar.gz                            100%   38MB   1.1MB/s   00:35    
-Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 mke2fs 1.47.0 (5-Feb-2023)
 Preconfiguring packages ...
 Failed to stop iperf3.service: Unit iperf3.service not loaded.
@@ -232,7 +232,7 @@ Executing: /usr/lib/systemd/systemd-sysv-install enable redis-server
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-s3.service → /etc/systemd/system/jfs-s3.service.
 Created symlink /etc/systemd/system/multi-user.target.wants/jfs-webdav.service → /etc/systemd/system/jfs-webdav.service.
 [2026-11-12T05:09:02Z] Initializing Bowl deploy/prod Docker Compose stack on Server (172.16.1.199)...
-Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 Preconfiguring packages ...
 Selecting previously unselected package pigz.
 (Reading database ... 87644 files and directories currently installed.)
@@ -336,7 +336,7 @@ DEPRECATED: The legacy builder is deprecated and will be removed in a future rel
             Install the buildx component to build images with BuildKit:
             https://docs.docker.com/go/buildx/
 
-Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
  grafana Pulling 
  loki Pulling 
  postgres Pulling 
@@ -3710,12 +3710,12 @@ Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
  Container bowl-grafana  Started
 [2026-11-12T05:10:48Z] Server node (172.16.1.199) services (Bowl deploy/prod:9000 + Jaeger/Prometheus/Loki, rclone S3:9001, PG:5432, Redis:6379) are ready on local NVMe SSD.
 [2026-11-12T05:10:48Z] Measuring Server local NVMe SSD disk baseline...
-Warning: Permanently added '47.88.17.145' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-server-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:11:15Z] Server baseline: {"server":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"30.7 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","pg_version":"psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)","bowl_pg_version":"postgres (PostgreSQL) 18.6","docker_version":"Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2","redis_version":"Redis server v=7.0.15","rclone_version":"rclone v1.68.2","data_disk_device":"/dev/nvme1n1","data_disk_size_gib":894},"disk_baseline":{"local_seq_write_mib_s":1998.05,"local_seq_read_mib_s":3494.88,"local_randwrite_4k_iops":69961,"local_randread_4k_iops":699143,"local_fsync_4k_iops":50592,"local_fsync_4k_p99_us":62.8}}
 [2026-11-12T05:11:15Z] Step 4/6: Mounting local NVMe SSD and installing benchmark tools (bowl, juicefs, fio, mdtest) on Client (172.16.1.198)...
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 client-bins.tar.gz                            100%   18MB   1.0MB/s   00:17    
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 mke2fs 1.47.0 (5-Feb-2023)
 tar: Ignoring unknown extended header keyword 'LIBARCHIVE.xattr.com.apple.provenance'
 Preconfiguring packages ...
@@ -4970,12 +4970,12 @@ Making all in contrib
   CCLD     cbif
 make[1]: Nothing to be done for 'all-am'.
 [2026-11-12T05:12:15Z] Measuring internal VPC RTT and throughput (172.16.1.198 -> 172.16.1.199)...
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:12:23Z] Client info & VPC network baseline: {"client":{"cpu_model":"Intel(R) Xeon(R) 6982P-C","vcpu":"4","memory_gib":"30.7 GiB","os_release":"Ubuntu 24.04.5 LTS","kernel":"6.8.0-147-generic","fusermount_version":"fusermount3 version: 3.14.0","juicefs_version":"juicefs version 1.2.1+2024-08-30.cd871d1","fio_version":"fio-3.36","mdtest_version":"mdtest-3.3.0"},"network":{"ping_rtt_ms":"0.041/0.078/0.258/0.055","iperf3_gbps":"21.22"}}
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 [2026-11-12T05:12:25Z] Step 5/6: Running benchmark suites (bowl jfs_pg jfs_redis) on Client -> Server...
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 Warning: Permanently added '172.16.1.199' (ED25519) to the list of known hosts.
 Warning: Permanently added '172.16.1.199' (ED25519) to the list of known hosts.
  Container bowl-postgres  Running
@@ -5355,7 +5355,7 @@ SUMMARY rate: (of 1 iterations)
 -- finished at 11/12/2026 13:19:44 --
 
 [2026-11-12T05:19:44Z] Benchmark targets (bowl jfs_pg jfs_redis) completed at 2026-11-12T05:19:44Z. Fetching results...
-Warning: Permanently added '43.110.150.184' (ED25519) to the list of known hosts.
+Warning: Permanently added '<redacted-client-pub-ip>' (ED25519) to the list of known hosts.
 bench_bowl.log                                100% 1050     2.6KB/s   00:00    
 bench_jfs_pg.log                              100% 1051     2.6KB/s   00:00    
 bench_jfs_redis.log                           100% 1050     2.3KB/s   00:00    
@@ -5392,7 +5392,7 @@ mdtest_jfs_pg_4proc.log                       100% 1392     2.5KB/s   00:00
 mdtest_jfs_redis_1proc.log                    100% 1390     3.3KB/s   00:00    
 mdtest_jfs_redis_4proc.log                    100% 1398     3.4KB/s   00:00    
 stage_timings.jsonl                           100% 2174     5.0KB/s   00:00    
-[2026-11-12T05:20:33Z] Collecting and distilling deploy/prod telemetry into /Users/fanxing/code/starsrc/bowl/benchmark/juicefs/results/telemetry/ ...
+[2026-11-12T05:20:33Z] Collecting and distilling deploy/prod telemetry into <repo_root>/benchmark/juicefs/results/telemetry/ ...
 [2026-11-12T05:20:56Z] Step 6/6: Releasing Aliyun PostPaid ECS instances and generating REPORT.md...
-[2026-11-12T05:21:00Z] Verified both ECS instances (i-rj92npx0idoo4fww70e1, i-rj92npx0idoo4fww70e2) are deleted (Remaining: 0).
-[2026-11-12T05:21:02Z] Benchmark complete! Report written to: /Users/fanxing/code/starsrc/bowl/benchmark/juicefs/REPORT.md
+[2026-11-12T05:21:00Z] Verified both ECS instances (i-<redacted-server>, i-<redacted-client>) are deleted (Remaining: 0).
+[2026-11-12T05:21:02Z] Benchmark complete! Report written to: <repo_root>/benchmark/juicefs/REPORT.md

@@ -5,10 +5,10 @@
     "provider": "Alibaba Cloud (阿里云)",
     "region_id": "us-west-1",
     "zone_id": "us-west-1a",
-    "vpc_id": "vpc-rj9gjwyzzh4v0cn576fhu",
-    "vswitch_id": "vsw-rj9rsvsgpihtsgxej6me5",
+    "vpc_id": "vpc-<redacted>",
+    "vswitch_id": "vsw-<redacted>",
     "cidr_block": "172.16.1.0/24",
-    "security_group_id": "sg-rj97ly79h6cp3mnfpo2q",
+    "security_group_id": "sg-<redacted>",
     "instance_type": "ecs.i5.xlarge",
     "instance_charge_type": "PostPaid (按量计费)",
     "image_id": "ubuntu_24_04_x64_20G_alibase_20261016.vhd",
@@ -30,7 +30,7 @@
     "rclone_version": "rclone v1.68.2",
     "data_disk_device": "/dev/nvme1n1",
     "data_disk_size_gib": 894,
-    "instance_id": "i-rj92npx0idoo4fww70e1",
+    "instance_id": "i-<redacted-server>",
     "private_ip": "172.16.1.199"
   },
   "server_disk_baseline": {
@@ -51,7 +51,7 @@
     "juicefs_version": "juicefs version 1.2.1+2024-08-30.cd871d1",
     "fio_version": "fio-3.36",
     "mdtest_version": "mdtest-3.3.0",
-    "instance_id": "i-rj92npx0idoo4fww70e2",
+    "instance_id": "i-<redacted-client>",
     "private_ip": "172.16.1.198"
   },
   "network_baseline": {

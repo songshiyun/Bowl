@@ -29,14 +29,14 @@
 
 | 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 数据盘 (本地 NVMe SSD) | 系统盘 | 操作系统与内核 | VPC 私网 IP |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Server 服务端** (`bowl-bench-server`) | `i-rj947g04pwz6x8nu9fbk` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme0n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.200:9000` |
-| **Client 客户端** (`bowl-bench-client`) | `i-rj947g04pwz6x8nu9fbl` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.201` |
+| **Server 服务端** (`bowl-bench-server`) | `i-<redacted-server>` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme0n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.200:9000` |
+| **Client 客户端** (`bowl-bench-client`) | `i-<redacted-client>` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.201` |
 
 ### 2.2 同可用区 VPC 内网与本地 NVMe SSD 性能基线
 
 | 指标 | 实测数值 | 采集方式 |
 | :--- | :--- | :--- |
-| **VPC ID / 交换机 ID** | `vpc-rj9gjwyzzh4v0cn576fhu` / `vsw-rj9rsvsgpihtsgxej6me5` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
+| **VPC ID / 交换机 ID** | `vpc-<redacted>` / `vsw-<redacted>` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
 | **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `0.040/0.078/0.252/0.054` ms | `ping -c 20 -i 0.05 172.16.1.200` |
 | **内网单流 TCP 吞吐带宽** | `21.22` Gbps | `iperf3 -c 172.16.1.200 -t 5` |
 | **Server 本地 NVMe SSD 4 MiB 顺序写 / 读基线** | `1998.05` / `3494.88` MiB/s | `fio --bs=4M --size=2G --direct=1` |
@@ -90,7 +90,7 @@
 
 ### 4.1 跨机内网 RPC 延迟与吞吐分布剖析
 
-- **内网通信底座**：Client 与 Server 位于阿里云硅谷 `us-west-1a` 同一交换机（`vsw-rj9rsvsgpihtsgxej6me5`），内网 ICMP RTT 延迟仅 `0.040/0.078/0.252/0.054` ms，内网带宽达 `21.22` Gbps。内核属性与目录项缓存超时设为 `0s`；客户端 NamespaceCache 仍会影响请求路径。
+- **内网通信底座**：Client 与 Server 位于阿里云硅谷 `us-west-1a` 同一交换机（`vsw-<redacted>`），内网 ICMP RTT 延迟仅 `0.040/0.078/0.252/0.054` ms，内网带宽达 `21.22` Gbps。内核属性与目录项缓存超时设为 `0s`；客户端 NamespaceCache 仍会影响请求路径。
 - **耗时集中度分析**：耗时排名前三的子集为 `chown/`（1,497 项断言，耗时 79.87s，占比 46.8%）、`rename/`（4,857 项断言，耗时 23.06s，占比 13.5%）、`unlink/`（440 项断言，耗时 18.67s，占比 10.9%）。
 
 ### 4.2 关键 POSIX 契约与边界语义验证结论
@@ -675,8 +675,8 @@ Pebble BlockCache 命中率 `N/A (0 reads)` · ReadAmp `0.0` · WriteStall `0.0`
 | 审计项 | 记录值 |
 | :--- | :--- |
 | **临时 SSH 密钥对** | `bowl-pjdfstest-kp-20261112-050719`（已调用 `DeleteKeyPairs` 销毁） |
-| **Server 节点实例 ID** | `i-rj947g04pwz6x8nu9fbk`（已调用 `DeleteInstances --Force true` 销毁） |
-| **Client 节点实例 ID** | `i-rj947g04pwz6x8nu9fbl`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Server 节点实例 ID** | `i-<redacted-server>`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Client 节点实例 ID** | `i-<redacted-client>`（已调用 `DeleteInstances --Force true` 销毁） |
 | **实例创建时间 (UTC)** | `2026-11-12T05:07:27Z` |
 | **实例销毁时间 (UTC)** | `2026-11-12T05:16:27Z` |
 | **销毁后存量实例核验** | `DescribeInstances` 核验目标实例残留数为 `0`（存量 VPC/VSwitch/安全组完整保留） |

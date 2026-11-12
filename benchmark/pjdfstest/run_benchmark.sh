@@ -31,9 +31,9 @@ source "${REPO_ROOT}/benchmark/common/prod_stack.sh"
 # Aliyun Configuration (Silicon Valley us-west-1a, Local NVMe SSD ecs.i5.xlarge)
 REGION_ID="${REGION_ID:-us-west-1}"
 ZONE_ID="${ZONE_ID:-us-west-1a}"
-VPC_ID="${VPC_ID:-vpc-rj9gjwyzzh4v0cn576fhu}"
-VSWITCH_ID="${VSWITCH_ID:-vsw-rj9rsvsgpihtsgxej6me5}"
-SECURITY_GROUP_ID="${SECURITY_GROUP_ID:-sg-rj97ly79h6cp3mnfpo2q}"
+VPC_ID="${VPC_ID:?VPC_ID is required}"
+VSWITCH_ID="${VSWITCH_ID:?VSWITCH_ID is required}"
+SECURITY_GROUP_ID="${SECURITY_GROUP_ID:?SECURITY_GROUP_ID is required}"
 INSTANCE_TYPE="${INSTANCE_TYPE:-ecs.i5.xlarge}"
 IMAGE_ID="${IMAGE_ID:-ubuntu_24_04_x64_20G_alibase_20261016.vhd}"
 SYSTEM_DISK_CATEGORY="${SYSTEM_DISK_CATEGORY:-cloud_essd}"
@@ -734,16 +734,16 @@ jq -n \
   --arg test_completed_at "${TEST_COMPLETED_AT}" \
   --arg region_id "${REGION_ID}" \
   --arg zone_id "${ZONE_ID}" \
-  --arg vpc_id "${VPC_ID}" \
-  --arg vswitch_id "${VSWITCH_ID}" \
-  --arg sg_id "${SECURITY_GROUP_ID}" \
+  --arg vpc_id "vpc-<redacted>" \
+  --arg vswitch_id "vsw-<redacted>" \
+  --arg sg_id "sg-<redacted>" \
   --arg instance_type "${INSTANCE_TYPE}" \
   --arg image_id "${IMAGE_ID}" \
   --arg disk_cat "${SYSTEM_DISK_CATEGORY}" \
   --argjson disk_size "${SYSTEM_DISK_SIZE}" \
-  --arg server_id "${SERVER_ID}" \
+  --arg server_id "i-<redacted-server>" \
   --arg server_priv_ip "${SERVER_PRIV_IP}" \
-  --arg client_id "${CLIENT_ID}" \
+  --arg client_id "i-<redacted-client>" \
   --arg client_priv_ip "${CLIENT_PRIV_IP}" \
   --arg bowl_commit "${BOWL_GIT_COMMIT}" \
   --arg key_pair "${KEY_PAIR_NAME}" \

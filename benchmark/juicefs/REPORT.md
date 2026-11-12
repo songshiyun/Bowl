@@ -37,14 +37,14 @@
 
 | 节点角色 | 实例 ID | 实例规格 | 处理器 (CPU) | vCPU / 内存 | 数据盘 (本地 NVMe SSD) | 系统盘 | 操作系统与内核 | VPC 私网 IP |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Server 服务端** (`bowl-bench-server`) | `i-rj92npx0idoo4fww70e1` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme1n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.199` |
-| **Client 客户端** (`bowl-bench-client`) | `i-rj92npx0idoo4fww70e2` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.198` |
+| **Server 服务端** (`bowl-bench-server`) | `i-<redacted-server>` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB `/dev/nvme1n1`) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.199` |
+| **Client 客户端** (`bowl-bench-client`) | `i-<redacted-client>` | `ecs.i5.xlarge` | Intel(R) Xeon(R) 6982P-C | 4 vCPU / 30.7 GiB | `local_ssd_pro (NVMe)` (894 GiB) | `cloud_essd` (40 GiB) | Ubuntu 24.04.5 LTS (`6.8.0-147-generic`) | `172.16.1.198` |
 
 ### 2.2 同可用区 VPC 内网与 Server 节点本地 NVMe SSD 物理基线
 
 | 基线指标 | 实测数值 | 采集方式与说明 |
 | :--- | :--- | :--- |
-| **VPC ID / 交换机 ID** | `vpc-rj9gjwyzzh4v0cn576fhu` / `vsw-rj9rsvsgpihtsgxej6me5` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
+| **VPC ID / 交换机 ID** | `vpc-<redacted>` / `vsw-<redacted>` | 阿里云 `us-west-1a` 私网网段 `172.16.1.0/24` |
 | **内网 ICMP RTT 延迟 (min / avg / max / mdev)** | `0.041/0.078/0.258/0.055` ms | `ping -c 20 -i 0.05 172.16.1.199` |
 | **内网单流 TCP 吞吐带宽** | `21.22` Gbps | `iperf3 -c 172.16.1.199 -t 5` |
 | **Server 本地 NVMe SSD (894 GiB) 顺序写基线** | `1998.05` MiB/s | Server 本地 `fio --rw=write --bs=4M --size=2G --direct=1 --end_fsync=1` |
@@ -534,8 +534,8 @@ Pebble BlockCache 命中率 `99.04%` · ReadAmp `1.0` · WriteStall `0.0`。
 | 审计项 | 记录值 |
 | :--- | :--- |
 | **临时 SSH 密钥对** | `bowl-jfsbench-kp-20261112-050700`（已调用 `DeleteKeyPairs` 销毁） |
-| **Server 节点实例 ID** | `i-rj92npx0idoo4fww70e1`（已调用 `DeleteInstances --Force true` 销毁） |
-| **Client 节点实例 ID** | `i-rj92npx0idoo4fww70e2`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Server 节点实例 ID** | `i-<redacted-server>`（已调用 `DeleteInstances --Force true` 销毁） |
+| **Client 节点实例 ID** | `i-<redacted-client>`（已调用 `DeleteInstances --Force true` 销毁） |
 | **实例创建时间 (UTC)** | `2026-11-12T05:07:09Z` |
 | **实例销毁时间 (UTC)** | `2026-11-12T05:21:00Z` |
 | **销毁后存量实例核验** | `DescribeInstances` 核验目标实例残留数为 `0`（存量 VPC/VSwitch/安全组完整保留） |
