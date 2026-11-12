@@ -1,7 +1,7 @@
 # 0012. FUSE 文件锁（GetLk/SetLk/SetLkw）、两种锁互不干扰、客户端会话租约与死锁检查
 
 ## 状态
-已采纳 (accepted)
+部分被 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 与 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 (partially superseded by ADR-0029 and ADR-0032) — 服务端文件锁表与 `ClientSession` 会话租约已迁为客户端本地内存 `FileLock` 与无会话 `Epoch` 栅栏，POSIX 记录锁与 BSD `flock` 隔离语义保留
 
 ## 背景
 Storage 元数据引擎在完成扩展属性（Xattr）和错误码规范（ADR-0011）后，需要实现 Linux FUSE 文件锁相关的三个接口：`FUSE_GETLK (31)`、`FUSE_SETLK (32)` 和 `FUSE_SETLKW (33)`，并在 `FUSE_FLUSH` 与 `FUSE_RELEASE` 关闭文件时清理对应的锁。在按照 POSIX `fcntl(2)`、BSD `flock(2)` 和 Linux 内核 FUSE 协议实现文件锁时，需要处理六个实际问题：

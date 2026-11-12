@@ -1,7 +1,7 @@
 # 0031. 基于 ShardStore 的 64 MiB Append-Only Pack 封包存储、256 KiB 逻辑分块与 CAS 搬迁回收
 
 ## 状态
-已采纳 (accepted) — 演进并替代 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 与 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md) 中关于「`1 MiB` 独立 `.blob` 小文件、窗口内 `PatchLog` 原地覆写及阶段 4 同步 `os.Remove`」的数据层设计
+已采纳 (accepted) — 替代 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 与 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md) 的独立 `.blob` 数据层；§4.1 跨分支封口硬链接已随 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 单盘化裁撤，封包渐进回写、后台死包回收与连续冷块合并读由 [ADR-0034](0034-h2c-striped-transport-zero-alloc-codec-and-pack-io-coalescing.md) 演进
 
 ## 背景
 在 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md) 的 `StoreActor` 架构下，元数据层已实现单协程 `IndexedBatch` Group Commit 与 100% 锁外并发直读，但底层数据层（Data Layer）沿用了「1 个逻辑块对应宿主机 1 个独立 `blobs/<00..ff>/<id>.blob` 文件」的模型，暴露出以下四个根源问题：

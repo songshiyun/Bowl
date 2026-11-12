@@ -1,7 +1,7 @@
 # 0019. 文件数据分三层（Chunk-Slice-Block）存储、数据库合并切片与本地 NVMe 落盘设计
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0010](0010-fuse-directory-stream-and-fallocate-metadata-semantics.md) 与 [ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md)
+已被 [ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 替代 (superseded by ADR-0031) — 三层 `Chunk-Slice-Block` 与 PostgreSQL 切片合并已被 `256 KiB` 逻辑 `Blob` 网格与 `64 MiB` Append-Only `.pack` 封包容器取代
 
 ## 背景
 在完成 `StorageService` 的 36 个 POSIX 元数据接口与 `Disk` 容量配额管理（ADR-0001 至 ADR-0018）后，系统需要实现真正的文件数据读写功能（`Read` 与 `Write`）。在设计数据存储结构时，需要兼顾以下四个要求：

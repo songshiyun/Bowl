@@ -1,7 +1,7 @@
 # 0024. 服务端写入先落系统缓存、Fsync 按需刷盘与内存实时统计磁盘配额
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0009](0009-fuse-file-handle-lifecycle-and-orphan-reclamation.md)、[ADR-0013](0013-fuse-rename2-tmpfile-fsyncdir-and-session-orphan-reclamation.md)、[ADR-0015](0015-unify-disk-and-storage-service-with-transactional-quota.md)、[ADR-0019](0019-chunk-slice-block-nvme-data-layer.md) 与 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md)
+已被 [ADR-0030](0030-store-actor-group-commit-and-four-stage-data-pipeline.md)、[ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 与 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 替代 (superseded by ADR-0030, ADR-0031, and ADR-0032)
 
 ## 背景
 在完成 [ADR-0022](0022-server-write-group-commit-and-prefix-skipping-compaction.md) 与 [ADR-0023](0023-session-touch-throttling-lockless-handle-close-and-read-pipeline.md) 后，系统在写入速度和磁盘配额统计上还有两个明显问题：

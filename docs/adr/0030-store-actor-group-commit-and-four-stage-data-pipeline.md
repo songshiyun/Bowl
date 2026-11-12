@@ -1,7 +1,7 @@
 # 0030. Store Actor 存储引擎：无锁并发直读、单协程双阶段 Group Commit 与四阶段跨层数据流水线
 
 ## 状态
-已采纳 (accepted) — 演进 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 的单分支存储引擎内部并发模型与跨层写入流水线
+已采纳 (accepted) — 演进 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 的引擎并发模型；其中 `1 MiB` `.blob` 与 `PatchLog` 数据层已被 [ADR-0031](0031-shardstore-append-only-pack-storage-and-256kib-block-grid.md) 替代，多分支键与 `25B` `"sys:stat"` 已被 [ADR-0032](0032-single-disk-control-plane-and-stateless-epoch-fencing.md) 演进为单盘 `41B` `"sys:stat"` 与 `Epoch` 栅栏
 
 ## 背景
 在 [ADR-0029](0029-pebble-per-branch-storage-swmr-and-checkpoint-commit.md) 确立「1 个 `Branch` 对应 1 个独立 Pebble 实例与 `blobs/` 1 MiB 块目录」的基础上，原存储引擎实现将文件元数据（`meta` / `pebblekv`）与数据块管理（`BlobStore`）分散在不同模块与锁域中，通过细粒度 Inode 读写锁（`RWMutex`）与每次 RPC 独立提交 Pebble Batch 协同，存在以下性能与工程边界瓶颈：
