@@ -15,9 +15,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/observability/slogx"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/observability/slogx"
+	"github.com/starsrc/pkg/observability/telemetry"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"

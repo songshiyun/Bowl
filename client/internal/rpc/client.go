@@ -16,7 +16,7 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/otelconnect"
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/serverx"
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"

@@ -3,11 +3,11 @@ package config
 import (
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/observability/slogx"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
-	"github.com/starsrc/Aether/pkg/serverx"
-	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/observability/slogx"
+	"github.com/starsrc/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/serverx"
+	"github.com/starsrc/pkg/tx"
 )
 
 // noDefaultMetricsObsConfig 包装 *EnvConfig，在 obsfx.Module 调用 observability.Setup 时

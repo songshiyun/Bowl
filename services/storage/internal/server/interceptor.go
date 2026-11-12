@@ -13,9 +13,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/starsrc/Aether/pkg/observability/slogx"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/observability/slogx"
+	"github.com/starsrc/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/serverx"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
@@ -260,7 +260,7 @@ func logSlowStorageRPC(
 	target.LogAttrs(ctx, slog.LevelWarn, "slow storage rpc", attrs...)
 }
 
-// BuildInterceptors 委托 Aether/pkg/serverx 构建标准 ConnectRPC 拦截器链：
+// BuildInterceptors 委托 starsrc/pkg/serverx 构建标准 ConnectRPC 拦截器链：
 // 1. 最外层脱敏 (slogx.NewMaskInterceptor)
 // 2. 次外层追踪与指标 (otelconnect.NewInterceptor)
 // 3. 错误原因提取 (serverx.NewErrorReasonInterceptor)

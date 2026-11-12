@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/serverx"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )

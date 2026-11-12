@@ -16,8 +16,8 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/observability/telemetry"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )

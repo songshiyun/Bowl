@@ -12,7 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/serverx"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )

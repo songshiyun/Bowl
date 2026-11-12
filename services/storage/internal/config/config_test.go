@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/observability/telemetry"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
 )

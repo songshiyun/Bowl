@@ -36,4 +36,4 @@
   - `task goose:storage:up`（及 `down` / `status`）：执行数据库迁移（默认 DSN：`postgres://postgres:postgres@127.0.0.1:9432/bowl?sslmode=disable`，对应本地容器 `bowl-postgres`）。
 ## 跨仓事务契约
 
-- **事务管理依赖**：依赖 `github.com/starsrc/Aether/pkg/tx`（`Transactor[Querier]`、`ExecTx`、`WithReadOnly()`、`WithIsoLevel(...)`）。
+- **事务管理依赖**：依赖 `github.com/starsrc/pkg/tx`（`Transactor[Querier]`、`ExecTx`、`WithReadOnly()`、`WithIsoLevel(...)`）。

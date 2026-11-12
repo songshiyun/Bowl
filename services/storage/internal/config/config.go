@@ -10,9 +10,9 @@ import (
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/serverx"
-	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/serverx"
+	"github.com/starsrc/pkg/tx"
 )
 
 // DefaultServerReadMaxBytes 定义 Storage 服务默认的最大请求体读取字节数（8 MiB）。

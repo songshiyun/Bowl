@@ -23,10 +23,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/observability/obsfx"
-	"github.com/starsrc/Aether/pkg/serverx"
-	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/observability/obsfx"
+	"github.com/starsrc/pkg/serverx"
+	"github.com/starsrc/pkg/tx"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"

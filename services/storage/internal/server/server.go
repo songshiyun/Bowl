@@ -11,9 +11,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/observability/telemetry"
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/observability/telemetry"
+	"github.com/starsrc/pkg/serverx"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 	"github.com/starsrc/bowl/services/storage/internal/config"

@@ -4,7 +4,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability/obsfx"
+	"github.com/starsrc/pkg/observability/obsfx"
 )
 
 func provideHTTPMetricsCollector(m *HTTPMetrics) prometheus.Collector {

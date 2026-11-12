@@ -9,7 +9,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/status"
 
-	"github.com/starsrc/Aether/pkg/serverx"
+	"github.com/starsrc/pkg/serverx"
 
 	"github.com/starsrc/bowl/services/storage/internal/control"
 )

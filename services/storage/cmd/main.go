@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability/obsfx"
+	"github.com/starsrc/pkg/observability/obsfx"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/control"

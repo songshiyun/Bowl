@@ -8,8 +8,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/fx"
 
-	"github.com/starsrc/Aether/pkg/observability"
-	"github.com/starsrc/Aether/pkg/tx"
+	"github.com/starsrc/pkg/observability"
+	"github.com/starsrc/pkg/tx"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
 )
