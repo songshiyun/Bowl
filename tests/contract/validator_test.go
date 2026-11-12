@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/pkg/validator"
@@ -214,6 +215,82 @@ func TestStorageValidatorControlPlaneAndMountDiskRequests(t *testing.T) {
 	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: new(uint64(0))}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.UpdateDiskRequest{DiskId: validDiskID, MaxBytes: new(overMax)}), validator.ReasonInvalidArgument)
 	assertValidationReason(t, v.Validate(&storagev1.DeleteDiskRequest{DiskId: nilUUID}), validator.ReasonInvalidArgument)
+
+	// ForkDiskRequest / ForkDiskResponse / Disk.parent_disk_id 正反边界与优先级断言
+	maxLimit := uint64(math.MaxInt64)
+	require.NoError(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID}))
+	require.NoError(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: strings.Repeat("a", 255), MaxBytes: new(uint64(1))}))
+	require.NoError(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: "forked-disk", MaxBytes: &maxLimit}))
+
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: "bad"}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: nilUUID}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: longName}), validator.ReasonNameTooLong)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: "a\x00b"}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: strings.Repeat("a", 255) + "\x00"}), validator.ReasonNameTooLong)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, MaxBytes: new(uint64(0))}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, MaxBytes: new(overMax)}), validator.ReasonInvalidArgument)
+	// 优先级断言：source_disk_id / max_bytes (10) 高于 name 超长 (20)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: "bad", Name: longName}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskRequest{SourceDiskId: validDiskID, Name: longName, MaxBytes: new(uint64(0))}), validator.ReasonInvalidArgument)
+
+	now := timestamppb.Now()
+	parentID := "22222222-2222-7222-8222-222222222222"
+	validRootDisk := &storagev1.Disk{
+		DiskId:    validDiskID,
+		Name:      "root-disk",
+		RootIno:   1,
+		MaxBytes:  maxBytes,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	validForkedDisk := &storagev1.Disk{
+		DiskId:       validDiskID,
+		Name:         "child-disk",
+		RootIno:      1,
+		MaxBytes:     maxBytes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ParentDiskId: &parentID,
+	}
+	require.NoError(t, v.Validate(validRootDisk))
+	require.NoError(t, v.Validate(validForkedDisk))
+	require.NoError(t, v.Validate(&storagev1.ForkDiskResponse{Disk: validForkedDisk}))
+
+	assertValidationReason(t, v.Validate(&storagev1.ForkDiskResponse{}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.Disk{
+		DiskId:       validDiskID,
+		RootIno:      1,
+		MaxBytes:     maxBytes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ParentDiskId: new(""),
+	}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.Disk{
+		DiskId:       validDiskID,
+		RootIno:      1,
+		MaxBytes:     maxBytes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ParentDiskId: new("not-a-uuid"),
+	}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.Disk{
+		DiskId:       validDiskID,
+		RootIno:      1,
+		MaxBytes:     maxBytes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ParentDiskId: new(nilUUID),
+	}), validator.ReasonInvalidArgument)
+	assertValidationReason(t, v.Validate(&storagev1.Disk{
+		DiskId:       validDiskID,
+		Name:         longName,
+		RootIno:      1,
+		MaxBytes:     maxBytes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ParentDiskId: new(nilUUID),
+	}), validator.ReasonInvalidArgument)
 }
 
 func TestStorageValidatorReadDataPlaneDiskIDContract(t *testing.T) {
