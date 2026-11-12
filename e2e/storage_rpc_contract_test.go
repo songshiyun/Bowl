@@ -686,3 +686,228 @@ func assertAll16WriteRPCsFenced(
 	}))
 	testutil.RequireConnectError(t, err, connect.CodeFailedPrecondition, "EBUSY")
 }
+
+// TestForkDiskOnlineIsolationOrphanSanitizeAndLineageDelete 验证真实 PostgreSQL + Storage 容器下
+// 在线无感 ForkDisk、孤儿净化配额水位线、级联 Fork DAG 及同血缘 |D|>=2 / |D|==1 / |D|==0 删盘回收契约。
+func TestForkDiskOnlineIsolationOrphanSanitizeAndLineageDelete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client := testutil.NewStorageClient()
+
+	createdParent, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "e2e-fork-parent",
+		MaxBytes: 16 << 20,
+	}))
+	require.NoError(t, err)
+	parentID := createdParent.Msg.GetDisk().GetDiskId()
+	require.Nil(t, createdParent.Msg.GetDisk().ParentDiskId)
+
+	var createdDiskIDs []string
+	createdDiskIDs = append(createdDiskIDs, parentID)
+	t.Cleanup(func() {
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		for _, id := range createdDiskIDs {
+			_, _ = client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: id}))
+		}
+	})
+
+	// 1. 校验 ForkDisk 错误码契约（ENOENT / EINVAL / ENAMETOOLONG）。
+	_, notFoundErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: "018f0000-0000-7000-8000-000000009999",
+		Name:         "missing-src",
+	}))
+	testutil.RequireConnectError(t, notFoundErr, connect.CodeNotFound, "ENOENT")
+
+	_, nilUUIDErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: "00000000-0000-0000-0000-000000000000",
+		Name:         "nil-src",
+	}))
+	testutil.RequireConnectError(t, nilUUIDErr, connect.CodeInvalidArgument, "EINVAL")
+
+	_, longNameErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: parentID,
+		Name:         string(bytes.Repeat([]byte("n"), 256)),
+	}))
+	testutil.RequireConnectError(t, longNameErr, connect.CodeInvalidArgument, "ENAMETOOLONG")
+
+	// 2. 挂载父盘，写入 300 KiB 常规文件（跨 256 KiB Blob 边界）与 256 KiB 孤儿文件。
+	parentMount, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId: parentID,
+	}))
+	require.NoError(t, err)
+	parentEpoch := parentMount.Msg.GetEpoch()
+	require.Equal(t, uint64(1), parentEpoch)
+
+	sharedCreate, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    parentID,
+		Epoch:     parentEpoch,
+		ParentIno: 1,
+		Name:      []byte("shared.bin"),
+		Mode:      0o644,
+	}))
+	require.NoError(t, err)
+	sharedIno := sharedCreate.Msg.GetInode().GetIno()
+
+	sharedPayload := bytes.Repeat([]byte("FORK-BASE-DATA-"), 20480) // 307,200 B (300 KiB)
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID,
+		Epoch:  parentEpoch,
+		Ino:    sharedIno,
+		Offset: 0,
+		Data:   sharedPayload,
+	}))
+	require.NoError(t, err)
+
+	orphanCreate, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    parentID,
+		Epoch:     parentEpoch,
+		ParentIno: 1,
+		Name:      []byte("orphan.bin"),
+		Mode:      0o644,
+	}))
+	require.NoError(t, err)
+	orphanIno := orphanCreate.Msg.GetInode().GetIno()
+	orphanPayload := bytes.Repeat([]byte{0xEE}, 256*1024)
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID,
+		Epoch:  parentEpoch,
+		Ino:    orphanIno,
+		Offset: 0,
+		Data:   orphanPayload,
+	}))
+	require.NoError(t, err)
+	_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
+		DiskId:       parentID,
+		Epoch:        parentEpoch,
+		ParentIno:    1,
+		Name:         []byte("orphan.bin"),
+		OpenInClient: new(true),
+	}))
+	require.NoError(t, err)
+
+	// 2a. 缩容至低于净化后已用空间（100 KiB < 300 KiB）必须返回 FailedPrecondition (EINVAL)。
+	_, shrinkErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: parentID,
+		Name:         "too-small-fork",
+		MaxBytes:     new(uint64(100 * 1024)),
+	}))
+	testutil.RequireConnectError(t, shrinkErr, connect.CodeFailedPrecondition, "EINVAL")
+
+	// 2b. 指定 MaxBytes = 512 KiB（介于净化后 300 KiB 与源盘含孤儿 556 KiB 之间），在线无感派生 child1。
+	child1Resp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: parentID,
+		Name:         "e2e-fork-child-1",
+		MaxBytes:     new(uint64(512 * 1024)),
+	}))
+	require.NoError(t, err)
+	child1 := child1Resp.Msg.GetDisk()
+	child1ID := child1.GetDiskId()
+	createdDiskIDs = append(createdDiskIDs, child1ID)
+	require.NotNil(t, child1.ParentDiskId)
+	require.Equal(t, parentID, child1.GetParentDiskId())
+	require.Equal(t, uint64(512*1024), child1.GetMaxBytes())
+	require.Equal(t, uint64(len(sharedPayload)), child1.GetUsedBytes())
+	require.Equal(t, uint64(2), child1.GetUsedInodes())
+
+	// 3. 父盘原挂载 Epoch=1 零中断继续覆写，且父盘孤儿句柄仍可读。
+	parentMutated := []byte("PARENT-NEW-PAYLOAD-AFTER-ONLINE-FORK")
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID,
+		Epoch:  parentEpoch,
+		Ino:    sharedIno,
+		Offset: 0,
+		Data:   parentMutated,
+	}))
+	require.NoError(t, err)
+	_, err = client.SetAttr(ctx, connect.NewRequest(&storagev1.SetAttrRequest{
+		DiskId: parentID,
+		Epoch:  parentEpoch,
+		Ino:    sharedIno,
+		Size:   new(uint64(len(parentMutated))),
+	}))
+	require.NoError(t, err)
+	orphanRead, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: parentID,
+		Ino:    orphanIno,
+		Offset: 0,
+		Size:   uint32(len(orphanPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, orphanPayload, orphanRead.Msg.GetData())
+
+	// 4. 子盘首次可写挂载返回 Epoch=1，读取 shared.bin 保持 Fork 时刻 300 KiB 数据，并写入新文件验证号段防撞。
+	child1Mount, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId: child1ID,
+	}))
+	require.NoError(t, err)
+	child1Epoch := child1Mount.Msg.GetEpoch()
+	require.Equal(t, uint64(1), child1Epoch)
+
+	child1Lookup, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		DiskId:    child1ID,
+		ParentIno: 1,
+		Name:      []byte("shared.bin"),
+	}))
+	require.NoError(t, err)
+	child1Read, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: child1ID,
+		Ino:    child1Lookup.Msg.GetInode().GetIno(),
+		Offset: 0,
+		Size:   uint32(len(sharedPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, sharedPayload, child1Read.Msg.GetData())
+
+	parentNewFile, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: parentID, Epoch: parentEpoch, ParentIno: 1, Name: []byte("p-new.txt"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	childNewFile, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: child1ID, Epoch: child1Epoch, ParentIno: 1, Name: []byte("c-new.txt"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	require.NotEqual(t, parentNewFile.Msg.GetInode().GetIno(), childNewFile.Msg.GetInode().GetIno(), "同源派生分支新分配 Inode 严禁冲突")
+
+	// 5. 二次 Fork 与级联 Fork，随后按 |D|>=2 -> |D|==1 -> |D|==0 顺序删盘，验证 PG 外键与切面回收。
+	child2Resp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: parentID,
+		Name:         "e2e-fork-child-2",
+	}))
+	require.NoError(t, err)
+	child2ID := child2Resp.Msg.GetDisk().GetDiskId()
+	createdDiskIDs = append(createdDiskIDs, child2ID)
+	require.Equal(t, uint64(16<<20), child2Resp.Msg.GetDisk().GetMaxBytes())
+
+	grandResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: child1ID,
+		Name:         "e2e-fork-grandchild",
+	}))
+	require.NoError(t, err)
+	grandID := grandResp.Msg.GetDisk().GetDiskId()
+	createdDiskIDs = append(createdDiskIDs, grandID)
+	require.Equal(t, child1ID, grandResp.Msg.GetDisk().GetParentDiskId())
+
+	// 删除父盘（|D| == 3 >= 2），所有子孙分支完好可读。
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: parentID}))
+	require.NoError(t, err)
+
+	// 删除 child2 与 grandChild，使同血缘仅剩唯一幸存盘 child1（|D| == 1，自动清空切面 DAG）。
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: child2ID}))
+	require.NoError(t, err)
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: grandID}))
+	require.NoError(t, err)
+
+	// 唯一幸存盘 child1 仍可正常读取与再次删除（|D| == 0）。
+	child1ReadAfterGC, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: child1ID,
+		Ino:    child1Lookup.Msg.GetInode().GetIno(),
+		Offset: 0,
+		Size:   uint32(len(sharedPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, sharedPayload, child1ReadAfterGC.Msg.GetData())
+
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: child1ID}))
+	require.NoError(t, err)
+}

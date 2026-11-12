@@ -55,7 +55,7 @@ func toProtoDisk(d *control.Disk) *storagev1.Disk {
 	if d == nil {
 		return nil
 	}
-	return &storagev1.Disk{
+	pb := &storagev1.Disk{
 		DiskId:     d.DiskID,
 		Name:       d.Name,
 		RootIno:    d.RootIno,
@@ -65,6 +65,10 @@ func toProtoDisk(d *control.Disk) *storagev1.Disk {
 		CreatedAt:  timestamppb.New(d.CreatedAt),
 		UpdatedAt:  timestamppb.New(d.UpdatedAt),
 	}
+	if d.ParentDiskID != "" {
+		pb.ParentDiskId = &d.ParentDiskID
+	}
+	return pb
 }
 
 // CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
@@ -77,6 +81,21 @@ func (s *Server) CreateDisk(ctx context.Context, req *connect.Request[storagev1.
 		return nil, toConnectError(err)
 	}
 	return connect.NewResponse(&storagev1.CreateDiskResponse{
+		Disk: toProtoDisk(disk),
+	}), nil
+}
+
+// ForkDisk 基于已有源虚拟磁盘在线零拷贝派生新的虚拟磁盘。
+func (s *Server) ForkDisk(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
+	disk, err := s.control.ForkDisk(ctx, control.ForkDiskParams{
+		SourceDiskID: req.Msg.SourceDiskId,
+		Name:         req.Msg.Name,
+		MaxBytes:     req.Msg.MaxBytes,
+	})
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.ForkDiskResponse{
 		Disk: toProtoDisk(disk),
 	}), nil
 }

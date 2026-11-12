@@ -37,12 +37,18 @@ import (
 )
 
 type memDiskDB struct {
-	mu    sync.Mutex
-	disks map[[16]byte]db.Disk
+	mu       sync.Mutex
+	disks    map[[16]byte]db.Disk
+	lineages map[[16]byte]db.DiskLineage
+	commits  map[[16]byte]db.DiskCommit
 }
 
 func newMemDiskDB() *memDiskDB {
-	return &memDiskDB{disks: make(map[[16]byte]db.Disk)}
+	return &memDiskDB{
+		disks:    make(map[[16]byte]db.Disk),
+		lineages: make(map[[16]byte]db.DiskLineage),
+		commits:  make(map[[16]byte]db.DiskCommit),
+	}
 }
 
 func (m *memDiskDB) ExecTx(_ context.Context, fn func(db.Querier) error) error {
@@ -53,18 +59,150 @@ func (m *memDiskDB) ExecTxWithOptions(_ context.Context, fn func(db.Querier) err
 	return fn(m)
 }
 
+func (m *memDiskDB) CreateDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := db.DiskLineage{
+		LineageID:  lineageID,
+		NextIno:    2,
+		NextPackID: 1,
+		CreatedAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+	}
+	m.lineages[lineageID.Bytes] = row
+	return row, nil
+}
+
+func (m *memDiskDB) LockDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.lineages[lineageID.Bytes]
+	if !ok {
+		return db.DiskLineage{}, pgx.ErrNoRows
+	}
+	return row, nil
+}
+
+func (m *memDiskDB) ReserveInodeSegment(_ context.Context, arg db.ReserveInodeSegmentParams) (db.ReserveInodeSegmentRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.lineages[arg.LineageID.Bytes]
+	if !ok || arg.Count <= 0 {
+		return db.ReserveInodeSegmentRow{}, pgx.ErrNoRows
+	}
+	start := max(row.NextIno, arg.MinNext)
+	row.NextIno = start + arg.Count
+	m.lineages[arg.LineageID.Bytes] = row
+	return db.ReserveInodeSegmentRow{
+		FirstIno: start,
+		LastIno:  row.NextIno - 1,
+	}, nil
+}
+
+func (m *memDiskDB) ReservePackSegment(_ context.Context, arg db.ReservePackSegmentParams) (db.ReservePackSegmentRow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.lineages[arg.LineageID.Bytes]
+	if !ok || arg.Count <= 0 {
+		return db.ReservePackSegmentRow{}, pgx.ErrNoRows
+	}
+	start := max(row.NextPackID, arg.MinNext)
+	row.NextPackID = start + arg.Count
+	m.lineages[arg.LineageID.Bytes] = row
+	return db.ReservePackSegmentRow{
+		FirstPackID: start,
+		LastPackID:  row.NextPackID - 1,
+	}, nil
+}
+
+//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
+func (m *memDiskDB) CreateDiskCommit(_ context.Context, arg db.CreateDiskCommitParams) (db.DiskCommit, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := db.DiskCommit{
+		CommitID:            arg.CommitID,
+		LineageID:           arg.LineageID,
+		SourceDiskID:        arg.SourceDiskID,
+		ParentCommitID:      arg.ParentCommitID,
+		MergeParentCommitID: arg.MergeParentCommitID,
+		CreatedAt:           pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+	}
+	m.commits[arg.CommitID.Bytes] = row
+	return row, nil
+}
+
+//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
 func (m *memDiskDB) CreateDisk(_ context.Context, arg db.CreateDiskParams) (db.Disk, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	row := db.Disk{
-		DiskID:    arg.DiskID,
-		Name:      arg.Name,
-		CreatedAt: now,
-		UpdatedAt: now,
+		DiskID:       arg.DiskID,
+		Name:         arg.Name,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		LineageID:    arg.LineageID,
+		ParentDiskID: arg.ParentDiskID,
+		BaseCommitID: arg.BaseCommitID,
 	}
 	m.disks[arg.DiskID.Bytes] = row
 	return row, nil
+}
+
+func (m *memDiskDB) SetDiskBaseCommit(_ context.Context, arg db.SetDiskBaseCommitParams) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.disks[arg.DiskID.Bytes]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	row.BaseCommitID = arg.BaseCommitID
+	m.disks[arg.DiskID.Bytes] = row
+	return nil
+}
+
+func (m *memDiskDB) ClearLineageBaseCommits(_ context.Context, lineageID pgtype.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id := range m.disks {
+		row := m.disks[id]
+		if row.LineageID == lineageID && row.BaseCommitID.Valid {
+			row.BaseCommitID = pgtype.UUID{}
+			m.disks[id] = row
+		}
+	}
+	return nil
+}
+
+func (m *memDiskDB) DeleteLineageCommits(_ context.Context, lineageID pgtype.UUID) ([]pgtype.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var deleted []pgtype.UUID
+	for id, c := range m.commits {
+		if c.LineageID == lineageID {
+			deleted = append(deleted, c.CommitID)
+			delete(m.commits, id)
+		}
+	}
+	return deleted, nil
+}
+
+func (m *memDiskDB) CountDisksByLineage(_ context.Context, lineageID pgtype.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var cnt int64
+	for id := range m.disks {
+		if m.disks[id].LineageID == lineageID {
+			cnt++
+		}
+	}
+	return cnt, nil
+}
+
+func (m *memDiskDB) DeleteDiskLineage(_ context.Context, lineageID pgtype.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.lineages, lineageID.Bytes)
+	return nil
 }
 
 func (m *memDiskDB) DeleteDisk(_ context.Context, diskID pgtype.UUID) (int64, error) {
@@ -95,8 +233,8 @@ func (m *memDiskDB) ListDisks(_ context.Context, _ db.ListDisksParams) ([]db.Dis
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]db.Disk, 0, len(m.disks))
-	for _, d := range m.disks {
-		out = append(out, d)
+	for id := range m.disks {
+		out = append(out, m.disks[id])
 	}
 	return out, nil
 }
@@ -267,6 +405,24 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	require.Zero(t, leasedWritePayloadCount())
 	require.Zero(t, leasedReadPayloadCount())
 
+	// 验证 ForkDisk 成功与失败路径的 HTTP 指标归一化与 Span bowl.disk_id 提取（含 GetSourceDiskId 兜底）
+	forkResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: diskID,
+		Name:         "obs-e2e-forked-disk",
+	}))
+	require.NoError(t, err)
+	forkedDiskID := forkResp.Msg.GetDisk().GetDiskId()
+	require.NotEmpty(t, forkedDiskID)
+	require.Equal(t, diskID, forkResp.Msg.GetDisk().GetParentDiskId())
+	require.Equal(t, uint64(ioSize), forkResp.Msg.GetDisk().GetUsedBytes())
+
+	const missingSourceDiskID = "018f0000-0000-7000-8000-000000009999"
+	_, forkMissingErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: missingSourceDiskID,
+		Name:         "obs-e2e-missing-fork",
+	}))
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkMissingErr))
+
 	// 发送一条未知 URL 探测，验证 procedure 归一到 "other" 且不引发高基数膨胀
 	probeResp, err := httpSrv.Client().Post(httpSrv.URL+"/malicious/random-path-12345", "application/proto", bytes.NewReader([]byte("x")))
 	require.NoError(t, err)
@@ -296,7 +452,7 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 
 	httpDurFam := byName["bowl_storage_http_request_duration_seconds"]
 	require.NotNil(t, httpDurFam)
-	var sawWrite2xx, sawRead2xx, sawOther4xx bool
+	var sawWrite2xx, sawRead2xx, sawFork2xx, sawFork4xx, sawOther4xx bool
 	for _, m := range httpDurFam.GetMetric() {
 		var proc, sc string
 		for _, lp := range m.GetLabel() {
@@ -315,12 +471,20 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 		if proc == storagev1connect.StorageServiceReadProcedure && sc == "2xx" && m.GetHistogram().GetSampleCount() == 1 {
 			sawRead2xx = true
 		}
+		if proc == storagev1connect.StorageServiceForkDiskProcedure && sc == "2xx" && m.GetHistogram().GetSampleCount() == 1 {
+			sawFork2xx = true
+		}
+		if proc == storagev1connect.StorageServiceForkDiskProcedure && sc == "4xx" && m.GetHistogram().GetSampleCount() == 1 {
+			sawFork4xx = true
+		}
 		if proc == "other" && sc == "4xx" && m.GetHistogram().GetSampleCount() == 1 {
 			sawOther4xx = true
 		}
 	}
 	require.True(t, sawWrite2xx, "外层 HTTP 直方图必须记录 Write 2xx")
 	require.True(t, sawRead2xx, "外层 HTTP 直方图必须记录 Read 2xx")
+	require.True(t, sawFork2xx, "外层 HTTP 直方图必须记录 ForkDisk 2xx")
+	require.True(t, sawFork4xx, "外层 HTTP 直方图必须记录 ForkDisk 4xx")
 	require.True(t, sawOther4xx, "未知路径必须收敛至 procedure=other, status_class=4xx")
 
 	reqBytesFam := byName["bowl_storage_http_request_bytes_total"]
@@ -350,9 +514,19 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	// 3. 断言 Server -> Control -> StoreActor 全链路 OTel Span 已真实打通
 	spans := spanExporter.GetSpans()
 	spanNames := make(map[string]int)
+	forkSpanDiskIDs := make(map[string]bool)
 	for _, sp := range spans {
 		spanNames[sp.Name]++
+		if sp.Name == "storage.v1.StorageService/ForkDisk" || sp.Name == storagev1connect.StorageServiceForkDiskProcedure {
+			for _, attr := range sp.Attributes {
+				if string(attr.Key) == attrKeyBowlDiskID {
+					forkSpanDiskIDs[attr.Value.AsString()] = true
+				}
+			}
+		}
 	}
+	require.True(t, forkSpanDiskIDs[forkedDiskID], "ForkDisk 成功 Span 必须记录新建子盘 bowl.disk_id")
+	require.True(t, forkSpanDiskIDs[missingSourceDiskID], "ForkDisk 失败 Span 必须通过 GetSourceDiskId 兜底记录源盘 bowl.disk_id")
 	for _, expected := range []string{
 		"control.OpenDiskActor",
 		"store.BlobWrite",
