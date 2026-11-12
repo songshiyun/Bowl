@@ -48,6 +48,7 @@ const (
 	StorageService_ListDisks_FullMethodName     = "/storage.v1.StorageService/ListDisks"
 	StorageService_UpdateDisk_FullMethodName    = "/storage.v1.StorageService/UpdateDisk"
 	StorageService_DeleteDisk_FullMethodName    = "/storage.v1.StorageService/DeleteDisk"
+	StorageService_ForkDisk_FullMethodName      = "/storage.v1.StorageService/ForkDisk"
 	StorageService_StatFS_FullMethodName        = "/storage.v1.StorageService/StatFS"
 	StorageService_ReclaimOrphan_FullMethodName = "/storage.v1.StorageService/ReclaimOrphan"
 )
@@ -206,6 +207,12 @@ type StorageServiceClient interface {
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(ctx context.Context, in *DeleteDiskRequest, opts ...grpc.CallOption) (*DeleteDiskResponse, error)
+	// ForkDisk 基于指定源虚拟磁盘当前已提交状态零拷贝派生新的虚拟磁盘实体。
+	// 自动将源磁盘当前状态固化为不可变共同祖先切面，并在不中断源磁盘在线读写的前提下克隆出独立子磁盘。
+	// 若源磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若显式指定的 max_bytes 小于孤儿节点净化后的初始已用空间，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EINVAL 缩容保护)。
+	// 若参数校验不通过（如 source_disk_id 格式非法或为全零 Nil UUID、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL 或 ENAMETOOLONG)。
+	ForkDisk(ctx context.Context, in *ForkDiskRequest, opts ...grpc.CallOption) (*ForkDiskResponse, error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
 	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -513,6 +520,16 @@ func (c *storageServiceClient) DeleteDisk(ctx context.Context, in *DeleteDiskReq
 	return out, nil
 }
 
+func (c *storageServiceClient) ForkDisk(ctx context.Context, in *ForkDiskRequest, opts ...grpc.CallOption) (*ForkDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ForkDiskResponse)
+	err := c.cc.Invoke(ctx, StorageService_ForkDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storageServiceClient) StatFS(ctx context.Context, in *StatFSRequest, opts ...grpc.CallOption) (*StatFSResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatFSResponse)
@@ -687,6 +704,12 @@ type StorageServiceServer interface {
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error)
+	// ForkDisk 基于指定源虚拟磁盘当前已提交状态零拷贝派生新的虚拟磁盘实体。
+	// 自动将源磁盘当前状态固化为不可变共同祖先切面，并在不中断源磁盘在线读写的前提下克隆出独立子磁盘。
+	// 若源磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若显式指定的 max_bytes 小于孤儿节点净化后的初始已用空间，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EINVAL 缩容保护)。
+	// 若参数校验不通过（如 source_disk_id 格式非法或为全零 Nil UUID、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL 或 ENAMETOOLONG)。
+	ForkDisk(context.Context, *ForkDiskRequest) (*ForkDiskResponse, error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
 	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -790,6 +813,9 @@ func (UnimplementedStorageServiceServer) UpdateDisk(context.Context, *UpdateDisk
 }
 func (UnimplementedStorageServiceServer) DeleteDisk(context.Context, *DeleteDiskRequest) (*DeleteDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteDisk not implemented")
+}
+func (UnimplementedStorageServiceServer) ForkDisk(context.Context, *ForkDiskRequest) (*ForkDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ForkDisk not implemented")
 }
 func (UnimplementedStorageServiceServer) StatFS(context.Context, *StatFSRequest) (*StatFSResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StatFS not implemented")
@@ -1340,6 +1366,24 @@ func _StorageService_DeleteDisk_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_ForkDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ForkDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).ForkDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_ForkDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).ForkDisk(ctx, req.(*ForkDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StorageService_StatFS_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(StatFSRequest)
 	if err := dec(in); err != nil {
@@ -1498,6 +1542,10 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteDisk",
 			Handler:    _StorageService_DeleteDisk_Handler,
+		},
+		{
+			MethodName: "ForkDisk",
+			Handler:    _StorageService_ForkDisk_Handler,
 		},
 		{
 			MethodName: "StatFS",

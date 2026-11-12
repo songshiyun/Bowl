@@ -186,6 +186,13 @@ service StorageService {
   // 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
   rpc DeleteDisk(DeleteDiskRequest) returns (DeleteDiskResponse);
 
+  // ForkDisk 基于指定源虚拟磁盘当前已提交状态零拷贝派生新的虚拟磁盘实体。
+  // 自动将源磁盘当前状态固化为不可变共同祖先切面，并在不中断源磁盘在线读写的前提下克隆出独立子磁盘。
+  // 若源磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+  // 若显式指定的 max_bytes 小于孤儿节点净化后的初始已用空间，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EINVAL 缩容保护)。
+  // 若参数校验不通过（如 source_disk_id 格式非法或为全零 Nil UUID、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL 或 ENAMETOOLONG)。
+  rpc ForkDisk(ForkDiskRequest) returns (ForkDiskResponse);
+
   // StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
   // 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
   // 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -1443,6 +1450,16 @@ message Disk {
 
   // 磁盘最后更新时间戳（必填）。
   google.protobuf.Timestamp updated_at = 8 [(buf.validate.field).required = true];
+
+  // 派生源父磁盘唯一标识符（根磁盘未设置；派生磁盘为合法非全零 nil UUID）。
+  optional string parent_disk_id = 9 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "disk_parent_disk_id_not_nil"
+      message: "parent_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
 }
 
 // CreateDiskRequest 定义 CreateDisk 接口输入参数。
@@ -1563,6 +1580,41 @@ message DeleteDiskRequest {
 
 // DeleteDiskResponse 定义 DeleteDisk 接口输出参数。
 message DeleteDiskResponse {}
+
+// ForkDiskRequest 定义 ForkDisk 接口输入参数。
+message ForkDiskRequest {
+  // 派生源虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+  string source_disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "fork_disk_source_disk_id_not_nil"
+      message: "source_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 新建派生磁盘名称（最大 255 字节，严禁包含空字节 '\x00'）。
+  string name = 2 [
+    (buf.validate.field).string.max_bytes = 255,
+    (buf.validate.field).cel = {
+      id: "fork_disk_name_no_nul"
+      message: "name cannot contain NUL byte"
+      expression: "!this.contains('\\x00')"
+    }
+  ];
+
+  // 可选的新盘容量配额上限字节数（省略时继承源盘配额；指定时必须在 int64 正数区间内）。
+  optional uint64 max_bytes = 3 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+}
+
+// ForkDiskResponse 定义 ForkDisk 接口输出参数。
+message ForkDiskResponse {
+  // 派生成功的虚拟磁盘实体。
+  Disk disk = 1 [(buf.validate.field).required = true];
+}
 
 // StatFSRequest 定义 StatFS 接口输入参数。
 message StatFSRequest {

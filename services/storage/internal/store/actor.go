@@ -69,6 +69,7 @@ const (
 	opCompactSelect
 	opCompactRelocate
 	opCompactReap
+	opCheckpoint
 )
 
 func (op opKind) String() string {
@@ -119,6 +120,8 @@ func (op opKind) String() string {
 		return "compact_relocate"
 	case opCompactReap:
 		return "compact_reap"
+	case opCheckpoint:
+		return "checkpoint"
 	default:
 		return "unknown"
 	}
@@ -142,16 +145,19 @@ type writeCmd struct {
 
 // Options 配置 StoreActor 实例打开参数。
 type Options struct {
-	Dir       string
-	DiskID    string
-	ReadOnly  bool
-	MaxBytes  uint64
-	MaxInodes uint64
-	AtimeMode AtimeMode
-	Cache     *pebble.Cache
-	Now       func() time.Time
-	Logger    *slog.Logger
-	Metrics   *Metrics
+	Dir           string
+	DiskID        string
+	ReadOnly      bool
+	MaxBytes      uint64
+	MaxInodes     uint64
+	AtimeMode     AtimeMode
+	Cache         *pebble.Cache
+	Now           func() time.Time
+	Logger        *slog.Logger
+	Metrics       *Metrics
+	InoAllocator  InodeSegmentAllocator
+	PackAllocator PackSegmentAllocator
+	ResetEpoch    bool
 
 	// 包内单测注入钩子（生产路径留零值）。
 	pebbleFS          vfs.FS
@@ -230,6 +236,8 @@ type StoreActor struct {
 	lastActivePackID       uint64
 	nextIno                uint64
 	reservedIno            uint64
+	maxExistingIno         uint64
+	inoAllocator           InodeSegmentAllocator
 	walDirty               atomic.Bool
 	tickCount              atomic.Uint64
 	batchResetCnt          atomic.Uint64
@@ -323,6 +331,7 @@ func Open(opts Options) (*StoreActor, error) {
 		dirtyAtime:        make(map[uint64]int64),
 		loopDone:          make(chan struct{}),
 		inFlightPacks:     make(map[uint64]int),
+		inoAllocator:      opts.InoAllocator,
 		slowTickThreshold: slowTickThresh,
 	}
 	s.maxBytes.Store(opts.MaxBytes)
@@ -353,7 +362,7 @@ func Open(opts Options) (*StoreActor, error) {
 	s.db = db
 	s.fsCloser = fsCloser
 
-	if err := s.initOrLoadState(); err != nil {
+	if err := s.initOrLoadState(&opts); err != nil {
 		_ = db.Close()
 		if fsCloser != nil {
 			_ = fsCloser.Close()
@@ -368,6 +377,7 @@ func Open(opts Options) (*StoreActor, error) {
 		s.dir,
 		baseLogger.With("component", "blobstore", "disk_id", opts.DiskID),
 		opts.Metrics,
+		opts.PackAllocator,
 	)
 
 	if err := s.syncPackStatsWithBlobs(); err != nil {
@@ -394,7 +404,7 @@ func Open(opts Options) (*StoreActor, error) {
 	return s, nil
 }
 
-func (s *StoreActor) initOrLoadState() error {
+func (s *StoreActor) initOrLoadState(opts *Options) error {
 	val, closer, err := s.db.Get(StatKey())
 	if errors.Is(err, pebble.ErrNotFound) {
 		if s.readOnly {
@@ -435,7 +445,13 @@ func (s *StoreActor) initOrLoadState() error {
 		s.atomicLogicalBytes.Store(stat.LogicalBytes)
 		s.atomicInodes.Store(stat.Inodes)
 		s.atomicWriterEpoch.Store(stat.WriterEpoch)
-		s.reservedIno = RootIno
+		s.maxExistingIno = RootIno
+		if s.inoAllocator != nil {
+			s.nextIno = 0
+			s.reservedIno = 0
+		} else {
+			s.reservedIno = RootIno
+		}
 		return nil
 	}
 	if err != nil {
@@ -445,7 +461,25 @@ func (s *StoreActor) initOrLoadState() error {
 	if closeErr := closer.Close(); decErr != nil || closeErr != nil {
 		return errors.Join(decErr, closeErr)
 	}
-	if stat.MaxBytes > 0 {
+	if !s.readOnly && opts.ResetEpoch {
+		if opts.MaxBytes > 0 {
+			if opts.MaxBytes < stat.LogicalBytes {
+				return ErrQuotaShrinkBelowUsed
+			}
+			stat.MaxBytes = opts.MaxBytes
+			s.maxBytes.Store(opts.MaxBytes)
+		} else if stat.MaxBytes > 0 {
+			s.maxBytes.Store(stat.MaxBytes)
+		}
+		stat.WriterEpoch = 0
+		resetBatch := s.db.NewBatch()
+		BatchSetStatDeferred(resetBatch, stat)
+		applyErr := s.db.Apply(resetBatch, pebble.Sync)
+		closeBatchErr := resetBatch.Close()
+		if applyErr != nil || closeBatchErr != nil {
+			return errors.Join(applyErr, closeBatchErr)
+		}
+	} else if stat.MaxBytes > 0 {
 		s.maxBytes.Store(stat.MaxBytes)
 	} else if maxB := s.maxBytes.Load(); maxB > 0 {
 		stat.MaxBytes = maxB
@@ -456,11 +490,17 @@ func (s *StoreActor) initOrLoadState() error {
 	s.atomicWriterEpoch.Store(stat.WriterEpoch)
 
 	if !s.readOnly {
-		maxIno, err := s.scanMaxInode()
-		if err != nil {
-			return err
+		maxIno, scanErr := s.scanMaxInode()
+		if scanErr != nil {
+			return scanErr
 		}
-		s.reservedIno = max(maxIno, RootIno)
+		s.maxExistingIno = max(maxIno, RootIno)
+		if s.inoAllocator != nil {
+			s.nextIno = 0
+			s.reservedIno = 0
+		} else {
+			s.reservedIno = s.maxExistingIno
+		}
 	}
 	return s.loadPackStats()
 }
@@ -981,9 +1021,28 @@ func (s *StoreActor) prepareIno() (uint64, error) {
 }
 
 func (s *StoreActor) reserveInoSegment() error {
-	last := max(s.reservedIno, RootIno)
+	last := max(s.maxExistingIno, s.reservedIno, RootIno)
 	if last >= uint64(math.MaxInt64) {
 		return ErrInodeExhausted
+	}
+	if s.inoAllocator != nil {
+		first, reserved, err := s.inoAllocator(last + 1)
+		if err != nil {
+			return err
+		}
+		if first > uint64(math.MaxInt64) {
+			return ErrInodeExhausted
+		}
+		if first <= last || reserved < first {
+			return ErrInvalidValue
+		}
+		if reserved > uint64(math.MaxInt64) {
+			reserved = uint64(math.MaxInt64)
+		}
+		s.nextIno = first
+		s.reservedIno = reserved
+		s.maxExistingIno = reserved
+		return nil
 	}
 	first := last + 1
 	var reserved uint64
@@ -994,6 +1053,7 @@ func (s *StoreActor) reserveInoSegment() error {
 	}
 	s.nextIno = first
 	s.reservedIno = reserved
+	s.maxExistingIno = reserved
 	return nil
 }
 
@@ -1097,6 +1157,7 @@ func (s *StoreActor) processTick() {
 
 	var (
 		hasSyncBarrier  bool
+		hasCheckpoint   bool
 		fsyncFileInodes []uint64
 		mutated         bool
 		phaseADur       time.Duration
@@ -1135,6 +1196,9 @@ func (s *StoreActor) processTick() {
 		cmd.stagedBlobs = cmd.stagedBlobs[:0]
 		if s.batch.Count() > prevCount || s.stat != prevStat || len(s.dirtyPackStats) > 0 || cmd.op == opUpdateMaxBytes {
 			mutated = true
+		}
+		if cmd.op == opCheckpoint {
+			hasCheckpoint = true
 		}
 		if cmd.syncBarrier || cmd.op == opFsync || cmd.op == opFsyncDir {
 			hasSyncBarrier = true
@@ -1231,6 +1295,14 @@ func (s *StoreActor) processTick() {
 		s.batchResetCnt.Add(1)
 	} else {
 		s.batch.Reset()
+	}
+
+	if hasCheckpoint && commitErr == nil {
+		for _, cmd := range cmds {
+			if cmd.op == opCheckpoint && cmd.err == nil {
+				cmd.err = s.execCheckpointCmd(cmd)
+			}
+		}
 	}
 
 	for i, cmd := range cmds {
@@ -1336,6 +1408,8 @@ func (s *StoreActor) validateCmd(cmd *writeCmd) error {
 		return s.validateCompactSelectCmd(cmd)
 	case opCompactRelocate:
 		return s.validateCompactRelocateCmd(cmd)
+	case opCheckpoint:
+		return s.validateCheckpointCmd(cmd)
 	default:
 		return nil
 	}
@@ -1379,6 +1453,8 @@ func (s *StoreActor) mutateCmd(cmd *writeCmd) {
 		s.mutateCompactRelocateCmd(cmd)
 	case opCompactReap:
 		s.mutateCompactReapCmd(cmd)
+	case opCheckpoint:
+		s.mutateCheckpointCmd(cmd)
 	}
 }
 

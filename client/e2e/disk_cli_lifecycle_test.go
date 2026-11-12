@@ -304,3 +304,169 @@ func TestE2E_DiskCLI_Pagination(t *testing.T) {
 		"page2_count":    strconv.Itoa(len(page2.Disks)),
 	})
 }
+
+// TestE2E_DiskCLI_OnlineForkDualMountIsolationAndDeleteParent 验证父盘 FUSE 在线挂载写入期间
+// 执行 bowl disk fork、父子双挂载点并发读写隔离，以及卸载删除父盘后子盘依然完好可读可写。
+func TestE2E_DiskCLI_OnlineForkDualMountIsolationAndDeleteParent(t *testing.T) {
+	client := newTestStorageClient(t)
+	endpoint := getStorageEndpoint()
+	bowlBin := getBowlBin()
+
+	// 1. 创建父盘并挂载至 parentMnt，写入跨块文件与目录结构。
+	createCmd := exec.Command(bowlBin, "disk", "create", "--endpoint", endpoint, "--size", "1GiB", "--name", "e2e-fork-parent", "--json")
+	createOut, err := createCmd.CombinedOutput()
+	require.NoError(t, err, "创建父盘失败: %s", string(createOut))
+
+	var parentDisk struct {
+		DiskID       string `json:"disk_id"`
+		ParentDiskID string `json:"parent_disk_id"`
+		Name         string `json:"name"`
+		MaxBytes     uint64 `json:"max_bytes"`
+	}
+	require.NoError(t, json.Unmarshal(createOut, &parentDisk))
+	require.NotEmpty(t, parentDisk.DiskID)
+	require.Empty(t, parentDisk.ParentDiskID)
+	parentID := parentDisk.DiskID
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: parentID}))
+	})
+
+	parentMnt := t.TempDir()
+	mountParentCmd := exec.Command(bowlBin, "mount", "--endpoint", endpoint, parentID, parentMnt)
+	mountParentOut, err := mountParentCmd.CombinedOutput()
+	require.NoError(t, err, "挂载父盘失败: %s", string(mountParentOut))
+	parentDaemonPID := findBowlDaemonPID(t, parentMnt)
+	parentMounted := true
+	t.Cleanup(func() {
+		if parentMounted {
+			_ = exec.Command(bowlBin, "umount", parentMnt).Run()
+		}
+	})
+
+	require.NoError(t, os.MkdirAll(filepath.Join(parentMnt, "app"), 0o755))
+	baseConfig := []byte("{\"env\":\"staging\",\"version\":1}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(parentMnt, "app", "config.json"), baseConfig, 0o644))
+
+	largePayload := bytes.Repeat([]byte("BOWL-FUSE-ONLINE-FORK-BLOCK-"), 18725) // ~512 KiB
+	largePayload = largePayload[:512*1024]
+	largeFile, err := os.OpenFile(filepath.Join(parentMnt, "large.bin"), os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	require.NoError(t, err)
+	_, err = largeFile.Write(largePayload)
+	require.NoError(t, err)
+	require.NoError(t, largeFile.Sync())
+	require.NoError(t, largeFile.Close())
+
+	// 2. 保持父盘在线挂载，测试缩容拦截后执行在线 bowl disk fork。
+	shrinkForkCmd := exec.Command(bowlBin, "disk", "fork", parentID, "--endpoint", endpoint, "--size", "4KiB")
+	shrinkForkOut, shrinkForkErr := shrinkForkCmd.CombinedOutput()
+	require.Error(t, shrinkForkErr, "在线 Fork 目标配额低于已用空间必须被拦截: %s", string(shrinkForkOut))
+
+	forkCmd := exec.Command(bowlBin, "disk", "fork", parentID, "--endpoint", endpoint, "--name", "e2e-fork-child", "--size", "2GiB", "--json")
+	forkOut, err := forkCmd.CombinedOutput()
+	require.NoError(t, err, "bowl disk fork 失败: %s", string(forkOut))
+
+	var childDisk struct {
+		DiskID       string `json:"disk_id"`
+		ParentDiskID string `json:"parent_disk_id"`
+		Name         string `json:"name"`
+		MaxBytes     uint64 `json:"max_bytes"`
+		UsedBytes    uint64 `json:"used_bytes"`
+	}
+	require.NoError(t, json.Unmarshal(forkOut, &childDisk), "解析 fork JSON 失败: %s", string(forkOut))
+	require.NotEmpty(t, childDisk.DiskID)
+	require.Equal(t, parentID, childDisk.ParentDiskID)
+	require.Equal(t, "e2e-fork-child", childDisk.Name)
+	require.Equal(t, uint64(2*1024*1024*1024), childDisk.MaxBytes)
+	require.GreaterOrEqual(t, childDisk.UsedBytes, uint64(len(largePayload)))
+	childID := childDisk.DiskID
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: childID}))
+	})
+
+	// 校验人类可读详情输出包含 Parent Disk 字段。
+	getDetailCmd := exec.Command(bowlBin, "disk", "get", "--endpoint", endpoint, childID)
+	getDetailOut, err := getDetailCmd.CombinedOutput()
+	require.NoError(t, err, "bowl disk get 详情失败: %s", string(getDetailOut))
+	require.Contains(t, string(getDetailOut), "Parent Disk:  "+parentID)
+
+	// 3. 将子盘挂载至 childMnt，父子双挂载点同时在线并发读写变更。
+	childMnt := t.TempDir()
+	mountChildCmd := exec.Command(bowlBin, "mount", "--endpoint", endpoint, childID, childMnt)
+	mountChildOut, err := mountChildCmd.CombinedOutput()
+	require.NoError(t, err, "挂载子盘失败: %s", string(mountChildOut))
+	childDaemonPID := findBowlDaemonPID(t, childMnt)
+	childMounted := true
+	t.Cleanup(func() {
+		if childMounted {
+			_ = exec.Command(bowlBin, "umount", childMnt).Run()
+		}
+	})
+
+	// 先核对子盘初始继承内容与父盘 Fork 时刻完全一致。
+	gotChildLarge, err := os.ReadFile(filepath.Join(childMnt, "large.bin"))
+	require.NoError(t, err)
+	require.Equal(t, largePayload, gotChildLarge)
+	gotChildCfg, err := os.ReadFile(filepath.Join(childMnt, "app", "config.json"))
+	require.NoError(t, err)
+	require.Equal(t, baseConfig, gotChildCfg)
+
+	// 父子双盘各自覆写同路径文件并新增独有文件，验证严格隔离。
+	parentNewCfg := []byte("{\"env\":\"production\",\"version\":2}\n")
+	childNewCfg := []byte("{\"env\":\"experiment\",\"version\":99}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(parentMnt, "app", "config.json"), parentNewCfg, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(parentMnt, "only_parent.txt"), []byte("parent-branch"), 0o644))
+
+	require.NoError(t, os.WriteFile(filepath.Join(childMnt, "app", "config.json"), childNewCfg, 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(childMnt, "only_child.txt"), []byte("child-branch"), 0o644))
+
+	readParentCfg, err := os.ReadFile(filepath.Join(parentMnt, "app", "config.json"))
+	require.NoError(t, err)
+	require.Equal(t, parentNewCfg, readParentCfg)
+	_, err = os.Stat(filepath.Join(parentMnt, "only_child.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	readChildCfg, err := os.ReadFile(filepath.Join(childMnt, "app", "config.json"))
+	require.NoError(t, err)
+	require.Equal(t, childNewCfg, readChildCfg)
+	_, err = os.Stat(filepath.Join(childMnt, "only_parent.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	// 4. 卸载并删除父盘，保持子盘挂载不断开，验证子盘继承的数据块与新写文件依然完整可读可写。
+	umountParentOut, err := exec.Command(bowlBin, "umount", parentMnt).CombinedOutput()
+	require.NoError(t, err, "卸载父盘失败: %s", string(umountParentOut))
+	waitForUnmount(t, parentMnt)
+	waitForProcessExit(t, parentDaemonPID)
+	parentMounted = false
+
+	delParentOut, err := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, parentID, "-y").CombinedOutput()
+	require.NoError(t, err, "删除父盘失败: %s", string(delParentOut))
+
+	gotChildLargeAfterParentDel, err := os.ReadFile(filepath.Join(childMnt, "large.bin"))
+	require.NoError(t, err)
+	require.Equal(t, largePayload, gotChildLargeAfterParentDel, "删除父盘后子盘共享 .pack 数据必须完好可读")
+
+	gotChildCfgAfterParentDel, err := os.ReadFile(filepath.Join(childMnt, "app", "config.json"))
+	require.NoError(t, err)
+	require.Equal(t, childNewCfg, gotChildCfgAfterParentDel)
+
+	require.NoError(t, os.WriteFile(filepath.Join(childMnt, "after_parent_del.txt"), []byte("still-alive"), 0o644))
+	gotAlive, err := os.ReadFile(filepath.Join(childMnt, "after_parent_del.txt"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("still-alive"), gotAlive)
+
+	// 5. 正常卸载并删除子盘。
+	umountChildOut, err := exec.Command(bowlBin, "umount", childMnt).CombinedOutput()
+	require.NoError(t, err, "卸载子盘失败: %s", string(umountChildOut))
+	waitForUnmount(t, childMnt)
+	waitForProcessExit(t, childDaemonPID)
+	childMounted = false
+
+	delChildOut, err := exec.Command(bowlBin, "disk", "delete", "--endpoint", endpoint, childID, "-y").CombinedOutput()
+	require.NoError(t, err, "删除子盘失败: %s", string(delChildOut))
+}

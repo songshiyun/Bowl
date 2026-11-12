@@ -1,0 +1,214 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/google/uuid"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+)
+
+const diskForkUsageHelp = `用法:
+  bowl disk fork <source-disk-id> [flags]
+
+参数:
+  <source-disk-id>     派生源虚拟磁盘 UUID（必填，非 Nil UUID）
+
+标志:
+  --name string        新建虚拟磁盘名称 (可选，最大 255 字节)
+  --size string        新建磁盘配额容量上限 (可选，省略时继承源盘配额；支持 B/K/KB/KiB/M/MB/MiB/G/GB/GiB/T/TB/TiB/P/PB/PiB，如 10GiB)
+  -q, --quiet          静默模式，仅输出新建磁盘的 <disk-id>
+  --json               以 JSON 格式输出新建磁盘详情
+  --endpoint string    StorageService 基础地址 (默认读取 $BOWL_STORAGE_ENDPOINT 或 http://127.0.0.1:9000)
+  --token string       访问令牌 (默认读取 $BOWL_TOKEN)
+  -h, --help           查看帮助信息
+`
+
+// executeDiskFork 解析并执行 bowl disk fork 命令。
+func executeDiskFork(args []string, stdout, stderr io.Writer) int {
+	var (
+		sizeRaw  *string
+		name     string
+		quiet    bool
+		jsonOut  bool
+		endpoint string
+		token    string
+		help     bool
+	)
+
+	var posArgs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			posArgs = append(posArgs, args[i+1:]...)
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			flagName := strings.TrimLeft(arg, "-")
+			hasVal := strings.Contains(flagName, "=")
+			var val string
+			if hasVal {
+				parts := strings.SplitN(flagName, "=", 2)
+				flagName = parts[0]
+				val = parts[1]
+			}
+			switch flagName {
+			case "h", "help":
+				help = true
+			case "q", "quiet":
+				quiet = true
+			case "json":
+				jsonOut = true
+			case "size":
+				switch {
+				case hasVal:
+					v := val
+					sizeRaw = &v
+				case i+1 < len(args):
+					i++
+					v := args[i]
+					sizeRaw = &v
+				default:
+					fmt.Fprintln(stderr, "错误: --size 需要指定参数值")
+					return 2
+				}
+			case "name":
+				switch {
+				case hasVal:
+					name = val
+				case i+1 < len(args):
+					i++
+					name = args[i]
+				default:
+					fmt.Fprintln(stderr, "错误: --name 需要指定参数值")
+					return 2
+				}
+			case "endpoint":
+				switch {
+				case hasVal:
+					endpoint = val
+				case i+1 < len(args):
+					i++
+					endpoint = args[i]
+				default:
+					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
+					return 2
+				}
+			case "token":
+				switch {
+				case hasVal:
+					token = val
+				case i+1 < len(args):
+					i++
+					token = args[i]
+				default:
+					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
+					return 2
+				}
+			default:
+				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, diskForkUsageHelp)
+				return 2
+			}
+		} else {
+			posArgs = append(posArgs, arg)
+		}
+	}
+
+	if help {
+		fmt.Fprint(stdout, diskForkUsageHelp)
+		return 0
+	}
+
+	if len(posArgs) != 1 {
+		fmt.Fprintf(stderr, "错误: fork 命令需要且仅需要 1 个位置参数 (<source-disk-id>)\n\n%s", diskForkUsageHelp)
+		return 2
+	}
+
+	if quiet && jsonOut {
+		fmt.Fprintln(stderr, "错误: -q/--quiet 与 --json 不能同时使用")
+		return 2
+	}
+
+	sourceDiskIDStr := posArgs[0]
+	parsedUUID, err := uuid.Parse(sourceDiskIDStr)
+	if err != nil || parsedUUID == uuid.Nil {
+		fmt.Fprintf(stderr, "错误: 无效的 source-disk-id \"%s\"，必须为合法的非 Nil UUID\n", sourceDiskIDStr)
+		return 2
+	}
+
+	var sizePtr *uint64
+	if sizeRaw != nil {
+		var maxBytes uint64
+		maxBytes, err = ParseSize(*sizeRaw)
+		if err != nil {
+			fmt.Fprintf(stderr, "错误: 无效的 --size 参数: %v\n", err)
+			return 2
+		}
+		sizePtr = &maxBytes
+	}
+
+	if err = validateDiskName(name); err != nil {
+		fmt.Fprintf(stderr, "错误: %v\n", err)
+		return 2
+	}
+
+	client, exitCode, err := newDiskStorageClient(endpoint, token)
+	if err != nil {
+		fmt.Fprintf(stderr, "错误: %v\n", err)
+		return exitCode
+	}
+
+	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer rpcCancel()
+
+	resp, err := client.ForkDisk(rpcCtx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: sourceDiskIDStr,
+		Name:         name,
+		MaxBytes:     sizePtr,
+	}))
+	if err != nil {
+		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
+			switch connectErr.Code() {
+			case connect.CodeNotFound:
+				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", sourceDiskIDStr)
+				return 1
+			case connect.CodeFailedPrecondition:
+				fmt.Fprintf(stderr, "错误: 目标容量小于源磁盘已用容量: %v\n", err)
+				return 1
+			}
+		}
+		fmt.Fprintf(stderr, "错误: 派生虚拟磁盘失败: %v\n", err)
+		return 1
+	}
+
+	disk := resp.Msg.GetDisk()
+	if disk == nil {
+		fmt.Fprintln(stderr, "错误: 服务端返回空的虚拟磁盘元数据")
+		return 1
+	}
+
+	if quiet {
+		fmt.Fprintln(stdout, disk.GetDiskId())
+		return 0
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if encErr := enc.Encode(toDiskJSON(disk)); encErr != nil {
+			fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", encErr)
+			return 1
+		}
+		return 0
+	}
+
+	printDiskDetail(stdout, disk)
+	return 0
+}

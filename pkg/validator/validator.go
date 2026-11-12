@@ -58,6 +58,7 @@ var storageMessages = []proto.Message{
 	&storagev1.ListDisksRequest{},
 	&storagev1.UpdateDiskRequest{},
 	&storagev1.DeleteDiskRequest{},
+	&storagev1.ForkDiskRequest{},
 	&storagev1.StatFSRequest{},
 
 	// 响应消息 (Responses)
@@ -91,6 +92,7 @@ var storageMessages = []proto.Message{
 	&storagev1.ListDisksResponse{},
 	&storagev1.UpdateDiskResponse{},
 	&storagev1.DeleteDiskResponse{},
+	&storagev1.ForkDiskResponse{},
 	&storagev1.StatFSResponse{},
 
 	// 嵌套与共享消息
@@ -424,6 +426,7 @@ func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason
 		"storage.v1.Disk.used_inodes",
 		"storage.v1.Disk.created_at",
 		"storage.v1.Disk.updated_at",
+		"storage.v1.Disk.parent_disk_id",
 		"storage.v1.CreateDiskRequest.max_bytes",
 		"storage.v1.CreateDiskResponse.disk",
 		"storage.v1.GetDiskRequest.disk_id",
@@ -433,6 +436,9 @@ func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason
 		"storage.v1.UpdateDiskRequest.max_bytes",
 		"storage.v1.UpdateDiskResponse.disk",
 		"storage.v1.DeleteDiskRequest.disk_id",
+		"storage.v1.ForkDiskRequest.source_disk_id",
+		"storage.v1.ForkDiskRequest.max_bytes",
+		"storage.v1.ForkDiskResponse.disk",
 		"storage.v1.StatFSRequest.ino":
 		return 10, ReasonInvalidArgument
 
@@ -460,7 +466,8 @@ func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason
 		"storage.v1.DirEntryPlus.name",
 		"storage.v1.Disk.name",
 		"storage.v1.CreateDiskRequest.name",
-		"storage.v1.UpdateDiskRequest.name":
+		"storage.v1.UpdateDiskRequest.name",
+		"storage.v1.ForkDiskRequest.name":
 		if isMaxLen {
 			return 20, ReasonNameTooLong
 		}

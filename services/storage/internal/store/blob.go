@@ -19,17 +19,26 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// PackSegment 定义外部血缘号段分配器单次预留的 PackID 步长。
+const PackSegment uint64 = 64
+
+// PackSegmentAllocator 定义同源血缘树跨实例防撞的 PackID 连续号段分配函数。
+// minNext 为当前实例已知最小可用起始编号（本地最大已有 PackID + 1），返回的闭区间 [first, last] 须满足 first >= minNext 且 last >= first。
+type PackSegmentAllocator func(minNext uint64) (first, last uint64, err error)
+
 // BlobStore 规格与分片热块缓存参数。
 const (
-	BlobIDSegment           uint64 = 4096
-	hotBlobShards                  = 16
-	hotBlobSlots                   = 64
-	hotBlobTotalBudget             = 64 << 20                           // 64 MiB
-	hotBlobShardBudget             = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
-	hotExtendMinCap                = 16 << 10                           // ExtendTail 热块倍增扩容最小预留容量（16 KiB）
-	maxSyncBatchConcurrency        = 8
-	packWritebackWindow     uint32 = 8 << 20 // 活跃 .pack 渐进异步回写对齐窗口（8 MiB）
-	writebackHintQueueCap          = 32
+	BlobIDSegment            uint64 = 4096
+	hotBlobShards                   = 16
+	hotBlobSlots                    = 64
+	hotBlobTotalBudget              = 64 << 20                           // 64 MiB
+	hotBlobShardBudget              = hotBlobTotalBudget / hotBlobShards // 4 MiB per shard
+	hotExtendMinCap                 = 16 << 10                           // ExtendTail 热块倍增扩容最小预留容量（16 KiB）
+	maxSyncBatchConcurrency         = 8
+	checkpointLinkThreshold         = 32
+	maxCheckpointLinkWorkers        = 8
+	packWritebackWindow      uint32 = 8 << 20 // 活跃 .pack 渐进异步回写对齐窗口（8 MiB）
+	writebackHintQueueCap           = 32
 )
 
 type writebackHint struct {
@@ -74,12 +83,13 @@ type BlobStore struct {
 	dirReady    atomic.Bool
 	maxPackSize atomic.Uint32
 
-	// 1. 内置无锁 PackID 分配游标（步长 4096 预留）
+	// 1. 内置无锁 PackID 分配游标（支持可选外部血缘号段分配器，默认本地步长 4096 预留）
 	nextPackID     atomic.Uint64
 	reservedPackID atomic.Uint64
 	allocMu        sync.Mutex
 	minPackID      uint64
 	lastReserved   uint64
+	packAlloc      PackSegmentAllocator
 
 	// 2. 分片环形热块缓存（16 分片 × 64 槽位，总预算 64 MiB，按 (PackID, Offset) 定位）
 	hot [hotBlobShards]hotShard
@@ -138,10 +148,10 @@ func (s *StoreActor) Blobs() *BlobStore {
 
 // NewBlobStore 创建以 base（磁盘根目录）为根的 BlobStore，扫描已有最大 PackID 初始化内置分配器。
 func NewBlobStore(base string) *BlobStore {
-	return newBlobStore(base, slog.Default(), nil)
+	return newBlobStore(base, slog.Default(), nil, nil)
 }
 
-func newBlobStore(base string, logger *slog.Logger, metrics *Metrics) *BlobStore {
+func newBlobStore(base string, logger *slog.Logger, metrics *Metrics, packAlloc PackSegmentAllocator) *BlobStore {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -149,6 +159,7 @@ func newBlobStore(base string, logger *slog.Logger, metrics *Metrics) *BlobStore
 		dir:          filepath.Join(base, "packs"),
 		logger:       logger,
 		metrics:      metrics,
+		packAlloc:    packAlloc,
 		dirtyPacks:   make(map[uint64]uint64),
 		unownedDirty: make(map[uint64]uint64),
 		inoPacks:     make(map[uint64]map[uint64]uint64),
@@ -277,7 +288,7 @@ func (s *BlobStore) existingPackIDs() []uint64 {
 	return ids
 }
 
-// NextPackID 无锁分配下一个唯一 PackID；当本地号段耗尽时加 allocMu 按 4096 步长预留新号段。
+// NextPackID 无锁分配下一个唯一 PackID；当本地号段耗尽时加 allocMu 向外部血缘分配器或按本地 4096 步长预留新号段。
 func (s *BlobStore) NextPackID() (uint64, error) {
 	for {
 		next := s.nextPackID.Load()
@@ -302,16 +313,34 @@ func (s *BlobStore) NextPackID() (uint64, error) {
 			s.allocMu.Unlock()
 			return 0, ErrNoSpace
 		}
-		first := s.lastReserved + 1
-		var last uint64
-		if math.MaxUint64-s.lastReserved < BlobIDSegment {
-			last = math.MaxUint64
+		var first, last uint64
+		if s.packAlloc != nil {
+			var err error
+			first, last, err = s.packAlloc(s.lastReserved + 1)
+			if err != nil {
+				s.allocMu.Unlock()
+				return 0, err
+			}
+			if first <= s.lastReserved || last < first {
+				s.allocMu.Unlock()
+				return 0, ErrInvalidValue
+			}
 		} else {
-			last = s.lastReserved + BlobIDSegment
+			first = s.lastReserved + 1
+			if math.MaxUint64-s.lastReserved < BlobIDSegment {
+				last = math.MaxUint64
+			} else {
+				last = s.lastReserved + BlobIDSegment
+			}
 		}
+		s.minPackID = max(s.minPackID, last)
 		s.lastReserved = last
 		s.reservedPackID.Store(last)
-		s.nextPackID.Store(first + 1)
+		if first == math.MaxUint64 {
+			s.nextPackID.Store(0)
+		} else {
+			s.nextPackID.Store(first + 1)
+		}
 		s.allocMu.Unlock()
 		return first, nil
 	}
@@ -322,6 +351,10 @@ func (s *BlobStore) Root() string { return s.dir }
 
 // Path 返回指定编号封包文件的物理路径 <branch_dir>/packs/<pack_id_hex16>.pack。
 func (s *BlobStore) Path(packID uint64) string {
+	return packFilePath(s.dir, packID)
+}
+
+func packFilePath(dir string, packID uint64) string {
 	var buf [22]byte // "/0000000000000000.pack"
 	const hexDigits = "0123456789abcdef"
 	buf[0] = filepath.Separator
@@ -330,7 +363,7 @@ func (s *BlobStore) Path(packID uint64) string {
 		packID >>= 4
 	}
 	copy(buf[17:], ".pack")
-	return s.dir + string(buf[:])
+	return dir + string(buf[:])
 }
 
 // Append 将有效块数据（1..256 KiB）追加写入当前活跃 .pack：
@@ -1065,6 +1098,168 @@ func (s *BlobStore) Sync() error {
 	s.mu.Unlock()
 
 	return s.syncBatch(packs, syncTriggerFlushWAL)
+}
+
+// SyncAll 在校验上下文未取消后将所有未刷盘的脏 .pack 常驻句柄与待刷 packs/ 目录持久化落盘。
+func (s *BlobStore) SyncAll(ctx context.Context) error {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return s.Sync()
+}
+
+// SealAndLinkPacks 排空待回收死包、同步所有脏包并封口当前活跃 .pack（使其永久只读），
+// 随后在常驻句柄表读锁保护下将 livePackIDs 硬链接至 destPacksDir。
+func (s *BlobStore) SealAndLinkPacks(destPacksDir string, livePackIDs []uint64) error {
+	if destPacksDir == "" {
+		return ErrInvalid
+	}
+	s.WaitPendingReclaims()
+	if err := s.SyncAll(context.Background()); err != nil {
+		return err
+	}
+
+	s.lockActiveMu()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	if s.activeFile != nil {
+		packID := s.activePackID
+		file := s.activeFile
+		offset := s.activeOffset
+		if offset > 0 {
+			var syncStart time.Time
+			if s.metrics != nil {
+				syncStart = time.Now()
+			}
+			syncErr := file.Sync()
+			if s.metrics != nil {
+				s.metrics.observeBlobSync(syncTargetPackData, syncTriggerFlushWAL, time.Since(syncStart))
+			}
+			if syncErr != nil {
+				s.mu.Unlock()
+				return syncErr
+			}
+			s.syncFileCount.Add(1)
+			s.filesMu.Lock()
+			s.packFiles[packID] = file
+			s.filesMu.Unlock()
+			s.clearDirtyTrackingOnSealLocked(packID)
+		} else {
+			s.clearDirtyStateForPackLocked(packID)
+			s.filesMu.Lock()
+			delete(s.packFiles, packID)
+			s.filesMu.Unlock()
+			_ = file.Close()
+			_ = os.Remove(s.Path(packID))
+		}
+		s.activePackID = 0
+		s.atomicActivePackID.Store(0)
+		s.activeFile = nil
+		s.activeOffset = 0
+		s.activeFlushedTo = 0
+	}
+
+	var residualDirty []uint64
+	for _, id := range livePackIDs {
+		if _, ok := s.dirtyPacks[id]; ok {
+			residualDirty = append(residualDirty, id)
+		}
+	}
+	needDirSync := s.dirDirty
+	s.mu.Unlock()
+
+	if len(residualDirty) > 0 || needDirSync {
+		if err := s.syncBatch(residualDirty, syncTriggerFlushWAL); err != nil {
+			return err
+		}
+	}
+
+	if err := os.MkdirAll(destPacksDir, 0o755); err != nil {
+		return err
+	}
+	if len(livePackIDs) > 0 {
+		ids := make([]uint64, 0, len(livePackIDs))
+		for _, id := range livePackIDs {
+			if id != 0 {
+				ids = append(ids, id)
+			}
+		}
+		slices.Sort(ids)
+		ids = slices.Compact(ids)
+
+		s.filesMu.RLock()
+		linkErr := s.linkPacksLocked(destPacksDir, ids)
+		s.filesMu.RUnlock()
+		if linkErr != nil {
+			return linkErr
+		}
+	}
+	return syncDirPath(destPacksDir)
+}
+
+func (s *BlobStore) clearDirtyTrackingOnSealLocked(packID uint64) {
+	delete(s.dirtyPacks, packID)
+	delete(s.unownedDirty, packID)
+	for owner, set := range s.inoPacks {
+		if _, ok := set[packID]; ok {
+			delete(set, packID)
+			if len(set) == 0 {
+				delete(s.inoPacks, owner)
+			}
+		}
+	}
+	if _, isNew := s.dirtyNew[packID]; isNew {
+		delete(s.dirtyNew, packID)
+		s.markDirDirtyLocked()
+	}
+	s.bgQueue = slices.DeleteFunc(s.bgQueue, func(id uint64) bool { return id == packID })
+}
+
+func (s *BlobStore) linkPacksLocked(destPacksDir string, ids []uint64) error {
+	if len(ids) < checkpointLinkThreshold {
+		for _, id := range ids {
+			if err := os.Link(s.Path(id), packFilePath(destPacksDir, id)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	workers := min(len(ids), maxCheckpointLinkWorkers)
+	errList := make([]error, len(ids))
+	var failed atomic.Bool
+	var nextIdx atomic.Uint32
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for {
+				if failed.Load() {
+					return
+				}
+				i := int(nextIdx.Add(1) - 1)
+				if i >= len(ids) {
+					return
+				}
+				if linkErr := os.Link(s.Path(ids[i]), packFilePath(destPacksDir, ids[i])); linkErr != nil {
+					errList[i] = linkErr
+					failed.Store(true)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	var errs []error
+	for _, linkErr := range errList {
+		if linkErr != nil {
+			errs = append(errs, linkErr)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // SyncInode 仅对包含指定 Inode 未刷盘写入的脏 .pack 常驻句柄执行 fdatasync，

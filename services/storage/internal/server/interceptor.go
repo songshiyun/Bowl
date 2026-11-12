@@ -40,11 +40,12 @@ const (
 )
 
 type (
-	diskIDGetter    interface{ GetDiskId() string }
-	epochGetter     interface{ GetEpoch() uint64 }
-	inoGetter       interface{ GetIno() uint64 }
-	diskRespGetter  interface{ GetDisk() *storagev1.Disk }
-	inodeRespGetter interface {
+	diskIDGetter       interface{ GetDiskId() string }
+	sourceDiskIDGetter interface{ GetSourceDiskId() string }
+	epochGetter        interface{ GetEpoch() uint64 }
+	inoGetter          interface{ GetIno() uint64 }
+	diskRespGetter     interface{ GetDisk() *storagev1.Disk }
+	inodeRespGetter    interface {
 		GetInode() *storagev1.Inode
 	}
 	rootInodeRespGetter interface {
@@ -90,6 +91,7 @@ func classifyStorageLogLevel(procedure string, code connect.Code, err error) slo
 func isControlPlaneProcedure(procedure string) bool {
 	switch procedure {
 	case storagev1connect.StorageServiceCreateDiskProcedure, "CreateDisk",
+		storagev1connect.StorageServiceForkDiskProcedure, "ForkDisk",
 		storagev1connect.StorageServiceGetDiskProcedure, "GetDisk",
 		storagev1connect.StorageServiceListDisksProcedure, "ListDisks",
 		storagev1connect.StorageServiceUpdateDiskProcedure, "UpdateDisk",
@@ -133,6 +135,11 @@ func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err e
 			case rootInodeRespGetter:
 				ino = g.GetRootInode().GetIno()
 			}
+		}
+	}
+	if diskID == "" && req != nil {
+		if g, ok := req.Any().(sourceDiskIDGetter); ok {
+			diskID = g.GetSourceDiskId()
 		}
 	}
 	return diskID, epoch, ino

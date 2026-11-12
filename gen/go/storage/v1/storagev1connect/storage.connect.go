@@ -100,6 +100,8 @@ const (
 	// StorageServiceDeleteDiskProcedure is the fully-qualified name of the StorageService's DeleteDisk
 	// RPC.
 	StorageServiceDeleteDiskProcedure = "/storage.v1.StorageService/DeleteDisk"
+	// StorageServiceForkDiskProcedure is the fully-qualified name of the StorageService's ForkDisk RPC.
+	StorageServiceForkDiskProcedure = "/storage.v1.StorageService/ForkDisk"
 	// StorageServiceStatFSProcedure is the fully-qualified name of the StorageService's StatFS RPC.
 	StorageServiceStatFSProcedure = "/storage.v1.StorageService/StatFS"
 	// StorageServiceReclaimOrphanProcedure is the fully-qualified name of the StorageService's
@@ -257,6 +259,12 @@ type StorageServiceClient interface {
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
+	// ForkDisk 基于指定源虚拟磁盘当前已提交状态零拷贝派生新的虚拟磁盘实体。
+	// 自动将源磁盘当前状态固化为不可变共同祖先切面，并在不中断源磁盘在线读写的前提下克隆出独立子磁盘。
+	// 若源磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若显式指定的 max_bytes 小于孤儿节点净化后的初始已用空间，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EINVAL 缩容保护)。
+	// 若参数校验不通过（如 source_disk_id 格式非法或为全零 Nil UUID、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL 或 ENAMETOOLONG)。
+	ForkDisk(context.Context, *connect.Request[v1.ForkDiskRequest]) (*connect.Response[v1.ForkDiskResponse], error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
 	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -451,6 +459,12 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("DeleteDisk")),
 			connect.WithClientOptions(opts...),
 		),
+		forkDisk: connect.NewClient[v1.ForkDiskRequest, v1.ForkDiskResponse](
+			httpClient,
+			baseURL+StorageServiceForkDiskProcedure,
+			connect.WithSchema(storageServiceMethods.ByName("ForkDisk")),
+			connect.WithClientOptions(opts...),
+		),
 		statFS: connect.NewClient[v1.StatFSRequest, v1.StatFSResponse](
 			httpClient,
 			baseURL+StorageServiceStatFSProcedure,
@@ -497,6 +511,7 @@ type storageServiceClient struct {
 	listDisks     *connect.Client[v1.ListDisksRequest, v1.ListDisksResponse]
 	updateDisk    *connect.Client[v1.UpdateDiskRequest, v1.UpdateDiskResponse]
 	deleteDisk    *connect.Client[v1.DeleteDiskRequest, v1.DeleteDiskResponse]
+	forkDisk      *connect.Client[v1.ForkDiskRequest, v1.ForkDiskResponse]
 	statFS        *connect.Client[v1.StatFSRequest, v1.StatFSResponse]
 	reclaimOrphan *connect.Client[v1.ReclaimOrphanRequest, v1.ReclaimOrphanResponse]
 }
@@ -644,6 +659,11 @@ func (c *storageServiceClient) UpdateDisk(ctx context.Context, req *connect.Requ
 // DeleteDisk calls storage.v1.StorageService.DeleteDisk.
 func (c *storageServiceClient) DeleteDisk(ctx context.Context, req *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error) {
 	return c.deleteDisk.CallUnary(ctx, req)
+}
+
+// ForkDisk calls storage.v1.StorageService.ForkDisk.
+func (c *storageServiceClient) ForkDisk(ctx context.Context, req *connect.Request[v1.ForkDiskRequest]) (*connect.Response[v1.ForkDiskResponse], error) {
+	return c.forkDisk.CallUnary(ctx, req)
 }
 
 // StatFS calls storage.v1.StorageService.StatFS.
@@ -806,6 +826,12 @@ type StorageServiceHandler interface {
 	// 若目标磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
 	// 若 disk_id 格式非法或为全零 Nil UUID，必须返回 gRPC 标准状态码 InvalidArgument (映射至 POSIX EINVAL)。
 	DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error)
+	// ForkDisk 基于指定源虚拟磁盘当前已提交状态零拷贝派生新的虚拟磁盘实体。
+	// 自动将源磁盘当前状态固化为不可变共同祖先切面，并在不中断源磁盘在线读写的前提下克隆出独立子磁盘。
+	// 若源磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
+	// 若显式指定的 max_bytes 小于孤儿节点净化后的初始已用空间，必须返回 gRPC 标准状态码 FailedPrecondition (映射至 POSIX EINVAL 缩容保护)。
+	// 若参数校验不通过（如 source_disk_id 格式非法或为全零 Nil UUID、name 超过 255 字节或包含 '\x00'、max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL 或 ENAMETOOLONG)。
+	ForkDisk(context.Context, *connect.Request[v1.ForkDiskRequest]) (*connect.Response[v1.ForkDiskResponse], error)
 	// StatFS 查询指定 Inode 所属虚拟磁盘的字节容量与 POSIX 4096 字节块统计信息（对接 Linux FUSE FUSE_STATFS = 17 协议）。
 	// 接收目标节点的 uint64 ino，查询所属 Disk 配额并返回 4096 字节块及已用 Inode 统计信息。
 	// 若目标 Inode 或其所属虚拟磁盘不存在，必须返回 gRPC 标准状态码 NotFound (映射至 POSIX ENOENT)。
@@ -996,6 +1022,12 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("DeleteDisk")),
 		connect.WithHandlerOptions(opts...),
 	)
+	storageServiceForkDiskHandler := connect.NewUnaryHandler(
+		StorageServiceForkDiskProcedure,
+		svc.ForkDisk,
+		connect.WithSchema(storageServiceMethods.ByName("ForkDisk")),
+		connect.WithHandlerOptions(opts...),
+	)
 	storageServiceStatFSHandler := connect.NewUnaryHandler(
 		StorageServiceStatFSProcedure,
 		svc.StatFS,
@@ -1068,6 +1100,8 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceUpdateDiskHandler.ServeHTTP(w, r)
 		case StorageServiceDeleteDiskProcedure:
 			storageServiceDeleteDiskHandler.ServeHTTP(w, r)
+		case StorageServiceForkDiskProcedure:
+			storageServiceForkDiskHandler.ServeHTTP(w, r)
 		case StorageServiceStatFSProcedure:
 			storageServiceStatFSHandler.ServeHTTP(w, r)
 		case StorageServiceReclaimOrphanProcedure:
@@ -1195,6 +1229,10 @@ func (UnimplementedStorageServiceHandler) UpdateDisk(context.Context, *connect.R
 
 func (UnimplementedStorageServiceHandler) DeleteDisk(context.Context, *connect.Request[v1.DeleteDiskRequest]) (*connect.Response[v1.DeleteDiskResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.DeleteDisk is not implemented"))
+}
+
+func (UnimplementedStorageServiceHandler) ForkDisk(context.Context, *connect.Request[v1.ForkDiskRequest]) (*connect.Response[v1.ForkDiskResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.ForkDisk is not implemented"))
 }
 
 func (UnimplementedStorageServiceHandler) StatFS(context.Context, *connect.Request[v1.StatFSRequest]) (*connect.Response[v1.StatFSResponse], error) {
