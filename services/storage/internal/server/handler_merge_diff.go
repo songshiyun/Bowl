@@ -191,6 +191,7 @@ func (s *Server) MergeDisk(ctx context.Context, req *connect.Request[storagev1.M
 		Strategy:       strategy,
 		PathStrategies: pathStrategies,
 		DryRun:         req.Msg.DryRun,
+		Force:          req.Msg.Force,
 		MaxBytes:       req.Msg.MaxBytes,
 	})
 	if err != nil {

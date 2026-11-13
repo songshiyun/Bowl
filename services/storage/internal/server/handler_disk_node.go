@@ -167,7 +167,36 @@ func (s *Server) MountDisk(ctx context.Context, req *connect.Request[storagev1.M
 		RootInode:           toProtoInode(&res.RootAttr),
 		EntryTimeoutSeconds: res.EntryTimeoutSeconds,
 		AttrTimeoutSeconds:  res.AttrTimeoutSeconds,
+		MountId:             res.MountID,
+		LeaseTtlSeconds:     res.LeaseTTLSeconds,
 	}), nil
+}
+
+// RenewMount 为已建立的在线挂载软租约执行周期续期。
+func (s *Server) RenewMount(ctx context.Context, req *connect.Request[storagev1.RenewMountRequest]) (*connect.Response[storagev1.RenewMountResponse], error) {
+	res, err := s.control.RenewMount(ctx, control.RenewMountParams{
+		DiskID:   req.Msg.DiskId,
+		MountID:  req.Msg.MountId,
+		ReadOnly: req.Msg.ReadOnly,
+		Epoch:    req.Msg.Epoch,
+	})
+	if err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.RenewMountResponse{
+		LeaseTtlSeconds: res.LeaseTTLSeconds,
+	}), nil
+}
+
+// UnmountDisk 幂等释放指定的在线挂载软租约。
+func (s *Server) UnmountDisk(ctx context.Context, req *connect.Request[storagev1.UnmountDiskRequest]) (*connect.Response[storagev1.UnmountDiskResponse], error) {
+	if err := s.control.UnmountDisk(ctx, control.UnmountDiskParams{
+		DiskID:  req.Msg.DiskId,
+		MountID: req.Msg.MountId,
+	}); err != nil {
+		return nil, toConnectError(err)
+	}
+	return connect.NewResponse(&storagev1.UnmountDiskResponse{}), nil
 }
 
 // StatFS 查询指定 Inode 所在虚拟磁盘的文件系统统计状态。

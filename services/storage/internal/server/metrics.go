@@ -64,6 +64,8 @@ var knownProcedures = map[string]string{
 	storagev1connect.StorageServiceListXattrProcedure:      storagev1connect.StorageServiceListXattrProcedure,
 	storagev1connect.StorageServiceRemoveXattrProcedure:    storagev1connect.StorageServiceRemoveXattrProcedure,
 	storagev1connect.StorageServiceMountDiskProcedure:      storagev1connect.StorageServiceMountDiskProcedure,
+	storagev1connect.StorageServiceRenewMountProcedure:     storagev1connect.StorageServiceRenewMountProcedure,
+	storagev1connect.StorageServiceUnmountDiskProcedure:    storagev1connect.StorageServiceUnmountDiskProcedure,
 	storagev1connect.StorageServiceCreateDiskProcedure:     storagev1connect.StorageServiceCreateDiskProcedure,
 	storagev1connect.StorageServiceGetDiskProcedure:        storagev1connect.StorageServiceGetDiskProcedure,
 	storagev1connect.StorageServiceListDisksProcedure:      storagev1connect.StorageServiceListDisksProcedure,

@@ -862,6 +862,8 @@ func TestObservability_ClassifyStorageLogLevel_MapsProceduresAndCodes(t *testing
 		{name: "CreateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceCreateDiskProcedure, want: slog.LevelInfo},
 		{name: "UpdateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceUpdateDiskProcedure, want: slog.LevelInfo},
 		{name: "DeleteDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceDeleteDiskProcedure, want: slog.LevelInfo},
+		{name: "UnmountDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceUnmountDiskProcedure, want: slog.LevelInfo},
+		{name: "RenewMount高频续期成功降级Debug", procedure: storagev1connect.StorageServiceRenewMountProcedure, want: slog.LevelDebug},
 		{name: "MergeDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceMergeDiskProcedure, want: slog.LevelInfo},
 		{name: "DiffDisk只读控制面降级Debug", procedure: storagev1connect.StorageServiceDiffDiskProcedure, want: slog.LevelDebug},
 		{name: "ReadCommitNode只读控制面降级Debug", procedure: storagev1connect.StorageServiceReadCommitNodeProcedure, want: slog.LevelDebug},
@@ -885,8 +887,12 @@ func TestObservability_MergeDiffProcedures_RegisteredInMetricsControlAndSampler(
 	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceDiffDiskProcedure))
 	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceReadCommitNodeProcedure))
 	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceMergeDiskProcedure))
+	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceRenewMountProcedure))
+	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceUnmountDiskProcedure))
 
 	require.True(t, isSampledControlSpanName(storagev1connect.StorageServiceMergeDiskProcedure))
+	require.True(t, isSampledControlSpanName(storagev1connect.StorageServiceUnmountDiskProcedure))
+	require.False(t, isSampledControlSpanName(storagev1connect.StorageServiceRenewMountProcedure))
 	require.False(t, isSampledControlSpanName(storagev1connect.StorageServiceDiffDiskProcedure))
 	require.False(t, isSampledControlSpanName(storagev1connect.StorageServiceReadCommitNodeProcedure))
 }
