@@ -97,8 +97,8 @@ func requireOrderedDesc(t *testing.T, disks []db.DiskRecord) {
 
 func collectDiskIDs(disks []db.DiskRecord) []uuid.UUID {
 	ids := make([]uuid.UUID, 0, len(disks))
-	for _, d := range disks {
-		ids = append(ids, d.DiskID)
+	for i := range disks {
+		ids = append(ids, disks[i].DiskID)
 	}
 	return ids
 }
@@ -191,6 +191,7 @@ func TestStoreContract_GivenValidDisk_WhenCreatedUpdatedRead_ThenPersistsEndStat
 		require.Equal(t, diskID, created.DiskID, "DiskID want=%s, got=%s", diskID, created.DiskID)
 		require.Equal(t, uuid.Nil, created.ParentDiskID, "根盘 ParentDiskID 应为 Nil UUID, got=%s", created.ParentDiskID)
 		require.Equal(t, diskID, created.LineageID, "根盘 LineageID want=%s, got=%s", diskID, created.LineageID)
+		require.Equal(t, uuid.Nil, created.BaseCommitID, "根盘初始 BaseCommitID 应为 Nil UUID, got=%s", created.BaseCommitID)
 		require.Equal(t, "alpha", created.Name, "Name want=alpha, got=%s", created.Name)
 		require.False(t, created.CreatedAt.IsZero(), "CreatedAt 不应为零值")
 		require.Equal(t, created.CreatedAt.Truncate(time.Microsecond), created.CreatedAt, "CreatedAt 应为微秒精度")
@@ -449,5 +450,367 @@ func TestStoreContract_GivenSharedAndIsolatedLineages_WhenReserveSegmentCalled_T
 func TestStoreContract_GivenConcurrentForkDelete_WhenExecuted_ThenConsistentWithoutDeadlock(t *testing.T) {
 	runStoreAdapters(t, func(t *testing.T, s db.Store, ctx context.Context) {
 		runConcurrentForkDeleteRounds(t, ctx, s, 5)
+	})
+}
+
+func TestStoreContract_GivenForkedDisks_WhenInspectedAndListed_ThenPopulatesBaseCommitIDAndLineageCommits(t *testing.T) {
+	runStoreAdapters(t, func(t *testing.T, s db.Store, ctx context.Context) {
+		_, err := s.ListLineageCommits(ctx, uuid.Nil)
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+
+		rootID := mustNewUUIDv7(t)
+		root, err := s.CreateDisk(ctx, rootID, "root")
+		require.NoError(t, err)
+		require.Equal(t, uuid.Nil, root.BaseCommitID)
+
+		emptyCommits, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Empty(t, emptyCommits, "未分叉血缘 Commit 列表应为空")
+
+		otherID := mustNewUUIDv7(t)
+		other, err := s.CreateDisk(ctx, otherID, "other")
+		require.NoError(t, err)
+		otherChildID, otherCmID := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		_, err = s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: otherID,
+			ChildDiskID:  otherChildID,
+			CommitID:     otherCmID,
+			Name:         "other-child",
+		})
+		require.NoError(t, err)
+
+		c1ID, cm1ID := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		c1, err := s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: rootID,
+			ChildDiskID:  c1ID,
+			CommitID:     cm1ID,
+			Name:         "child-1",
+		})
+		require.NoError(t, err)
+		require.Equal(t, cm1ID, c1.BaseCommitID, "ForkDisk 返回子盘应填充 BaseCommitID")
+
+		gotRoot, err := s.GetDisk(ctx, rootID)
+		require.NoError(t, err)
+		require.Equal(t, cm1ID, gotRoot.BaseCommitID, "GetDisk 源盘应填充更新后的 BaseCommitID")
+
+		gotC1, err := s.GetDisk(ctx, c1ID)
+		require.NoError(t, err)
+		require.Equal(t, cm1ID, gotC1.BaseCommitID, "GetDisk 子盘应填充 BaseCommitID")
+
+		renamedC1, err := s.UpdateDiskName(ctx, c1ID, "child-1-renamed")
+		require.NoError(t, err)
+		require.Equal(t, cm1ID, renamedC1.BaseCommitID, "UpdateDiskName 应保留并填充 BaseCommitID")
+
+		c2ID, cm2ID := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		_, err = s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: rootID,
+			ChildDiskID:  c2ID,
+			CommitID:     cm2ID,
+			Name:         "child-2",
+		})
+		require.NoError(t, err)
+
+		page, err := s.ListDisks(ctx, db.ListDisksQuery{PageSize: 10})
+		require.NoError(t, err)
+		byID := make(map[uuid.UUID]db.DiskRecord, len(page.Disks))
+		for i := range page.Disks {
+			byID[page.Disks[i].DiskID] = page.Disks[i]
+		}
+		require.Equal(t, cm2ID, byID[rootID].BaseCommitID, "ListDisks 应填充源盘最新 BaseCommitID")
+		require.Equal(t, cm1ID, byID[c1ID].BaseCommitID, "ListDisks 应填充 child-1 BaseCommitID")
+		require.Equal(t, cm2ID, byID[c2ID].BaseCommitID, "ListDisks 应填充 child-2 BaseCommitID")
+
+		commits, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Len(t, commits, 2, "血缘 Commit 数量 want=2, got=%d", len(commits))
+		require.Equal(t, cm1ID, commits[0].CommitID)
+		require.Equal(t, root.LineageID, commits[0].LineageID)
+		require.Equal(t, uuid.Nil, commits[0].ParentCommitID)
+		require.Equal(t, uuid.Nil, commits[0].MergeParentCommitID)
+		require.Equal(t, rootID, commits[0].BaseDiskID)
+		require.False(t, commits[0].CreatedAt.IsZero())
+
+		require.Equal(t, cm2ID, commits[1].CommitID)
+		require.Equal(t, cm1ID, commits[1].ParentCommitID)
+		require.Equal(t, uuid.Nil, commits[1].MergeParentCommitID)
+		require.Equal(t, rootID, commits[1].BaseDiskID)
+
+		otherCommits, err := s.ListLineageCommits(ctx, other.LineageID)
+		require.NoError(t, err)
+		require.Len(t, otherCommits, 1, "其他血缘不应混入当前血缘 Commit")
+		require.Equal(t, otherCmID, otherCommits[0].CommitID)
+	})
+}
+
+func TestStoreContract_GivenSameLineageDisks_WhenMergeDiskCalled_ThenUpdatesDAGAndAdvancesBaseCommits(t *testing.T) {
+	runStoreAdapters(t, func(t *testing.T, s db.Store, ctx context.Context) {
+		rootID := mustNewUUIDv7(t)
+		root, err := s.CreateDisk(ctx, rootID, "main")
+		require.NoError(t, err)
+
+		branchID, cmFork := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		_, err = s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: rootID,
+			ChildDiskID:  branchID,
+			CommitID:     cmFork,
+			Name:         "feature",
+		})
+		require.NoError(t, err)
+
+		// 常规合并：SkipSourceCommit=false，同时推进 source 和 target 的 base_commit_id。
+		cmSrc1, cmMerge1 := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		merged1, err := s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               branchID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          cmSrc1,
+			NewMergeCommitID:           cmMerge1,
+			SkipSourceCommit:           false,
+		})
+		require.NoError(t, err)
+		require.Equal(t, rootID, merged1.DiskID)
+		require.Equal(t, cmMerge1, merged1.BaseCommitID)
+		require.False(t, merged1.UpdatedAt.Before(root.UpdatedAt))
+
+		gotBranch, err := s.GetDisk(ctx, branchID)
+		require.NoError(t, err)
+		require.Equal(t, cmSrc1, gotBranch.BaseCommitID, "常规合并后源盘 BaseCommitID 应推进为 NewSourceCommitID")
+
+		gotRoot, err := s.GetDisk(ctx, rootID)
+		require.NoError(t, err)
+		require.Equal(t, cmMerge1, gotRoot.BaseCommitID, "常规合并后目标盘 BaseCommitID 应推进为 NewMergeCommitID")
+
+		commits, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Len(t, commits, 3)
+		require.Equal(t, cmFork, commits[0].CommitID)
+
+		require.Equal(t, cmSrc1, commits[1].CommitID)
+		require.Equal(t, cmFork, commits[1].ParentCommitID)
+		require.Equal(t, uuid.Nil, commits[1].MergeParentCommitID)
+		require.Equal(t, branchID, commits[1].BaseDiskID)
+
+		require.Equal(t, cmMerge1, commits[2].CommitID)
+		require.Equal(t, cmFork, commits[2].ParentCommitID)
+		require.Equal(t, cmSrc1, commits[2].MergeParentCommitID)
+		require.Equal(t, rootID, commits[2].BaseDiskID)
+
+		// 二次合并（SkipSourceCommit=true）：不插入 C_src，仅插入 C_merge 并保持 source BaseCommitID 不变。
+		cmMerge2 := mustNewUUIDv7(t)
+		merged2, err := s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               branchID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmSrc1,
+			ExpectedTargetBaseCommitID: cmMerge1,
+			NewMergeCommitID:           cmMerge2,
+			SkipSourceCommit:           true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, cmMerge2, merged2.BaseCommitID)
+
+		gotBranchAfterSkip, err := s.GetDisk(ctx, branchID)
+		require.NoError(t, err)
+		require.Equal(t, cmSrc1, gotBranchAfterSkip.BaseCommitID, "SkipSourceCommit=true 不得推进源盘 BaseCommitID")
+
+		commitsAfterSkip, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Len(t, commitsAfterSkip, 4)
+		lastCommit := commitsAfterSkip[3]
+		require.Equal(t, cmMerge2, lastCommit.CommitID)
+		require.Equal(t, cmMerge1, lastCommit.ParentCommitID)
+		require.Equal(t, cmSrc1, lastCommit.MergeParentCommitID)
+		require.Equal(t, rootID, lastCommit.BaseDiskID)
+
+		// 非单调 UUID（cmMerge < cmSrc）下，ListLineageCommits 仍须保证父切面 cmSrc 排在子切面 cmMerge 之前。
+		cmMerge3 := uuid.MustParse("01900000-0000-7000-8000-000000000001")
+		cmSrc3 := uuid.MustParse("01900000-0000-7000-8000-000000000002")
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               branchID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmSrc1,
+			ExpectedTargetBaseCommitID: cmMerge2,
+			NewSourceCommitID:          cmSrc3,
+			NewMergeCommitID:           cmMerge3,
+			SkipSourceCommit:           false,
+		})
+		require.NoError(t, err)
+
+		commitsAfterNonMono, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Len(t, commitsAfterNonMono, 6)
+		require.Equal(t, cmSrc3, commitsAfterNonMono[4].CommitID, "父切面 cmSrc3 必须排在子切面 cmMerge3 之前")
+		require.Equal(t, cmMerge3, commitsAfterNonMono[5].CommitID, "子切面 cmMerge3 必须排在父切面 cmSrc3 之后")
+	})
+}
+
+func TestStoreContract_GivenInvalidOrConflictingMergeInputs_WhenMergeDiskCalled_ThenFailsAtomicallyWithoutSideEffects(t *testing.T) {
+	runStoreAdapters(t, func(t *testing.T, s db.Store, ctx context.Context) {
+		rootID := mustNewUUIDv7(t)
+		root, err := s.CreateDisk(ctx, rootID, "root")
+		require.NoError(t, err)
+
+		childID, cmFork := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		_, err = s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: rootID,
+			ChildDiskID:  childID,
+			CommitID:     cmFork,
+			Name:         "child",
+		})
+		require.NoError(t, err)
+
+		otherID := mustNewUUIDv7(t)
+		_, err = s.CreateDisk(ctx, otherID, "other")
+		require.NoError(t, err)
+		otherChildID, otherForkCm := mustNewUUIDv7(t), mustNewUUIDv7(t)
+		_, err = s.ForkDisk(ctx, db.ForkDiskInput{
+			SourceDiskID: otherID,
+			ChildDiskID:  otherChildID,
+			CommitID:     otherForkCm,
+			Name:         "other-child",
+		})
+		require.NoError(t, err)
+
+		// 1. 非法入参
+		_, err = s.MergeDisk(ctx, nil)
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               rootID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: uuid.Nil,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewMergeCommitID:           mustNewUUIDv7(t),
+			SkipSourceCommit:           true,
+		})
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: uuid.Nil,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+			SkipSourceCommit:           false,
+		})
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewMergeCommitID:           mustNewUUIDv7(t),
+			SkipSourceCommit:           false,
+		})
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+		sameCommit := mustNewUUIDv7(t)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          sameCommit,
+			NewMergeCommitID:           sameCommit,
+			SkipSourceCommit:           false,
+		})
+		require.ErrorIs(t, err, db.ErrInvalidArgument)
+
+		// 2. 跨血缘拦截
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               otherID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: otherForkCm,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrCrossLineage)
+
+		// 3. 不存在目标/源盘/血缘
+		missingID := mustNewUUIDv7(t)
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               missingID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrDiskNotFound)
+
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               missingID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrDiskNotFound)
+
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  missingID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrDiskNotFound)
+
+		// 4. CAS 切面过期冲突（源盘与目标盘各测一次）
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: mustNewUUIDv7(t),
+			ExpectedTargetBaseCommitID: cmFork,
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrStaleBaseCommit)
+
+		_, err = s.MergeDisk(ctx, &db.MergeDiskInput{
+			LineageID:                  root.LineageID,
+			SourceDiskID:               childID,
+			TargetDiskID:               rootID,
+			ExpectedSourceBaseCommitID: cmFork,
+			ExpectedTargetBaseCommitID: mustNewUUIDv7(t),
+			NewSourceCommitID:          mustNewUUIDv7(t),
+			NewMergeCommitID:           mustNewUUIDv7(t),
+		})
+		require.ErrorIs(t, err, db.ErrStaleBaseCommit)
+
+		// 验证全部失败路径零副作用回滚
+		gotRoot, err := s.GetDisk(ctx, rootID)
+		require.NoError(t, err)
+		require.Equal(t, cmFork, gotRoot.BaseCommitID, "失败合并后目标盘 BaseCommitID 不得变化")
+		gotChild, err := s.GetDisk(ctx, childID)
+		require.NoError(t, err)
+		require.Equal(t, cmFork, gotChild.BaseCommitID, "失败合并后源盘 BaseCommitID 不得变化")
+		commits, err := s.ListLineageCommits(ctx, root.LineageID)
+		require.NoError(t, err)
+		require.Len(t, commits, 1, "失败合并后血缘不得残留任何新 Commit")
+		require.Equal(t, cmFork, commits[0].CommitID)
 	})
 }

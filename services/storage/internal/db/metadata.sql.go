@@ -279,6 +279,40 @@ func (q *Queries) ListDisks(ctx context.Context, arg ListDisksParams) ([]Disk, e
 	return items, nil
 }
 
+const listLineageCommits = `-- name: ListLineageCommits :many
+SELECT commit_id, lineage_id, source_disk_id, parent_commit_id, merge_parent_commit_id, created_at
+FROM disk_commits
+WHERE lineage_id = $1
+ORDER BY created_at ASC, commit_id ASC
+`
+
+func (q *Queries) ListLineageCommits(ctx context.Context, lineageID pgtype.UUID) ([]DiskCommit, error) {
+	rows, err := q.db.Query(ctx, listLineageCommits, lineageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DiskCommit
+	for rows.Next() {
+		var i DiskCommit
+		if err := rows.Scan(
+			&i.CommitID,
+			&i.LineageID,
+			&i.SourceDiskID,
+			&i.ParentCommitID,
+			&i.MergeParentCommitID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockDiskLineage = `-- name: LockDiskLineage :one
 SELECT lineage_id, next_ino, next_pack_id, created_at
 FROM disk_lineages
@@ -368,6 +402,33 @@ type SetDiskBaseCommitParams struct {
 func (q *Queries) SetDiskBaseCommit(ctx context.Context, arg SetDiskBaseCommitParams) error {
 	_, err := q.db.Exec(ctx, setDiskBaseCommit, arg.DiskID, arg.BaseCommitID)
 	return err
+}
+
+const setDiskBaseCommitAndTouch = `-- name: SetDiskBaseCommitAndTouch :one
+UPDATE disks
+SET base_commit_id = $2, updated_at = clock_timestamp()
+WHERE disk_id = $1
+RETURNING disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, base_commit_id
+`
+
+type SetDiskBaseCommitAndTouchParams struct {
+	DiskID       pgtype.UUID `json:"disk_id"`
+	BaseCommitID pgtype.UUID `json:"base_commit_id"`
+}
+
+func (q *Queries) SetDiskBaseCommitAndTouch(ctx context.Context, arg SetDiskBaseCommitAndTouchParams) (Disk, error) {
+	row := q.db.QueryRow(ctx, setDiskBaseCommitAndTouch, arg.DiskID, arg.BaseCommitID)
+	var i Disk
+	err := row.Scan(
+		&i.DiskID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LineageID,
+		&i.ParentDiskID,
+		&i.BaseCommitID,
+	)
+	return i, err
 }
 
 const updateDisk = `-- name: UpdateDisk :one

@@ -31,6 +31,7 @@ func (v *MemDiskView) toRecord() DiskRecord {
 		DiskID:       v.DiskID,
 		ParentDiskID: v.ParentDiskID,
 		LineageID:    v.LineageID,
+		BaseCommitID: v.BaseCommitID,
 		Name:         v.Name,
 		CreatedAt:    v.CreatedAt,
 		UpdatedAt:    v.UpdatedAt,
@@ -55,6 +56,17 @@ type MemCommitView struct {
 	CreatedAt           time.Time
 }
 
+func (v *MemCommitView) toRecord() CommitRecord {
+	return CommitRecord{
+		LineageID:           v.LineageID,
+		CommitID:            v.CommitID,
+		ParentCommitID:      v.ParentCommitID,
+		MergeParentCommitID: v.MergeParentCommitID,
+		BaseDiskID:          v.SourceDiskID,
+		CreatedAt:           v.CreatedAt,
+	}
+}
+
 // MemSnapshot 描述 MemStore 在某一时刻的深拷贝只读状态快照。
 type MemSnapshot struct {
 	Disks             map[uuid.UUID]MemDiskView
@@ -70,6 +82,7 @@ type MemStore struct {
 	disks             map[uuid.UUID]MemDiskView
 	lineages          map[uuid.UUID]MemLineageView
 	commits           map[uuid.UUID]MemCommitView
+	lastTS            time.Time
 	failNextWrite     error
 	inodeReserveCalls int
 	packReserveCalls  int
@@ -117,6 +130,15 @@ func nowMicroUTC() time.Time {
 	return time.Now().UTC().Truncate(time.Microsecond)
 }
 
+func (m *MemStore) nextNowLocked() time.Time {
+	now := nowMicroUTC()
+	if !now.After(m.lastTS) {
+		now = m.lastTS.Add(time.Microsecond)
+	}
+	m.lastTS = now
+	return now
+}
+
 // CreateDisk 原子创建新血缘行与根磁盘记录。
 func (m *MemStore) CreateDisk(ctx context.Context, diskID uuid.UUID, name string) (DiskRecord, error) {
 	if err := ctx.Err(); err != nil {
@@ -135,7 +157,7 @@ func (m *MemStore) CreateDisk(ctx context.Context, diskID uuid.UUID, name string
 		return DiskRecord{}, errors.New("db: disk already exists")
 	}
 
-	now := nowMicroUTC()
+	now := m.nextNowLocked()
 	m.lineages[diskID] = MemLineageView{
 		LineageID:  diskID,
 		NextIno:    2,
@@ -182,7 +204,7 @@ func (m *MemStore) ForkDisk(ctx context.Context, arg ForkDiskInput) (DiskRecord,
 		return DiskRecord{}, errors.New("db: commit already exists")
 	}
 
-	now := nowMicroUTC()
+	now := m.nextNowLocked()
 	m.commits[arg.CommitID] = MemCommitView{
 		CommitID:       arg.CommitID,
 		LineageID:      srcRow.LineageID,
@@ -286,6 +308,39 @@ func (m *MemStore) ListDisks(ctx context.Context, query ListDisksQuery) (ListDis
 	}, nil
 }
 
+// ListLineageCommits 按 (created_at ASC, commit_id ASC) 查询指定血缘的全部切面节点。
+func (m *MemStore) ListLineageCommits(ctx context.Context, lineageID uuid.UUID) ([]CommitRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if lineageID == uuid.Nil {
+		return nil, fmt.Errorf("%w: lineage id cannot be nil uuid", ErrInvalidArgument)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ordered := make([]MemCommitView, 0)
+	for cid := range m.commits {
+		c := m.commits[cid]
+		if c.LineageID == lineageID {
+			ordered = append(ordered, c)
+		}
+	}
+	slices.SortFunc(ordered, func(a, b MemCommitView) int {
+		if cmp := a.CreatedAt.Compare(b.CreatedAt); cmp != 0 {
+			return cmp
+		}
+		return bytes.Compare(a.CommitID[:], b.CommitID[:])
+	})
+
+	commits := make([]CommitRecord, 0, len(ordered))
+	for i := range ordered {
+		commits = append(commits, ordered[i].toRecord())
+	}
+	return commits, nil
+}
+
 // UpdateDiskName 更新磁盘名称。
 func (m *MemStore) UpdateDiskName(ctx context.Context, diskID uuid.UUID, name string) (DiskRecord, error) {
 	if err := ctx.Err(); err != nil {
@@ -306,9 +361,81 @@ func (m *MemStore) UpdateDiskName(ctx context.Context, diskID uuid.UUID, name st
 		return DiskRecord{}, ErrNotFound
 	}
 	row.Name = name
-	row.UpdatedAt = nowMicroUTC()
+	row.UpdatedAt = m.nextNowLocked()
 	m.disks[diskID] = row
 	return row.toRecord(), nil
+}
+
+// MergeDisk 原子校验血缘与 CAS 切面并写入合并 Commit 节点（失败零副作用回滚）。
+func (m *MemStore) MergeDisk(ctx context.Context, input *MergeDiskInput) (DiskRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return DiskRecord{}, err
+	}
+	if err := validateMergeDiskInput(input); err != nil {
+		return DiskRecord{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.consumeFailNextWriteLocked(); err != nil {
+		return DiskRecord{}, err
+	}
+
+	if _, linOK := m.lineages[input.LineageID]; !linOK {
+		return DiskRecord{}, ErrDiskNotFound
+	}
+	srcRow, srcOK := m.disks[input.SourceDiskID]
+	if !srcOK {
+		return DiskRecord{}, ErrDiskNotFound
+	}
+	tgtRow, tgtOK := m.disks[input.TargetDiskID]
+	if !tgtOK {
+		return DiskRecord{}, ErrDiskNotFound
+	}
+	if srcRow.LineageID != input.LineageID || tgtRow.LineageID != input.LineageID {
+		return DiskRecord{}, ErrCrossLineage
+	}
+	if srcRow.BaseCommitID != input.ExpectedSourceBaseCommitID ||
+		tgtRow.BaseCommitID != input.ExpectedTargetBaseCommitID {
+		return DiskRecord{}, ErrStaleBaseCommit
+	}
+	if !input.SkipSourceCommit {
+		if _, exists := m.commits[input.NewSourceCommitID]; exists {
+			return DiskRecord{}, errors.New("db: commit already exists")
+		}
+	}
+	if _, exists := m.commits[input.NewMergeCommitID]; exists {
+		return DiskRecord{}, errors.New("db: commit already exists")
+	}
+
+	srcFinalCommitID := input.ExpectedSourceBaseCommitID
+	if !input.SkipSourceCommit {
+		srcNow := m.nextNowLocked()
+		m.commits[input.NewSourceCommitID] = MemCommitView{
+			CommitID:       input.NewSourceCommitID,
+			LineageID:      input.LineageID,
+			SourceDiskID:   input.SourceDiskID,
+			ParentCommitID: input.ExpectedSourceBaseCommitID,
+			CreatedAt:      srcNow,
+		}
+		srcRow.BaseCommitID = input.NewSourceCommitID
+		m.disks[input.SourceDiskID] = srcRow
+		srcFinalCommitID = input.NewSourceCommitID
+	}
+
+	mergeNow := m.nextNowLocked()
+	m.commits[input.NewMergeCommitID] = MemCommitView{
+		CommitID:            input.NewMergeCommitID,
+		LineageID:           input.LineageID,
+		SourceDiskID:        input.TargetDiskID,
+		ParentCommitID:      input.ExpectedTargetBaseCommitID,
+		MergeParentCommitID: srcFinalCommitID,
+		CreatedAt:           mergeNow,
+	}
+	tgtRow.BaseCommitID = input.NewMergeCommitID
+	tgtRow.UpdatedAt = mergeNow
+	m.disks[input.TargetDiskID] = tgtRow
+	return tgtRow.toRecord(), nil
 }
 
 // DeleteDisk 删盘并按同血缘剩余盘数执行三态切面回收。

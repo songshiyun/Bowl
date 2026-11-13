@@ -22,7 +22,10 @@ import (
 // 领域哨兵错误（吞并底层驱动细节，避免 pgx.ErrNoRows 泄露至调用方）。
 var (
 	ErrNotFound        = errors.New("db: not found")
+	ErrDiskNotFound    = ErrNotFound
 	ErrInvalidArgument = errors.New("db: invalid argument")
+	ErrCrossLineage    = errors.New("db: cross lineage")
+	ErrStaleBaseCommit = errors.New("db: stale base commit")
 )
 
 // SegmentKind 标识血缘单调号段资源类别。
@@ -34,14 +37,25 @@ const (
 	SegmentKindPack
 )
 
-// DiskRecord 描述控制面持久化的单盘领域记录（隐藏 base_commit_id 等内部表字段）。
+// DiskRecord 描述控制面持久化的单盘领域记录。
 type DiskRecord struct {
 	DiskID       uuid.UUID
 	ParentDiskID uuid.UUID
 	LineageID    uuid.UUID
+	BaseCommitID uuid.UUID
 	Name         string
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+// CommitRecord 描述血缘 DAG 中的不可变切面提交记录。
+type CommitRecord struct {
+	LineageID           uuid.UUID
+	CommitID            uuid.UUID
+	ParentCommitID      uuid.UUID
+	MergeParentCommitID uuid.UUID
+	BaseDiskID          uuid.UUID
+	CreatedAt           time.Time
 }
 
 // ForkDiskInput 描述派生子盘事务入参（64B，满足 gocritic hugeParam <= 80B）。
@@ -50,6 +64,18 @@ type ForkDiskInput struct {
 	ChildDiskID  uuid.UUID
 	CommitID     uuid.UUID
 	Name         string
+}
+
+// MergeDiskInput 描述原子合并事务入参（按指针传递以满足 gocritic hugeParam <= 80B）。
+type MergeDiskInput struct {
+	LineageID                  uuid.UUID
+	SourceDiskID               uuid.UUID
+	TargetDiskID               uuid.UUID
+	ExpectedSourceBaseCommitID uuid.UUID
+	ExpectedTargetBaseCommitID uuid.UUID
+	NewSourceCommitID          uuid.UUID
+	NewMergeCommitID           uuid.UUID
+	SkipSourceCommit           bool
 }
 
 // ListDisksQuery 描述游标分页查询参数。
@@ -76,7 +102,9 @@ type Store interface {
 	ForkDisk(ctx context.Context, arg ForkDiskInput) (DiskRecord, error)
 	GetDisk(ctx context.Context, diskID uuid.UUID) (DiskRecord, error)
 	ListDisks(ctx context.Context, query ListDisksQuery) (ListDisksPage, error)
+	ListLineageCommits(ctx context.Context, lineageID uuid.UUID) ([]CommitRecord, error)
 	UpdateDiskName(ctx context.Context, diskID uuid.UUID, name string) (DiskRecord, error)
+	MergeDisk(ctx context.Context, input *MergeDiskInput) (DiskRecord, error)
 	DeleteDisk(ctx context.Context, diskID uuid.UUID) ([]uuid.UUID, error)
 	ReserveSegment(ctx context.Context, kind SegmentKind, lineageID uuid.UUID, minNext, count int64) (SegmentRange, error)
 }
@@ -118,10 +146,49 @@ func toDiskRecord(d *Disk) DiskRecord {
 		DiskID:       fromPGUUID(d.DiskID),
 		ParentDiskID: fromPGUUID(d.ParentDiskID),
 		LineageID:    fromPGUUID(d.LineageID),
+		BaseCommitID: fromPGUUID(d.BaseCommitID),
 		Name:         d.Name,
 		CreatedAt:    d.CreatedAt.Time.UTC(),
 		UpdatedAt:    d.UpdatedAt.Time.UTC(),
 	}
+}
+
+func toCommitRecord(c *DiskCommit) CommitRecord {
+	return CommitRecord{
+		LineageID:           fromPGUUID(c.LineageID),
+		CommitID:            fromPGUUID(c.CommitID),
+		ParentCommitID:      fromPGUUID(c.ParentCommitID),
+		MergeParentCommitID: fromPGUUID(c.MergeParentCommitID),
+		BaseDiskID:          fromPGUUID(c.SourceDiskID),
+		CreatedAt:           c.CreatedAt.Time.UTC(),
+	}
+}
+
+func validateMergeDiskInput(input *MergeDiskInput) error {
+	if input == nil {
+		return fmt.Errorf("%w: merge disk input cannot be nil", ErrInvalidArgument)
+	}
+	if input.LineageID == uuid.Nil || input.SourceDiskID == uuid.Nil || input.TargetDiskID == uuid.Nil {
+		return fmt.Errorf("%w: lineage, source and target disk ids cannot be nil uuid", ErrInvalidArgument)
+	}
+	if input.SourceDiskID == input.TargetDiskID {
+		return fmt.Errorf("%w: source and target disk ids must differ", ErrInvalidArgument)
+	}
+	if input.ExpectedSourceBaseCommitID == uuid.Nil || input.ExpectedTargetBaseCommitID == uuid.Nil {
+		return fmt.Errorf("%w: expected source and target base commit ids cannot be nil uuid", ErrInvalidArgument)
+	}
+	if input.NewMergeCommitID == uuid.Nil {
+		return fmt.Errorf("%w: new merge commit id cannot be nil uuid", ErrInvalidArgument)
+	}
+	if !input.SkipSourceCommit {
+		if input.NewSourceCommitID == uuid.Nil {
+			return fmt.Errorf("%w: new source commit id cannot be nil uuid", ErrInvalidArgument)
+		}
+		if input.NewSourceCommitID == input.NewMergeCommitID {
+			return fmt.Errorf("%w: new source and merge commit ids must differ", ErrInvalidArgument)
+		}
+	}
+	return nil
 }
 
 func mapPGXErr(err error) error {
@@ -275,6 +342,22 @@ func (s *SQLStore) ListDisks(ctx context.Context, query ListDisksQuery) (ListDis
 	}, nil
 }
 
+// ListLineageCommits 按 (created_at ASC, commit_id ASC) 查询指定血缘的全部切面节点。
+func (s *SQLStore) ListLineageCommits(ctx context.Context, lineageID uuid.UUID) ([]CommitRecord, error) {
+	if lineageID == uuid.Nil {
+		return nil, fmt.Errorf("%w: lineage id cannot be nil uuid", ErrInvalidArgument)
+	}
+	rows, err := s.queries.ListLineageCommits(ctx, toPGUUID(lineageID))
+	if err != nil {
+		return nil, mapPGXErr(err)
+	}
+	commits := make([]CommitRecord, 0, len(rows))
+	for i := range rows {
+		commits = append(commits, toCommitRecord(&rows[i]))
+	}
+	return commits, nil
+}
+
 // UpdateDiskName 更新磁盘名称。
 func (s *SQLStore) UpdateDiskName(ctx context.Context, diskID uuid.UUID, name string) (DiskRecord, error) {
 	if diskID == uuid.Nil {
@@ -297,6 +380,98 @@ func (s *SQLStore) UpdateDiskName(ctx context.Context, diskID uuid.UUID, name st
 		return DiskRecord{}, mapPGXErr(err)
 	}
 	return toDiskRecord(&row), nil
+}
+
+// MergeDisk 在单次可重试事务内按严格锁序与 CAS 切面校验原子提交合并节点。
+func (s *SQLStore) MergeDisk(ctx context.Context, input *MergeDiskInput) (DiskRecord, error) {
+	if err := validateMergeDiskInput(input); err != nil {
+		return DiskRecord{}, err
+	}
+
+	pgLineage := toPGUUID(input.LineageID)
+	pgSource := toPGUUID(input.SourceDiskID)
+	pgTarget := toPGUUID(input.TargetDiskID)
+
+	var targetRow Disk
+	err := s.tx.ExecTxWithOptions(ctx, func(q *Queries) error {
+		if _, lockErr := q.LockDiskLineage(ctx, pgLineage); lockErr != nil {
+			return mapPGXErr(lockErr)
+		}
+
+		firstID, secondID := pgSource, pgTarget
+		sourceFirst := true
+		if input.TargetDiskID.String() < input.SourceDiskID.String() {
+			firstID, secondID = pgTarget, pgSource
+			sourceFirst = false
+		}
+
+		firstRow, lockFirstErr := q.GetDiskForUpdate(ctx, firstID)
+		if lockFirstErr != nil {
+			return mapPGXErr(lockFirstErr)
+		}
+		secondRow, lockSecondErr := q.GetDiskForUpdate(ctx, secondID)
+		if lockSecondErr != nil {
+			return mapPGXErr(lockSecondErr)
+		}
+
+		sourceRow, curTargetRow := firstRow, secondRow
+		if !sourceFirst {
+			sourceRow, curTargetRow = secondRow, firstRow
+		}
+
+		if fromPGUUID(sourceRow.LineageID) != input.LineageID || fromPGUUID(curTargetRow.LineageID) != input.LineageID {
+			return ErrCrossLineage
+		}
+		if fromPGUUID(sourceRow.BaseCommitID) != input.ExpectedSourceBaseCommitID ||
+			fromPGUUID(curTargetRow.BaseCommitID) != input.ExpectedTargetBaseCommitID {
+			return ErrStaleBaseCommit
+		}
+
+		srcFinalCommitID := input.ExpectedSourceBaseCommitID
+		if !input.SkipSourceCommit {
+			pgNewSrc := toPGUUID(input.NewSourceCommitID)
+			if _, srcCommitErr := q.CreateDiskCommit(ctx, CreateDiskCommitParams{
+				CommitID:       pgNewSrc,
+				LineageID:      pgLineage,
+				SourceDiskID:   pgSource,
+				ParentCommitID: toPGUUID(input.ExpectedSourceBaseCommitID),
+			}); srcCommitErr != nil {
+				return srcCommitErr
+			}
+			if setSrcErr := q.SetDiskBaseCommit(ctx, SetDiskBaseCommitParams{
+				DiskID:       pgSource,
+				BaseCommitID: pgNewSrc,
+			}); setSrcErr != nil {
+				return setSrcErr
+			}
+			srcFinalCommitID = input.NewSourceCommitID
+		}
+
+		pgNewMerge := toPGUUID(input.NewMergeCommitID)
+		if _, mergeCommitErr := q.CreateDiskCommit(ctx, CreateDiskCommitParams{
+			CommitID:            pgNewMerge,
+			LineageID:           pgLineage,
+			SourceDiskID:        pgTarget,
+			ParentCommitID:      toPGUUID(input.ExpectedTargetBaseCommitID),
+			MergeParentCommitID: toPGUUID(srcFinalCommitID),
+		}); mergeCommitErr != nil {
+			return mergeCommitErr
+		}
+
+		updatedTarget, touchErr := q.SetDiskBaseCommitAndTouch(ctx, SetDiskBaseCommitAndTouchParams{
+			DiskID:       pgTarget,
+			BaseCommitID: pgNewMerge,
+		})
+		if touchErr != nil {
+			return touchErr
+		}
+		targetRow = updatedTarget
+		return nil
+	}, tx.WithDefaultRetry())
+	if err != nil {
+		return DiskRecord{}, mapPGXErr(err)
+	}
+	return toDiskRecord(&targetRow), nil
 }
 
 // DeleteDisk 在单次可重试事务内按 disk_lineages -> disks 锁序删盘并执行三态血缘切面回收。

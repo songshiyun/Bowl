@@ -50,6 +50,42 @@ func TestMemStore_GivenInjectedWriteError_WhenForkDiskCalled_ThenRollsBackAtomic
 	require.Len(t, snapRecovered.Commits, 1, "恢复后切面数量 want=1, got=%d", len(snapRecovered.Commits))
 }
 
+func TestMemStore_GivenInjectedWriteError_WhenMergeDiskCalled_ThenRollsBackAtomically(t *testing.T) {
+	ctx := context.Background()
+	mem := db.NewMemStore()
+
+	rootID := mustNewUUIDv7(t)
+	root, err := mem.CreateDisk(ctx, rootID, "root")
+	require.NoError(t, err)
+
+	childID, cmFork := mustNewUUIDv7(t), mustNewUUIDv7(t)
+	_, err = mem.ForkDisk(ctx, db.ForkDiskInput{
+		SourceDiskID: rootID,
+		ChildDiskID:  childID,
+		CommitID:     cmFork,
+		Name:         "child",
+	})
+	require.NoError(t, err)
+
+	injected := errors.New("injected merge write error")
+	mem.SetFailNextWrite(injected)
+	_, err = mem.MergeDisk(ctx, &db.MergeDiskInput{
+		LineageID:                  root.LineageID,
+		SourceDiskID:               childID,
+		TargetDiskID:               rootID,
+		ExpectedSourceBaseCommitID: cmFork,
+		ExpectedTargetBaseCommitID: cmFork,
+		NewSourceCommitID:          mustNewUUIDv7(t),
+		NewMergeCommitID:           mustNewUUIDv7(t),
+	})
+	require.ErrorIs(t, err, injected)
+
+	snapAfterFail := mem.Inspect()
+	require.Len(t, snapAfterFail.Commits, 1, "注入写失败后不得残留新 Commit")
+	require.Equal(t, cmFork, snapAfterFail.Disks[rootID].BaseCommitID)
+	require.Equal(t, cmFork, snapAfterFail.Disks[childID].BaseCommitID)
+}
+
 func TestMemStore_GivenCanceledContext_WhenMethodsCalled_ThenFailsFast(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -68,6 +104,16 @@ func TestMemStore_GivenCanceledContext_WhenMethodsCalled_ThenFailsFast(t *testin
 	_, err = mem.UpdateDiskName(ctx, id, "x")
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = mem.DeleteDisk(ctx, id)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = mem.ListLineageCommits(ctx, id)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = mem.MergeDisk(ctx, &db.MergeDiskInput{
+		LineageID:         id,
+		SourceDiskID:      id,
+		TargetDiskID:      mustNewUUIDv7(t),
+		NewSourceCommitID: mustNewUUIDv7(t),
+		NewMergeCommitID:  mustNewUUIDv7(t),
+	})
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = mem.ReserveSegment(ctx, db.SegmentKindInode, id, 2, 10)
 	require.ErrorIs(t, err, context.Canceled)

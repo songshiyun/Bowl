@@ -39,6 +39,12 @@ INSERT INTO disk_commits (
 VALUES ($1, $2, $3, $4, $5, clock_timestamp())
 RETURNING commit_id, lineage_id, source_disk_id, parent_commit_id, merge_parent_commit_id, created_at;
 
+-- name: ListLineageCommits :many
+SELECT commit_id, lineage_id, source_disk_id, parent_commit_id, merge_parent_commit_id, created_at
+FROM disk_commits
+WHERE lineage_id = $1
+ORDER BY created_at ASC, commit_id ASC;
+
 -- name: CreateDisk :one
 INSERT INTO disks (
     disk_id,
@@ -81,6 +87,12 @@ RETURNING disk_id, name, created_at, updated_at, lineage_id, parent_disk_id, bas
 UPDATE disks
 SET base_commit_id = $2
 WHERE disk_id = $1;
+
+-- name: SetDiskBaseCommitAndTouch :one
+UPDATE disks
+SET base_commit_id = $2, updated_at = clock_timestamp()
+WHERE disk_id = $1
+RETURNING *;
 
 -- name: ClearLineageBaseCommits :exec
 UPDATE disks
