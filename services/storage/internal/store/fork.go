@@ -12,10 +12,16 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	checkpointLinkThreshold  = 32
+	maxCheckpointLinkWorkers = 8
 )
 
 // InodeSegmentAllocator 定义同源血缘树跨实例防撞的 Inode 连续号段分配函数。
@@ -146,7 +152,20 @@ func (s *StoreActor) execCheckpointCmd(ctx context.Context, cmd *writeCmd) error
 	if ckErr := s.db.Checkpoint(op.destDir); ckErr != nil {
 		return ckErr
 	}
-	if linkErr := s.blobs.SealAndLinkPacks(ctx, filepath.Join(op.destDir, "packs"), livePackIDs); linkErr != nil {
+	if sealErr := s.blobs.sealAndSync(ctx, livePackIDs); sealErr != nil {
+		_ = os.RemoveAll(op.destDir)
+		return sealErr
+	}
+	packNames := make([]string, 0, len(livePackIDs))
+	for _, id := range livePackIDs {
+		if id != 0 {
+			packNames = append(packNames, packFileName(id))
+		}
+	}
+	s.blobs.filesMu.RLock()
+	linkErr := linkPackFilesToDir(s.blobs.dir, filepath.Join(op.destDir, "packs"), packNames, s.metrics)
+	s.blobs.filesMu.RUnlock()
+	if linkErr != nil {
 		_ = os.RemoveAll(op.destDir)
 		return linkErr
 	}
@@ -230,7 +249,7 @@ func SanitizeCheckpoint(ctx context.Context, opts SanitizeOptions) (st StatFSRes
 		_ = actor.Close()
 		return StatFSResult{}, walErr
 	}
-	if flushErr := actor.DB().Flush(); flushErr != nil {
+	if flushErr := actor.db.Flush(); flushErr != nil {
 		_ = actor.Close()
 		return StatFSResult{}, flushErr
 	}
@@ -371,50 +390,69 @@ func clonePacksSubdir(srcPacksDir, dstPacksDir string) error {
 		}
 	}
 
+	return linkPackFilesToDir(srcPacksDir, dstPacksDir, packNames, nil)
+}
+
+func linkPackFilesToDir(srcPacksDir, dstPacksDir string, packNames []string, metrics *Metrics) error {
+	if dstPacksDir == "" {
+		return ErrInvalid
+	}
+	if mkErr := os.MkdirAll(dstPacksDir, 0o755); mkErr != nil {
+		return mkErr
+	}
+
 	if len(packNames) < checkpointLinkThreshold {
 		for _, name := range packNames {
 			if linkErr := os.Link(filepath.Join(srcPacksDir, name), filepath.Join(dstPacksDir, name)); linkErr != nil {
 				return linkErr
 			}
 		}
-		return syncDirPath(dstPacksDir)
-	}
-
-	workers := min(len(packNames), maxCheckpointLinkWorkers)
-	errList := make([]error, len(packNames))
-	var failed atomic.Bool
-	var nextIdx atomic.Uint32
-	var wg sync.WaitGroup
-	for range workers {
-		wg.Go(func() {
-			for {
-				if failed.Load() {
-					return
+	} else {
+		workers := min(len(packNames), maxCheckpointLinkWorkers)
+		errList := make([]error, len(packNames))
+		var failed atomic.Bool
+		var nextIdx atomic.Uint32
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					if failed.Load() {
+						return
+					}
+					i := int(nextIdx.Add(1) - 1)
+					if i >= len(packNames) {
+						return
+					}
+					name := packNames[i]
+					if linkErr := os.Link(filepath.Join(srcPacksDir, name), filepath.Join(dstPacksDir, name)); linkErr != nil {
+						errList[i] = linkErr
+						failed.Store(true)
+						return
+					}
 				}
-				i := int(nextIdx.Add(1) - 1)
-				if i >= len(packNames) {
-					return
-				}
-				name := packNames[i]
-				if linkErr := os.Link(filepath.Join(srcPacksDir, name), filepath.Join(dstPacksDir, name)); linkErr != nil {
-					errList[i] = linkErr
-					failed.Store(true)
-					return
-				}
+			})
+		}
+		wg.Wait()
+		var errs []error
+		for _, linkErr := range errList {
+			if linkErr != nil {
+				errs = append(errs, linkErr)
 			}
-		})
-	}
-	wg.Wait()
-	var errs []error
-	for _, linkErr := range errList {
-		if linkErr != nil {
-			errs = append(errs, linkErr)
+		}
+		if joinErr := errors.Join(errs...); joinErr != nil {
+			return joinErr
 		}
 	}
-	if joinErr := errors.Join(errs...); joinErr != nil {
-		return joinErr
+
+	var dirSyncStart time.Time
+	if metrics != nil {
+		dirSyncStart = time.Now()
 	}
-	return syncDirPath(dstPacksDir)
+	dirSyncErr := syncDirPath(dstPacksDir)
+	if metrics != nil {
+		metrics.observeBlobSync(syncTargetPacksDir, syncTriggerFlushWAL, time.Since(dirSyncStart))
+	}
+	return dirSyncErr
 }
 
 func copySubdirRecursive(srcDir, dstDir string) error {

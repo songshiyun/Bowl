@@ -75,17 +75,14 @@ func TestCheckpointSealParallelHardLinksAndCloneMetadataCopy(t *testing.T) {
 	childDir := filepath.Join(t.TempDir(), "disks", "child-01")
 
 	srcActor, err := store.Open(store.Options{
-		Dir:       srcDir,
-		DiskID:    "src-disk",
-		MaxBytes:  256 << 20,
-		AtimeMode: store.AtimeModeStrictAtime,
+		Dir:         srcDir,
+		DiskID:      "src-disk",
+		MaxBytes:    256 << 20,
+		MaxPackSize: store.BlobSize,
+		AtimeMode:   store.AtimeModeStrictAtime,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, srcActor.Close()) }()
-
-	// 将单包上限设为 1 个满块（256 KiB），写入 35 个满块以覆盖 >= 32 个包的 8 worker 并发硬链接路径，
-	// 再追加 1 个 64 KiB 尾块保持最后一个 .pack 处于活跃未满状态。
-	srcActor.Blobs().SetMaxPackSize(store.BlobSize)
 
 	ep1, _, err := srcActor.AdvanceEpoch(ctx)
 	require.NoError(t, err)
@@ -111,7 +108,10 @@ func TestCheckpointSealParallelHardLinksAndCloneMetadataCopy(t *testing.T) {
 	tailPayload := bytes.Repeat([]byte{0xFE}, 64*1024)
 	_, _, err = srcActor.Write(ctx, fAttr.Ino, uint64(fullPackCount)*store.BlobSize, tailPayload, ep2)
 	require.NoError(t, err)
-	require.NotZero(t, srcActor.Blobs().ActivePackID(), "Checkpoint 前最后一个包应处于活跃可写状态")
+	tailPackPath := packFilePathForTest(srcDir, fullPackCount+1)
+	tailInfoBefore, err := os.Stat(tailPackPath)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(tailPayload)), tailInfoBefore.Size())
 
 	expectedAtime := time.Now().Add(10 * time.Minute).Truncate(time.Nanosecond)
 	srcActor.MarkAtimeDirty(fAttr.Ino, expectedAtime)
@@ -126,10 +126,24 @@ func TestCheckpointSealParallelHardLinksAndCloneMetadataCopy(t *testing.T) {
 	require.Equal(t, uint64(2), stats.Inodes)
 	require.Equal(t, uint64(256<<20), stats.MaxBytes)
 	require.False(t, stats.HasOrphans)
+	require.Equal(t, fullPackCount+1, stats.LivePacks)
 
-	// Checkpoint 全程不得递增源盘 WriterEpoch，且活跃 .pack 已被封口重置为 0。
+	// Checkpoint 全程不得递增源盘 WriterEpoch；后续写入必须新开 Pack 37 而不再追加到已封口的 Pack 36。
 	require.Equal(t, ep2, srcActor.WriterEpoch())
-	require.Zero(t, srcActor.Blobs().ActivePackID())
+	afterFile, err := srcActor.Create(ctx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("post_checkpoint.bin"),
+		Mode:      store.S_IFREG | 0o644,
+		Epoch:     ep2,
+	})
+	require.NoError(t, err)
+	_, _, err = srcActor.Write(ctx, afterFile.Ino, 0, bytes.Repeat([]byte{0xAC}, 4096), ep2)
+	require.NoError(t, err)
+	tailInfoAfter, err := os.Stat(tailPackPath)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(tailPayload)), tailInfoAfter.Size(), "Checkpoint 后已封口的 Pack 36 长度不得再增长")
+	_, err = os.Stat(packFilePathForTest(srcDir, fullPackCount+2))
+	require.NoError(t, err, "Checkpoint 后新写入必须分配新 Pack 37")
 
 	// 校验 36 个存活 .pack 在源盘与 commitDir 之间为同一硬链接且 st_nlink == 2。
 	commitPackEntries, err := os.ReadDir(filepath.Join(commitDir, "packs"))
@@ -273,7 +287,6 @@ func TestCloneIsolationResetEpochAndMaxBytesOverride(t *testing.T) {
 		Epoch:     0,
 	})
 	require.NoError(t, err)
-	require.NoError(t, childExpand.DB().Flush())
 	require.NoError(t, childExpand.Close())
 
 	// 重启打开（ResetEpoch: false）验证 WriterEpoch == 0 与 MaxBytes == 512 MiB 已在 sys:stat 持久化。
@@ -299,7 +312,6 @@ func TestCloneIsolationResetEpochAndMaxBytesOverride(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, roCommit.Close()) }()
 
-	roCommit.Blobs().EvictHot(store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize})
 	gotCommitData, err := roCommit.Read(ctx, baseFile.Ino, 0, store.BlobSize)
 	require.NoError(t, err)
 	require.Equal(t, originalPayload, gotCommitData)
@@ -319,13 +331,13 @@ func TestSanitizeCheckpointOrphansAndDeadPackUnlink(t *testing.T) {
 	childDir := filepath.Join(rootDir, "child")
 
 	srcActor, err := store.Open(store.Options{
-		Dir:      srcDir,
-		DiskID:   "src-orphan",
-		MaxBytes: 128 << 20,
+		Dir:         srcDir,
+		DiskID:      "src-orphan",
+		MaxBytes:    128 << 20,
+		MaxPackSize: store.BlobSize,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, srcActor.Close()) }()
-	srcActor.Blobs().SetMaxPackSize(store.BlobSize)
 
 	ep, _, err := srcActor.AdvanceEpoch(ctx)
 	require.NoError(t, err)
@@ -371,9 +383,9 @@ func TestSanitizeCheckpointOrphansAndDeadPackUnlink(t *testing.T) {
 	require.Equal(t, uint64(3*store.BlobSize), ckStats.LogicalBytes)
 	require.Equal(t, uint64(3), ckStats.Inodes)
 
-	require.Equal(t, uint64(2), fileNlink(t, srcActor.Blobs().Path(1)))
-	require.Equal(t, uint64(2), fileNlink(t, srcActor.Blobs().Path(2)))
-	require.Equal(t, uint64(2), fileNlink(t, srcActor.Blobs().Path(3)))
+	require.Equal(t, uint64(2), fileNlink(t, packFilePathForTest(srcDir, 1)))
+	require.Equal(t, uint64(2), fileNlink(t, packFilePathForTest(srcDir, 2)))
+	require.Equal(t, uint64(2), fileNlink(t, packFilePathForTest(srcDir, 3)))
 
 	// 执行切面孤儿净化：移除孤儿节点及其独占的 Pack 2、Pack 3。
 	sharedCache := pebble.NewCache(16 << 20)
@@ -389,16 +401,15 @@ func TestSanitizeCheckpointOrphansAndDeadPackUnlink(t *testing.T) {
 	require.Equal(t, uint64(2), sanitizedStat.Files)
 
 	// Pack 2、3 已从 commitDir 解链删除，源盘对应 .pack 的 st_nlink 立即恢复为 1；Pack 1 仍为 2。
-	require.Equal(t, uint64(2), fileNlink(t, srcActor.Blobs().Path(1)))
-	require.Equal(t, uint64(1), fileNlink(t, srcActor.Blobs().Path(2)))
-	require.Equal(t, uint64(1), fileNlink(t, srcActor.Blobs().Path(3)))
+	require.Equal(t, uint64(2), fileNlink(t, packFilePathForTest(srcDir, 1)))
+	require.Equal(t, uint64(1), fileNlink(t, packFilePathForTest(srcDir, 2)))
+	require.Equal(t, uint64(1), fileNlink(t, packFilePathForTest(srcDir, 3)))
 	_, err = os.Stat(filepath.Join(commitDir, "packs", "0000000000000002.pack"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(filepath.Join(commitDir, "packs", "0000000000000003.pack"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
 	// 源盘上的未关闭孤儿句柄仍然正常可读，不受切面净化影响。
-	srcActor.Blobs().EvictHot(store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize})
 	gotOrphanFromSrc, err := srcActor.Read(ctx, orphanAttr.Ino, 0, 2*store.BlobSize)
 	require.NoError(t, err)
 	require.Equal(t, orphanData, gotOrphanFromSrc)
@@ -457,12 +468,12 @@ func TestExternalSegmentAllocatorsCrossBranchCollisionFree(t *testing.T) {
 		Dir:           parentDir,
 		DiskID:        "parent",
 		MaxBytes:      512 << 20,
+		MaxPackSize:   store.BlobSize,
 		InoAllocator:  lineage.allocInodeSegment,
 		PackAllocator: lineage.allocPackSegment,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, parentActor.Close()) }()
-	parentActor.Blobs().SetMaxPackSize(store.BlobSize)
 
 	baseFile, err := parentActor.Create(ctx, store.CreateReq{
 		ParentIno: store.RootIno,
@@ -483,24 +494,24 @@ func TestExternalSegmentAllocatorsCrossBranchCollisionFree(t *testing.T) {
 	childA, err := store.Open(store.Options{
 		Dir:           childADir,
 		DiskID:        "child-a",
+		MaxPackSize:   store.BlobSize,
 		InoAllocator:  lineage.allocInodeSegment,
 		PackAllocator: lineage.allocPackSegment,
 		ResetEpoch:    true,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, childA.Close()) }()
-	childA.Blobs().SetMaxPackSize(store.BlobSize)
 
 	childB, err := store.Open(store.Options{
 		Dir:           childBDir,
 		DiskID:        "child-b",
+		MaxPackSize:   store.BlobSize,
 		InoAllocator:  lineage.allocInodeSegment,
 		PackAllocator: lineage.allocPackSegment,
 		ResetEpoch:    true,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, childB.Close()) }()
-	childB.Blobs().SetMaxPackSize(store.BlobSize)
 
 	actors := []*store.StoreActor{parentActor, childA, childB}
 	branchInos := make([][]uint64, len(actors))
@@ -547,7 +558,7 @@ func TestExternalSegmentAllocatorsCrossBranchCollisionFree(t *testing.T) {
 			require.False(t, exists, "Inode %d 在分支 %d 与分支 %d 之间发生碰撞", ino, prevBranch, branchIdx)
 			seenInos[ino] = branchIdx
 		}
-		packEntries, readErr := os.ReadDir(act.Blobs().Root())
+		packEntries, readErr := os.ReadDir(filepath.Join(act.Dir(), "packs"))
 		require.NoError(t, readErr)
 		for _, entry := range packEntries {
 			if _, inBase := basePacks[entry.Name()]; inBase {
@@ -567,16 +578,15 @@ func TestCheckpointUnderConcurrentWritesAndCompactPacks(t *testing.T) {
 	rootDir := t.TempDir()
 	srcDir := filepath.Join(rootDir, "src-concurrent")
 
+	// 每包上限 2 个块（512 KiB），高频制造切包与低水位碎片搬迁。
 	srcActor, err := store.Open(store.Options{
-		Dir:      srcDir,
-		DiskID:   "src-concurrent",
-		MaxBytes: 1 << 30,
+		Dir:         srcDir,
+		DiskID:      "src-concurrent",
+		MaxBytes:    1 << 30,
+		MaxPackSize: 2 * store.BlobSize,
 	})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, srcActor.Close()) }()
-
-	// 每包上限 2 个块（512 KiB），高频制造切包与低水位碎片搬迁。
-	srcActor.Blobs().SetMaxPackSize(2 * store.BlobSize)
 
 	const (
 		workerCount     = 4
@@ -684,26 +694,39 @@ func TestForkErrorBoundariesAndAllocatorFailure(t *testing.T) {
 	srcDir := filepath.Join(rootDir, "src")
 
 	allocErr := errors.New("lineage db unavailable")
-	failActor, err := store.Open(store.Options{
-		Dir:    filepath.Join(rootDir, "fail-alloc"),
-		DiskID: "fail-alloc",
+	failInoActor, err := store.Open(store.Options{
+		Dir:    filepath.Join(rootDir, "fail-ino-alloc"),
+		DiskID: "fail-ino-alloc",
 		InoAllocator: func(_ context.Context, _ uint64) (uint64, uint64, error) {
-			return 0, 0, allocErr
-		},
-		PackAllocator: func(_ context.Context, _ uint64) (uint64, uint64, error) {
 			return 0, 0, allocErr
 		},
 	})
 	require.NoError(t, err)
-	_, err = failActor.Create(ctx, store.CreateReq{
+	_, err = failInoActor.Create(ctx, store.CreateReq{
 		ParentIno: store.RootIno,
 		Name:      []byte("a.txt"),
 		Mode:      store.S_IFREG | 0o644,
 	})
 	require.ErrorIs(t, err, allocErr)
-	_, err = failActor.Blobs().Append(ctx, 2, []byte("payload"))
+	require.NoError(t, failInoActor.Close())
+
+	failPackActor, err := store.Open(store.Options{
+		Dir:    filepath.Join(rootDir, "fail-pack-alloc"),
+		DiskID: "fail-pack-alloc",
+		PackAllocator: func(_ context.Context, _ uint64) (uint64, uint64, error) {
+			return 0, 0, allocErr
+		},
+	})
+	require.NoError(t, err)
+	failAttr, err := failPackActor.Create(ctx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("b.txt"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+	_, _, err = failPackActor.Write(ctx, failAttr.Ino, 0, []byte("payload"))
 	require.ErrorIs(t, err, allocErr)
-	require.NoError(t, failActor.Close())
+	require.NoError(t, failPackActor.Close())
 
 	srcActor, err := store.Open(store.Options{
 		Dir:    srcDir,

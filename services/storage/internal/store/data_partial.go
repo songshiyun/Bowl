@@ -66,13 +66,13 @@ func (s *StoreActor) setAttrWithSize(ctx context.Context, ino uint64, req SetAtt
 	return op.attr, nil
 }
 
-func (s *StoreActor) prepareTruncateTailBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
+func (s *StoreActor) prepareTruncateTailBlock(ctx context.Context, blobs *blobStore, ino, blockIdx uint64, oldRef BlobRef, tailLen uint32, staged *[]BlobRef) (writeBlockSpec, error) {
 	data := make([]byte, tailLen)
 	var readStart time.Time
 	if s.metrics != nil {
 		readStart = time.Now()
 	}
-	err := blobs.ReadAtContext(ctx, oldRef, 0, data)
+	err := blobs.readAtContext(ctx, oldRef, 0, data)
 	if s.metrics != nil {
 		s.metrics.observeBlobRMWRead(time.Since(readStart))
 	}
@@ -209,7 +209,7 @@ func (s *StoreActor) Fallocate(ctx context.Context, ino, offset, length uint64, 
 	return s.enqueueAndWait(ctx, cmd)
 }
 
-func (s *StoreActor) preparePunchPartialBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, inBlock, clearLen int, staged *[]BlobRef) (writeBlockSpec, bool, error) {
+func (s *StoreActor) preparePunchPartialBlock(ctx context.Context, blobs *blobStore, ino, blockIdx uint64, inBlock, clearLen int, staged *[]BlobRef) (writeBlockSpec, bool, error) {
 	oldRef, oldOK, err := s.readDataBlobRefFromDB(ctx, ino, blockIdx)
 	if err != nil || !oldOK {
 		return writeBlockSpec{}, false, err
@@ -224,7 +224,7 @@ func (s *StoreActor) preparePunchPartialBlock(ctx context.Context, blobs *BlobSt
 	if s.metrics != nil {
 		readStart = time.Now()
 	}
-	err = blobs.ReadAtContext(ctx, oldRef, 0, data)
+	err = blobs.readAtContext(ctx, oldRef, 0, data)
 	if s.metrics != nil {
 		s.metrics.observeBlobRMWRead(time.Since(readStart))
 	}

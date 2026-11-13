@@ -107,7 +107,7 @@ func (s *StoreActor) syncPackStatsWithBlobs() error {
 	}
 
 	if maxPackID > 0 {
-		bs.AdvanceMinPackID(maxPackID)
+		bs.advanceMinPackID(maxPackID)
 	}
 	if s.readOnly {
 		return nil
@@ -132,7 +132,7 @@ func (s *StoreActor) syncPackStatsWithBlobs() error {
 		}
 	}
 	for _, packID := range deadDiskPacks {
-		if err := bs.RemovePack(packID); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := bs.removePack(packID); err != nil && !errors.Is(err, os.ErrNotExist) {
 			s.metrics.incPackRemoveErrors()
 			if s.logger != nil {
 				s.logger.Warn("startup dead pack remove failed", "pack_id", packID, "err", err)
@@ -194,14 +194,14 @@ func (s *StoreActor) recordDeadBlobWrite(ref BlobRef) {
 
 func (s *StoreActor) activePackID() uint64 {
 	if s.blobs != nil {
-		return s.blobs.ActivePackID()
+		return s.blobs.activePackID()
 	}
 	return 0
 }
 
 // stageAppend 在 Stage 1 向活跃 .pack 追加写入数据块，并将生成的 BlobRef 纳入命令级预写租约（自动 Pin 所属 PackID）。
-func (s *StoreActor) stageAppend(ctx context.Context, blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) (BlobRef, error) {
-	ref, err := blobs.Append(ctx, ino, data)
+func (s *StoreActor) stageAppend(ctx context.Context, blobs *blobStore, ino uint64, data []byte, staged *[]BlobRef) (BlobRef, error) {
+	ref, err := blobs.append(ctx, ino, data)
 	if err != nil {
 		return BlobRef{}, err
 	}
@@ -213,8 +213,8 @@ func (s *StoreActor) stageAppend(ctx context.Context, blobs *BlobStore, ino uint
 }
 
 // stageAppendBlocks 在 Stage 1 向活跃 .pack 批量追加连续的 256 KiB 满块，并将生成的 BlobRef 序列单次批量加锁纳入预写租约。
-func (s *StoreActor) stageAppendBlocks(ctx context.Context, blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) ([]BlobRef, error) {
-	refs, err := blobs.AppendBlocks(ctx, ino, data)
+func (s *StoreActor) stageAppendBlocks(ctx context.Context, blobs *blobStore, ino uint64, data []byte, staged *[]BlobRef) ([]BlobRef, error) {
+	refs, err := blobs.appendBlocks(ctx, ino, data)
 	if err != nil {
 		return nil, err
 	}
@@ -232,8 +232,8 @@ func (s *StoreActor) stageAppendBlocks(ctx context.Context, blobs *BlobStore, in
 }
 
 // stageExtendTail 在 Stage 1 尝试原地顺延扩展活跃 .pack 最末尾同块，成功后自动将更新后的 BlobRef 纳入预写租约。
-func (s *StoreActor) stageExtendTail(blobs *BlobStore, ino uint64, oldRef BlobRef, patchOffset uint32, data []byte, newLen uint32, staged *[]BlobRef) (BlobRef, bool, error) {
-	extRef, ok, err := blobs.ExtendTail(ino, oldRef, patchOffset, data, newLen)
+func (s *StoreActor) stageExtendTail(blobs *blobStore, ino uint64, oldRef BlobRef, patchOffset uint32, data []byte, newLen uint32, staged *[]BlobRef) (BlobRef, bool, error) {
+	extRef, ok, err := blobs.extendTail(ino, oldRef, patchOffset, data, newLen)
 	if err != nil || !ok {
 		return BlobRef{}, false, err
 	}
@@ -368,7 +368,7 @@ func (s *StoreActor) enqueueRemovePacks(packIDs []uint64) {
 	if len(packIDs) == 0 || s.blobs == nil {
 		return
 	}
-	s.blobs.EnqueueRemovePacks(packIDs)
+	s.blobs.enqueueRemovePacks(packIDs)
 }
 
 func (s *StoreActor) syncFileInodes(inodes []uint64) error {
@@ -377,7 +377,7 @@ func (s *StoreActor) syncFileInodes(inodes []uint64) error {
 	}
 	var err error
 	for _, ino := range inodes {
-		err = errors.Join(err, s.blobs.SyncInode(ino))
+		err = errors.Join(err, s.blobs.syncInode(ino))
 	}
 	return err
 }
@@ -395,7 +395,7 @@ func (s *StoreActor) syncWALAndReclaimDeadPacksTimed() (didWALSync bool, walDur 
 	if !wasDirty && len(toReclaim) == 0 {
 		if s.blobs != nil {
 			remStart := time.Now()
-			s.blobs.WaitPendingReclaims()
+			s.blobs.waitPendingReclaims()
 			removeDur = time.Since(remStart)
 		}
 		return false, 0, 0, removeDur, nil
@@ -414,7 +414,7 @@ func (s *StoreActor) syncWALAndReclaimDeadPacksTimed() (didWALSync bool, walDur 
 		reclaimed = len(toReclaim)
 	}
 	if s.blobs != nil {
-		s.blobs.WaitPendingReclaims()
+		s.blobs.waitPendingReclaims()
 	}
 	if reclaimed > 0 {
 		removeDur = time.Since(remStart)

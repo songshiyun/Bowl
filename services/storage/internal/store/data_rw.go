@@ -220,7 +220,7 @@ func (s *StoreActor) writePartialData(ctx context.Context, ino, offset uint64, d
 	return op.dataLen, op.attr, nil
 }
 
-func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *BlobStore, ino, blockIdx uint64, inBlock int, chunk []byte, staged *[]BlobRef) (writeBlockSpec, error) {
+func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *blobStore, ino, blockIdx uint64, inBlock int, chunk []byte, staged *[]BlobRef) (writeBlockSpec, error) {
 	// 跨块局部写中可能包含中间满块对齐整块：直接追加新块，无需读旧块。
 	if inBlock == 0 && len(chunk) == BlobSize {
 		if isAllZero(chunk) {
@@ -285,7 +285,7 @@ func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *BlobSt
 		if s.metrics != nil {
 			readStart = time.Now()
 		}
-		err = blobs.ReadAtContext(ctx, oldRef, 0, merged[:oldRef.Length])
+		err = blobs.readAtContext(ctx, oldRef, 0, merged[:oldRef.Length])
 		if s.metrics != nil {
 			s.metrics.observeBlobRMWRead(time.Since(readStart))
 		}
@@ -607,7 +607,7 @@ func (s *StoreActor) readMultiBlocks(ctx context.Context, ino, firstBlock, lastB
 		}
 		cur := run
 		run = coalescedDiskRead{}
-		return blobs.ReadRangeAtContext(ctx, cur.packID, int64(cur.packOffset), out[cur.outStart:cur.outStart+cur.length], cur.blockCount)
+		return blobs.readRangeAtContext(ctx, cur.packID, int64(cur.packOffset), out[cur.outStart:cur.outStart+cur.length], cur.blockCount)
 	}
 
 	filledEnd := offset
@@ -654,7 +654,7 @@ func (s *StoreActor) readMultiBlocks(ctx context.Context, ino, firstBlock, lastB
 		n := min(reqLen, uint64(h.ref.Length)-inBlockStart)
 		// 一致性守卫：仍在 hotShard 内存热缓存中的块（活跃包尾块或部分覆写块）优先命中最新内存字节，
 		// 仅对不在 hotShard 中的相邻物理连续冷块区间合并执行单次底层 pread。
-		if blobs.TryReadHot(h.ref, int64(inBlockStart), dst[:n]) {
+		if blobs.tryReadHot(h.ref, int64(inBlockStart), dst[:n]) {
 			if err := flushRun(); err != nil {
 				return err
 			}
@@ -727,7 +727,7 @@ func (s *StoreActor) readBlockSlice(ctx context.Context, ref BlobRef, rangeStart
 		return nil
 	}
 	n := min(reqLen, uint64(ref.Length)-inBlockStart)
-	if err := blobs.ReadAtContext(ctx, ref, int64(inBlockStart), dst[:n]); err != nil {
+	if err := blobs.readAtContext(ctx, ref, int64(inBlockStart), dst[:n]); err != nil {
 		return err
 	}
 	if !preZeroed && n < reqLen {

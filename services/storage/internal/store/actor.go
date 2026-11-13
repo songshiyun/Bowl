@@ -146,24 +146,29 @@ type writeCmd struct {
 
 // Options 配置 StoreActor 实例打开参数。
 type Options struct {
-	Dir           string
-	DiskID        string
-	ReadOnly      bool
-	MaxBytes      uint64
-	MaxInodes     uint64
-	AtimeMode     AtimeMode
-	Cache         *pebble.Cache
-	Now           func() time.Time
-	Logger        *slog.Logger
-	Metrics       *Metrics
-	InoAllocator  InodeSegmentAllocator
-	PackAllocator PackSegmentAllocator
-	ResetEpoch    bool
+	Dir               string
+	DiskID            string
+	ReadOnly          bool
+	MaxBytes          uint64
+	MaxInodes         uint64
+	AtimeMode         AtimeMode
+	Cache             *pebble.Cache
+	Now               func() time.Time
+	Logger            *slog.Logger
+	Metrics           *Metrics
+	InoAllocator      InodeSegmentAllocator
+	PackAllocator     PackSegmentAllocator
+	ResetEpoch        bool
+	MaxPackSize       uint32
+	SlowTickThreshold time.Duration
 
 	// 包内单测注入钩子（生产路径留零值）。
-	pebbleFS          vfs.FS
-	diskSlowThreshold time.Duration
-	slowTickThreshold time.Duration
+	pebbleFS                  vfs.FS
+	diskSlowThreshold         time.Duration
+	beforeTickHook            func()
+	beforeCompactRelocateHook func()
+	syncFileHook              func(packID uint64)
+	removePackHook            func(packID uint64)
 }
 
 // NewPebbleOptions 构建*pebble.Options：
@@ -272,7 +277,7 @@ type StoreActor struct {
 
 	// 6. Data Layer 协同锁与钩子
 	inodeLocks                [4096]sync.Mutex
-	blobs                     *BlobStore
+	blobs                     *blobStore
 	beforeTickHook            func()
 	beforeCompactRelocateHook func()
 	inFlightMu                sync.Mutex
@@ -289,6 +294,12 @@ func Open(opts Options) (*StoreActor, error) {
 	if opts.Dir == "" {
 		return nil, ErrInvalid
 	}
+	maxPackSize := opts.MaxPackSize
+	if maxPackSize == 0 {
+		maxPackSize = PackMaxSize
+	} else if maxPackSize < BlobSize || maxPackSize > PackMaxSize {
+		return nil, ErrInvalid
+	}
 	nowFn := opts.Now
 	if nowFn == nil {
 		nowFn = time.Now
@@ -297,7 +308,7 @@ func Open(opts Options) (*StoreActor, error) {
 	if baseLogger == nil {
 		baseLogger = slog.Default()
 	}
-	slowTickThresh := opts.slowTickThreshold
+	slowTickThresh := opts.SlowTickThreshold
 	if slowTickThresh <= 0 {
 		slowTickThresh = defaultSlowTickThreshold
 	}
@@ -319,21 +330,23 @@ func Open(opts Options) (*StoreActor, error) {
 	}
 
 	s := &StoreActor{
-		dir:               opts.Dir,
-		diskID:            opts.DiskID,
-		readOnly:          opts.ReadOnly,
-		atimeMode:         opts.AtimeMode,
-		now:               nowFn,
-		logger:            baseLogger.With("component", "store", "disk_id", opts.DiskID),
-		metrics:           opts.Metrics,
-		ownedCache:        ownedCache,
-		packStats:         make(map[uint64]PackMeta),
-		dirtyPackStats:    make(map[uint64]struct{}),
-		dirtyAtime:        make(map[uint64]int64),
-		loopDone:          make(chan struct{}),
-		inFlightPacks:     make(map[uint64]int),
-		inoAllocator:      opts.InoAllocator,
-		slowTickThreshold: slowTickThresh,
+		dir:                       opts.Dir,
+		diskID:                    opts.DiskID,
+		readOnly:                  opts.ReadOnly,
+		atimeMode:                 opts.AtimeMode,
+		now:                       nowFn,
+		logger:                    baseLogger.With("component", "store", "disk_id", opts.DiskID),
+		metrics:                   opts.Metrics,
+		ownedCache:                ownedCache,
+		packStats:                 make(map[uint64]PackMeta),
+		dirtyPackStats:            make(map[uint64]struct{}),
+		dirtyAtime:                make(map[uint64]int64),
+		loopDone:                  make(chan struct{}),
+		inFlightPacks:             make(map[uint64]int),
+		inoAllocator:              opts.InoAllocator,
+		slowTickThreshold:         slowTickThresh,
+		beforeTickHook:            opts.beforeTickHook,
+		beforeCompactRelocateHook: opts.beforeCompactRelocateHook,
 	}
 	s.maxBytes.Store(opts.MaxBytes)
 	s.maxInodes.Store(opts.MaxInodes)
@@ -376,13 +389,16 @@ func Open(opts Options) (*StoreActor, error) {
 
 	s.blobs = newBlobStore(
 		s.dir,
+		maxPackSize,
 		baseLogger.With("component", "blobstore", "disk_id", opts.DiskID),
 		opts.Metrics,
 		opts.PackAllocator,
+		opts.syncFileHook,
+		opts.removePackHook,
 	)
 
 	if err := s.syncPackStatsWithBlobs(); err != nil {
-		_ = s.blobs.Close()
+		_ = s.blobs.close()
 		_ = db.Close()
 		if fsCloser != nil {
 			_ = fsCloser.Close()
@@ -538,9 +554,6 @@ func (s *StoreActor) enter() (func(), error) {
 	}
 	return s.lifecycleMu.RUnlock, nil
 }
-
-// DB 返回底层 *pebble.DB 实例。
-func (s *StoreActor) DB() *pebble.DB { return s.db }
 
 // Dir 返回当前分支工作区目录路径。
 func (s *StoreActor) Dir() string { return s.dir }
@@ -1695,7 +1708,7 @@ func (s *StoreActor) closeInternal(discard bool) error {
 		}
 		var blobErr error
 		if s.blobs != nil {
-			blobErr = s.blobs.Close()
+			blobErr = s.blobs.close()
 		}
 		s.lifecycleMu.Unlock()
 

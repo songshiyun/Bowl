@@ -45,7 +45,8 @@ func TestPebbleEventsLogPersistedUnderWarnLogLevel(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = actor.Write(ctx, f.Ino, 0, bytes.Repeat([]byte{0x7A}, 4096))
 	require.NoError(t, err)
-	require.NoError(t, actor.DB().Flush())
+	_, err = actor.Checkpoint(ctx, filepath.Join(t.TempDir(), "ck-pebble-events"))
+	require.NoError(t, err)
 	require.NoError(t, actor.Close())
 
 	logPath := filepath.Join(dir, store.PebbleEventsLogFileName)
@@ -159,169 +160,6 @@ func findMetricByLabel(metrics []*dto.Metric, labelName, labelVal string) *dto.M
 	return nil
 }
 
-func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	metrics := store.NewMetrics()
-	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(metrics))
-
-	actor, err := store.Open(store.Options{
-		Dir:      dir,
-		DiskID:   "disk-metrics-sync",
-		MaxBytes: 64 << 20,
-		Metrics:  metrics,
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
-
-	dirAttr, err := actor.Mkdir(ctx, store.MkdirReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("sub"),
-		Mode:      store.S_IFDIR | 0o755,
-	})
-	require.NoError(t, err)
-	f, err := actor.Create(ctx, store.CreateReq{
-		ParentIno: dirAttr.Ino,
-		Name:      []byte("data.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
-	sym, err := actor.Symlink(ctx, store.SymlinkReq{
-		ParentIno: dirAttr.Ino,
-		Name:      []byte("ln"),
-		Target:    []byte("data.bin"),
-	})
-	require.NoError(t, err)
-	require.NoError(t, actor.SetXattr(ctx, f.Ino, []byte("user.k"), []byte("v"), 0))
-
-	// 1. 验证纯 Fsync (syncBarrierWithoutBatch) 中 .pack fdatasync 在独立协程并发执行且正确采集耗时
-	_, _, err = actor.Write(ctx, f.Ino, 0, bytes.Repeat([]byte{0x31}, store.BlobSize))
-	require.NoError(t, err)
-
-	var syncHookCalls int32
-	var syncHookMu sync.Mutex
-	actor.Blobs().SetSyncFileHookForTest(func(_ uint64) {
-		syncHookMu.Lock()
-		syncHookCalls++
-		syncHookMu.Unlock()
-		time.Sleep(35 * time.Millisecond)
-	})
-	require.NoError(t, actor.Fsync(ctx, f.Ino))
-	syncHookMu.Lock()
-	require.Equal(t, int32(1), syncHookCalls)
-	syncHookMu.Unlock()
-
-	// 2. 验证合并批次 commitWithSyncBarrier 中 wal_apply_sync 记录完整墙钟耗时（不被并发 35ms .pack sync 扣减为零）
-	f2, err := actor.Create(ctx, store.CreateReq{
-		ParentIno: dirAttr.Ino,
-		Name:      []byte("merged.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
-	_, _, err = actor.Write(ctx, f2.Ino, 0, bytes.Repeat([]byte{0x42}, store.BlobSize))
-	require.NoError(t, err)
-
-	var (
-		wg          sync.WaitGroup
-		once        sync.Once
-		tickEntered = make(chan struct{})
-		releaseTick = make(chan struct{})
-		mErr        error
-		cErr        error
-		fErr        error
-	)
-	actor.SetBeforeTickHookForTest(func() {
-		once.Do(func() {
-			close(tickEntered)
-			<-releaseTick
-		})
-	})
-
-	wg.Go(func() {
-		_, mErr = actor.Mkdir(ctx, store.MkdirReq{
-			ParentIno: dirAttr.Ino,
-			Name:      []byte("co-batch-dir"),
-			Mode:      store.S_IFDIR | 0o755,
-		})
-	})
-	<-tickEntered
-	wg.Go(func() {
-		// 与下一轮或排空合并：再投递一条带 batch 变更的写命令和一条 Fsync 使它们在同一 draining 批内合并
-		_, cErr = actor.Mkdir(ctx, store.MkdirReq{
-			ParentIno: dirAttr.Ino,
-			Name:      []byte("co-batch-dir-2"),
-			Mode:      store.S_IFDIR | 0o755,
-		})
-	})
-	wg.Go(func() {
-		fErr = actor.Fsync(ctx, f2.Ino)
-	})
-	time.Sleep(10 * time.Millisecond)
-	close(releaseTick)
-	wg.Wait()
-	require.NoError(t, mErr)
-	require.NoError(t, cErr)
-	require.NoError(t, fErr)
-	actor.SetBeforeTickHookForTest(nil)
-	actor.Blobs().SetSyncFileHookForTest(nil)
-
-	// 3. 触发全部 9 类只读操作与冷读 pread
-	_, _, err = actor.Lookup(ctx, dirAttr.Ino, []byte("data.bin"))
-	require.NoError(t, err)
-	_, err = actor.GetAttr(ctx, f.Ino)
-	require.NoError(t, err)
-	_, err = actor.ReadDir(ctx, dirAttr.Ino, 0, 16)
-	require.NoError(t, err)
-	_, err = actor.ReadDirPlus(ctx, dirAttr.Ino, 0, 16)
-	require.NoError(t, err)
-	_, err = actor.Readlink(ctx, sym.Ino)
-	require.NoError(t, err)
-	_, err = actor.GetXattr(ctx, f.Ino, []byte("user.k"))
-	require.NoError(t, err)
-	_, err = actor.ListXattr(ctx, f.Ino)
-	require.NoError(t, err)
-	_, err = actor.StatFS(ctx)
-	require.NoError(t, err)
-
-	// 写入跨块数据并清退热缓存，触发 KVScan (data_blocks) 与磁盘 .pack pread
-	_, _, err = actor.Write(ctx, f.Ino, store.BlobSize, bytes.Repeat([]byte{0x32}, 4096))
-	require.NoError(t, err)
-	ref1 := requireDataRef(t, actor, f.Ino, 1)
-	actor.Blobs().EvictHot(ref1)
-	_, err = actor.Read(ctx, f.Ino, 0, store.BlobSize+4096)
-	require.NoError(t, err)
-
-	gathered := gatherHistogramMap(t, reg)
-
-	// 断言阶段拆分与 WAL Sync 完整墙钟计时
-	phaseMetrics := gathered["bowl_storage_actor_tick_phase_duration_seconds"]
-	require.NotNil(t, findMetricByLabel(phaseMetrics, "phase", "phase_a_validate"))
-	require.NotNil(t, findMetricByLabel(phaseMetrics, "phase", "phase_b_mutate"))
-	require.Nil(t, findMetricByLabel(phaseMetrics, "phase", "validate_mutate"), "旧的合并标签 validate_mutate 必须彻底移除")
-
-	walSyncMetric := findMetricByLabel(phaseMetrics, "phase", "wal_apply_sync")
-	require.NotNil(t, walSyncMetric)
-	require.GreaterOrEqual(t, walSyncMetric.GetHistogram().GetSampleSum(), 0.030, "commitWithSyncBarrier 中 wal_apply_sync 必须记录从 ApplyNoSyncWait 到 SyncWait 的完整墙钟")
-
-	// 断言全部 9 类只读操作直方图非零
-	readOpMetrics := gathered["bowl_storage_read_op_duration_seconds"]
-	for _, op := range []string{"read", "lookup", "getattr", "readdir", "readdirplus", "readlink", "getxattr", "listxattr", "statfs"} {
-		m := findMetricByLabel(readOpMetrics, "op", op)
-		require.NotNil(t, m, "缺少 read_op 直方图标签 %s", op)
-		require.GreaterOrEqual(t, m.GetHistogram().GetSampleCount(), uint64(1), "read_op=%s 计数必须 >= 1", op)
-	}
-
-	// 断言 KV 点查/扫描与 BlobPread 直方图非零
-	kvMetrics := gathered["bowl_storage_kv_read_duration_seconds"]
-	require.GreaterOrEqual(t, findMetricByLabel(kvMetrics, "op", "point_get").GetHistogram().GetSampleCount(), uint64(1))
-	require.GreaterOrEqual(t, findMetricByLabel(kvMetrics, "op", "prefix_scan").GetHistogram().GetSampleCount(), uint64(1))
-
-	preadMetrics := gathered["bowl_storage_blob_pread_duration_seconds"]
-	require.Len(t, preadMetrics, 1)
-	require.GreaterOrEqual(t, preadMetrics[0].GetHistogram().GetSampleCount(), uint64(1))
-}
-
 func TestStoreOTelSpansWhenSampledAndZeroAllocsWhenUnsampled(t *testing.T) {
 	prevTP := otel.GetTracerProvider()
 	exporter := tracetest.NewInMemoryExporter()
@@ -342,7 +180,6 @@ func TestStoreOTelSpansWhenSampledAndZeroAllocsWhenUnsampled(t *testing.T) {
 		MaxBytes: 64 << 20,
 	})
 	require.NoError(t, err)
-	defer func() { require.NoError(t, actor.Close()) }()
 
 	// 1. 未采样 context.Background() 热路径零分配验证
 	unsampledCtx := context.Background()
@@ -371,10 +208,17 @@ func TestStoreOTelSpansWhenSampledAndZeroAllocsWhenUnsampled(t *testing.T) {
 	_, _, err = actor.Write(sampledCtx, f.Ino, store.BlobSize, bytes.Repeat([]byte{0x5B}, 4096))
 	require.NoError(t, err)
 	require.NoError(t, actor.Fsync(sampledCtx, f.Ino))
+	require.NoError(t, actor.Close())
 
-	ref1 := requireDataRef(t, actor, f.Ino, 1)
-	actor.Blobs().EvictHot(ref1)
-	_, err = actor.Read(sampledCtx, f.Ino, 0, store.BlobSize+4096)
+	reopened, err := store.Open(store.Options{
+		Dir:      dir,
+		DiskID:   "disk-otel-spans",
+		MaxBytes: 64 << 20,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopened.Close()) }()
+
+	_, err = reopened.Read(sampledCtx, f.Ino, 0, store.BlobSize+4096)
 	require.NoError(t, err)
 	rootSpan.End()
 
@@ -435,11 +279,12 @@ func TestForkObservabilityCheckpointPhaseSpansAndAllocatorTrace(t *testing.T) {
 	rootDir := t.TempDir()
 	srcDir := filepath.Join(rootDir, "src")
 	actor, err := store.Open(store.Options{
-		Dir:      srcDir,
-		DiskID:   "disk-fork-obs",
-		MaxBytes: 64 << 20,
-		Metrics:  metrics,
-		Logger:   warnLogger,
+		Dir:               srcDir,
+		DiskID:            "disk-fork-obs",
+		MaxBytes:          64 << 20,
+		Metrics:           metrics,
+		Logger:            warnLogger,
+		SlowTickThreshold: time.Nanosecond,
 		InoAllocator: func(allocCtx context.Context, minNext uint64) (uint64, uint64, error) {
 			allocMu.Lock()
 			inoTraceIDs = append(inoTraceIDs, mustTraceIDFromCtx(allocCtx))
@@ -454,7 +299,6 @@ func TestForkObservabilityCheckpointPhaseSpansAndAllocatorTrace(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	actor.SetSlowTickThresholdForTest(time.Nanosecond)
 	defer func() { require.NoError(t, actor.Close()) }()
 
 	tracer := tp.Tracer("test-fork-rpc")
