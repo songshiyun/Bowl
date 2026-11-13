@@ -957,6 +957,12 @@ def extract_server_prom_snapshot(
         "control_open_actor_ms": summarize_prom_histogram(
             post_p, "bowl_storage_control_open_actor_duration_seconds", group_key="result", pre_parsed=pre_p, scale=1000.0
         ),
+        "control_fork_stage_ms": summarize_prom_histogram(
+            post_p, "bowl_storage_control_fork_stage_duration_seconds", group_key="stage", pre_parsed=pre_p, scale=1000.0
+        ),
+        "control_segment_reserve_ms": summarize_prom_histogram(
+            post_p, "bowl_storage_control_segment_reserve_duration_seconds", group_key="kind", pre_parsed=pre_p, scale=1000.0
+        ),
         "read_op_latency_ms": summarize_prom_histogram(
             post_p, "bowl_storage_read_op_duration_seconds", group_key="op", pre_parsed=pre_p, scale=1000.0
         ),
@@ -1016,6 +1022,17 @@ def extract_server_prom_snapshot(
             ),
             "pebble_disk_slow_events": _sum_prom_metric(
                 post_p, "bowl_storage_pebble_disk_slow_total", pre_parsed=pre_p
+            ),
+            "pack_physical_bytes": _sum_prom_metric(post_p, "bowl_storage_pack_physical_bytes"),
+            "pack_referenced_bytes": _sum_prom_metric(post_p, "bowl_storage_pack_referenced_bytes"),
+            "data_dir_physical_bytes": _sum_prom_metric(post_p, "bowl_storage_data_dir_physical_bytes"),
+            "commits_active": _sum_prom_metric(post_p, "bowl_storage_commits_active"),
+            "commits_physical_bytes": _sum_prom_metric(post_p, "bowl_storage_commits_physical_bytes"),
+            "commits_reclaimed": _sum_prom_metric(
+                post_p, "bowl_storage_control_commits_reclaimed_total", pre_parsed=pre_p
+            ),
+            "forks_by_result": _sum_prom_metric(
+                post_p, "bowl_storage_control_forks_total", "result", pre_parsed=pre_p
             ),
         },
     }
@@ -1585,15 +1602,26 @@ def build_single_phase_breakdown(
         if agg and agg["count"] > 0:
             add_hop("7. BlobStore 数据面", comp_name, agg["count"], agg["total"], agg["mean"], agg["p50"], agg["p99"])
 
-    # Hop 8: Persistence Barrier (Pebble WAL Sync / Pack Fsync)
+    # Hop 8: Persistence Barrier (Pebble WAL Sync / Pack Fsync / Fork Checkpoint)
     for ph_key, ph_label in (
         ("wal_apply_sync", "Pebble WAL 同步完整墙钟 (wal_apply_sync)"),
         ("pack_sync_barrier", "Pack 双层同步屏障 (pack_sync_barrier)"),
+        ("checkpoint", "Fork Checkpoint 硬链接切面屏障 (checkpoint)"),
         ("dead_pack_remove", "已封口死包回收 (dead_pack_remove)"),
     ):
         if ph_key in tick_by_phase:
             r = tick_by_phase[ph_key]
             add_hop("8. 持久化 Fsync 屏障", ph_label, r["count"], r["total"], r["mean"], r["p50"], r["p99"])
+    for fk in sp.get("control_fork_stage_ms") or []:
+        add_hop(
+            "9. 控制面 Fork 分阶段",
+            f"Fork 阶段 ({fk['group']})",
+            fk["count"],
+            fk["total"],
+            fk["mean"],
+            fk["p50"],
+            fk["p99"],
+        )
     for bs in sp.get("blob_sync_ms") or []:
         add_hop(
             "8. 持久化 Fsync 屏障",

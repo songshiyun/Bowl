@@ -990,5 +990,52 @@ class CollectTelemetryTest(unittest.TestCase):
             )
 
 
+    def test_extract_server_prom_snapshot_fork_and_storage_usage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pre_path = Path(tmp) / "pre.prom"
+            post_path = Path(tmp) / "post.prom"
+            pre_path.write_text(
+                "\n".join([
+                    'bowl_storage_control_forks_total{result="ok"} 1',
+                    'bowl_storage_control_commits_reclaimed_total 0',
+                ]),
+                encoding="utf-8",
+            )
+            post_path.write_text(
+                "\n".join([
+                    'bowl_storage_pack_physical_bytes 1048576',
+                    'bowl_storage_pack_referenced_bytes 4194304',
+                    'bowl_storage_data_dir_physical_bytes 2097152',
+                    'bowl_storage_commits_active 3',
+                    'bowl_storage_commits_physical_bytes 1048576',
+                    'bowl_storage_control_commits_reclaimed_total 2',
+                    'bowl_storage_control_forks_total{result="ok"} 4',
+                    'bowl_storage_control_forks_total{result="error"} 1',
+                    'bowl_storage_actor_tick_phase_duration_seconds_bucket{phase="checkpoint",le="0.05"} 3',
+                    'bowl_storage_actor_tick_phase_duration_seconds_bucket{phase="checkpoint",le="+Inf"} 3',
+                    'bowl_storage_actor_tick_phase_duration_seconds_sum{phase="checkpoint"} 0.060',
+                    'bowl_storage_actor_tick_phase_duration_seconds_count{phase="checkpoint"} 3',
+                    'bowl_storage_control_fork_stage_duration_seconds_bucket{stage="sanitize",le="0.05"} 3',
+                    'bowl_storage_control_fork_stage_duration_seconds_bucket{stage="sanitize",le="+Inf"} 3',
+                    'bowl_storage_control_fork_stage_duration_seconds_sum{stage="sanitize"} 0.045',
+                    'bowl_storage_control_fork_stage_duration_seconds_count{stage="sanitize"} 3',
+                ]),
+                encoding="utf-8",
+            )
+            pre_p = collect_telemetry.parse_prom_text(pre_path)
+            post_p = collect_telemetry.parse_prom_text(post_path)
+            snap = collect_telemetry.extract_server_prom_snapshot(post_p, pre_p=pre_p)
+            cg = snap["counters_and_gauges"]
+            self.assertEqual(cg["pack_physical_bytes"], 1048576.0)
+            self.assertEqual(cg["pack_referenced_bytes"], 4194304.0)
+            self.assertEqual(cg["data_dir_physical_bytes"], 2097152.0)
+            self.assertEqual(cg["commits_active"], 3.0)
+            self.assertEqual(cg["commits_physical_bytes"], 1048576.0)
+            self.assertEqual(cg["commits_reclaimed"], 2.0)
+            self.assertEqual(cg["forks_by_result"], {"ok": 3.0, "error": 1.0})
+            self.assertEqual([r["group"] for r in snap["control_fork_stage_ms"]], ["sanitize"])
+            self.assertEqual(snap["actor_tick_phase_ms"][0]["group"], "checkpoint")
+
+
 if __name__ == "__main__":
     unittest.main()
