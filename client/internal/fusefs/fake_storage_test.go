@@ -1532,6 +1532,18 @@ func (s *fakeStorage) ForkDisk(context.Context, *connect.Request[storagev1.ForkD
 	return nil, s.failFast("ForkDisk")
 }
 
+func (s *fakeStorage) DiffDisk(context.Context, *connect.Request[storagev1.DiffDiskRequest]) (*connect.Response[storagev1.DiffDiskResponse], error) {
+	return nil, s.failFast("DiffDisk")
+}
+
+func (s *fakeStorage) ReadCommitNode(context.Context, *connect.Request[storagev1.ReadCommitNodeRequest]) (*connect.Response[storagev1.ReadCommitNodeResponse], error) {
+	return nil, s.failFast("ReadCommitNode")
+}
+
+func (s *fakeStorage) MergeDisk(context.Context, *connect.Request[storagev1.MergeDiskRequest]) (*connect.Response[storagev1.MergeDiskResponse], error) {
+	return nil, s.failFast("MergeDisk")
+}
+
 // ---------------------------------------------------------------------------
 // 测试通用装配与自诊断辅助函数（置于接缝外侧，零业务分支）
 // ---------------------------------------------------------------------------

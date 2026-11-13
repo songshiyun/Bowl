@@ -60,6 +60,9 @@ var storageMessages = []proto.Message{
 	&storagev1.DeleteDiskRequest{},
 	&storagev1.ForkDiskRequest{},
 	&storagev1.StatFSRequest{},
+	&storagev1.DiffDiskRequest{},
+	&storagev1.ReadCommitNodeRequest{},
+	&storagev1.MergeDiskRequest{},
 
 	// 响应消息 (Responses)
 	&storagev1.MountDiskResponse{},
@@ -94,6 +97,9 @@ var storageMessages = []proto.Message{
 	&storagev1.DeleteDiskResponse{},
 	&storagev1.ForkDiskResponse{},
 	&storagev1.StatFSResponse{},
+	&storagev1.DiffDiskResponse{},
+	&storagev1.ReadCommitNodeResponse{},
+	&storagev1.MergeDiskResponse{},
 
 	// 嵌套与共享消息
 	&storagev1.DirEntry{},
@@ -101,6 +107,11 @@ var storageMessages = []proto.Message{
 	&storagev1.Inode{},
 	&storagev1.InodeAttribute{},
 	&storagev1.Disk{},
+	&storagev1.DiffNodeSummary{},
+	&storagev1.DiffEntry{},
+	&storagev1.DiffSummary{},
+	&storagev1.MergeConflict{},
+	&storagev1.MergeConflictReport{},
 }
 
 // ValidationError 包装 protovalidate.ValidationError，并将其边界违规映射为携带 google.rpc.ErrorInfo 的 gRPC Status。

@@ -201,6 +201,15 @@ service StorageService {
 
   // ReclaimOrphan 回收最后一个本地句柄关闭的孤儿节点。
   rpc ReclaimOrphan(ReclaimOrphanRequest) returns (ReclaimOrphanResponse);
+
+  // DiffDisk 计算源虚拟磁盘相对最近共同祖先与目标虚拟磁盘之间的差异与冲突列表。
+  rpc DiffDisk(DiffDiskRequest) returns (DiffDiskResponse);
+
+  // ReadCommitNode 读取指定不可变提交切面中某个节点的元数据与文件内容切片或符号链接目标。
+  rpc ReadCommitNode(ReadCommitNodeRequest) returns (ReadCommitNodeResponse);
+
+  // MergeDisk 将源虚拟磁盘的变更三路合并至目标虚拟磁盘（支持 dry_run 预览与冲突解决策略）。
+  rpc MergeDisk(MergeDiskRequest) returns (MergeDiskResponse);
 }
 
 // LookupRequest 定义 Lookup 接口输入参数。
@@ -1693,3 +1702,345 @@ message ReclaimOrphanRequest {
 
 // ReclaimOrphanResponse 定义 ReclaimOrphan 接口输出参数。
 message ReclaimOrphanResponse {}
+
+// DiffKind 表示目录树条目在三路或两路差异比较中的变更类型。
+enum DiffKind {
+  // 未指定变更类型。
+  DIFF_KIND_UNSPECIFIED = 0;
+  // 新增条目。
+  DIFF_KIND_ADDED = 1;
+  // 修改条目。
+  DIFF_KIND_MODIFIED = 2;
+  // 删除条目。
+  DIFF_KIND_DELETED = 3;
+}
+
+// ConflictKind 表示三路合并或差异检测中识别出的冲突类型。
+enum ConflictKind {
+  // 无冲突。
+  CONFLICT_KIND_UNSPECIFIED = 0;
+  // 双边新增同名条目冲突（Add/Add）。
+  CONFLICT_KIND_ADD_ADD = 1;
+  // 常规文件内容双边修改冲突（Content）。
+  CONFLICT_KIND_CONTENT = 2;
+  // 目标盘修改而源盘删除冲突（Modify/Delete）。
+  CONFLICT_KIND_MODIFY_DELETE = 3;
+  // 目标盘删除而源盘修改冲突（Delete/Modify）。
+  CONFLICT_KIND_DELETE_MODIFY = 4;
+  // 目录树删除与子树修改冲突（Tree Delete/Modify）。
+  CONFLICT_KIND_TREE_DELETE_MODIFY = 5;
+  // 节点类型不匹配冲突（Type）。
+  CONFLICT_KIND_TYPE = 6;
+  // 目录与文件同名冲突（Dir/File）。
+  CONFLICT_KIND_DIR_FILE = 7;
+  // POSIX 元数据属性冲突（Attr）。
+  CONFLICT_KIND_ATTR = 8;
+  // 扩展属性冲突（Xattr）。
+  CONFLICT_KIND_XATTR = 9;
+  // 扩展属性配额或容量限制冲突（Xattr Quota）。
+  CONFLICT_KIND_XATTR_QUOTA = 10;
+  // 安全扩展属性冲突（Security Xattr）。
+  CONFLICT_KIND_SECURITY_ATTR = 11;
+  // 硬链接拓扑冲突（Hardlink）。
+  CONFLICT_KIND_HARDLINK = 12;
+}
+
+// MergeStrategy 表示磁盘合并时对冲突条目的解决策略。
+enum MergeStrategy {
+  // 未指定策略（服务端按 FAIL 语义处理）。
+  MERGE_STRATEGY_UNSPECIFIED = 0;
+  // 遇到任何未显式覆盖的冲突即中止并报告冲突（默认语义）。
+  MERGE_STRATEGY_FAIL = 1;
+  // 冲突时保留目标盘（ours）版本。
+  MERGE_STRATEGY_OURS = 2;
+  // 冲突时采用源盘（theirs）版本。
+  MERGE_STRATEGY_THEIRS = 3;
+}
+
+// DiffNodeSummary 描述差异或冲突条目的节点关键元数据摘要。
+message DiffNodeSummary {
+  // 节点 Inode 编号。
+  uint64 ino = 1;
+
+  // POSIX 文件模式位（包含文件类型与权限位）。
+  uint32 mode = 2;
+
+  // 节点逻辑字节大小。
+  uint64 size = 3;
+}
+
+// DiffEntry 描述单条路径的差异与冲突详情。
+message DiffEntry {
+  // 变更或冲突项的相对路径字节序列。
+  bytes path = 1;
+
+  // 变更类型。
+  DiffKind kind = 2;
+
+  // 冲突类型（无冲突时为 CONFLICT_KIND_UNSPECIFIED）。
+  ConflictKind conflict = 3;
+
+  // 共同祖先切面中的节点摘要（若存在）。
+  optional DiffNodeSummary base = 4;
+
+  // 目标磁盘中的节点摘要（若存在）。
+  optional DiffNodeSummary target = 5;
+
+  // 源磁盘中的节点摘要（若存在）。
+  optional DiffNodeSummary source = 6;
+}
+
+// DiffSummary 汇总差异比较的各项条目统计计数。
+message DiffSummary {
+  // 新增条目数量。
+  uint64 added = 1;
+
+  // 修改条目数量。
+  uint64 modified = 2;
+
+  // 删除条目数量。
+  uint64 deleted = 3;
+
+  // 冲突条目数量。
+  uint64 conflicts = 4;
+}
+
+// DiffDiskRequest 定义 DiffDisk 接口输入参数。
+message DiffDiskRequest {
+  option (buf.validate.message).cel = {
+    id: "diff_disk_source_not_equal_target"
+    message: "source_disk_id and target_disk_id must be different"
+    expression: "has(this.target_disk_id) ? this.source_disk_id != this.target_disk_id : true"
+  };
+
+  // 源虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+  string source_disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "diff_disk_source_disk_id_not_nil"
+      message: "source_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 可选的目标虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID；省略时仅做两路差异或相对祖先比较）。
+  optional string target_disk_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "diff_disk_target_disk_id_not_nil"
+      message: "target_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 可选的路径前缀过滤条件（最大 4096 字节，严禁包含空字节 '\x00'）。
+  bytes path_prefix = 3 [
+    (buf.validate.field).bytes.max_len = 4096,
+    (buf.validate.field).cel = {
+      id: "diff_disk_path_prefix_no_nul"
+      message: "path_prefix cannot contain NUL byte"
+      expression: "!this.contains(b'\\x00')"
+    }
+  ];
+
+  // 是否仅返回存在冲突的条目。
+  bool conflicts_only = 4;
+
+  // 单页最大返回条数（最大不超过 1000）。
+  uint32 page_size = 5 [(buf.validate.field).uint32.lte = 1000];
+
+  // 游标分页令牌（最大 4096 字符，严禁包含空字节 '\x00'）。
+  string page_token = 6 [
+    (buf.validate.field).string.max_len = 4096,
+    (buf.validate.field).cel = {
+      id: "diff_disk_page_token_no_nul"
+      message: "page_token cannot contain NUL byte"
+      expression: "!this.contains('\\x00')"
+    }
+  ];
+}
+
+// DiffDiskResponse 定义 DiffDisk 接口输出参数。
+message DiffDiskResponse {
+  // 最近共同祖先提交标识。
+  string lca_commit_id = 1;
+
+  // 差异与冲突统计摘要。
+  DiffSummary summary = 2;
+
+  // 当前页差异条目列表。
+  repeated DiffEntry entries = 3;
+
+  // 下一页游标令牌（为空字符串表示已到达最后一页）。
+  string next_page_token = 4;
+}
+
+// ReadCommitNodeRequest 定义 ReadCommitNode 接口输入参数。
+message ReadCommitNodeRequest {
+  // 所属虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+  string disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "read_commit_node_disk_id_not_nil"
+      message: "disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 目标不可变提交切面唯一标识符（UUID 格式，非全零 nil UUID）。
+  string commit_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "read_commit_node_commit_id_not_nil"
+      message: "commit_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 目标节点 Inode 编号（必须在 int64 正数区间内）。
+  uint64 ino = 3 [(buf.validate.field).uint64 = {
+    gt: 0
+    lte: 9223372036854775807
+  }];
+
+  // 读取起始偏移量（必须在 int64 非负区间内）。
+  uint64 offset = 4 [(buf.validate.field).uint64.lte = 9223372036854775807];
+
+  // 单次请求读取的字节大小上限（最大 4 MiB，即 4194304 字节）。
+  uint32 size = 5 [(buf.validate.field).uint32.lte = 4194304];
+}
+
+// ReadCommitNodeResponse 定义 ReadCommitNode 接口输出参数。
+message ReadCommitNodeResponse {
+  // 节点 POSIX 文件模式位。
+  uint32 mode = 1;
+
+  // 文件总字节大小。
+  uint64 file_size = 2;
+
+  // 本次读取的文件内容字节切片。
+  bytes data = 3;
+
+  // 是否已读取至文件末尾。
+  bool eof = 4;
+
+  // 若目标节点为符号链接，返回其目标路径字节序列。
+  bytes symlink_target = 5;
+}
+
+// MergeConflict 描述合并过程中发现的单个路径冲突详情。
+message MergeConflict {
+  // 冲突路径字节序列。
+  bytes path = 1;
+
+  // 冲突类型。
+  ConflictKind kind = 2;
+
+  // 共同祖先切面中的节点摘要（若存在）。
+  optional DiffNodeSummary base = 3;
+
+  // 目标磁盘中的节点摘要（若存在）。
+  optional DiffNodeSummary target = 4;
+
+  // 源磁盘中的节点摘要（若存在）。
+  optional DiffNodeSummary source = 5;
+}
+
+// MergeConflictReport 汇总合并冲突报告。
+message MergeConflictReport {
+  // 最近共同祖先提交标识。
+  string lca_commit_id = 1;
+
+  // 冲突总数（可能大于当前响应携带的截断列表长度）。
+  uint64 total_conflicts = 2;
+
+  // 冲突明细列表。
+  repeated MergeConflict conflicts = 3;
+
+  // 冲突列表是否因数量过多而被截断。
+  bool conflicts_truncated = 4;
+}
+
+// MergeDiskRequest 定义 MergeDisk 接口输入参数。
+message MergeDiskRequest {
+  option (buf.validate.message).cel = {
+    id: "merge_disk_source_not_equal_target"
+    message: "source_disk_id and target_disk_id must be different"
+    expression: "this.source_disk_id != this.target_disk_id"
+  };
+
+  // 源虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+  string source_disk_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "merge_disk_source_disk_id_not_nil"
+      message: "source_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 目标虚拟磁盘唯一标识符（UUID 格式，非全零 nil UUID，且不能与 source_disk_id 相同）。
+  string target_disk_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "merge_disk_target_disk_id_not_nil"
+      message: "target_disk_id must not be nil UUID"
+      expression: "this != '00000000-0000-0000-0000-000000000000'"
+    }
+  ];
+
+  // 全局默认冲突解决策略（UNSPECIFIED 服务端按 FAIL 语义处理）。
+  MergeStrategy strategy = 3 [(buf.validate.field).enum.defined_only = true];
+
+  // 按路径前缀或精确路径覆盖的冲突解决策略映射。
+  map<string, MergeStrategy> path_strategies = 4 [
+    (buf.validate.field).map.max_pairs = 4096,
+    (buf.validate.field).map.keys = {
+      string: {
+        min_len: 1
+        max_len: 4096
+      }
+      cel: [
+        {
+          id: "merge_disk_path_strategies_key_no_nul"
+          message: "path_strategies key cannot contain NUL byte"
+          expression: "!this.contains('\\x00')"
+        }
+      ]
+    },
+    (buf.validate.field).map.values.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+
+  // 是否仅执行预演检查而不实际提交合并结果。
+  bool dry_run = 5;
+
+  // 可选的合并后目标盘容量配额上限字节数（指定时必须在 int64 正数区间内）。
+  optional uint64 max_bytes = 6 [
+    (buf.validate.field).uint64.gt = 0,
+    (buf.validate.field).uint64.lte = 9223372036854775807
+  ];
+}
+
+// MergeDiskResponse 定义 MergeDisk 接口输出参数。
+message MergeDiskResponse {
+  // 合并后更新的目标虚拟磁盘实体（dry_run 或冲突中止时可能为空）。
+  optional Disk disk = 1;
+
+  // 最近共同祖先提交标识。
+  string lca_commit_id = 2;
+
+  // 合并产生的新提交标识（dry_run 或冲突中止时为空）。
+  string merge_commit_id = 3;
+
+  // 预估或实际合并后的目标盘已用字节数。
+  uint64 estimated_used_bytes = 4;
+
+  // 合并后目标盘的容量配额上限字节数。
+  uint64 target_max_bytes = 5;
+
+  // 冲突报告（无冲突或非冲突失败时可能为空）。
+  optional MergeConflictReport conflict_report = 6;
+}
