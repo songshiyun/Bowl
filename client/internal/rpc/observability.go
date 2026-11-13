@@ -2,6 +2,8 @@ package rpc
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"log/slog"
 	"math"
@@ -37,6 +39,20 @@ const (
 type requestIDContextKey struct{}
 
 var fallbackRequestIDSeq atomic.Uint64
+
+func init() {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		// 清零最高位并保留低 8 位步进余量，既保证跨短命 CLI 进程高熵唯一性又规避有符号 64 位溢出。
+		seed := binary.LittleEndian.Uint64(b[:]) & 0x3fffffffffffff00
+		if seed == 0 {
+			seed = 1 << 20
+		}
+		fallbackRequestIDSeq.Store(seed)
+		return
+	}
+	fallbackRequestIDSeq.Store(1 << 20)
+}
 
 // WithRequestID 将非零请求关联 ID 注入 context.Context（供上游如 fusefs.RawFS.RPCContext 传入 NextRequestID()）。
 // 若 reqID == 0，保持原上下文不变（出站拦截器将自动使用包内原子序列兜底生成）。
