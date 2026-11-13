@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/pkg/rpccodec"
 	"github.com/starsrc/bowl/pkg/validator"
 )
 
@@ -227,7 +228,7 @@ func registerAbandonedReadResponse(t *testing.T) {
 	runtime.KeepAlive(resp)
 }
 
-func marshalAndReleaseReadPayload(t *testing.T, codec *protoBinaryCodec, dst []byte) []byte {
+func marshalAndReleaseReadPayload(t *testing.T, codec *rpccodec.ProtoBinaryCodec, dst []byte) []byte {
 	t.Helper()
 	buf := acquireReadPayloadBuf()
 	resp := &storagev1.ReadResponse{
@@ -242,7 +243,7 @@ func marshalAndReleaseReadPayload(t *testing.T, codec *protoBinaryCodec, dst []b
 }
 
 func TestProtoBinaryCodecReadResponsePoolAndOrphanedGC(t *testing.T) {
-	codec := &protoBinaryCodec{}
+	codec := newProtoBinaryCodec()
 	payload := bytes.Repeat([]byte{0x41, 0x42, 0x43, 0x44}, maxReadWriteSize/4)
 
 	// 1. Marshal 与 MarshalStable 编码完成后立即释放 4 MiB 池租约，且编码出的字节完整保真
@@ -291,7 +292,7 @@ func TestProtoBinaryCodecReadResponsePoolAndOrphanedGC(t *testing.T) {
 }
 
 func TestProtoBinaryCodecReadResponseMarshalAppendZeroAllocAndCompatibility(t *testing.T) {
-	codec := &protoBinaryCodec{}
+	codec := newProtoBinaryCodec()
 
 	sizes := []int{0, 1, 127, 128, 4096, 256 << 10, maxReadWriteSize}
 	dst := make([]byte, 0, maxReadWriteSize+64)
