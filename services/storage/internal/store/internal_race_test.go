@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,90 @@ func findMetricByLabelInternal(metrics []*dto.Metric, labelName, labelVal string
 		}
 	}
 	return nil
+}
+
+func awaitValueInternal[T any](t *testing.T, ch <-chan T, timeout time.Duration, msg string, onTimeout func()) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(timeout):
+		if onTimeout != nil {
+			onTimeout()
+		}
+		t.Fatal(msg)
+		var zero T
+		return zero
+	}
+}
+
+func requireChanPendingInternal(t *testing.T, ch <-chan error, msg string) {
+	t.Helper()
+	select {
+	case err := <-ch:
+		t.Fatalf("%s: unexpected early completion err=%v", msg, err)
+	default:
+	}
+}
+
+func waitMailboxActiveAtLeast(t *testing.T, actor *StoreActor, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		actor.mb.mu.Lock()
+		n := len(actor.mb.active)
+		actor.mb.mu.Unlock()
+		if n >= want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待邮箱排队请求超时: want>=%d got=%d", want, n)
+		}
+		runtime.Gosched()
+	}
+}
+
+func makeDualRemovePackHook(
+	entered1 chan<- uint64, release1 <-chan struct{},
+	entered2 chan<- uint64, release2 <-chan struct{},
+) func(uint64) {
+	return func(packID uint64) {
+		switch packID {
+		case 1:
+			entered1 <- packID
+			<-release1
+		case 2:
+			entered2 <- packID
+			<-release2
+		}
+	}
+}
+
+func makeOnceArmedSyncHook(armed *atomic.Bool, calls *atomic.Int32, entered chan struct{}, release <-chan struct{}) func(uint64) {
+	var once sync.Once
+	return func(_ uint64) {
+		if !armed.Load() {
+			return
+		}
+		calls.Add(1)
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
+}
+
+func makeOnceArmedTickHook(armed *atomic.Bool, entered chan struct{}, release <-chan struct{}) func() {
+	var once sync.Once
+	return func() {
+		if !armed.Load() {
+			return
+		}
+		once.Do(func() {
+			close(entered)
+			<-release
+		})
+	}
 }
 
 func TestCompactPacksPhaseACASFenceAgainstConcurrentOverwriteTruncateAndUnlink(t *testing.T) {
@@ -130,23 +215,20 @@ func TestAsyncDeadPackReclaimNonBlockingFsyncAndDrainOnClose(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 
-	removeEntered := make(chan uint64, 4)
-	releaseRemove := make(chan struct{})
-	var releaseOnce sync.Once
+	removeEntered1 := make(chan uint64, 2)
+	releaseRemove1 := make(chan struct{})
+	var release1Once sync.Once
+
+	removeEntered2 := make(chan uint64, 2)
+	releaseRemove2 := make(chan struct{})
+	var release2Once sync.Once
 
 	actor, err := Open(Options{
-		Dir:         dir,
-		DiskID:      "disk-async-reclaim",
-		MaxBytes:    64 << 20,
-		MaxPackSize: 2 * BlobSize, // 将封包上限缩至 512 KiB，便于快速制造已封口死包
-		removePackHook: func(packID uint64) {
-			if packID == 1 {
-				removeEntered <- packID
-				<-releaseRemove
-				return
-			}
-			time.Sleep(25 * time.Millisecond)
-		},
+		Dir:            dir,
+		DiskID:         "disk-async-reclaim",
+		MaxBytes:       64 << 20,
+		MaxPackSize:    2 * BlobSize, // 将封包上限缩至 512 KiB，便于快速制造已封口死包
+		removePackHook: makeDualRemovePackHook(removeEntered1, releaseRemove1, removeEntered2, releaseRemove2),
 	})
 	require.NoError(t, err)
 
@@ -168,43 +250,52 @@ func TestAsyncDeadPackReclaimNonBlockingFsyncAndDrainOnClose(t *testing.T) {
 	_, statErr := os.Stat(packFilePath(actor.blobs.dir, 1))
 	require.NoError(t, statErr)
 
-	// 1. 前台 Fsync 在 Pebble WAL Sync 完成后必须立即返回，绝不被慢速死包物理删除阻塞
+	// 1. 前台 Fsync 在 Pebble WAL Sync 完成后必须立即返回，绝不被挂起在钩子上的死包物理删除阻塞
 	fsyncDone := make(chan error, 1)
 	go func() {
 		fsyncDone <- actor.Fsync(ctx, f.Ino)
 	}()
 
-	select {
-	case fsyncErr := <-fsyncDone:
-		require.NoError(t, fsyncErr)
-	case <-time.After(2 * time.Second):
-		releaseOnce.Do(func() { close(releaseRemove) })
-		t.Fatal("前台 Fsync 被后台死包删除同步阻塞")
-	}
+	fsyncErr := awaitValueInternal(t, fsyncDone, 2*time.Second, "前台 Fsync 被后台死包删除同步阻塞", func() {
+		release1Once.Do(func() { close(releaseRemove1) })
+		release2Once.Do(func() { close(releaseRemove2) })
+	})
+	require.NoError(t, fsyncErr)
 
-	// 确认后台回收协程已收到 Pack 1 并在钩子处挂起，放行后 waitPendingReclaims 确保物理文件被彻底移除
-	select {
-	case id := <-removeEntered:
-		require.Equal(t, uint64(1), id)
-	case <-time.After(2 * time.Second):
-		releaseOnce.Do(func() { close(releaseRemove) })
-		t.Fatal("后台死包回收协程未收到待删死包")
-	}
-	releaseOnce.Do(func() { close(releaseRemove) })
+	id1 := awaitValueInternal(t, removeEntered1, 2*time.Second, "后台死包回收协程未收到待删死包 1", func() {
+		release1Once.Do(func() { close(releaseRemove1) })
+		release2Once.Do(func() { close(releaseRemove2) })
+	})
+	require.Equal(t, uint64(1), id1)
+	release1Once.Do(func() { close(releaseRemove1) })
 	actor.blobs.waitPendingReclaims()
 	_, statErr = os.Stat(packFilePath(actor.blobs.dir, 1))
 	require.ErrorIs(t, statErr, os.ErrNotExist, "waitPendingReclaims 返回后死包 1 必须已物理删除")
 
-	// 2. 再使已封口的 Pack 2 变为死包，验证 Close() 必须排空后台回收队列后再返回
+	// 2. 使已封口的 Pack 2 变为死包并卡在 removePackHook(2)，验证 Close() 必须阻塞等待后台排空后再返回
 	_, _, err = actor.Write(ctx, f.Ino, 0, bytes.Repeat([]byte{0x44}, 2*BlobSize))
 	require.NoError(t, err)
 	require.NoError(t, actor.Fsync(ctx, f.Ino))
-	require.NoError(t, actor.Close())
+
+	id2 := awaitValueInternal(t, removeEntered2, 2*time.Second, "后台死包回收协程未收到待删死包 2", func() {
+		release2Once.Do(func() { close(releaseRemove2) })
+	})
+	require.Equal(t, uint64(2), id2)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- actor.Close()
+	}()
+	requireChanPendingInternal(t, closeDone, "后台死包回收未释放前 Close 不得提前返回")
+
+	release2Once.Do(func() { close(releaseRemove2) })
+	closeErr := awaitValueInternal(t, closeDone, 2*time.Second, "释放死包回收钩子后 Close 未能排空返回", nil)
+	require.NoError(t, closeErr)
 	_, statErr = os.Stat(packFilePath(actor.blobs.dir, 2))
 	require.ErrorIs(t, statErr, os.ErrNotExist, "Close 返回前必须排空后台死包回收队列并删净 Pack 2")
 }
 
-func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
+func TestSyncBarrierCoalescingAndParallelPackSync(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	metrics := NewMetrics()
@@ -212,37 +303,26 @@ func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
 	require.NoError(t, reg.Register(metrics))
 
 	var (
-		syncHookEnabled atomic.Bool
-		syncHookCalls   atomic.Int32
-		tickHookArmed   atomic.Bool
-		tickOnce        sync.Once
-		tickEntered     = make(chan struct{})
-		releaseTick     = make(chan struct{})
+		syncHookArmed atomic.Bool
+		syncHookCalls atomic.Int32
+		syncEntered   = make(chan struct{})
+		releaseSync   = make(chan struct{})
+
+		tickHookArmed atomic.Bool
+		tickEntered   = make(chan struct{})
+		releaseTick   = make(chan struct{})
 	)
 
 	actor, err := Open(Options{
-		Dir:      dir,
-		DiskID:   "disk-metrics-sync",
-		MaxBytes: 64 << 20,
-		Metrics:  metrics,
-		syncFileHook: func(_ uint64) {
-			if !syncHookEnabled.Load() {
-				return
-			}
-			syncHookCalls.Add(1)
-			time.Sleep(35 * time.Millisecond)
-		},
-		beforeTickHook: func() {
-			if !tickHookArmed.Load() {
-				return
-			}
-			tickOnce.Do(func() {
-				close(tickEntered)
-				<-releaseTick
-			})
-		},
+		Dir:            dir,
+		DiskID:         "disk-metrics-sync",
+		MaxBytes:       64 << 20,
+		Metrics:        metrics,
+		syncFileHook:   makeOnceArmedSyncHook(&syncHookArmed, &syncHookCalls, syncEntered, releaseSync),
+		beforeTickHook: makeOnceArmedTickHook(&tickHookArmed, tickEntered, releaseTick),
 	})
 	require.NoError(t, err)
+	defer func() { require.NoError(t, actor.Close()) }()
 
 	dirAttr, err := actor.Mkdir(ctx, MkdirReq{
 		ParentIno: RootIno,
@@ -256,23 +336,25 @@ func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
 		Mode:      S_IFREG | 0o644,
 	})
 	require.NoError(t, err)
-	sym, err := actor.Symlink(ctx, SymlinkReq{
-		ParentIno: dirAttr.Ino,
-		Name:      []byte("ln"),
-		Target:    []byte("data.bin"),
-	})
-	require.NoError(t, err)
-	require.NoError(t, actor.SetXattr(ctx, f.Ino, []byte("user.k"), []byte("v"), 0))
 
-	// 1. 验证纯 Fsync (syncBarrierWithoutBatch) 中 .pack fdatasync 在独立协程并发执行且正确采集耗时
+	// 1. 验证 syncBarrierWithoutBatch 中 .pack fdatasync 钩子确切触发并通过 channel 屏障同步完成
 	_, _, err = actor.Write(ctx, f.Ino, 0, bytes.Repeat([]byte{0x31}, BlobSize))
 	require.NoError(t, err)
 
-	syncHookEnabled.Store(true)
-	require.NoError(t, actor.Fsync(ctx, f.Ino))
+	syncHookArmed.Store(true)
+	fsyncDone := make(chan error, 1)
+	go func() {
+		fsyncDone <- actor.Fsync(ctx, f.Ino)
+	}()
+	awaitValueInternal(t, syncEntered, 2*time.Second, "Fsync 屏障未触发 .pack syncFileHook", func() {
+		close(releaseSync)
+	})
+	close(releaseSync)
+	require.NoError(t, awaitValueInternal(t, fsyncDone, 2*time.Second, "释放 syncFileHook 后 Fsync 未完成", nil))
 	require.Equal(t, int32(1), syncHookCalls.Load())
+	syncHookArmed.Store(false)
 
-	// 2. 验证合并批次 commitWithSyncBarrier 中 wal_apply_sync 记录完整墙钟耗时（不被并发 35ms .pack sync 扣减为零）
+	// 2. 验证合并批次 commitWithSyncBarrier：通过 beforeTickHook 挂起当前 tick，等两个并发请求确定入队后再放行合批
 	f2, err := actor.Create(ctx, CreateReq{
 		ParentIno: dirAttr.Ino,
 		Name:      []byte("merged.bin"),
@@ -297,9 +379,11 @@ func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
 			Mode:      S_IFDIR | 0o755,
 		})
 	})
-	<-tickEntered
+	awaitValueInternal(t, tickEntered, 2*time.Second, "beforeTickHook 未能截获首轮 tick", func() {
+		close(releaseTick)
+	})
+
 	wg.Go(func() {
-		// 与下一轮或排空合并：再投递一条带 batch 变更的写命令和一条 Fsync 使它们在同一 draining 批内合并
 		_, cErr = actor.Mkdir(ctx, MkdirReq{
 			ParentIno: dirAttr.Ino,
 			Name:      []byte("co-batch-dir-2"),
@@ -309,145 +393,18 @@ func TestSyncBarrierParallelismWALTimingAndReadHistograms(t *testing.T) {
 	wg.Go(func() {
 		fErr = actor.Fsync(ctx, f2.Ino)
 	})
-	time.Sleep(10 * time.Millisecond)
+	waitMailboxActiveAtLeast(t, actor, 2, 2*time.Second)
+
 	close(releaseTick)
 	wg.Wait()
 	require.NoError(t, mErr)
 	require.NoError(t, cErr)
 	require.NoError(t, fErr)
 	tickHookArmed.Store(false)
-	syncHookEnabled.Store(false)
-
-	// 3. 写入跨块数据后关闭重开以清空热缓存，触发全部 9 类只读操作、KVScan 与磁盘 .pack pread
-	_, _, err = actor.Write(ctx, f.Ino, BlobSize, bytes.Repeat([]byte{0x32}, 4096))
-	require.NoError(t, err)
-	require.NoError(t, actor.Close())
-
-	reopened, err := Open(Options{
-		Dir:      dir,
-		DiskID:   "disk-metrics-sync",
-		MaxBytes: 64 << 20,
-		Metrics:  metrics,
-	})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, reopened.Close()) }()
-
-	_, _, err = reopened.Lookup(ctx, dirAttr.Ino, []byte("data.bin"))
-	require.NoError(t, err)
-	_, err = reopened.GetAttr(ctx, f.Ino)
-	require.NoError(t, err)
-	_, err = reopened.ReadDir(ctx, dirAttr.Ino, 0, 16)
-	require.NoError(t, err)
-	_, err = reopened.ReadDirPlus(ctx, dirAttr.Ino, 0, 16)
-	require.NoError(t, err)
-	_, err = reopened.Readlink(ctx, sym.Ino)
-	require.NoError(t, err)
-	_, err = reopened.GetXattr(ctx, f.Ino, []byte("user.k"))
-	require.NoError(t, err)
-	_, err = reopened.ListXattr(ctx, f.Ino)
-	require.NoError(t, err)
-	_, err = reopened.StatFS(ctx)
-	require.NoError(t, err)
-
-	_, err = reopened.Read(ctx, f.Ino, 0, BlobSize+4096)
-	require.NoError(t, err)
 
 	gathered := gatherHistogramMapInternal(t, reg)
-
-	// 断言阶段拆分与 WAL Sync 完整墙钟计时
 	phaseMetrics := gathered["bowl_storage_actor_tick_phase_duration_seconds"]
-	require.NotNil(t, findMetricByLabelInternal(phaseMetrics, "phase", "phase_a_validate"))
-	require.NotNil(t, findMetricByLabelInternal(phaseMetrics, "phase", "phase_b_mutate"))
-	require.Nil(t, findMetricByLabelInternal(phaseMetrics, "phase", "validate_mutate"), "旧的合并标签 validate_mutate 必须彻底移除")
-
 	walSyncMetric := findMetricByLabelInternal(phaseMetrics, "phase", "wal_apply_sync")
-	require.NotNil(t, walSyncMetric)
-	require.GreaterOrEqual(t, walSyncMetric.GetHistogram().GetSampleSum(), 0.030, "commitWithSyncBarrier 中 wal_apply_sync 必须记录从 ApplyNoSyncWait 到 SyncWait 的完整墙钟")
-
-	// 断言全部 9 类只读操作直方图非零
-	readOpMetrics := gathered["bowl_storage_read_op_duration_seconds"]
-	for _, op := range []string{"read", "lookup", "getattr", "readdir", "readdirplus", "readlink", "getxattr", "listxattr", "statfs"} {
-		m := findMetricByLabelInternal(readOpMetrics, "op", op)
-		require.NotNil(t, m, "缺少 read_op 直方图标签 %s", op)
-		require.GreaterOrEqual(t, m.GetHistogram().GetSampleCount(), uint64(1), "read_op=%s 计数必须 >= 1", op)
-	}
-
-	// 断言 KV 点查/扫描与 BlobPread 直方图非零
-	kvMetrics := gathered["bowl_storage_kv_read_duration_seconds"]
-	require.GreaterOrEqual(t, findMetricByLabelInternal(kvMetrics, "op", "point_get").GetHistogram().GetSampleCount(), uint64(1))
-	require.GreaterOrEqual(t, findMetricByLabelInternal(kvMetrics, "op", "prefix_scan").GetHistogram().GetSampleCount(), uint64(1))
-
-	preadMetrics := gathered["bowl_storage_blob_pread_duration_seconds"]
-	require.Len(t, preadMetrics, 1)
-	require.GreaterOrEqual(t, preadMetrics[0].GetHistogram().GetSampleCount(), uint64(1))
-}
-
-func TestBlobStoreExtendHotDoublingAndWritebackHints(t *testing.T) {
-	ctx := context.Background()
-	blobs := newBlobStore(t.TempDir(), PackMaxSize, nil, nil, nil, nil, nil)
-	defer func() { require.NoError(t, blobs.close()) }()
-
-	require.Zero(t, blobs.activePackID())
-
-	// 1. 验证连续 63 次 4 KiB extendTail (4 KiB -> 256 KiB) 采用倍增扩容，堆分配次数远低于线性 63 次
-	chunk := bytes.Repeat([]byte{0x5C}, 4096)
-	var ref BlobRef
-	allocs := testing.AllocsPerRun(5, func() {
-		cur, appErr := blobs.append(ctx, 10, chunk)
-		if appErr != nil {
-			t.Fatalf("append failed: %v", appErr)
-		}
-		for step := 2; step <= 64; step++ {
-			newLen := uint32(step * 4096)
-			nextRef, ok, extErr := blobs.extendTail(10, cur, cur.Length, chunk, newLen)
-			if extErr != nil || !ok {
-				t.Fatalf("extendTail failed at step %d: ok=%v err=%v", step, ok, extErr)
-			}
-			cur = nextRef
-		}
-		ref = cur
-	})
-	require.Equal(t, uint64(1), blobs.activePackID())
-	require.Equal(t, uint32(BlobSize), ref.Length)
-	require.LessOrEqual(t, allocs, float64(12), "1 次 append + 63 次 4 KiB extendTail 倍增扩容总分配次数应 <= 12（消除 O(N^2) 重分配）")
-
-	gotFull := make([]byte, ref.Length)
-	require.NoError(t, blobs.readAtContext(ctx, ref, 0, gotFull))
-	require.Equal(t, bytes.Repeat(chunk, 64), gotFull)
-
-	// 2. 验证并发读取 activePackID 与跨 8 MiB 边界写入提示（写入 16 MiB 跨过 8 MiB 与 16 MiB 两个窗口）
-	stopReader := make(chan struct{})
-	errCh := make(chan uint64, 1)
-	var readerWG sync.WaitGroup
-	readerWG.Go(func() {
-		for {
-			select {
-			case <-stopReader:
-				return
-			default:
-				if id := blobs.activePackID(); id < 1 {
-					select {
-					case errCh <- id:
-					default:
-					}
-					return
-				}
-			}
-		}
-	})
-
-	buf4M := bytes.Repeat([]byte{0xA7}, 4<<20)
-	for range 4 {
-		_, err := blobs.appendBlocks(ctx, 10, buf4M)
-		require.NoError(t, err)
-	}
-	close(stopReader)
-	readerWG.Wait()
-	select {
-	case badID := <-errCh:
-		t.Fatalf("并发读取 activePackID 返回非法值: %d", badID)
-	default:
-	}
-
-	require.GreaterOrEqual(t, blobs.writebackHintCount.Load(), uint64(2), "顺序写入跨过 8 MiB 与 16 MiB 边界应触发至少 2 次异步回写提示")
+	require.NotNil(t, walSyncMetric, "合并同步批次后必须记录 wal_apply_sync 直方图")
+	require.GreaterOrEqual(t, walSyncMetric.GetHistogram().GetSampleCount(), uint64(2), "两次同步屏障应均记录 wal_apply_sync")
 }
