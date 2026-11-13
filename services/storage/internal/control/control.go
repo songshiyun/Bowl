@@ -62,6 +62,11 @@ var (
 	ErrTooManyLinks    = store.ErrTooManyLinks
 	ErrFileTooLarge    = store.ErrFileTooLarge
 	ErrIO              = store.ErrIO
+	ErrCrossLineage    = db.ErrCrossLineage
+	ErrStaleBaseCommit = db.ErrStaleBaseCommit
+	ErrAmbiguousLCA    = errors.New("ambiguous lowest common ancestor (criss-cross merge)")
+	ErrNoBaseCommit    = errors.New("disk has no base commit in lineage")
+	ErrConcurrentMerge = errors.New("concurrent write or epoch change on target disk during merge")
 )
 
 // AtimeMode 复用 store.AtimeMode。
@@ -142,6 +147,9 @@ type Manager interface {
 	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
 	DeleteDisk(ctx context.Context, diskID string) error
 	MountDisk(ctx context.Context, params MountDiskParams) (*MountDiskResult, error)
+	DiffDisk(ctx context.Context, params *DiffDiskParams) (*DiffDiskResult, error)
+	ReadCommitNode(ctx context.Context, params *ReadCommitNodeParams) (*store.ReadNodeResult, error)
+	MergeDisk(ctx context.Context, params *MergeDiskParams) (*MergeDiskResult, error)
 	Actor(ctx context.Context, diskID string) (*store.StoreActor, error)
 	Collector() prometheus.Collector
 
@@ -180,6 +188,9 @@ type manager struct {
 
 	diskLocksMu sync.Mutex
 	diskLocks   map[string]*diskLockEntry
+
+	lineageCommitMu         sync.RWMutex
+	beforePhase2CutoverHook func()
 
 	poolMu sync.RWMutex
 	closed bool
@@ -514,6 +525,11 @@ func assembleDisk(row *db.DiskRecord, stat *store.StatFSResult) *Disk {
 
 //nolint:gocritic // hugeParam: store.Options 按值传递保持与 store.Open 构造契约一致。
 func (m *manager) openDiskActor(ctx context.Context, opts store.Options) (*store.StoreActor, error) {
+	if !opts.ReadOnly && !strings.HasPrefix(opts.DiskID, "commit:") && m.store != nil {
+		if reconcileErr := m.reconcilePendingMergeLocked(ctx, opts.DiskID); reconcileErr != nil {
+			return nil, reconcileErr
+		}
+	}
 	var span trace.Span
 	if ctx != nil && trace.SpanFromContext(ctx).IsRecording() {
 		_, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(ctx, "control.OpenDiskActor",
@@ -1107,11 +1123,19 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		return openErr
 	}
 
+	// 删盘触发 ClearLineageBaseCommits 前，先协助血缘中崩溃未重启的他盘完成挂起合并的前滚/回滚。
+	if recErr := m.reconcileOtherPendingMergesBeforeDelete(ctx, diskID); recErr != nil {
+		return recErr
+	}
+
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	if openErr := m.ensureOpen(); openErr != nil {
 		return openErr
+	}
+	if recErr := m.reconcilePendingMergeLocked(ctx, diskID); recErr != nil {
+		return recErr
 	}
 
 	commitsToClean, err := m.store.DeleteDisk(ctx, id)
@@ -1156,6 +1180,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		)
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("清理磁盘存储目录: %w", removeErr))
 	}
+	m.cleanupPendingMergeArtifactsForDisk(ctx, diskID)
 
 	if len(commitsToClean) > 0 {
 		var reclaimSpan trace.Span
@@ -1168,6 +1193,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 			)
 		}
 		var reclaimErrs []error
+		m.lineageCommitMu.Lock()
 		for _, cID := range commitsToClean {
 			if cID == uuid.Nil {
 				continue
@@ -1189,6 +1215,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 				m.collector.addCommitsReclaimed(1)
 			}
 		}
+		m.lineageCommitMu.Unlock()
 		if reclaimSpan != nil {
 			if errJoined := errors.Join(reclaimErrs...); errJoined != nil {
 				reclaimSpan.RecordError(errJoined)
