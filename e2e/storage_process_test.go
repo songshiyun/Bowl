@@ -300,13 +300,20 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	require.NoError(t, statErr)
 	require.True(t, dirInfo.IsDir())
 
-	mount1, err := client1.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+	const tracedReqID = "e2e-req-trace-42"
+	tracedMount := connect.NewRequest(&storagev1.MountDiskRequest{
 		DiskId:   diskID,
 		ReadOnly: false,
-	}))
+	})
+	tracedMount.Header().Set("X-Request-Id", tracedReqID)
+	mount1, err := client1.MountDisk(ctx, tracedMount)
 	require.NoError(t, err)
 	epoch1 := mount1.Msg.GetEpoch()
 	require.Equal(t, uint64(1), epoch1)
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.Contains(c, logs1.String(), `"request_id":"`+tracedReqID+`"`)
+	}, 5*time.Second, 15*time.Millisecond, "进程标准输出结构化日志必须携带入站 X-Request-Id")
 
 	fileResp, err := client1.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
 		DiskId:    diskID,
@@ -319,20 +326,13 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	fileIno := fileResp.Msg.GetInode().GetIno()
 
 	persistedPayload := []byte("persisted-across-sigterm")
-	tracedWrite := connect.NewRequest(&storagev1.WriteRequest{
+	_, err = client1.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
 		DiskId: diskID,
 		Epoch:  epoch1,
 		Ino:    fileIno,
 		Data:   persistedPayload,
-	})
-	const tracedReqID = "e2e-req-trace-42"
-	tracedWrite.Header().Set("X-Request-Id", tracedReqID)
-	_, err = client1.Write(ctx, tracedWrite)
+	}))
 	require.NoError(t, err)
-
-	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		assert.Contains(c, logs1.String(), `"request_id":"`+tracedReqID+`"`)
-	}, 5*time.Second, 15*time.Millisecond, "进程标准输出结构化日志必须携带入站 X-Request-Id")
 
 	// 推进世代号至 2，再用过期世代号 1 触发 EBUSY 错误原因指标。
 	mount2, err := client1.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
