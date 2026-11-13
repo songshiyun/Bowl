@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"github.com/starsrc/pkg/serverx"
 
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
@@ -96,20 +96,8 @@ func IsIdempotentProcedure(procedure string) bool {
 // hasErrorInfo 检查错误是否解包出非空业务 ErrorInfo。
 // 任何携带业务 ErrorInfo 的错误表明服务端已明确处理并拒绝，必须绝不重试。
 func hasErrorInfo(err error) bool {
-	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
-		for _, detail := range connectErr.Details() {
-			msg, detailErr := detail.Value()
-			if detailErr != nil {
-				continue
-			}
-			if info, ok := msg.(*errdetails.ErrorInfo); ok {
-				if (info.Domain == "bowl.storage" || info.Reason != "") && info.Reason != "" {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	info := serverx.ExtractErrorInfo(err)
+	return info != nil && info.Reason != ""
 }
 
 // isNeverRetryCode 检查 Connect 错误状态码是否属于绝不重试的状态码。

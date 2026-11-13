@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"github.com/starsrc/pkg/serverx"
 )
 
 // inFlightCancelGracePeriod 为在途 RPC 收到内核 cancel (FUSE_INTERRUPT) 信号后的宽限期。
@@ -84,66 +84,58 @@ func MapError(err error) syscall.Errno {
 	}
 
 	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
-		for _, detail := range connectErr.Details() {
-			msg, detailErr := detail.Value()
-			if detailErr != nil {
-				continue
-			}
-			if info, ok := msg.(*errdetails.ErrorInfo); ok {
-				if (info.Domain == "bowl.storage" || info.Reason != "") && info.Reason != "" {
-					switch info.Reason {
-					case "EINVAL":
-						return syscall.EINVAL
-					case "ENAMETOOLONG":
-						return syscall.ENAMETOOLONG
-					case "ERANGE":
-						return syscall.ERANGE
-					case "E2BIG":
-						return syscall.E2BIG
-					case "ENOENT":
-						return syscall.ENOENT
-					case "ENODATA":
-						return syscall.ENODATA
-					case "EEXIST":
-						return syscall.EEXIST
-					case "EPERM":
-						return syscall.EPERM
-					case "EACCES":
-						return syscall.EACCES
-					case "ENOTDIR":
-						return syscall.ENOTDIR
-					case "EISDIR":
-						return syscall.EISDIR
-					case "ENOTEMPTY":
-						return syscall.ENOTEMPTY
-					case "EBADF":
-						return syscall.EBADF
-					case "ENOSPC":
-						return syscall.ENOSPC
-					case "EAGAIN":
-						return syscall.EAGAIN
-					case "EDEADLK":
-						return syscall.EDEADLK
-					case "EINTR":
-						return syscall.EINTR
-					case "EOPNOTSUPP":
-						return syscall.EOPNOTSUPP
-					case "EMLINK":
-						return syscall.EMLINK
-					case "EFBIG":
-						return syscall.EFBIG
-					case "ESPIPE":
-						return syscall.ESPIPE
-					case "EXDEV":
-						return syscall.EXDEV
-					case "EIO":
-						return syscall.EIO
-					case "EROFS":
-						return syscall.EROFS
-					case "EBUSY":
-						return syscall.EBUSY
-					}
-				}
+		if info := serverx.ExtractErrorInfo(connectErr); info != nil && info.Reason != "" {
+			switch info.Reason {
+			case "EINVAL":
+				return syscall.EINVAL
+			case "ENAMETOOLONG":
+				return syscall.ENAMETOOLONG
+			case "ERANGE":
+				return syscall.ERANGE
+			case "E2BIG":
+				return syscall.E2BIG
+			case "ENOENT":
+				return syscall.ENOENT
+			case "ENODATA":
+				return syscall.ENODATA
+			case "EEXIST":
+				return syscall.EEXIST
+			case "EPERM":
+				return syscall.EPERM
+			case "EACCES":
+				return syscall.EACCES
+			case "ENOTDIR":
+				return syscall.ENOTDIR
+			case "EISDIR":
+				return syscall.EISDIR
+			case "ENOTEMPTY":
+				return syscall.ENOTEMPTY
+			case "EBADF":
+				return syscall.EBADF
+			case "ENOSPC":
+				return syscall.ENOSPC
+			case "EAGAIN":
+				return syscall.EAGAIN
+			case "EDEADLK":
+				return syscall.EDEADLK
+			case "EINTR":
+				return syscall.EINTR
+			case "EOPNOTSUPP":
+				return syscall.EOPNOTSUPP
+			case "EMLINK":
+				return syscall.EMLINK
+			case "EFBIG":
+				return syscall.EFBIG
+			case "ESPIPE":
+				return syscall.ESPIPE
+			case "EXDEV":
+				return syscall.EXDEV
+			case "EIO":
+				return syscall.EIO
+			case "EROFS":
+				return syscall.EROFS
+			case "EBUSY":
+				return syscall.EBUSY
 			}
 		}
 
