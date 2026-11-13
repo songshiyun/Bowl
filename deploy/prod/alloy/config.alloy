@@ -29,20 +29,61 @@ discovery.relabel "bowl" {
 loki.source.docker "bowl" {
 	host       = "unix:///var/run/docker.sock"
 	targets    = discovery.relabel.bowl.output
-	forward_to = [loki.write.local.receiver]
+	forward_to = [loki.process.bowl.receiver]
 }
 
 local.file_match "pebble_events" {
-	path_targets = [{
-		__path__   = "/var/lib/bowl/data/disks/*/pebble_events.log",
-		service    = "storage-service",
-		component  = "pebble",
-		log_source = "pebble_events",
-	}]
+	path_targets = [
+		{
+			__path__   = "/var/lib/bowl/data/disks/*/pebble_events.log",
+			service    = "storage-service",
+			component  = "pebble",
+			log_source = "pebble_events",
+		},
+		{
+			__path__   = "/var/lib/bowl/data/commits/*/pebble_events.log",
+			service    = "storage-service",
+			component  = "pebble",
+			log_source = "pebble_events",
+		},
+	]
 }
 
 loki.source.file "pebble_events" {
 	targets    = local.file_match.pebble_events.targets
+	forward_to = [loki.process.bowl.receiver]
+}
+
+loki.process "bowl" {
+	stage.json {
+		expressions = {
+			level          = "level",
+			component      = "component",
+			disk_id        = "disk_id",
+			source_disk_id = "source_disk_id",
+			commit_id      = "commit_id",
+			trace_id       = "trace_id",
+			request_id     = "request_id",
+		}
+	}
+
+	stage.labels {
+		values = {
+			level     = "",
+			component = "",
+		}
+	}
+
+	stage.structured_metadata {
+		values = {
+			disk_id        = "",
+			source_disk_id = "",
+			commit_id      = "",
+			trace_id       = "",
+			request_id     = "",
+		}
+	}
+
 	forward_to = [loki.write.local.receiver]
 }
 
@@ -105,9 +146,29 @@ otelcol.processor.tail_sampling "default" {
 				"name == \"write_behind.FlushChunk\"",
 				"name == \"read_ahead.Prefetch\"",
 				"name == \"control.OpenDiskActor\"",
+				"name == \"control.ForkCommitTx\"",
+				"name == \"control.ReclaimCommits\"",
+				"name == \"control.ReserveSegment\"",
+				"name == \"control.LockDiskWait\"",
+				"name == \"store.Checkpoint\"",
+				"name == \"store.SanitizeCheckpoint\"",
+				"name == \"store.CloneCheckpointDir\"",
 				"name == \"storage.v1.StorageService/Fsync\"",
 				"name == \"storage.v1.StorageService/FsyncDir\"",
 				"name == \"storage.v1.StorageService/MountDisk\"",
+				"name == \"storage.v1.StorageService/CreateDisk\"",
+				"name == \"storage.v1.StorageService/ForkDisk\"",
+				"name == \"storage.v1.StorageService/UpdateDisk\"",
+				"name == \"storage.v1.StorageService/DeleteDisk\"",
+				"name == \"storage.v1.StorageService/ReclaimOrphan\"",
+				"name == \"cli.disk.create\"",
+				"name == \"cli.disk.fork\"",
+				"name == \"cli.disk.get\"",
+				"name == \"cli.disk.list\"",
+				"name == \"cli.disk.update\"",
+				"name == \"cli.disk.delete\"",
+				"attributes[\"rpc.response.status_code\"] != nil and attributes[\"rpc.response.status_code\"] != \"\" and attributes[\"rpc.response.status_code\"] != \"ok\"",
+				"attributes[\"rpc.connect_rpc.error_code\"] != nil and attributes[\"rpc.connect_rpc.error_code\"] != \"\"",
 			]
 		}
 	}

@@ -1,0 +1,142 @@
+{
+  "uid": "bowl-storage-overview",
+  "title": "Bowl 存储与 Fork 全链路总览",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "tags": ["bowl", "storage", "fork"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "驻留血缘切面数 (Commits Active)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "bowl_storage_commits_active", "refId": "A" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "驻留切面物理占用 (Bytes)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "bowl_storage_commits_physical_bytes", "refId": "A" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "已加载虚拟磁盘数",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "bowl_storage_disks_loaded", "refId": "A" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "宿主机卷剩余容量 (Bytes)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "bowl_storage_volume_available_bytes", "refId": "A" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "去重物理封包占用 vs 跨分支逻辑引用 (Bytes)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        {
+          "expr": "bowl_storage_pack_physical_bytes",
+          "legendFormat": "去重物理封包占用",
+          "refId": "A"
+        },
+        {
+          "expr": "bowl_storage_pack_referenced_bytes",
+          "legendFormat": "全分支逻辑引用总和",
+          "refId": "B"
+        },
+        {
+          "expr": "bowl_storage_data_dir_physical_bytes",
+          "legendFormat": "数据目录真实物理占用",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Fork 控制面分阶段 P99 耗时 (含 Exemplar Trace 跳转)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (stage, le) (rate(bowl_storage_control_fork_stage_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{stage}} P99",
+          "exemplar": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "StoreActor Tick 各阶段 P99 耗时 (含 Checkpoint)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (phase, le) (rate(bowl_storage_actor_tick_phase_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{phase}} P99",
+          "exemplar": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Fork 结果与血缘切面回收速率",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(bowl_storage_control_forks_total[5m]))",
+          "legendFormat": "fork:{{result}}/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(bowl_storage_control_commits_reclaimed_total[5m])",
+          "legendFormat": "commits_reclaimed/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "logs",
+      "title": "控制面与 Pebble 切面结构化日志 (Loki)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "{service=\"storage-service\"} | json | line_format \"[{{.level}}] {{.component}} {{.msg}} disk_id={{.disk_id}} source_disk_id={{.source_disk_id}} commit_id={{.commit_id}} trace_id={{.trace_id}}\"",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

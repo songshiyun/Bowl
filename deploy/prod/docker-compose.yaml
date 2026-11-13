@@ -113,6 +113,7 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=15d"
+      - "--enable-feature=exemplar-storage"
       - "--web.enable-lifecycle"
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
