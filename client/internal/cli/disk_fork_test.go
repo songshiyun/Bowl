@@ -14,6 +14,11 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -29,17 +34,21 @@ const (
 type mockDiskForkHandler struct {
 	storagev1connect.UnimplementedStorageServiceHandler
 
-	mu        sync.Mutex
-	lastReq   *storagev1.ForkDiskRequest
-	lastAuth  string
-	forkFunc  func(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error)
-	getDiskFn func(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error)
+	mu              sync.Mutex
+	lastReq         *storagev1.ForkDiskRequest
+	lastAuth        string
+	lastTraceparent string
+	lastRequestID   string
+	forkFunc        func(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error)
+	getDiskFn       func(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error)
 }
 
 func (m *mockDiskForkHandler) ForkDisk(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
 	m.mu.Lock()
 	m.lastReq = req.Msg
 	m.lastAuth = req.Header().Get("Authorization")
+	m.lastTraceparent = req.Header().Get("Traceparent")
+	m.lastRequestID = req.Header().Get("X-Request-Id")
 	fn := m.forkFunc
 	m.mu.Unlock()
 	if fn != nil {
@@ -325,4 +334,92 @@ func TestDiskForkServerErrors(t *testing.T) {
 	require.Equal(t, 1, code)
 	require.Empty(t, out)
 	require.Contains(t, errOut, "派生虚拟磁盘失败")
+}
+
+func TestDiskForkCLISpanAndW3CTraceparentPropagation(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	var failNext bool
+	handler := &mockDiskForkHandler{
+		forkFunc: func(_ context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
+			if failNext {
+				return nil, connect.NewError(connect.CodeNotFound, errors.New("source not found"))
+			}
+			now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
+			parentID := req.Msg.GetSourceDiskId()
+			return connect.NewResponse(&storagev1.ForkDiskResponse{
+				Disk: &storagev1.Disk{
+					DiskId:       testChildDiskID,
+					Name:         req.Msg.GetName(),
+					RootIno:      1,
+					MaxBytes:     1 << 30,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+					ParentDiskId: &parentID,
+				},
+			}), nil
+		},
+	}
+	endpoint := startMockDiskH2CServer(t, handler)
+
+	// 1. 成功路径：cli.disk.fork 根 Span 与出站 Traceparent 共享 TraceID，且 X-Request-Id 非 "1"。
+	code, _, errOut := runCLI("disk", "fork", testSourceDiskID, "--name", "traced-fork", "-q", "--endpoint", endpoint)
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+
+	handler.mu.Lock()
+	okTraceparent := handler.lastTraceparent
+	okReqID := handler.lastRequestID
+	handler.mu.Unlock()
+	require.NotEmpty(t, okReqID)
+	require.NotEqual(t, "1", okReqID)
+	require.Contains(t, okTraceparent, "00-")
+
+	spans := exporter.GetSpans()
+	var cliForkSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "cli.disk.fork" {
+			cliForkSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, cliForkSpan, "必须产生客户端根 Span cli.disk.fork")
+	require.Contains(t, okTraceparent, cliForkSpan.SpanContext.TraceID().String(), "请求头 Traceparent 必须携带 cli.disk.fork TraceID")
+
+	attrMap := make(map[string]string)
+	for _, a := range cliForkSpan.Attributes {
+		attrMap[string(a.Key)] = a.Value.AsString()
+	}
+	require.Equal(t, testSourceDiskID, attrMap["bowl.source_disk_id"])
+	require.Equal(t, testChildDiskID, attrMap["bowl.disk_id"])
+
+	// 2. 失败路径：cli.disk.fork 标记 Error 状态。
+	exporter.Reset()
+	failNext = true
+	code, _, errOut = runCLI("disk", "fork", testSourceDiskID, "--endpoint", endpoint)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在")
+
+	spans = exporter.GetSpans()
+	var errSpan *tracetest.SpanStub
+	for i := range spans {
+		if spans[i].Name == "cli.disk.fork" {
+			errSpan = &spans[i]
+		}
+	}
+	require.NotNil(t, errSpan)
+	require.Equal(t, codes.Error, errSpan.Status.Code)
 }

@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
@@ -173,13 +174,21 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	spanCtx, span, finishSpan := startDiskCLISpan(
+		context.Background(),
+		"cli.disk.update",
+		attribute.String("bowl.disk_id", diskIDStr),
+	)
+	defer finishSpan()
+
 	client, exitCode, err := newDiskStorageClient(endpoint, token)
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: %v\n", err)
 		return exitCode
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
 	defer rpcCancel()
 
 	// 第一层：当指定 --size 时，执行客户端 GetDisk 缩容水位线前置预检
@@ -190,6 +199,7 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 			DiskId: diskIDStr,
 		}))
 		if err != nil {
+			finishDiskCLISpanError(span, err)
 			var connectErr *connect.Error
 			if errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
 				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)
@@ -223,6 +233,7 @@ func executeDiskUpdate(args []string, stdout, stderr io.Writer) int {
 		MaxBytes: sizePtr,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			switch connectErr.Code() {
 			case connect.CodeNotFound:

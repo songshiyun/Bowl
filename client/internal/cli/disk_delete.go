@@ -13,6 +13,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
@@ -135,12 +136,6 @@ func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	client, exitCode, err := newDiskStorageClient(endpoint, token)
-	if err != nil {
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return exitCode
-	}
-
 	// 步骤 1：本机挂载表快检
 	mountpoint, mounted, err := FindDiskMountpoint(diskIDStr)
 	if err != nil {
@@ -167,14 +162,29 @@ func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// 步骤 3：发起 DeleteDisk RPC（预留服务端 1.5s 探活窗口余量）
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// 步骤 3：建立 CLI 根 Span 并发起 DeleteDisk RPC（预留服务端 1.5s 探活窗口余量）
+	spanCtx, span, finishSpan := startDiskCLISpan(
+		context.Background(),
+		"cli.disk.delete",
+		attribute.String("bowl.disk_id", diskIDStr),
+	)
+	defer finishSpan()
+
+	client, exitCode, err := newDiskStorageClient(endpoint, token)
+	if err != nil {
+		finishDiskCLISpanError(span, err)
+		fmt.Fprintf(stderr, "错误: %v\n", err)
+		return exitCode
+	}
+
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 15*time.Second)
 	defer rpcCancel()
 
 	_, err = client.DeleteDisk(rpcCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
 		DiskId: diskIDStr,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			switch connectErr.Code() {
 			case connect.CodeNotFound:

@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
@@ -159,13 +160,21 @@ func executeDiskFork(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	spanCtx, span, finishSpan := startDiskCLISpan(
+		context.Background(),
+		"cli.disk.fork",
+		attribute.String("bowl.source_disk_id", sourceDiskIDStr),
+	)
+	defer finishSpan()
+
 	client, exitCode, err := newDiskStorageClient(endpoint, token)
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: %v\n", err)
 		return exitCode
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 30*time.Second)
 	defer rpcCancel()
 
 	resp, err := client.ForkDisk(rpcCtx, connect.NewRequest(&storagev1.ForkDiskRequest{
@@ -174,6 +183,7 @@ func executeDiskFork(args []string, stdout, stderr io.Writer) int {
 		MaxBytes:     sizePtr,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
 			switch connectErr.Code() {
 			case connect.CodeNotFound:
@@ -193,6 +203,7 @@ func executeDiskFork(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "错误: 服务端返回空的虚拟磁盘元数据")
 		return 1
 	}
+	span.SetAttributes(attribute.String("bowl.disk_id", disk.GetDiskId()))
 
 	if quiet {
 		fmt.Fprintln(stdout, disk.GetDiskId())

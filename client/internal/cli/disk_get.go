@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
@@ -106,19 +107,28 @@ func executeDiskGet(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	spanCtx, span, finishSpan := startDiskCLISpan(
+		context.Background(),
+		"cli.disk.get",
+		attribute.String("bowl.disk_id", diskIDStr),
+	)
+	defer finishSpan()
+
 	client, exitCode, err := newDiskStorageClient(endpoint, token)
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: %v\n", err)
 		return exitCode
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
 	defer rpcCancel()
 
 	resp, err := client.GetDisk(rpcCtx, connect.NewRequest(&storagev1.GetDiskRequest{
 		DiskId: diskIDStr,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		var connectErr *connect.Error
 		if errors.As(err, &connectErr) && connectErr.Code() == connect.CodeNotFound {
 			fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)

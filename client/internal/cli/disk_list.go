@@ -139,13 +139,17 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 		pageSize = uint32(parsedLimit)
 	}
 
+	spanCtx, span, finishSpan := startDiskCLISpan(context.Background(), "cli.disk.list")
+	defer finishSpan()
+
 	client, exitCode, err := newDiskStorageClient(endpoint, token)
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: %v\n", err)
 		return exitCode
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
 	defer rpcCancel()
 
 	resp, err := client.ListDisks(rpcCtx, connect.NewRequest(&storagev1.ListDisksRequest{
@@ -153,6 +157,7 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 		PageToken: pageToken,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: 列出虚拟磁盘失败: %v\n", err)
 		return 1
 	}

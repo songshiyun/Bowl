@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
@@ -149,13 +150,17 @@ func executeDiskCreate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	spanCtx, span, finishSpan := startDiskCLISpan(context.Background(), "cli.disk.create")
+	defer finishSpan()
+
 	client, exitCode, err := newDiskStorageClient(endpoint, token)
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: %v\n", err)
 		return exitCode
 	}
 
-	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
 	defer rpcCancel()
 
 	resp, err := client.CreateDisk(rpcCtx, connect.NewRequest(&storagev1.CreateDiskRequest{
@@ -163,6 +168,7 @@ func executeDiskCreate(args []string, stdout, stderr io.Writer) int {
 		MaxBytes: maxBytes,
 	}))
 	if err != nil {
+		finishDiskCLISpanError(span, err)
 		fmt.Fprintf(stderr, "错误: 创建虚拟磁盘失败: %v\n", err)
 		return 1
 	}
@@ -172,6 +178,7 @@ func executeDiskCreate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "错误: 服务端返回空的虚拟磁盘元数据")
 		return 1
 	}
+	span.SetAttributes(attribute.String("bowl.disk_id", disk.GetDiskId()))
 
 	if quiet {
 		fmt.Fprintln(stdout, disk.GetDiskId())
