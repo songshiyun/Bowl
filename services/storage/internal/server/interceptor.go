@@ -46,6 +46,7 @@ const (
 
 type (
 	diskIDGetter       interface{ GetDiskId() string }
+	targetDiskIDGetter interface{ GetTargetDiskId() string }
 	sourceDiskIDGetter interface{ GetSourceDiskId() string }
 	epochGetter        interface{ GetEpoch() uint64 }
 	inoGetter          interface{ GetIno() uint64 }
@@ -90,6 +91,7 @@ func classifyStorageLogLevel(procedure string, code connect.Code, err error) slo
 			storagev1connect.StorageServiceUpdateDiskProcedure, "UpdateDisk",
 			storagev1connect.StorageServiceDeleteDiskProcedure, "DeleteDisk",
 			storagev1connect.StorageServiceMountDiskProcedure, "MountDisk",
+			storagev1connect.StorageServiceMergeDiskProcedure, "MergeDisk",
 			storagev1connect.StorageServiceReclaimOrphanProcedure, "ReclaimOrphan":
 			return slog.LevelInfo
 		default:
@@ -119,6 +121,9 @@ func isControlPlaneProcedure(procedure string) bool {
 		storagev1connect.StorageServiceUpdateDiskProcedure, "UpdateDisk",
 		storagev1connect.StorageServiceDeleteDiskProcedure, "DeleteDisk",
 		storagev1connect.StorageServiceMountDiskProcedure, "MountDisk",
+		storagev1connect.StorageServiceDiffDiskProcedure, "DiffDisk",
+		storagev1connect.StorageServiceReadCommitNodeProcedure, "ReadCommitNode",
+		storagev1connect.StorageServiceMergeDiskProcedure, "MergeDisk",
 		storagev1connect.StorageServiceReclaimOrphanProcedure, "ReclaimOrphan":
 		return true
 	default:
@@ -131,6 +136,11 @@ func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err e
 		msg := req.Any()
 		if g, ok := msg.(diskIDGetter); ok {
 			diskID = g.GetDiskId()
+		}
+		if diskID == "" {
+			if g, ok := msg.(targetDiskIDGetter); ok {
+				diskID = g.GetTargetDiskId()
+			}
 		}
 		if g, ok := msg.(sourceDiskIDGetter); ok {
 			sourceDiskID = g.GetSourceDiskId()

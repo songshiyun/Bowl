@@ -38,6 +38,19 @@ func toConnectError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	}
+	if conflictErr, ok := errors.AsType[*control.MergeConflictError](err); ok {
+		connectErr := connect.NewError(connect.CodeAborted, conflictErr)
+		if infoDetail, detailErr := connect.NewErrorDetail(&errdetails.ErrorInfo{
+			Reason: "ECONFLICT",
+			Domain: control.ErrorDomain,
+		}); detailErr == nil {
+			connectErr.AddDetail(infoDetail)
+		}
+		if reportDetail, detailErr := connect.NewErrorDetail(toProtoMergeConflictReport(conflictErr.LCACommitID, &conflictErr.Report)); detailErr == nil {
+			connectErr.AddDetail(reportDetail)
+		}
+		return connectErr
+	}
 	return StatusToConnectError(control.ToStatus(err))
 }
 

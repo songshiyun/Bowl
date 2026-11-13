@@ -862,6 +862,9 @@ func TestObservability_ClassifyStorageLogLevel_MapsProceduresAndCodes(t *testing
 		{name: "CreateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceCreateDiskProcedure, want: slog.LevelInfo},
 		{name: "UpdateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceUpdateDiskProcedure, want: slog.LevelInfo},
 		{name: "DeleteDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceDeleteDiskProcedure, want: slog.LevelInfo},
+		{name: "MergeDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceMergeDiskProcedure, want: slog.LevelInfo},
+		{name: "DiffDisk只读控制面降级Debug", procedure: storagev1connect.StorageServiceDiffDiskProcedure, want: slog.LevelDebug},
+		{name: "ReadCommitNode只读控制面降级Debug", procedure: storagev1connect.StorageServiceReadCommitNodeProcedure, want: slog.LevelDebug},
 		{name: "Lookup未命中降级Debug", procedure: storagev1connect.StorageServiceLookupProcedure, code: connect.CodeNotFound, err: connect.NewError(connect.CodeNotFound, nil), want: slog.LevelDebug},
 		{name: "Read客户端取消降级Debug", procedure: storagev1connect.StorageServiceReadProcedure, code: connect.CodeCanceled, err: connect.NewError(connect.CodeCanceled, context.Canceled), want: slog.LevelDebug},
 		{name: "ForkDisk未命中保持Warn", procedure: storagev1connect.StorageServiceForkDiskProcedure, code: connect.CodeNotFound, err: connect.NewError(connect.CodeNotFound, nil), want: slog.LevelWarn},
@@ -872,4 +875,100 @@ func TestObservability_ClassifyStorageLogLevel_MapsProceduresAndCodes(t *testing
 			require.Equal(t, tc.want, classifyStorageLogLevel(tc.procedure, tc.code, tc.err))
 		})
 	}
+}
+
+func TestObservability_MergeDiffProcedures_RegisteredInMetricsControlAndSampler(t *testing.T) {
+	require.Equal(t, storagev1connect.StorageServiceDiffDiskProcedure, normalizeProcedure(storagev1connect.StorageServiceDiffDiskProcedure))
+	require.Equal(t, storagev1connect.StorageServiceReadCommitNodeProcedure, normalizeProcedure(storagev1connect.StorageServiceReadCommitNodeProcedure))
+	require.Equal(t, storagev1connect.StorageServiceMergeDiskProcedure, normalizeProcedure(storagev1connect.StorageServiceMergeDiskProcedure))
+
+	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceDiffDiskProcedure))
+	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceReadCommitNodeProcedure))
+	require.True(t, isControlPlaneProcedure(storagev1connect.StorageServiceMergeDiskProcedure))
+
+	require.True(t, isSampledControlSpanName(storagev1connect.StorageServiceMergeDiskProcedure))
+	require.False(t, isSampledControlSpanName(storagev1connect.StorageServiceDiffDiskProcedure))
+	require.False(t, isSampledControlSpanName(storagev1connect.StorageServiceReadCommitNodeProcedure))
+}
+
+func TestObservability_DiffAndMerge_ExtractsTargetDiskIDIntoLogsAndSpans(t *testing.T) {
+	// Given: 配备 OTel Span 导出器与 JSON 结构化日志拦截器的完整 Server
+	installOTelCleanup(t)
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mgr := control.New(db.NewMemStore(), control.WithStorageRoot(t.TempDir()), control.WithLogger(logger))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	srv, err := New(Params{
+		Config: config.ServerConfig{
+			ServerPort:         0,
+			InternalServerPort: 0,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		Control: mgr,
+		Logger:  logger,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: srv.Handler()}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
+
+	mainResp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{Name: "main", MaxBytes: 16 << 20}))
+	require.NoError(t, err)
+	mainID := mainResp.Msg.GetDisk().GetDiskId()
+	forkResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{SourceDiskId: mainID, Name: "feat"}))
+	require.NoError(t, err)
+	featID := forkResp.Msg.GetDisk().GetDiskId()
+
+	exporter.Reset()
+	logBuf.Reset()
+
+	// When: 执行三路 DiffDisk 与 DryRun MergeDisk（响应均不携带 res.Disk）
+	_, err = client.DiffDisk(ctx, connect.NewRequest(&storagev1.DiffDiskRequest{
+		SourceDiskId: featID,
+		TargetDiskId: &mainID,
+	}))
+	require.NoError(t, err)
+
+	_, err = client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+		SourceDiskId: featID,
+		TargetDiskId: mainID,
+		DryRun:       true,
+	}))
+	require.NoError(t, err)
+	require.NoError(t, tp.ForceFlush(ctx))
+
+	// Then: Span 属性与日志字段必须同时记录目标盘 disk_id / bowl.disk_id 与源盘 source_disk_id / bowl.source_disk_id
+	spans := exporter.GetSpans()
+	var sawDiffTarget, sawDryMergeTarget bool
+	for i := range spans {
+		sp := &spans[i]
+		var dID, srcID string
+		for _, attr := range sp.Attributes {
+			switch string(attr.Key) {
+			case attrKeyBowlDiskID:
+				dID = attr.Value.AsString()
+			case attrKeyBowlSourceDiskID:
+				srcID = attr.Value.AsString()
+			}
+		}
+		if sp.Name == "storage.v1.StorageService/DiffDisk" && dID == mainID && srcID == featID {
+			sawDiffTarget = true
+		}
+		if sp.Name == "storage.v1.StorageService/MergeDisk" && dID == mainID && srcID == featID {
+			sawDryMergeTarget = true
+		}
+	}
+	require.True(t, sawDiffTarget, "三路 DiffDisk Span 必须提取目标盘 bowl.disk_id")
+	require.True(t, sawDryMergeTarget, "DryRun MergeDisk Span 必须提取目标盘 bowl.disk_id")
+
+	logText := logBuf.String()
+	require.Contains(t, logText, `"disk_id":"`+mainID+`"`)
+	require.Contains(t, logText, `"source_disk_id":"`+featID+`"`)
 }
