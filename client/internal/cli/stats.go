@@ -28,6 +28,8 @@ const statsUsageHelp = `用法:
 
 const statsRequestTimeout = 5 * time.Second
 
+var statsHTTPClient = http.DefaultClient
+
 // executeStats 解析 stats 命令参数，定位挂载进程管理面并输出 /debug/stats 统计视图。
 func executeStats(args []string, stdout, stderr io.Writer) int {
 	var (
@@ -173,7 +175,7 @@ func fetchStats(addr, format string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造统计请求失败: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := statsHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求管理面 %s 失败: %w", addr, err)
 	}

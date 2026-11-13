@@ -1,17 +1,11 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
-	"net/http"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
@@ -21,722 +15,28 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
-	"google.golang.org/protobuf/types/known/timestamppb"
-
-	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
-	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
-const (
-	testSourceDiskID = "01950000-0000-7000-8000-000000000001"
-	testChildDiskID  = "01950000-0000-7000-8000-000000000002"
-	testNilDiskID    = "00000000-0000-0000-0000-000000000000"
-)
-
-type mockDiskHandler struct {
-	storagev1connect.UnimplementedStorageServiceHandler
-
-	mu              sync.Mutex
-	lastCreateReq   *storagev1.CreateDiskRequest
-	lastForkReq     *storagev1.ForkDiskRequest
-	lastListReq     *storagev1.ListDisksRequest
-	lastUpdateReq   *storagev1.UpdateDiskRequest
-	lastDeleteReq   *storagev1.DeleteDiskRequest
-	lastAuth        string
-	lastTraceparent string
-	lastRequestID   string
-	deleteCalls     int
-
-	createFn func(ctx context.Context, req *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error)
-	forkFn   func(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error)
-	getFn    func(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error)
-	listFn   func(ctx context.Context, req *connect.Request[storagev1.ListDisksRequest]) (*connect.Response[storagev1.ListDisksResponse], error)
-	updateFn func(ctx context.Context, req *connect.Request[storagev1.UpdateDiskRequest]) (*connect.Response[storagev1.UpdateDiskResponse], error)
-	deleteFn func(ctx context.Context, req *connect.Request[storagev1.DeleteDiskRequest]) (*connect.Response[storagev1.DeleteDiskResponse], error)
-}
-
-func (m *mockDiskHandler) recordHeaders(header http.Header) {
-	m.lastAuth = header.Get("Authorization")
-	m.lastTraceparent = header.Get("Traceparent")
-	m.lastRequestID = header.Get("X-Request-Id")
-}
-
-func (m *mockDiskHandler) CreateDisk(ctx context.Context, req *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error) {
-	m.mu.Lock()
-	m.lastCreateReq = req.Msg
-	m.recordHeaders(req.Header())
-	fn := m.createFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	return connect.NewResponse(&storagev1.CreateDiskResponse{
-		Disk: &storagev1.Disk{
-			DiskId:     testSourceDiskID,
-			Name:       req.Msg.GetName(),
-			RootIno:    1,
-			MaxBytes:   req.Msg.GetMaxBytes(),
-			UsedBytes:  0,
-			UsedInodes: 1,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		},
-	}), nil
-}
-
-func (m *mockDiskHandler) ForkDisk(ctx context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
-	m.mu.Lock()
-	m.lastForkReq = req.Msg
-	m.recordHeaders(req.Header())
-	fn := m.forkFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	parentID := req.Msg.GetSourceDiskId()
-	maxBytes := uint64(1 << 30)
-	if req.Msg.MaxBytes != nil {
-		maxBytes = req.Msg.GetMaxBytes()
-	}
-	return connect.NewResponse(&storagev1.ForkDiskResponse{
-		Disk: &storagev1.Disk{
-			DiskId:       testChildDiskID,
-			Name:         req.Msg.GetName(),
-			RootIno:      1,
-			MaxBytes:     maxBytes,
-			UsedBytes:    4096,
-			UsedInodes:   2,
-			CreatedAt:    now,
-			UpdatedAt:    now,
-			ParentDiskId: &parentID,
-		},
-	}), nil
-}
-
-func (m *mockDiskHandler) GetDisk(ctx context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
-	m.mu.Lock()
-	m.recordHeaders(req.Header())
-	fn := m.getFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("unimplemented"))
-}
-
-func (m *mockDiskHandler) ListDisks(ctx context.Context, req *connect.Request[storagev1.ListDisksRequest]) (*connect.Response[storagev1.ListDisksResponse], error) {
-	m.mu.Lock()
-	m.lastListReq = req.Msg
-	m.recordHeaders(req.Header())
-	fn := m.listFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	return connect.NewResponse(&storagev1.ListDisksResponse{
-		Disks: []*storagev1.Disk{
-			{
-				DiskId:     testSourceDiskID,
-				Name:       "root-disk",
-				RootIno:    1,
-				MaxBytes:   1 << 30,
-				UsedBytes:  512 << 20,
-				UsedInodes: 10,
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			},
-		},
-	}), nil
-}
-
-func (m *mockDiskHandler) UpdateDisk(ctx context.Context, req *connect.Request[storagev1.UpdateDiskRequest]) (*connect.Response[storagev1.UpdateDiskResponse], error) {
-	m.mu.Lock()
-	m.lastUpdateReq = req.Msg
-	m.recordHeaders(req.Header())
-	fn := m.updateFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	name := "updated-disk"
-	if req.Msg.Name != nil {
-		name = req.Msg.GetName()
-	}
-	maxBytes := uint64(2 << 30)
-	if req.Msg.MaxBytes != nil {
-		maxBytes = req.Msg.GetMaxBytes()
-	}
-	return connect.NewResponse(&storagev1.UpdateDiskResponse{
-		Disk: &storagev1.Disk{
-			DiskId:     req.Msg.GetDiskId(),
-			Name:       name,
-			RootIno:    1,
-			MaxBytes:   maxBytes,
-			UsedBytes:  4096,
-			UsedInodes: 2,
-			CreatedAt:  now,
-			UpdatedAt:  now,
-		},
-	}), nil
-}
-
-func (m *mockDiskHandler) DeleteDisk(ctx context.Context, req *connect.Request[storagev1.DeleteDiskRequest]) (*connect.Response[storagev1.DeleteDiskResponse], error) {
-	m.mu.Lock()
-	m.lastDeleteReq = req.Msg
-	m.deleteCalls++
-	m.recordHeaders(req.Header())
-	fn := m.deleteFn
-	m.mu.Unlock()
-	if fn != nil {
-		return fn(ctx, req)
-	}
-	return connect.NewResponse(&storagev1.DeleteDiskResponse{}), nil
-}
-
-func startMockDiskH2CServer(t *testing.T, h storagev1connect.StorageServiceHandler) string {
+func requireCLIError2(t *testing.T, wantSubstr string, args ...string) {
 	t.Helper()
-	path, connectHandler := storagev1connect.NewStorageServiceHandler(h)
-	mux := http.NewServeMux()
-	mux.Handle(path, connectHandler)
-
-	var protocols http.Protocols
-	protocols.SetUnencryptedHTTP2(true)
-	srv := &http.Server{
-		Handler:   mux,
-		Protocols: &protocols,
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
-	return "http://" + ln.Addr().String()
+	code, out, errOut := runCLI(args...)
+	require.Equal(t, 2, code, "args=%v stderr=%s", args, errOut)
+	require.Empty(t, out)
+	require.Contains(t, errOut, wantSubstr, "args=%v", args)
 }
 
-func runCLI(args ...string) (exitCode int, stdout, stderr string) {
-	var outBuf, errBuf bytes.Buffer
-	code := Execute(args, &outBuf, &errBuf)
-	return code, outBuf.String(), errBuf.String()
+func requireHelpExit0(t *testing.T, wantSubstr string, args ...string) {
+	t.Helper()
+	code, out, errOut := runCLI(args...)
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Contains(t, out, wantSubstr)
 }
 
-func runDiskWithPorts(ports diskPorts, args ...string) (exitCode int, stdout, stderr string) {
-	var outBuf, errBuf bytes.Buffer
-	code := executeDiskWithPorts(args, &outBuf, &errBuf, ports)
-	return code, outBuf.String(), errBuf.String()
-}
-
-func TestDiskHelpAndRouting(t *testing.T) {
-	code, out, errOut := runCLI("disk")
-	require.Equal(t, 2, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "bowl disk <subcommand>")
-
-	code, out, errOut = runCLI("disk", "unknown")
-	require.Equal(t, 2, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "未知 disk 子命令 \"unknown\"")
-
-	for _, helpArg := range []string{"help", "-h", "--help"} {
-		code, out, errOut = runCLI("disk", helpArg)
-		require.Equal(t, 0, code)
-		require.Empty(t, errOut)
-		for _, sub := range []string{"create", "fork", "list", "get", "update", "resize", "delete"} {
-			require.Contains(t, out, sub)
-		}
-	}
-
-	subHelpChecks := []struct {
-		subcmd   string
-		contains []string
-	}{
-		{"create", []string{"bowl disk create --size <size>", "--quiet", "--json"}},
-		{"fork", []string{"bowl disk fork <source-disk-id>", "--size", "--name", "--quiet", "--json"}},
-		{"list", []string{"bowl disk list [flags]", "--limit", "--page-token", "--json"}},
-		{"get", []string{"bowl disk get <disk-id>", "--json"}},
-		{"update", []string{"bowl disk update <disk-id>", "bowl disk resize <disk-id>", "--size", "--name"}},
-		{"resize", []string{"bowl disk update <disk-id>", "bowl disk resize <disk-id>", "--size", "--name"}},
-		{"delete", []string{"bowl disk delete <disk-id>", "--yes", "--json"}},
-	}
-
-	for _, sc := range subHelpChecks {
-		for _, flag := range []string{"-h", "--help"} {
-			code, out, errOut = runCLI("disk", sc.subcmd, flag)
-			require.Equal(t, 0, code)
-			require.Empty(t, errOut)
-			for _, substr := range sc.contains {
-				require.Contains(t, out, substr)
-			}
-		}
-	}
-}
-
-func TestDiskValidationErrors(t *testing.T) {
-	cases := []struct {
-		name      string
-		args      []string
-		errSubstr string
-	}{
-		// fork
-		{"fork缺少位置参数", []string{"disk", "fork"}, "需要且仅需要 1 个位置参数"},
-		{"fork多余位置参数", []string{"disk", "fork", testSourceDiskID, "extra"}, "需要且仅需要 1 个位置参数"},
-		{"fork非法UUID", []string{"disk", "fork", "not-a-uuid"}, "无效的 source-disk-id"},
-		{"fork全零NilUUID", []string{"disk", "fork", testNilDiskID}, "无效的 source-disk-id"},
-		{"fork未知标志", []string{"disk", "fork", testSourceDiskID, "--unknown"}, "未知标志"},
-		{"fork_size缺少参数值", []string{"disk", "fork", testSourceDiskID, "--size"}, "--size 需要指定参数值"},
-		{"fork_name缺少参数值", []string{"disk", "fork", testSourceDiskID, "--name"}, "--name 需要指定参数值"},
-		{"fork_endpoint缺少参数值", []string{"disk", "fork", testSourceDiskID, "--endpoint"}, "--endpoint 需要指定参数值"},
-		{"fork_token缺少参数值", []string{"disk", "fork", testSourceDiskID, "--token"}, "--token 需要指定参数值"},
-		{"fork_quiet与json互斥", []string{"disk", "fork", testSourceDiskID, "-q", "--json"}, "不能同时使用"},
-		{"fork_size为空字符串", []string{"disk", "fork", testSourceDiskID, "--size="}, "无效的 --size 参数"},
-		{"fork_size为零", []string{"disk", "fork", testSourceDiskID, "--size", "0"}, "无效的 --size 参数"},
-		{"fork_name超长256字节", []string{"disk", "fork", testSourceDiskID, "--name", strings.Repeat("n", 256)}, "不能超过 255 字节"},
-		{"fork_name包含NUL", []string{"disk", "fork", testSourceDiskID, "--name", "bad\x00name"}, "不能包含空字节"},
-		{"fork无效endpoint协议", []string{"disk", "fork", testSourceDiskID, "--endpoint", "ftp://127.0.0.1:9000"}, "无效的 endpoint"},
-
-		// create
-		{"create多余位置参数", []string{"disk", "create", "--size", "1GiB", "extra"}, "create 命令不接受位置参数"},
-		{"create缺少size", []string{"disk", "create"}, "必须指定 --size 参数"},
-		{"create_quiet与json互斥", []string{"disk", "create", "--size", "1GiB", "-q", "--json"}, "不能同时使用"},
-		{"create_size无效", []string{"disk", "create", "--size", "bad"}, "无效的 --size 参数"},
-		{"create_name超长256字节", []string{"disk", "create", "--size", "1GiB", "--name", strings.Repeat("a", 256)}, "不能超过 255 字节"},
-		{"create_name包含NUL", []string{"disk", "create", "--size", "1GiB", "--name", "bad\x00"}, "不能包含空字节"},
-
-		// list
-		{"list多余位置参数", []string{"disk", "list", "extra"}, "list 命令不接受位置参数"},
-		{"list禁止quiet", []string{"disk", "list", "-q"}, "未知标志"},
-		{"list_limit缺少参数值", []string{"disk", "list", "--limit"}, "--limit 需要指定参数值"},
-		{"list_page-token缺少参数值", []string{"disk", "list", "--page-token"}, "--page-token 需要指定参数值"},
-		{"list_limit为零", []string{"disk", "list", "--limit", "0"}, "必须为 [1, 1000] 范围内的整数"},
-		{"list_limit超上限", []string{"disk", "list", "--limit", "1001"}, "必须为 [1, 1000] 范围内的整数"},
-		{"list_limit非数字", []string{"disk", "list", "--limit", "abc"}, "必须为 [1, 1000] 范围内的整数"},
-
-		// get
-		{"get缺少位置参数", []string{"disk", "get"}, "需要且仅需要 1 个位置参数"},
-		{"get非法UUID", []string{"disk", "get", "bad"}, "无效的 disk-id"},
-		{"get禁止quiet", []string{"disk", "get", testSourceDiskID, "-q"}, "未知标志"},
-
-		// update / resize
-		{"update缺少位置参数", []string{"disk", "update"}, "需要且仅需要 1 个位置参数"},
-		{"update非法UUID", []string{"disk", "update", testNilDiskID, "--size", "1GiB"}, "无效的 disk-id"},
-		{"update禁止quiet", []string{"disk", "update", testSourceDiskID, "--size", "1GiB", "--quiet"}, "未知标志"},
-		{"update未指定size或name", []string{"disk", "update", testSourceDiskID}, "必须至少指定 --size 或 --name 之一"},
-		{"resize未指定size或name", []string{"disk", "resize", testSourceDiskID}, "必须至少指定 --size 或 --name 之一"},
-		{"update_name超长", []string{"disk", "update", testSourceDiskID, "--name", strings.Repeat("b", 256)}, "不能超过 255 字节"},
-		{"update_size无效", []string{"disk", "update", testSourceDiskID, "--size", "0"}, "无效的 --size 参数"},
-
-		// delete
-		{"delete缺少位置参数", []string{"disk", "delete"}, "需要且仅需要 1 个位置参数"},
-		{"delete非法UUID", []string{"disk", "delete", "bad"}, "无效的 disk-id"},
-		{"delete禁止quiet", []string{"disk", "delete", testSourceDiskID, "-q"}, "未知标志"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			code, out, errOut := runCLI(tc.args...)
-			require.Equal(t, 2, code)
-			require.Empty(t, out)
-			require.Contains(t, errOut, tc.errSubstr)
-		})
-	}
-}
-
-func TestDiskOutputModesAndParentDiskDisplay(t *testing.T) {
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	handler := &mockDiskHandler{
-		getFn: func(_ context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
-			return connect.NewResponse(&storagev1.GetDiskResponse{
-				Disk: &storagev1.Disk{
-					DiskId:     req.Msg.GetDiskId(),
-					Name:       "root-disk",
-					RootIno:    1,
-					MaxBytes:   1 << 30,
-					UsedBytes:  4096,
-					UsedInodes: 1,
-					CreatedAt:  now,
-					UpdatedAt:  now,
-				},
-			}), nil
-		},
-	}
-	endpoint := startMockDiskH2CServer(t, handler)
-
-	// 1. fork 默认详情输出（省略 --size，验证 MaxBytes 为 nil 且紧接 Disk ID 打印 Parent Disk）
-	code, out, errOut := runCLI("disk", "fork", testSourceDiskID, "--name", "branch-exp", "--endpoint", endpoint, "--token", "sec-tok")
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NotNil(t, handler.lastForkReq)
-	require.Equal(t, testSourceDiskID, handler.lastForkReq.GetSourceDiskId())
-	require.Equal(t, "branch-exp", handler.lastForkReq.GetName())
-	require.Nil(t, handler.lastForkReq.MaxBytes)
-	require.Equal(t, "Bearer sec-tok", handler.lastAuth)
-
-	expectedHeader := "Disk ID:      " + testChildDiskID + "\nParent Disk:  " + testSourceDiskID + "\nName:         branch-exp\n"
-	require.True(t, strings.HasPrefix(out, expectedHeader), "实际输出:\n%s", out)
-
-	// 2. fork --json 输出模式（显式传入 --size=2GiB）
-	code, out, errOut = runCLI("disk", "fork", "--name=json-branch", "--size=2GiB", "--json", "--endpoint="+endpoint, "--token=tok2", "--", testSourceDiskID)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NotNil(t, handler.lastForkReq.MaxBytes)
-	require.Equal(t, uint64(2<<30), handler.lastForkReq.GetMaxBytes())
-
-	var dj diskJSON
-	require.NoError(t, json.Unmarshal([]byte(out), &dj))
-	require.Equal(t, testChildDiskID, dj.DiskID)
-	require.Equal(t, testSourceDiskID, dj.ParentDiskID)
-	require.Equal(t, "json-branch", dj.Name)
-	require.Equal(t, uint64(2<<30), dj.MaxBytes)
-
-	// 3. fork -q / --quiet 静默模式
-	code, out, errOut = runCLI("disk", "fork", testSourceDiskID, "-q", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.Equal(t, testChildDiskID+"\n", out)
-
-	// 4. get 根磁盘（无 parent_disk_id）在详情与 --json 下均不展示父盘字段
-	code, out, errOut = runCLI("disk", "get", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NotContains(t, out, "Parent Disk:")
-
-	code, out, errOut = runCLI("disk", "get", testSourceDiskID, "--json", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NotContains(t, out, "parent_disk_id")
-
-	// 5. create (-q / --json / 默认详情)
-	code, out, errOut = runCLI("disk", "create", "--size", "1GiB", "--name", "c1", "-q", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.Equal(t, testSourceDiskID+"\n", out)
-	require.Equal(t, uint64(1<<30), handler.lastCreateReq.GetMaxBytes())
-
-	code, out, errOut = runCLI("disk", "create", "--size=2GiB", "--json", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NoError(t, json.Unmarshal([]byte(out), &dj))
-	require.Equal(t, testSourceDiskID, dj.DiskID)
-	require.Equal(t, uint64(2<<30), dj.MaxBytes)
-
-	// 6. list (tabwriter 表格与 Next Page Token / --json)
-	handler.listFn = func(_ context.Context, _ *connect.Request[storagev1.ListDisksRequest]) (*connect.Response[storagev1.ListDisksResponse], error) {
-		return connect.NewResponse(&storagev1.ListDisksResponse{
-			Disks: []*storagev1.Disk{
-				{
-					DiskId:     testSourceDiskID,
-					Name:       "alpha",
-					RootIno:    1,
-					MaxBytes:   2 << 30,
-					UsedBytes:  1 << 30,
-					UsedInodes: 7,
-					CreatedAt:  now,
-					UpdatedAt:  now,
-				},
-			},
-			NextPageToken: "cursor-next-1",
-		}), nil
-	}
-	code, out, errOut = runCLI("disk", "list", "--limit", "10", "--page-token", "tok-0", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.Equal(t, uint32(10), handler.lastListReq.GetPageSize())
-	require.Equal(t, "tok-0", handler.lastListReq.GetPageToken())
-	require.Contains(t, out, "DISK ID")
-	require.Contains(t, out, "50.00%")
-	require.Contains(t, out, "Next Page Token: cursor-next-1")
-
-	code, out, errOut = runCLI("disk", "list", "--json", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	var listRes diskListJSON
-	require.NoError(t, json.Unmarshal([]byte(out), &listRes))
-	require.Len(t, listRes.Disks, 1)
-	require.Equal(t, "cursor-next-1", listRes.NextPageToken)
-
-	// 7. update 与 resize 别名
-	code, out, errOut = runCLI("disk", "resize", testSourceDiskID, "--size", "4GiB", "--name", "", "--json", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.NotNil(t, handler.lastUpdateReq.Name)
-	require.Empty(t, handler.lastUpdateReq.GetName())
-	require.NotNil(t, handler.lastUpdateReq.MaxBytes)
-	require.Equal(t, uint64(4<<30), handler.lastUpdateReq.GetMaxBytes())
-	require.NoError(t, json.Unmarshal([]byte(out), &dj))
-	require.Equal(t, uint64(4<<30), dj.MaxBytes)
-
-	// 8. delete (-y 文本与 --json)
-	code, out, errOut = runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-	}, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	require.Equal(t, "已删除虚拟磁盘 "+testSourceDiskID+"\n", out)
-
-	code, out, errOut = runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-	}, "delete", testSourceDiskID, "--yes", "--json", "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Empty(t, errOut)
-	var delRes diskDeleteJSON
-	require.NoError(t, json.Unmarshal([]byte(out), &delRes))
-	require.Equal(t, testSourceDiskID, delRes.DiskID)
-	require.True(t, delRes.Deleted)
-}
-
-func TestDiskServerErrors(t *testing.T) {
-	var mode string
-	var mu sync.Mutex
-	setMode := func(m string) {
-		mu.Lock()
-		mode = m
-		mu.Unlock()
-	}
-	getMode := func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		return mode
-	}
-
-	handler := &mockDiskHandler{
-		createFn: func(_ context.Context, _ *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error) {
-			if getMode() == "empty_disk" {
-				return connect.NewResponse(&storagev1.CreateDiskResponse{}), nil
-			}
-			return nil, connect.NewError(connect.CodeInternal, errors.New("create boom"))
-		},
-		forkFn: func(_ context.Context, _ *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
-			switch getMode() {
-			case "not_found":
-				return nil, connect.NewError(connect.CodeNotFound, errors.New("disk not found"))
-			case "shrink":
-				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("quota shrink below used"))
-			case "empty_disk":
-				return connect.NewResponse(&storagev1.ForkDiskResponse{}), nil
-			default:
-				return nil, connect.NewError(connect.CodeInternal, errors.New("internal boom"))
-			}
-		},
-		getFn: func(_ context.Context, _ *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
-			switch getMode() {
-			case "not_found":
-				return nil, connect.NewError(connect.CodeNotFound, errors.New("disk not found"))
-			case "empty_disk":
-				return connect.NewResponse(&storagev1.GetDiskResponse{}), nil
-			case "used_10mib":
-				return connect.NewResponse(&storagev1.GetDiskResponse{
-					Disk: &storagev1.Disk{
-						DiskId:    testSourceDiskID,
-						MaxBytes:  100 << 20,
-						UsedBytes: 10 << 20,
-					},
-				}), nil
-			default:
-				return nil, connect.NewError(connect.CodeInternal, errors.New("get boom"))
-			}
-		},
-		listFn: func(_ context.Context, _ *connect.Request[storagev1.ListDisksRequest]) (*connect.Response[storagev1.ListDisksResponse], error) {
-			return nil, connect.NewError(connect.CodeInternal, errors.New("list boom"))
-		},
-		updateFn: func(_ context.Context, _ *connect.Request[storagev1.UpdateDiskRequest]) (*connect.Response[storagev1.UpdateDiskResponse], error) {
-			switch getMode() {
-			case "update_not_found":
-				return nil, connect.NewError(connect.CodeNotFound, errors.New("disk not found"))
-			case "update_shrink":
-				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("shrink conflict"))
-			case "update_empty":
-				return connect.NewResponse(&storagev1.UpdateDiskResponse{}), nil
-			default:
-				return nil, connect.NewError(connect.CodeInternal, errors.New("update boom"))
-			}
-		},
-		deleteFn: func(_ context.Context, _ *connect.Request[storagev1.DeleteDiskRequest]) (*connect.Response[storagev1.DeleteDiskResponse], error) {
-			switch getMode() {
-			case "not_found":
-				return nil, connect.NewError(connect.CodeNotFound, errors.New("disk not found"))
-			case "failed_precondition":
-				return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("active mount"))
-			case "invalid_argument":
-				return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("bad disk id"))
-			case "ebusy_detail":
-				cErr := connect.NewError(connect.CodeUnavailable, errors.New("busy"))
-				detail, dErr := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EBUSY"})
-				if dErr == nil {
-					cErr.AddDetail(detail)
-				}
-				return nil, cErr
-			default:
-				return nil, connect.NewError(connect.CodeInternal, errors.New("delete boom"))
-			}
-		},
-	}
-	endpoint := startMockDiskH2CServer(t, handler)
-
-	// fork 错误矩阵
-	setMode("not_found")
-	code, out, errOut := runCLI("disk", "fork", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "磁盘不存在: "+testSourceDiskID)
-
-	setMode("shrink")
-	code, out, errOut = runCLI("disk", "fork", testSourceDiskID, "--size", "1MiB", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "目标容量小于源磁盘已用容量")
-
-	setMode("empty_disk")
-	code, out, errOut = runCLI("disk", "fork", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "空的虚拟磁盘元数据")
-
-	setMode("internal")
-	code, out, errOut = runCLI("disk", "fork", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "派生虚拟磁盘失败")
-
-	// create / get / list 错误
-	setMode("empty_disk")
-	code, _, errOut = runCLI("disk", "create", "--size", "1GiB", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "空的虚拟磁盘元数据")
-
-	setMode("not_found")
-	code, _, errOut = runCLI("disk", "get", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "磁盘不存在: "+testSourceDiskID)
-
-	code, _, errOut = runCLI("disk", "list", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "列出虚拟磁盘失败")
-
-	// update 缩容预检与 UpdateDisk 错误
-	setMode("used_10mib")
-	code, _, errOut = runCLI("disk", "update", testSourceDiskID, "--size", "1MiB", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "不允许缩容至已用水位以下")
-
-	setMode("update_shrink")
-	code, _, errOut = runCLI("disk", "update", testSourceDiskID, "--name", "only-name", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "目标容量小于磁盘当前已用容量")
-
-	setMode("update_not_found")
-	code, _, errOut = runCLI("disk", "update", testSourceDiskID, "--name", "only-name", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "磁盘不存在: "+testSourceDiskID)
-
-	setMode("update_empty")
-	code, _, errOut = runCLI("disk", "update", testSourceDiskID, "--name", "only-name", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "空的虚拟磁盘元数据")
-
-	// delete 错误（含 CodeInvalidArgument -> 2 与 ErrorInfo{Reason:"EBUSY"} 解包）
-	delPorts := diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-	}
-	setMode("not_found")
-	code, _, errOut = runDiskWithPorts(delPorts, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "磁盘不存在: "+testSourceDiskID)
-
-	setMode("failed_precondition")
-	code, _, errOut = runDiskWithPorts(delPorts, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "仍处于挂载状态")
-
-	setMode("invalid_argument")
-	code, _, errOut = runDiskWithPorts(delPorts, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 2, code)
-	require.Contains(t, errOut, "无效的请求参数")
-
-	setMode("ebusy_detail")
-	code, _, errOut = runDiskWithPorts(delPorts, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "仍处于挂载状态")
-
-	setMode("internal")
-	code, _, errOut = runDiskWithPorts(delPorts, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "删除虚拟磁盘失败")
-}
-
-func TestDiskDeleteLocalGuards(t *testing.T) {
-	handler := &mockDiskHandler{}
-	endpoint := startMockDiskH2CServer(t, handler)
-
-	// 1. 本机已挂载拦截（不触发 RPC）
-	code, out, errOut := runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "/mnt/bowl-test", true, nil },
-		stdin:          strings.NewReader("y\n"),
-	}, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "bowl umount /mnt/bowl-test")
-	require.Equal(t, 0, handler.deleteCalls)
-
-	// 2. 挂载表检查报错（不触发 RPC）
-	code, out, errOut = runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, errors.New("proc io err") },
-		stdin:          strings.NewReader("y\n"),
-	}, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "检查本机挂载表失败")
-	require.Equal(t, 0, handler.deleteCalls)
-
-	// 3. stdin 输入 n 与 EOF 取消删除（无 "错误: " 前缀，不触发 RPC）
-	for _, input := range []string{"n\n", ""} {
-		code, out, errOut = runDiskWithPorts(diskPorts{
-			findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-			stdin:          strings.NewReader(input),
-		}, "delete", testSourceDiskID, "--endpoint", endpoint)
-		require.Equal(t, 1, code)
-		require.Empty(t, out)
-		require.Contains(t, errOut, "操作已取消")
-		require.NotContains(t, errOut, "错误:")
-		require.Equal(t, 0, handler.deleteCalls)
-	}
-
-	// 4. stdin 读取异常
-	code, out, errOut = runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-		stdin:          errReader{err: errors.New("broken pipe")},
-	}, "delete", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Empty(t, out)
-	require.Contains(t, errOut, "读取终端确认输入失败")
-	require.Equal(t, 0, handler.deleteCalls)
-
-	// 5. stdin 输入 YES 确认删除
-	code, out, errOut = runDiskWithPorts(diskPorts{
-		findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-		stdin:          strings.NewReader("YES\n"),
-	}, "delete", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 0, code)
-	require.Contains(t, errOut, "确认删除虚拟磁盘")
-	require.Contains(t, out, "已删除虚拟磁盘 "+testSourceDiskID)
-	require.Equal(t, 1, handler.deleteCalls)
-}
-
-type errReader struct{ err error }
-
-func (r errReader) Read(_ []byte) (int, error) {
-	return 0, r.err
-}
-
-func TestDiskCLISpanAndW3CTraceparentPropagation(t *testing.T) {
+func setupDiskTestTracer(t *testing.T) *tracetest.InMemoryExporter {
+	t.Helper()
 	prevTP := otel.GetTracerProvider()
 	prevProp := otel.GetTextMapPropagator()
-	t.Cleanup(func() {
-		otel.SetTracerProvider(prevTP)
-		otel.SetTextMapPropagator(prevProp)
-	})
-
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSyncer(exporter),
@@ -744,120 +44,466 @@ func TestDiskCLISpanAndW3CTraceparentPropagation(t *testing.T) {
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-
-	now := timestamppb.New(time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC))
-	var failFork bool
-	handler := &mockDiskHandler{
-		forkFn: func(_ context.Context, req *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
-			if failFork {
-				return nil, connect.NewError(connect.CodeNotFound, errors.New("source not found"))
-			}
-			parentID := req.Msg.GetSourceDiskId()
-			return connect.NewResponse(&storagev1.ForkDiskResponse{
-				Disk: &storagev1.Disk{
-					DiskId:       testChildDiskID,
-					Name:         req.Msg.GetName(),
-					RootIno:      1,
-					MaxBytes:     1 << 30,
-					CreatedAt:    now,
-					UpdatedAt:    now,
-					ParentDiskId: &parentID,
-				},
-			}), nil
-		},
-		getFn: func(_ context.Context, req *connect.Request[storagev1.GetDiskRequest]) (*connect.Response[storagev1.GetDiskResponse], error) {
-			return connect.NewResponse(&storagev1.GetDiskResponse{
-				Disk: &storagev1.Disk{
-					DiskId:    req.Msg.GetDiskId(),
-					Name:      "root",
-					RootIno:   1,
-					MaxBytes:  1 << 30,
-					CreatedAt: now,
-					UpdatedAt: now,
-				},
-			}), nil
-		},
-	}
-	endpoint := startMockDiskH2CServer(t, handler)
-
-	// 1. 全 6 个子命令（含 resize 别名）Span 名、W3C Traceparent 与 X-Request-Id 传播
-	spanRuns := []struct {
-		spanName string
-		run      func() (int, string, string)
-	}{
-		{"cli.disk.create", func() (int, string, string) {
-			return runCLI("disk", "create", "--size", "1GiB", "-q", "--endpoint", endpoint)
-		}},
-		{"cli.disk.fork", func() (int, string, string) {
-			return runCLI("disk", "fork", testSourceDiskID, "--name", "traced-fork", "-q", "--endpoint", endpoint)
-		}},
-		{"cli.disk.list", func() (int, string, string) {
-			return runCLI("disk", "list", "--endpoint", endpoint)
-		}},
-		{"cli.disk.get", func() (int, string, string) {
-			return runCLI("disk", "get", testSourceDiskID, "--endpoint", endpoint)
-		}},
-		{"cli.disk.update", func() (int, string, string) {
-			return runCLI("disk", "resize", testSourceDiskID, "--name", "renamed", "--endpoint", endpoint)
-		}},
-		{"cli.disk.delete", func() (int, string, string) {
-			return runDiskWithPorts(diskPorts{
-				findMountpoint: func(string) (string, bool, error) { return "", false, nil },
-			}, "delete", testSourceDiskID, "-y", "--endpoint", endpoint)
-		}},
-	}
-
-	for _, sr := range spanRuns {
-		exporter.Reset()
-		code, _, errOut := sr.run()
-		require.Equal(t, 0, code)
-		require.Empty(t, errOut)
-
-		handler.mu.Lock()
-		okTraceparent := handler.lastTraceparent
-		okReqID := handler.lastRequestID
-		handler.mu.Unlock()
-		require.NotEmpty(t, okReqID)
-		require.NotEqual(t, "1", okReqID)
-		require.Contains(t, okTraceparent, "00-")
-
-		spans := exporter.GetSpans()
-		var rootSpan *tracetest.SpanStub
-		for i := range spans {
-			if spans[i].Name == sr.spanName {
-				rootSpan = &spans[i]
-			}
-		}
-		require.NotNil(t, rootSpan, "必须产生客户端根 Span %s", sr.spanName)
-		require.Contains(t, okTraceparent, rootSpan.SpanContext.TraceID().String(), "请求头 Traceparent 必须携带 %s TraceID", sr.spanName)
-
-		if sr.spanName == "cli.disk.fork" {
-			attrMap := make(map[string]string)
-			for _, a := range rootSpan.Attributes {
-				attrMap[string(a.Key)] = a.Value.AsString()
-			}
-			require.Equal(t, testSourceDiskID, attrMap["bowl.source_disk_id"])
-			require.Equal(t, testChildDiskID, attrMap["bowl.disk_id"])
-		}
-	}
-
-	// 2. 失败路径：cli.disk.fork 标记 Error 状态。
-	exporter.Reset()
-	failFork = true
-	code, _, errOut := runCLI("disk", "fork", testSourceDiskID, "--endpoint", endpoint)
-	require.Equal(t, 1, code)
-	require.Contains(t, errOut, "磁盘不存在")
-
-	spans := exporter.GetSpans()
-	var errSpan *tracetest.SpanStub
-	for i := range spans {
-		if spans[i].Name == "cli.disk.fork" {
-			errSpan = &spans[i]
-		}
-	}
-	require.NotNil(t, errSpan)
-	require.Equal(t, codes.Error, errSpan.Status.Code)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+	return exporter
 }
 
-var _ io.Reader = errReader{}
+func TestDisk_GivenHelpAndRoutingArgs_ReturnsExpectedUsageAndExitCodes(t *testing.T) {
+	// Given / When / Then
+	requireCLIError2(t, "bowl disk <subcommand>", "disk")
+	requireCLIError2(t, `未知 disk 子命令 "unknown"`, "disk", "unknown")
+
+	requireHelpExit0(t, "create", "disk", "help")
+	requireHelpExit0(t, "fork", "disk", "-h")
+	requireHelpExit0(t, "delete", "disk", "--help")
+
+	requireHelpExit0(t, "bowl disk create --size <size>", "disk", "create", "-h")
+	requireHelpExit0(t, "bowl disk fork <source-disk-id>", "disk", "fork", "--help")
+	requireHelpExit0(t, "bowl disk list [flags]", "disk", "list", "-h")
+	requireHelpExit0(t, "bowl disk get <disk-id>", "disk", "get", "--help")
+	requireHelpExit0(t, "bowl disk resize <disk-id>", "disk", "update", "-h")
+	requireHelpExit0(t, "bowl disk resize <disk-id>", "disk", "resize", "--help")
+	requireHelpExit0(t, "bowl disk delete <disk-id>", "disk", "delete", "-h")
+}
+
+func TestDisk_GivenInvalidValidationInputs_ReturnsExit2WithDiagnostics(t *testing.T) {
+	// fork 校验
+	requireCLIError2(t, "需要且仅需要 1 个位置参数", "disk", "fork")
+	requireCLIError2(t, "需要且仅需要 1 个位置参数", "disk", "fork", testDiskID1, "extra")
+	requireCLIError2(t, "无效的 source-disk-id", "disk", "fork", "not-a-uuid")
+	requireCLIError2(t, "无效的 source-disk-id", "disk", "fork", testNilUUID)
+	requireCLIError2(t, "未知标志", "disk", "fork", testDiskID1, "--unknown")
+	requireCLIError2(t, "--size 需要指定参数值", "disk", "fork", testDiskID1, "--size")
+	requireCLIError2(t, "--name 需要指定参数值", "disk", "fork", testDiskID1, "--name")
+	requireCLIError2(t, "--endpoint 需要指定参数值", "disk", "fork", testDiskID1, "--endpoint")
+	requireCLIError2(t, "--token 需要指定参数值", "disk", "fork", testDiskID1, "--token")
+	requireCLIError2(t, "不能同时使用", "disk", "fork", testDiskID1, "-q", "--json")
+	requireCLIError2(t, "无效的 --size 参数", "disk", "fork", testDiskID1, "--size=")
+	requireCLIError2(t, "无效的 --size 参数", "disk", "fork", testDiskID1, "--size", "0")
+	requireCLIError2(t, "不能超过 255 字节", "disk", "fork", testDiskID1, "--name", strings.Repeat("n", 256))
+	requireCLIError2(t, "不能包含空字节", "disk", "fork", testDiskID1, "--name", "bad\x00name")
+	requireCLIError2(t, "无效的 endpoint", "disk", "fork", testDiskID1, "--endpoint", "ftp://127.0.0.1:9000")
+
+	// create 校验
+	requireCLIError2(t, "create 命令不接受位置参数", "disk", "create", "--size", "1GiB", "extra")
+	requireCLIError2(t, "必须指定 --size 参数", "disk", "create")
+	requireCLIError2(t, "不能同时使用", "disk", "create", "--size", "1GiB", "-q", "--json")
+	requireCLIError2(t, "无效的 --size 参数", "disk", "create", "--size", "bad")
+	requireCLIError2(t, "不能超过 255 字节", "disk", "create", "--size", "1GiB", "--name", strings.Repeat("a", 256))
+	requireCLIError2(t, "不能包含空字节", "disk", "create", "--size", "1GiB", "--name", "bad\x00")
+
+	// list 校验
+	requireCLIError2(t, "list 命令不接受位置参数", "disk", "list", "extra")
+	requireCLIError2(t, "未知标志", "disk", "list", "-q")
+	requireCLIError2(t, "--limit 需要指定参数值", "disk", "list", "--limit")
+	requireCLIError2(t, "--page-token 需要指定参数值", "disk", "list", "--page-token")
+	requireCLIError2(t, "必须为 [1, 1000] 范围内的整数", "disk", "list", "--limit", "0")
+	requireCLIError2(t, "必须为 [1, 1000] 范围内的整数", "disk", "list", "--limit", "1001")
+	requireCLIError2(t, "必须为 [1, 1000] 范围内的整数", "disk", "list", "--limit", "abc")
+
+	// get 校验
+	requireCLIError2(t, "需要且仅需要 1 个位置参数", "disk", "get")
+	requireCLIError2(t, "无效的 disk-id", "disk", "get", "bad")
+	requireCLIError2(t, "未知标志", "disk", "get", testDiskID1, "-q")
+
+	// update / resize 校验
+	requireCLIError2(t, "需要且仅需要 1 个位置参数", "disk", "update")
+	requireCLIError2(t, "无效的 disk-id", "disk", "update", testNilUUID, "--size", "1GiB")
+	requireCLIError2(t, "未知标志", "disk", "update", testDiskID1, "--size", "1GiB", "--quiet")
+	requireCLIError2(t, "必须至少指定 --size 或 --name 之一", "disk", "update", testDiskID1)
+	requireCLIError2(t, "必须至少指定 --size 或 --name 之一", "disk", "resize", testDiskID1)
+	requireCLIError2(t, "不能超过 255 字节", "disk", "update", testDiskID1, "--name", strings.Repeat("b", 256))
+	requireCLIError2(t, "无效的 --size 参数", "disk", "update", testDiskID1, "--size", "0")
+
+	// delete 校验
+	requireCLIError2(t, "需要且仅需要 1 个位置参数", "disk", "delete")
+	requireCLIError2(t, "无效的 disk-id", "disk", "delete", "bad")
+	requireCLIError2(t, "未知标志", "disk", "delete", testDiskID1, "-q")
+}
+
+func TestDiskCreate_GivenValidSizeAndToken_CreatesDiskInQuietAndJSONModes(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	withDiskStorageFake(t, storage)
+
+	// When: quiet 模式创建磁盘并携带鉴权令牌
+	code, quietOut, errOut := runCLI("disk", "create", "--size", "1GiB", "--name", "c1", "-q", "--token", "sec-tok")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	createdID := strings.TrimSpace(quietOut)
+	require.NotEmpty(t, createdID)
+	require.Equal(t, "Bearer sec-tok", storage.lastAuth)
+
+	// When: --json 模式创建第二块磁盘
+	code, jsonOut, errOut := runCLI("disk", "create", "--size=2GiB", "--name=c2", "--json")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	var dj diskJSON
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &dj))
+	require.Equal(t, "c2", dj.Name)
+	require.Equal(t, uint64(2<<30), dj.MaxBytes)
+	require.Empty(t, dj.ParentDiskID)
+}
+
+func TestDiskFork_GivenSeededSourceDisk_InheritsOrOverridesQuotaAndDisplaysParent(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "root-disk", 1<<30, 4096)
+	withDiskStorageFake(t, storage)
+
+	// When: 省略 --size，继承源盘 1GiB 配额，验证详情紧接 Disk ID 打印 Parent Disk
+	code, out, errOut := runCLI("disk", "fork", testDiskID1, "--name", "branch-exp", "--token", "sec-tok")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Equal(t, "Bearer sec-tok", storage.lastAuth)
+	require.Contains(t, out, "Parent Disk:  "+testDiskID1+"\nName:         branch-exp\n")
+	require.Contains(t, out, "1.00 GiB")
+
+	// When: 显式覆盖 --size=2GiB 与 --json（使用 -- 分隔位置参数）
+	code, jsonOut, errOut := runCLI("disk", "fork", "--name=json-branch", "--size=2GiB", "--json", "--token=tok2", "--", testDiskID1)
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	var dj diskJSON
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &dj))
+	require.Equal(t, testDiskID1, dj.ParentDiskID)
+	require.Equal(t, "json-branch", dj.Name)
+	require.Equal(t, uint64(2<<30), dj.MaxBytes)
+
+	// When: -q 静默模式
+	code, qOut, errOut := runCLI("disk", "fork", testDiskID1, "-q")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Len(t, strings.TrimSpace(qOut), 36)
+}
+
+func TestDiskGet_GivenRootDiskWithoutParent_HidesParentDiskField(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "root-disk", 1<<30, 4096)
+	withDiskStorageFake(t, storage)
+
+	// When / Then: 人类可读模式
+	code, out, errOut := runCLI("disk", "get", testDiskID1)
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Contains(t, out, "Disk ID:      "+testDiskID1)
+	require.NotContains(t, out, "Parent Disk:")
+
+	// When / Then: JSON 模式
+	code, jsonOut, errOut := runCLI("disk", "get", testDiskID1, "--json")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.NotContains(t, jsonOut, "parent_disk_id")
+}
+
+func TestDiskList_GivenTwoDisksWithLimit_RendersTablePaginationAndJSON(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "alpha", 2<<30, 1<<30)
+	storage.seedDisk(testDiskID2, "beta", 4<<30, 0)
+	withDiskStorageFake(t, storage)
+
+	// When: --limit=1 分页拉取首条
+	code, out, errOut := runCLI("disk", "list", "--limit", "1")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Contains(t, out, "DISK ID")
+	require.Contains(t, out, "50.00%")
+	require.Contains(t, out, "Next Page Token: "+testDiskID2)
+
+	// When: 携带 --page-token --json 拉取下一页
+	code, jsonOut, errOut := runCLI("disk", "list", "--limit", "1", "--page-token", testDiskID2, "--json")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	var listRes diskListJSON
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &listRes))
+	require.Len(t, listRes.Disks, 1)
+	require.Equal(t, testDiskID2, listRes.Disks[0].DiskID)
+	require.Empty(t, listRes.NextPageToken)
+}
+
+func TestDiskResize_GivenValidExpansionAndEmptyName_UpdatesMetadata(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "old-name", 2<<30, 4096)
+	withDiskStorageFake(t, storage)
+
+	// When
+	code, out, errOut := runCLI("disk", "resize", testDiskID1, "--size", "4GiB", "--name", "", "--json")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	var dj diskJSON
+	require.NoError(t, json.Unmarshal([]byte(out), &dj))
+	require.Empty(t, dj.Name)
+	require.Equal(t, uint64(4<<30), dj.MaxBytes)
+}
+
+func TestDiskUpdate_GivenTargetBelowUsedBytes_RejectsBeforeUpdateRPC(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "used-disk", 100<<20, 10<<20)
+	withDiskStorageFake(t, storage)
+
+	// When
+	code, out, errOut := runCLI("disk", "update", testDiskID1, "--size", "1MiB")
+
+	// Then
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "不允许缩容至已用水位以下")
+	require.Equal(t, 0, storage.updateCalls, "前置水位校验拦截后不得发起 UpdateDisk 调用")
+}
+
+func TestDiskDelete_GivenLocalMountOrInteractiveCancel_BlocksBeforeRPC(t *testing.T) {
+	// Given: 本地 mountinfo 显示磁盘处于挂载状态
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "busy-disk", 1<<30, 0)
+	withDiskStorageFake(t, storage)
+	withMountInfoContent(t, "100 30 0:50 / /mnt/bowl-test rw - fuse.bowl bowl:"+testDiskID1+" rw\n")
+
+	// When
+	code, out, errOut := runCLI("disk", "delete", testDiskID1, "-y")
+
+	// Then
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "bowl umount /mnt/bowl-test")
+	require.Equal(t, 0, storage.deleteCalls)
+
+	// Given: 本机挂载信息不可读
+	withUnreadableMountInfo(t)
+	code, out, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "检查本机挂载表失败")
+	require.Equal(t, 0, storage.deleteCalls)
+
+	// Given: 未挂载但交互输入 n 或 EOF 取消
+	withMissingMountInfo(t)
+	withDiskStdin(t, strings.NewReader("n\n"))
+	code, out, errOut = runCLI("disk", "delete", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "操作已取消")
+	require.NotContains(t, errOut, "错误:")
+	require.Equal(t, 0, storage.deleteCalls)
+
+	withDiskStdin(t, strings.NewReader(""))
+	code, out, errOut = runCLI("disk", "delete", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "操作已取消")
+	require.Equal(t, 0, storage.deleteCalls)
+
+	// Given: stdin 读取报错
+	withDiskStdin(t, errReader{err: errors.New("broken pipe")})
+	code, out, errOut = runCLI("disk", "delete", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "读取终端确认输入失败")
+	require.Equal(t, 0, storage.deleteCalls)
+}
+
+func TestDiskDelete_GivenYesFlagJSONAndInteractiveYES_DeletesDisk(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "d1", 1<<30, 0)
+	storage.seedDisk(testDiskID2, "d2", 1<<30, 0)
+	withDiskStorageFake(t, storage)
+	withMissingMountInfo(t)
+
+	// When: --yes --json 删除第一块
+	code, jsonOut, errOut := runCLI("disk", "delete", testDiskID1, "--yes", "--json")
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	var delRes diskDeleteJSON
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &delRes))
+	require.Equal(t, testDiskID1, delRes.DiskID)
+	require.True(t, delRes.Deleted)
+
+	// When: 交互输入 YES 删除第二块
+	withDiskStdin(t, strings.NewReader("YES\n"))
+	code, textOut, errOut := runCLI("disk", "delete", testDiskID2)
+
+	// Then
+	require.Equal(t, 0, code)
+	require.Contains(t, errOut, "确认删除虚拟磁盘")
+	require.Equal(t, "已删除虚拟磁盘 "+testDiskID2+"\n", textOut)
+}
+
+func TestDisk_GivenServerErrorsAndEmptyResponses_MapsExpectedExitCodes(t *testing.T) {
+	// Given
+	storage := newFakeStorage()
+	withDiskStorageFake(t, storage)
+	withMissingMountInfo(t)
+
+	// CodeNotFound 场景 (fork / get / update / delete)
+	code, _, errOut := runCLI("disk", "fork", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在: "+testDiskID1)
+
+	code, _, errOut = runCLI("disk", "get", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在: "+testDiskID1)
+
+	code, _, errOut = runCLI("disk", "update", testDiskID1, "--name", "only-name")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在: "+testDiskID1)
+
+	code, _, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在: "+testDiskID1)
+
+	// CodeFailedPrecondition 场景 (fork 缩容 / update 并发缩容 / delete 活跃会话)
+	storage.seedDisk(testDiskID1, "root", 100<<20, 10<<20)
+	code, _, errOut = runCLI("disk", "fork", testDiskID1, "--size", "1MiB")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "目标容量小于源磁盘已用容量")
+
+	storage.mounted[testDiskID1] = true
+	code, _, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "仍处于挂载状态")
+	delete(storage.mounted, testDiskID1)
+
+	storage.forcedErr["UpdateDisk"] = connect.NewError(connect.CodeFailedPrecondition, errors.New("shrink conflict"))
+	code, _, errOut = runCLI("disk", "update", testDiskID1, "--name", "only-name")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "目标容量小于磁盘当前已用容量")
+	delete(storage.forcedErr, "UpdateDisk")
+
+	// delete: CodeInvalidArgument -> 退出码 2; ErrorInfo{Reason:"EBUSY"} -> 挂载提示退出码 1
+	storage.forcedErr["DeleteDisk"] = connect.NewError(connect.CodeInvalidArgument, errors.New("bad disk id"))
+	code, _, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 2, code)
+	require.Contains(t, errOut, "无效的请求参数")
+
+	ebusyErr := connect.NewError(connect.CodeUnavailable, errors.New("busy"))
+	detail, detailErr := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EBUSY"})
+	require.NoError(t, detailErr)
+	ebusyErr.AddDetail(detail)
+	storage.forcedErr["DeleteDisk"] = ebusyErr
+	code, _, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "仍处于挂载状态")
+
+	storage.forcedErr["DeleteDisk"] = connect.NewError(connect.CodeInternal, errors.New("delete boom"))
+	code, _, errOut = runCLI("disk", "delete", testDiskID1, "-y")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "删除虚拟磁盘失败")
+	delete(storage.forcedErr, "DeleteDisk")
+
+	// ListDisks 内部错误与空元数据返回
+	storage.forcedErr["ListDisks"] = connect.NewError(connect.CodeInternal, errors.New("list boom"))
+	code, _, errOut = runCLI("disk", "list")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "列出虚拟磁盘失败")
+	delete(storage.forcedErr, "ListDisks")
+
+	storage.returnNilDisk["CreateDisk"] = true
+	code, _, errOut = runCLI("disk", "create", "--size", "1GiB")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "空的虚拟磁盘元数据")
+	delete(storage.returnNilDisk, "CreateDisk")
+
+	storage.returnNilDisk["ForkDisk"] = true
+	code, _, errOut = runCLI("disk", "fork", testDiskID1)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "空的虚拟磁盘元数据")
+	delete(storage.returnNilDisk, "ForkDisk")
+
+	storage.returnNilDisk["UpdateDisk"] = true
+	code, _, errOut = runCLI("disk", "update", testDiskID1, "--name", "only-name")
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "空的虚拟磁盘元数据")
+}
+
+func TestDisk_GivenActiveOTelTracer_PropagatesTraceparentRequestIDAndSpanStatus(t *testing.T) {
+	// Given
+	exporter := setupDiskTestTracer(t)
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "root", 1<<30, 0)
+	withDiskStorageFake(t, storage)
+	withMissingMountInfo(t)
+
+	// When: create 链路追踪
+	exporter.Reset()
+	code, createOut, errOut := runCLI("disk", "create", "--size", "1GiB", "-q")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	createdID := strings.TrimSpace(createOut)
+	createSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.create")
+	require.Contains(t, storage.lastTraceparent, createSpan.SpanContext.TraceID().String())
+	require.NotEmpty(t, storage.lastRequestID)
+	require.NotEqual(t, "1", storage.lastRequestID)
+
+	// When: fork 链路追踪与磁盘属性记录
+	exporter.Reset()
+	code, forkOut, errOut := runCLI("disk", "fork", createdID, "--name", "traced-fork", "-q")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	forkedID := strings.TrimSpace(forkOut)
+	forkSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.fork")
+	require.Contains(t, storage.lastTraceparent, forkSpan.SpanContext.TraceID().String())
+	requireSpanStringAttr(t, forkSpan, "bowl.source_disk_id", createdID)
+	requireSpanStringAttr(t, forkSpan, "bowl.disk_id", forkedID)
+
+	// When: list / get / resize / delete 链路追踪
+	exporter.Reset()
+	code, _, errOut = runCLI("disk", "list")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	listSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.list")
+	require.Contains(t, storage.lastTraceparent, listSpan.SpanContext.TraceID().String())
+
+	exporter.Reset()
+	code, _, errOut = runCLI("disk", "get", forkedID)
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	getSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.get")
+	require.Contains(t, storage.lastTraceparent, getSpan.SpanContext.TraceID().String())
+
+	exporter.Reset()
+	code, _, errOut = runCLI("disk", "resize", forkedID, "--name", "renamed")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	updateSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.update")
+	require.Contains(t, storage.lastTraceparent, updateSpan.SpanContext.TraceID().String())
+
+	exporter.Reset()
+	code, _, errOut = runCLI("disk", "delete", forkedID, "-y")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	deleteSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.delete")
+	require.Contains(t, storage.lastTraceparent, deleteSpan.SpanContext.TraceID().String())
+
+	// When: 失败路径标记 Span Error 状态
+	exporter.Reset()
+	code, _, errOut = runCLI("disk", "fork", testDiskID2)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "磁盘不存在")
+	errSpan := requireSpanByName(t, exporter.GetSpans(), "cli.disk.fork")
+	require.Equal(t, codes.Error, errSpan.Status.Code)
+}

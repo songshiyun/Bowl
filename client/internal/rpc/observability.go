@@ -293,7 +293,11 @@ func newRequestObservabilityInterceptor(
 	logger *slog.Logger,
 	metrics *Metrics,
 	slowThreshold time.Duration,
+	clk rpcClock,
 ) connect.UnaryInterceptorFunc {
+	if clk == nil {
+		clk = realClock{}
+	}
 	if slowThreshold <= 0 {
 		slowThreshold = DefaultSlowRPCThreshold
 	}
@@ -304,13 +308,13 @@ func newRequestObservabilityInterceptor(
 			ctx, reqID := ensureRequestID(ctx)
 			writeRequestIDHeader(req.Header(), reqID)
 
-			start := time.Now()
+			start := clk.Now()
 			resp, err := next(ctx, req)
-			duration := time.Since(start)
+			duration := clk.Since(start)
 
 			if err != nil && isStaleEpochError(err) {
 				metrics.incStaleEpoch()
-				if logger != nil && epochFenceLimiter.allow(time.Now()) {
+				if logger != nil && epochFenceLimiter.allow(clk.Now()) {
 					traceID := extractTraceID(ctx, req, err)
 					logger.LogAttrs(
 						context.Background(),

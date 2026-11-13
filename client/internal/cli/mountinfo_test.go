@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,41 +13,81 @@ const sampleMountInfo = `23 61 0:21 / /sys rw,nosuid,nodev,noexec,relatime share
 101 30 0:51 / /mnt/foo/bar rw,nosuid,nodev shared:56 - fuse.bowl bowl:0192a3b4-c5d6-7e8f-9012-3456789abcd2 rw
 `
 
-func TestParseMountPointsFromReader(t *testing.T) {
-	points, err := parseMountPointsFromReader(strings.NewReader(sampleMountInfo))
-	require.NoError(t, err)
-	require.Len(t, points, 5)
-	require.True(t, containsMountPoint(points, "/mnt/foo/bar"))
-	require.True(t, containsMountPoint(points, "/mnt/my dir"), "八进制转义的空格必须被还原")
-	require.False(t, containsMountPoint(points, "/mnt/unmounted"))
+func TestIsMountPoint_GivenMountedAndOctalEscapedPaths_ReturnsExpectedState(t *testing.T) {
+	// Given
+	withMountInfoContent(t, sampleMountInfo)
 
-	mountpoint, mounted := findDiskMountpoint(points, "0192a3b4-c5d6-7e8f-9012-3456789abcd1")
-	require.True(t, mounted)
-	require.Equal(t, "/mnt/my dir", mountpoint)
-	mountpoint, mounted = findDiskMountpoint(points, "0192a3b4-c5d6-7e8f-9012-3456789abcd2")
-	require.True(t, mounted)
-	require.Equal(t, "/mnt/foo/bar", mountpoint)
-	_, mounted = findDiskMountpoint(points, "0192a3b4-c5d6-7e8f-9012-3456789abcd3")
+	// When / Then
+	mountedBar, err := IsMountPoint("/mnt/foo/bar/")
+	require.NoError(t, err)
+	require.True(t, mountedBar)
+
+	mountedSpace, err := IsMountPoint("/mnt/my dir")
+	require.NoError(t, err)
+	require.True(t, mountedSpace, "八进制转义的空格必须被还原")
+
+	unmounted, err := IsMountPoint("/mnt/unmounted")
+	require.NoError(t, err)
+	require.False(t, unmounted)
+}
+
+func TestIsMountPoint_GivenMalformedAndUnescapedLines_HandlesGracefully(t *testing.T) {
+	// Given
+	withMountInfoContent(t, "1 2 3\n\nnot-a-mountinfo-line\n100 30 0:50 / /mnt/no-separator rw\n101 30 0:51 / /mnt/keep\\999 rw - fuse.bowl bowl:disk rw\n")
+
+	// When / Then
+	noSep, err := IsMountPoint("/mnt/no-separator")
+	require.NoError(t, err)
+	require.True(t, noSep)
+
+	keepInvalidEscape, err := IsMountPoint(`/mnt/keep\999`)
+	require.NoError(t, err)
+	require.True(t, keepInvalidEscape, "非八进制转义必须原样保留")
+
+	absent, err := IsMountPoint("/1/2/3")
+	require.NoError(t, err)
+	require.False(t, absent)
+}
+
+func TestIsMountPoint_GivenMissingMountInfoFile_ReturnsFalseWithoutError(t *testing.T) {
+	// Given
+	withMissingMountInfo(t)
+
+	// When
+	mounted, err := IsMountPoint("/mnt/anything")
+
+	// Then
+	require.NoError(t, err)
 	require.False(t, mounted)
 }
 
-func TestParseMountPointsFromReaderBoundaries(t *testing.T) {
-	empty, err := parseMountPointsFromReader(strings.NewReader(""))
-	require.NoError(t, err)
-	require.Empty(t, empty)
+func TestIsMountPoint_GivenUnreadableMountInfo_ReturnsError(t *testing.T) {
+	// Given
+	withUnreadableMountInfo(t)
 
-	malformed, err := parseMountPointsFromReader(strings.NewReader("1 2 3\n\nnot-a-mountinfo-line\n"))
-	require.NoError(t, err)
-	require.Empty(t, malformed)
+	// When
+	_, err := IsMountPoint("/mnt/anything")
 
-	noSeparator, err := parseMountPointsFromReader(strings.NewReader("100 30 0:50 / /mnt/no-separator rw\n"))
-	require.NoError(t, err)
-	require.Len(t, noSeparator, 1)
-	require.Equal(t, "/mnt/no-separator", noSeparator[0].path)
-	require.Empty(t, noSeparator[0].source)
+	// Then
+	require.Error(t, err)
+}
 
-	invalidEscape, err := parseMountPointsFromReader(strings.NewReader(`100 30 0:50 / /mnt/keep\999 rw - fuse.bowl bowl:disk rw` + "\n"))
+func TestFindDiskMountpoint_GivenActiveAndAbsentDisks_MatchesCaseInsensitively(t *testing.T) {
+	// Given
+	withMountInfoContent(t, sampleMountInfo)
+
+	// When / Then
+	mp1, mounted1, err := FindDiskMountpoint("0192A3B4-C5D6-7E8F-9012-3456789ABCD1")
 	require.NoError(t, err)
-	require.Len(t, invalidEscape, 1)
-	require.Equal(t, `/mnt/keep\999`, invalidEscape[0].path, "非八进制转义必须原样保留")
+	require.True(t, mounted1)
+	require.Equal(t, "/mnt/my dir", mp1)
+
+	mp2, mounted2, err := FindDiskMountpoint("0192a3b4-c5d6-7e8f-9012-3456789abcd2")
+	require.NoError(t, err)
+	require.True(t, mounted2)
+	require.Equal(t, "/mnt/foo/bar", mp2)
+
+	_, mounted3, err := FindDiskMountpoint("0192a3b4-c5d6-7e8f-9012-3456789abcd3")
+	require.NoError(t, err)
+	require.False(t, mounted3)
 }

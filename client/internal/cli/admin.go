@@ -306,6 +306,13 @@ type adminServer struct {
 	srv *http.Server
 }
 
+func newAdminMux(obs *clientRuntime, fs *fusefs.RawFS) *http.ServeMux {
+	mux := http.NewServeMux()
+	obs.MountAdminRoutes(mux)
+	mux.Handle("GET /debug/stats", statsHandler(fs))
+	return mux
+}
+
 // startAdminServer 在 addr 上启动管理面：/metrics、/debug/pprof/*、/healthz、/readyz 与 /debug/stats。
 // addr 为 "off" 时返回 nil（方法对 nil 安全）。
 func startAdminServer(addr string, obs *clientRuntime, fs *fusefs.RawFS) (*adminServer, error) {
@@ -316,9 +323,7 @@ func startAdminServer(addr string, obs *clientRuntime, fs *fusefs.RawFS) (*admin
 	if err != nil {
 		return nil, fmt.Errorf("监听管理面地址 \"%s\" 失败: %w", addr, err)
 	}
-	mux := http.NewServeMux()
-	obs.MountAdminRoutes(mux)
-	mux.Handle("GET /debug/stats", statsHandler(fs))
+	mux := newAdminMux(obs, fs)
 
 	srv := &http.Server{
 		Handler:           mux,

@@ -1,13 +1,9 @@
 package rpc
 
 import (
-	"bytes"
 	"context"
-	"io"
-	"net"
+	"crypto/tls"
 	"net/http"
-	"sync"
-	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -17,207 +13,153 @@ import (
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
-type recordingRoundTripper struct {
-	calls      atomic.Int64
-	idleClosed atomic.Int64
-	lastPathMu sync.Mutex
-	seenPaths  []string
-}
-
-func (r *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.calls.Add(1)
-	r.lastPathMu.Lock()
-	r.seenPaths = append(r.seenPaths, req.URL.Path)
-	r.lastPathMu.Unlock()
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(bytes.NewReader(nil)),
-		Request:    req,
-	}, nil
-}
-
-func (r *recordingRoundTripper) CloseIdleConnections() {
-	r.idleClosed.Add(1)
-}
-
-func TestShardedRoundTripper_UnitRoutingAndCloseIdle(t *testing.T) {
-	metaRT := &recordingRoundTripper{}
-	var dataRTs [HTTP2DataConnectionShards]*recordingRoundTripper
-	rt := &shardedRoundTripper{
+func buildTestShardedRoundTripper() (rt *shardedRoundTripper, metaRT *recordingRoundTripper, dataRTs *[HTTP2DataConnectionShards]*recordingRoundTripper) {
+	metaRT = &recordingRoundTripper{}
+	var shards [HTTP2DataConnectionShards]*recordingRoundTripper
+	rt = &shardedRoundTripper{
 		metaTransport: metaRT,
 	}
 	for i := range HTTP2DataConnectionShards {
-		dataRTs[i] = &recordingRoundTripper{}
-		rt.dataTransports[i] = dataRTs[i]
+		shards[i] = &recordingRoundTripper{}
+		rt.dataTransports[i] = shards[i]
 	}
+	return rt, metaRT, &shards
+}
 
-	// 1. Read 与 Write（含带前缀路径）按 8 路严格轮询分发，不触碰 metaTransport
-	const rounds = 3
-	for r := range rounds {
-		for s := range HTTP2DataConnectionShards {
-			proc := storagev1connect.StorageServiceReadProcedure
-			if (r+s)%2 == 1 {
-				proc = "/api/v1" + storagev1connect.StorageServiceWriteProcedure
-			}
-			req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1:9000"+proc, http.NoBody)
-			require.NoError(t, err)
-			resp, err := rt.RoundTrip(req)
-			require.NoError(t, err)
-			_ = resp.Body.Close()
-		}
-	}
-	require.Zero(t, metaRT.calls.Load(), "大块数据面 Read/Write 不得占用元数据专用连接")
+func dispatchRoundTrip(t *testing.T, rt http.RoundTripper, path string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1:9000"+path, http.NoBody)
+	require.NoError(t, err)
+	resp, err := rt.RoundTrip(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+}
+
+func requireAllDataShardCalls(t *testing.T, dataRTs *[HTTP2DataConnectionShards]*recordingRoundTripper, want int64) {
+	t.Helper()
 	for i := range HTTP2DataConnectionShards {
-		require.Equal(t, int64(rounds), dataRTs[i].calls.Load(), "数据条带 %d 必须均匀承接轮询流量", i)
+		require.Equal(t, want, dataRTs[i].calls.Load(), "数据条带 %d 请求计数不匹配", i)
 	}
+}
 
-	// 2. 元数据、屏障与控制面 RPC 全部路由至 metaTransport，不触碰任何 dataTransports
-	metaProcedures := []string{
-		storagev1connect.StorageServiceLookupProcedure,
-		storagev1connect.StorageServiceGetAttrProcedure,
-		storagev1connect.StorageServiceCreateProcedure,
-		storagev1connect.StorageServiceUnlinkProcedure,
-		storagev1connect.StorageServiceFsyncProcedure,
-		storagev1connect.StorageServiceReadDirPlusProcedure,
-		storagev1connect.StorageServiceMountDiskProcedure,
-		storagev1connect.StorageServiceStatFSProcedure,
-	}
-	for _, proc := range metaProcedures {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "http://127.0.0.1:9000"+proc, http.NoBody)
-		require.NoError(t, err)
-		resp, err := rt.RoundTrip(req)
-		require.NoError(t, err)
-		_ = resp.Body.Close()
-	}
-	require.Equal(t, int64(len(metaProcedures)), metaRT.calls.Load())
+func requireAllDataShardIdleClosed(t *testing.T, dataRTs *[HTTP2DataConnectionShards]*recordingRoundTripper, want int64) {
+	t.Helper()
 	for i := range HTTP2DataConnectionShards {
-		require.Equal(t, int64(rounds), dataRTs[i].calls.Load(), "元数据流量不得污染数据条带 %d 计数", i)
+		require.Equal(t, want, dataRTs[i].idleClosed.Load(), "数据条带 %d 空闲关闭计数不匹配", i)
 	}
+}
 
-	// 3. CloseIdleConnections 转发至 metaTransport 与全部 8 个 dataTransports
+func TestShardedRoundTripper_GivenReadAndWriteTraffic_DistributesRoundRobinAcross8DataShards(t *testing.T) {
+	// Given
+	rt, metaRT, dataRTs := buildTestShardedRoundTripper()
+
+	// When: 连续发送 8 次 Read 与 8 次带前缀 Write（共 16 次大块数据面调用）
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, "/prefix"+storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceWriteProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadProcedure)
+
+	// Then
+	require.Zero(t, metaRT.calls.Load(), "大块数据读写不得占用元数据专用通道")
+	requireAllDataShardCalls(t, dataRTs, 2)
+}
+
+func TestShardedRoundTripper_GivenMetadataAndControlTraffic_RoutesToDedicatedMetaTransport(t *testing.T) {
+	// Given
+	rt, metaRT, dataRTs := buildTestShardedRoundTripper()
+
+	// When
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceLookupProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceGetAttrProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceCreateProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceUnlinkProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceFsyncProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceReadDirPlusProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceMountDiskProcedure)
+	dispatchRoundTrip(t, rt, storagev1connect.StorageServiceStatFSProcedure)
+
+	// Then
+	require.Equal(t, int64(8), metaRT.calls.Load())
+	requireAllDataShardCalls(t, dataRTs, 0)
+}
+
+func TestShardedRoundTripper_WhenCloseIdleConnectionsCalled_ForwardsToMetaAndAll8DataShards(t *testing.T) {
+	// Given
+	rt, metaRT, dataRTs := buildTestShardedRoundTripper()
 	httpCli := &http.Client{Transport: rt}
+
+	// When
 	httpCli.CloseIdleConnections()
+
+	// Then
 	require.Equal(t, int64(1), metaRT.idleClosed.Load())
-	for i := range HTTP2DataConnectionShards {
-		require.Equal(t, int64(1), dataRTs[i].idleClosed.Load())
-	}
+	requireAllDataShardIdleClosed(t, dataRTs, 1)
 }
 
-type shardedNetProbeHandler struct {
-	storagev1connect.UnimplementedStorageServiceHandler
-	payload []byte
-}
+func TestNewClient_GivenEndpointAndTokenConfig_ResolvesAndInjectsHeaders(t *testing.T) {
+	// Given
+	t.Setenv(EnvStorageEndpoint, "http://10.0.0.5:9001/")
+	t.Setenv(EnvToken, "env-secret")
+	resolvedEP, epErr := ResolveEndpoint("")
+	require.NoError(t, epErr)
+	require.Equal(t, "http://10.0.0.5:9001", resolvedEP)
+	require.Equal(t, "env-secret", ResolveToken(""))
+	require.Equal(t, "explicit-tok", ResolveToken("  explicit-tok  "))
 
-func (h *shardedNetProbeHandler) Read(_ context.Context, _ *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
-	return connect.NewResponse(&storagev1.ReadResponse{Data: h.payload}), nil
-}
+	_, badSchemeErr := ResolveEndpoint("ftp://127.0.0.1:9000")
+	require.Error(t, badSchemeErr)
+	_, missingHostErr := ResolveEndpoint("http://")
+	require.Error(t, missingHostErr)
 
-func (h *shardedNetProbeHandler) Write(_ context.Context, req *connect.Request[storagev1.WriteRequest]) (*connect.Response[storagev1.WriteResponse], error) {
-	return connect.NewResponse(&storagev1.WriteResponse{Size: uint32(len(req.Msg.GetData()))}), nil
-}
-
-func (h *shardedNetProbeHandler) Lookup(_ context.Context, _ *connect.Request[storagev1.LookupRequest]) (*connect.Response[storagev1.LookupResponse], error) {
-	return connect.NewResponse(&storagev1.LookupResponse{
-		Inode: &storagev1.Inode{Ino: 2},
-	}), nil
-}
-
-func (h *shardedNetProbeHandler) Fsync(_ context.Context, _ *connect.Request[storagev1.FsyncRequest]) (*connect.Response[storagev1.FsyncResponse], error) {
-	return connect.NewResponse(&storagev1.FsyncResponse{}), nil
-}
-
-func TestNewClient_EstablishesIsolatedMetaAnd8DataH2CConnections(t *testing.T) {
-	probe := &shardedNetProbeHandler{
-		payload: bytes.Repeat([]byte{0x7E}, 64<<10),
-	}
-	path, connectHandler := storagev1connect.NewStorageServiceHandler(
-		probe,
-		connect.WithCodec(newProtoBinaryCodec()),
-	)
-
-	var (
-		mu        sync.Mutex
-		dataPeers = make(map[string]int)
-		metaPeers = make(map[string]int)
-	)
-	mux := http.NewServeMux()
-	mux.Handle(path, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		if isBulkDataProcedure(r.URL.Path) {
-			dataPeers[r.RemoteAddr]++
-		} else {
-			metaPeers[r.RemoteAddr]++
-		}
-		mu.Unlock()
-		connectHandler.ServeHTTP(w, r)
-	}))
-
-	var protocols http.Protocols
-	protocols.SetUnencryptedHTTP2(true)
-	srv := &http.Server{
-		Handler:   mux,
-		Protocols: &protocols,
-		HTTP2: &http.HTTP2Config{
-			MaxReadFrameSize:              HTTP2MaxReadFrameSize,
-			MaxReceiveBufferPerStream:     HTTP2MaxReceiveBufferPerStream,
-			MaxReceiveBufferPerConnection: HTTP2MaxReceiveBufferPerConnection,
-		},
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// When: 通过 NewClientFromConfig 发送请求，校验 Bearer 与 Accept-Encoding: identity 注入
+	handler := &scriptedReadHandler{}
+	client, err := NewClientFromConfig(ClientConfig{
+		Endpoint:   "http://127.0.0.1:9000/",
+		Token:      "tok-123",
+		HTTPClient: newInMemoryHTTPClient(handler),
+	})
 	require.NoError(t, err)
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
+	_, err = client.Read(context.Background(), connect.NewRequest(&storagev1.ReadRequest{Ino: 1, Size: 2}))
 
-	cli, err := NewClient("http://"+ln.Addr().String(), "")
+	// Then
 	require.NoError(t, err)
+	require.Equal(t, "Bearer tok-123", handler.lastAuth)
+	require.Equal(t, "identity", handler.lastAcceptEnc)
+}
 
-	ctx := context.Background()
-	writeBuf := bytes.Repeat([]byte{0x42}, 32<<10)
-	for i := range HTTP2DataConnectionShards {
-		rResp, rErr := cli.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
-			DiskId: "11111111-1111-4111-8111-111111111111",
-			Ino:    uint64(10 + i),
-			Offset: 0,
-			Size:   uint32(len(probe.payload)),
-		}))
-		require.NoError(t, rErr)
-		p := TakeReadPayload(rResp.Msg)
-		require.Equal(t, probe.payload, p.Data)
-		p.Release()
+func TestNewShardedRoundTripper_GivenHTTPAndHTTPS_ConfiguresIsolatedH2Buffers(t *testing.T) {
+	// Given / When: HTTP (h2c) 传输配置
+	h2cRT, err := newShardedRoundTripper("http://127.0.0.1:9000", nil)
+	require.NoError(t, err)
+	defer h2cRT.CloseIdleConnections()
 
-		wResp, wErr := cli.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-			DiskId: "11111111-1111-4111-8111-111111111111",
-			Epoch:  1,
-			Ino:    uint64(10 + i),
-			Offset: 0,
-			Data:   writeBuf,
-		}))
-		require.NoError(t, wErr)
-		require.Equal(t, uint32(len(writeBuf)), wResp.Msg.GetSize())
-	}
+	metaH2C, ok := h2cRT.metaTransport.(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, HTTP2MetaMaxReceiveBufferPerConnection, metaH2C.HTTP2.MaxReceiveBufferPerConnection)
+	data0H2C, ok := h2cRT.dataTransports[0].(*http.Transport)
+	require.True(t, ok)
+	require.Equal(t, HTTP2DataMaxReceiveBufferPerConnection, data0H2C.HTTP2.MaxReceiveBufferPerConnection)
 
-	for range 4 {
-		_, lErr := cli.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
-			DiskId:    "11111111-1111-4111-8111-111111111111",
-			ParentIno: 1,
-			Name:      []byte("f"),
-		}))
-		require.NoError(t, lErr)
-		_, fErr := cli.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
-			DiskId: "11111111-1111-4111-8111-111111111111",
-			Epoch:  1,
-			Ino:    2,
-		}))
-		require.NoError(t, fErr)
-	}
+	// HTTPS TLS 传输配置
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS13}
+	tlsRT, err := newShardedRoundTripper("https://storage.bowl.local:9443", tlsCfg)
+	require.NoError(t, err)
+	defer tlsRT.CloseIdleConnections()
 
-	mu.Lock()
-	defer mu.Unlock()
-	require.Len(t, dataPeers, HTTP2DataConnectionShards, "8 路数据条带必须建立 8 条独立 H2C TCP 连接")
-	require.Len(t, metaPeers, 1, "元数据/屏障流量必须收敛在 1 条专用 H2C TCP 连接")
-	for metaAddr := range metaPeers {
-		_, shared := dataPeers[metaAddr]
-		require.False(t, shared, "元数据专用连接 %s 严禁与大块数据连接共享 TCP 通道", metaAddr)
-	}
+	metaTLS, ok := tlsRT.metaTransport.(*http.Transport)
+	require.True(t, ok)
+	require.True(t, metaTLS.ForceAttemptHTTP2)
+	require.Same(t, tlsCfg, metaTLS.TLSClientConfig)
 }

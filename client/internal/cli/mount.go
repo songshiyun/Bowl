@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -73,8 +74,11 @@ type mountFlagPresence struct {
 	traceSampleRatio bool
 }
 
-// serveFUSE 是 FUSE 服务的测试接缝：ready 必须在内核挂载就绪后调用一次。
-var serveFUSE = defaultServeFUSE
+// serveFUSE 与 mountHTTPClient 为测试接缝：ready 必须在内核挂载就绪后调用一次。
+var (
+	serveFUSE       = defaultServeFUSE
+	mountHTTPClient *http.Client
+)
 
 // mountHandshake 向服务端发起单次 MountDisk 握手，返回注入了权威 Epoch、RootIno 与缓存超时配置的 fusefs.Config。
 func mountHandshake(ctx context.Context, client storagev1connect.StorageServiceClient, baseCfg *fusefs.Config) (*fusefs.Config, error) {
@@ -172,10 +176,11 @@ func runMount(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, m
 
 	rpcMetrics := rpc.NewMetrics()
 	client, err := rpc.NewClientFromConfig(rpc.ClientConfig{
-		Endpoint: opts.endpoint,
-		Token:    opts.token,
-		Logger:   logger,
-		Metrics:  rpcMetrics,
+		Endpoint:   opts.endpoint,
+		Token:      opts.token,
+		HTTPClient: mountHTTPClient,
+		Logger:     logger,
+		Metrics:    rpcMetrics,
 	})
 	if err != nil {
 		return fmt.Errorf("创建 RPC 客户端失败: %w", err)
@@ -359,22 +364,19 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 		var err error
 		switch name {
 		case "h", "help":
-			help = true
+			help, err = parseBoolFlag(val, hasVal)
 		case "f", "foreground":
-			foreground = true
+			foreground, err = parseBoolFlag(val, hasVal)
 		case "allow-other":
-			allowOther = true
+			allowOther, err = parseBoolFlag(val, hasVal)
 		case "ro":
-			ro = true
+			ro, err = parseBoolFlag(val, hasVal)
 		case "direct-io":
-			directIO = true
+			directIO, err = parseBoolFlag(val, hasVal)
 		case "debug":
-			debug = true
+			debug, err = parseBoolFlag(val, hasVal)
 		case "stats-file":
-			statsFile = true
-			if hasVal {
-				statsFile, err = strconv.ParseBool(val)
-			}
+			statsFile, err = parseBoolFlag(val, hasVal)
 		case "endpoint":
 			opts.endpoint, err = takeFlagValue(args, &i, name, val, hasVal)
 		case "token":
@@ -487,7 +489,7 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 
 	// 若未指定 -f / --foreground，执行默认后台守护派生与就绪握手（原样透传 argv，子进程重新解析同一组标志）
 	if !foreground {
-		return spawnDaemonProcess(args, stderr)
+		return spawnDaemon(args, stderr)
 	}
 
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
@@ -499,4 +501,11 @@ func executeMount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+func parseBoolFlag(val string, hasVal bool) (bool, error) {
+	if !hasVal {
+		return true, nil
+	}
+	return strconv.ParseBool(val)
 }
