@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"os"
@@ -12,15 +13,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/store"
@@ -29,7 +25,7 @@ import (
 func fileHardLinkCount(t *testing.T, path string) uint64 {
 	t.Helper()
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(t, err, "获取文件 Stat 失败: path=%s", path)
 	v := reflect.ValueOf(info.Sys())
 	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
@@ -47,520 +43,116 @@ func writeRegularFile(t *testing.T, ctx context.Context, actor *store.StoreActor
 		Mode:      store.S_IFREG | 0o644,
 		Epoch:     epoch,
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "创建测试文件失败: name=%s", name)
 	if len(data) > 0 {
 		_, _, err = actor.Write(ctx, attr.Ino, 0, data, epoch)
-		require.NoError(t, err)
+		require.NoError(t, err, "写入测试文件失败: name=%s", name)
 	}
 	return attr.Ino
+}
+
+func overwriteRegularFile(t *testing.T, ctx context.Context, actor *store.StoreActor, epoch uint64, name string, data []byte) {
+	t.Helper()
+	_, attr, err := actor.Lookup(ctx, RootIno, []byte(name))
+	require.NoError(t, err, "查找待覆写文件失败: name=%s", name)
+	_, _, err = actor.Write(ctx, attr.Ino, 0, data, epoch)
+	require.NoError(t, err, "覆写文件数据失败: name=%s", name)
+	_, err = actor.SetAttr(ctx, attr.Ino, store.SetAttrReq{
+		Size:  new(uint64(len(data))),
+		Epoch: epoch,
+	}, epoch)
+	require.NoError(t, err, "截断更新文件大小失败: name=%s", name)
 }
 
 func readRegularFile(t *testing.T, ctx context.Context, actor *store.StoreActor, name string, size uint32) []byte {
 	t.Helper()
 	_, attr, err := actor.Lookup(ctx, RootIno, []byte(name))
-	require.NoError(t, err)
+	require.NoError(t, err, "查找待读取文件失败: name=%s", name)
 	data, err := actor.Read(ctx, attr.Ino, 0, size)
-	require.NoError(t, err)
+	require.NoError(t, err, "读取测试文件失败: name=%s", name)
 	return data
 }
 
-// TestForkDiskReadWriteIsolationAndCascadingDAG 验证在线无感 Fork 后的父子读写隔离、
-// 源盘 WriterEpoch 零中断及多级级联 Fork 的 DAG 拓扑关系。
-func TestForkDiskReadWriteIsolationAndCascadingDAG(t *testing.T) {
-	ctx := context.Background()
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	mgr := newManager(memDB, WithStorageRoot(rootDir))
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	parentDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{
-		Name:     "root-disk",
-		MaxBytes: 64 << 20,
-	})
-	require.NoError(t, err)
-	require.Empty(t, parentDisk.ParentDiskID)
-
-	parentMount, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: parentDisk.DiskID})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), parentMount.Epoch)
-
-	parentActor, err := mgr.Actor(ctx, parentDisk.DiskID)
-	require.NoError(t, err)
-	basePayload := bytes.Repeat([]byte("BASE-ROOT-CONTENT-"), 512)
-	writeRegularFile(t, ctx, parentActor, parentMount.Epoch, "shared.txt", basePayload)
-
-	// 在源盘在线挂载状态下派生 Child1（默认继承配额）。
-	child1, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: parentDisk.DiskID,
-		Name:         "child-1",
-	})
-	require.NoError(t, err)
-	require.Equal(t, parentDisk.DiskID, child1.ParentDiskID)
-	require.Equal(t, parentDisk.MaxBytes, child1.MaxBytes)
-	require.Equal(t, uint64(len(basePayload)), child1.UsedBytes)
-	require.Equal(t, uint64(2), child1.UsedInodes)
-
-	// 源盘 WriterEpoch 不变，原挂载世代号可无中断继续覆写与新增文件。
-	require.Equal(t, uint64(1), parentActor.WriterEpoch())
-	parentUpdated := []byte("PARENT-MUTATED-AFTER-FORK")
-	_, parentAttr, err := parentActor.Lookup(ctx, RootIno, []byte("shared.txt"))
-	require.NoError(t, err)
-	_, _, err = parentActor.Write(ctx, parentAttr.Ino, 0, parentUpdated, parentMount.Epoch)
-	require.NoError(t, err)
-	_, err = parentActor.SetAttr(ctx, parentAttr.Ino, store.SetAttrReq{
-		Size:  new(uint64(len(parentUpdated))),
-		Epoch: parentMount.Epoch,
-	}, parentMount.Epoch)
-	require.NoError(t, err)
-	writeRegularFile(t, ctx, parentActor, parentMount.Epoch, "only-in-parent.txt", []byte("parent-only"))
-
-	// 子盘初始 WriterEpoch 必须归零；首次可写挂载颁发 Epoch = 1，读取到 Fork 时刻基准内容。
-	child1Actor, err := mgr.Actor(ctx, child1.DiskID)
-	require.NoError(t, err)
-	require.Zero(t, child1Actor.WriterEpoch())
-
-	child1Mount, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: child1.DiskID})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), child1Mount.Epoch)
-	require.Equal(t, basePayload, readRegularFile(t, ctx, child1Actor, "shared.txt", uint32(len(basePayload)+64)))
-	_, _, err = child1Actor.Lookup(ctx, RootIno, []byte("only-in-parent.txt"))
-	require.ErrorIs(t, err, ErrNotFound)
-
-	// 子盘修改 shared.txt 并新增 child-only.txt，再从 Child1 级联派生 GrandChild，同时从 Root 二次派生 Child2。
-	child1Mutated := bytes.Repeat([]byte("CHILD1-BRANCH-DATA-"), 256)
-	_, childSharedAttr, err := child1Actor.Lookup(ctx, RootIno, []byte("shared.txt"))
-	require.NoError(t, err)
-	_, _, err = child1Actor.Write(ctx, childSharedAttr.Ino, 0, child1Mutated, child1Mount.Epoch)
-	require.NoError(t, err)
-	_, err = child1Actor.SetAttr(ctx, childSharedAttr.Ino, store.SetAttrReq{
-		Size:  new(uint64(len(child1Mutated))),
-		Epoch: child1Mount.Epoch,
-	}, child1Mount.Epoch)
-	require.NoError(t, err)
-	writeRegularFile(t, ctx, child1Actor, child1Mount.Epoch, "only-in-child1.txt", []byte("c1"))
-
-	grandChild, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: child1.DiskID,
-		Name:         "grand-child",
-	})
-	require.NoError(t, err)
-	require.Equal(t, child1.DiskID, grandChild.ParentDiskID)
-
-	child2, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: parentDisk.DiskID,
-		Name:         "child-2",
-	})
-	require.NoError(t, err)
-	require.Equal(t, parentDisk.DiskID, child2.ParentDiskID)
-
-	// 验证三块分支盘各自内容严格隔离。
-	require.Equal(t, parentUpdated, readRegularFile(t, ctx, parentActor, "shared.txt", 128))
-	require.Equal(t, child1Mutated, readRegularFile(t, ctx, child1Actor, "shared.txt", uint32(len(child1Mutated)+64)))
-
-	grandActor, err := mgr.Actor(ctx, grandChild.DiskID)
-	require.NoError(t, err)
-	require.Equal(t, child1Mutated, readRegularFile(t, ctx, grandActor, "shared.txt", uint32(len(child1Mutated)+64)))
-	require.Equal(t, []byte("c1"), readRegularFile(t, ctx, grandActor, "only-in-child1.txt", 16))
-
-	child2Actor, err := mgr.Actor(ctx, child2.DiskID)
-	require.NoError(t, err)
-	require.Equal(t, parentUpdated, readRegularFile(t, ctx, child2Actor, "shared.txt", 128))
-	require.Equal(t, []byte("parent-only"), readRegularFile(t, ctx, child2Actor, "only-in-parent.txt", 32))
-
-	// 校验数据库血缘与 DAG 拓扑：4 块盘同属一个 lineage，共 3 个切面（C1 <- C2, C1 <- C3）。
-	idRoot, err := parseDiskID(parentDisk.DiskID)
-	require.NoError(t, err)
-	idChild1, err := parseDiskID(child1.DiskID)
-	require.NoError(t, err)
-	idChild2, err := parseDiskID(child2.DiskID)
-	require.NoError(t, err)
-	idGrand, err := parseDiskID(grandChild.DiskID)
-	require.NoError(t, err)
-
-	snap := memDB.Inspect()
-	require.Len(t, snap.Lineages, 1)
-	require.Len(t, snap.Commits, 3)
-	dbRoot := snap.Disks[idRoot]
-	dbChild1 := snap.Disks[idChild1]
-	dbChild2 := snap.Disks[idChild2]
-	dbGrand := snap.Disks[idGrand]
-	c2 := snap.Commits[dbRoot.BaseCommitID]
-	c3 := snap.Commits[dbChild1.BaseCommitID]
-	c1 := snap.Commits[c2.ParentCommitID]
-
-	require.Equal(t, idRoot, dbRoot.LineageID)
-	require.Equal(t, idRoot, dbChild1.LineageID)
-	require.Equal(t, idRoot, dbChild2.LineageID)
-	require.Equal(t, idRoot, dbGrand.LineageID)
-	require.Equal(t, uuid.Nil, c1.ParentCommitID, "首次 Fork 切面的父切面应为空")
-	require.Equal(t, c1.CommitID, c2.ParentCommitID, "Root 二次 Fork 切面应指向首次切面 C1")
-	require.Equal(t, c1.CommitID, c3.ParentCommitID, "Child1 级联 Fork 切面应指向首次切面 C1")
-	require.Equal(t, c2.CommitID, dbChild2.BaseCommitID)
-	require.Equal(t, c3.CommitID, dbGrand.BaseCommitID)
-
-	// 验证 ListDisks 与 GetDisk 返回正确的 ParentDiskID。
-	listed, err := mgr.ListDisks(ctx, ListDisksParams{PageSize: 10})
-	require.NoError(t, err)
-	require.Len(t, listed.Disks, 4)
-	gotGrand, err := mgr.GetDisk(ctx, grandChild.DiskID)
-	require.NoError(t, err)
-	require.Equal(t, child1.DiskID, gotGrand.ParentDiskID)
+func singlePackFilePath(t *testing.T, packsDir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(packsDir)
+	require.NoError(t, err, "读取 packs 目录失败: dir=%s", packsDir)
+	require.Len(t, entries, 1, "packs 目录预期仅有 1 个封包文件: dir=%s got=%d", packsDir, len(entries))
+	return filepath.Join(packsDir, entries[0].Name())
 }
 
-// TestForkDiskQuotaValidationAndOrphanSanitization 验证配额缩容前置零 I/O 快检、
-// 以及存在未关闭孤儿节点时先净化孤儿再复核目标 MaxBytes 水位线的不变量。
-func TestForkDiskQuotaValidationAndOrphanSanitization(t *testing.T) {
-	ctx := context.Background()
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	mgr := newManager(memDB, WithStorageRoot(rootDir))
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	srcDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{
-		Name:     "quota-src",
-		MaxBytes: 16 << 20,
-	})
-	require.NoError(t, err)
-	mnt, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: srcDisk.DiskID})
-	require.NoError(t, err)
-	srcActor, err := mgr.Actor(ctx, srcDisk.DiskID)
-	require.NoError(t, err)
-
-	keepData := bytes.Repeat([]byte{0xAA}, 4096)
-	writeRegularFile(t, ctx, srcActor, mnt.Epoch, "keep.bin", keepData)
-
-	// 1. 无孤儿节点时：MaxBytes < UsedBytes (2048 < 4096) 在零磁盘 I/O 前直接拦截，commits 目录尚未创建。
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: srcDisk.DiskID,
-		Name:         "too-small-fast",
-		MaxBytes:     new(uint64(2048)),
-	})
-	require.ErrorIs(t, err, ErrInvalidShrink)
-	_, statCommitsErr := os.Stat(filepath.Join(rootDir, "commits"))
-	require.ErrorIs(t, statCommitsErr, os.ErrNotExist, "无孤儿前置快检拦截不得产生任何切面目录 I/O")
-
-	// 2. 制造一个 256 KiB 的未关闭孤儿文件（openInClient=true 解链），此时源盘 UsedBytes = 4096 + 262144。
-	orphanPayload := bytes.Repeat([]byte{0xBB}, store.BlobSize)
-	orphanIno := writeRegularFile(t, ctx, srcActor, mnt.Epoch, "temp-orphan.bin", orphanPayload)
-	err = srcActor.Unlink(ctx, RootIno, []byte("temp-orphan.bin"), true, mnt.Epoch)
-	require.NoError(t, err)
-
-	srcStatBefore, err := srcActor.StatFS(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint64(4096+store.BlobSize), srcStatBefore.UsedBytes)
-
-	// 2a. 目标配额 2048 < 净化后已用空间 4096：净化后复核被拦截，且临时切面目录必须清理干净。
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: srcDisk.DiskID,
-		Name:         "too-small-after-sanitize",
-		MaxBytes:     new(uint64(2048)),
-	})
-	require.ErrorIs(t, err, ErrInvalidShrink)
-	commitEntries, readErr := os.ReadDir(filepath.Join(rootDir, "commits"))
-	if readErr == nil {
-		require.Empty(t, commitEntries, "配额拦截回滚后 commits 目录必须零残留")
-	}
-
-	// 2b. 目标配额 8192（介于净化后 4096 与净化前 266240 之间）：净化孤儿后成功派生！
-	forked, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: srcDisk.DiskID,
-		Name:         "sanitized-child",
-		MaxBytes:     new(uint64(8192)),
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(8192), forked.MaxBytes)
-	require.Equal(t, uint64(4096), forked.UsedBytes)
-	require.Equal(t, uint64(2), forked.UsedInodes)
-
-	// 验证源盘上的孤儿节点未受影响，依然可按原句柄 Inode 读取完整 256 KiB 内容。
-	orphanData, err := srcActor.Read(ctx, orphanIno, 0, store.BlobSize)
-	require.NoError(t, err)
-	require.Equal(t, orphanPayload, orphanData)
-}
-
-// TestDeleteDiskLineageCommitGCAndHardLinkRefcount 验证同血缘三态回收规则：
-// |D| >= 2 删父盘保留兄弟分支公共祖先切面；|D| == 1 自动回收切面使幸存盘 .pack st_nlink 回落至 1；|D| == 0 级联清空血缘。
-func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
-	ctx := context.Background()
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	mgr := newManager(memDB, WithStorageRoot(rootDir))
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	rootDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{
-		Name:     "lineage-root",
-		MaxBytes: 64 << 20,
-	})
-	require.NoError(t, err)
-	mnt, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: rootDisk.DiskID})
-	require.NoError(t, err)
-	rootActor, err := mgr.Actor(ctx, rootDisk.DiskID)
-	require.NoError(t, err)
-
-	packPayload := bytes.Repeat([]byte{0x5C}, store.BlobSize)
-	writeRegularFile(t, ctx, rootActor, mnt.Epoch, "shared-pack.bin", packPayload)
-
-	// 派生 Child1：此时共享 .pack 同时存在于 Root、Commit1、Child1 三处（st_nlink == 3）。
-	child1, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: rootDisk.DiskID,
-		Name:         "sibling-1",
-	})
-	require.NoError(t, err)
-
-	child1PacksDir := filepath.Join(rootDir, "disks", child1.DiskID, "packs")
-	packEntries, err := os.ReadDir(child1PacksDir)
-	require.NoError(t, err)
-	require.Len(t, packEntries, 1)
-	sharedPackPath := filepath.Join(child1PacksDir, packEntries[0].Name())
-	require.Equal(t, uint64(3), fileHardLinkCount(t, sharedPackPath))
-
-	// Root 再派生 Child2（此时 |D| == 3：Root, Child1, Child2；切面数 == 2：C1, C2，其中 C2 也硬链接了该共享 .pack，st_nlink == 5）。
-	child2, err := mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: rootDisk.DiskID,
-		Name:         "sibling-2",
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(5), fileHardLinkCount(t, sharedPackPath))
-
-	// 阶段 1：删除父盘 Root，剩余存活兄弟分支 |D| == 2（Child1, Child2）。
-	// 两个切面 C1、C2 与物理快照目录必须保留，供兄弟分支未来三路 Merge 定位 LCA。
-	require.NoError(t, mgr.DeleteDisk(ctx, rootDisk.DiskID))
-	_, err = os.Stat(filepath.Join(rootDir, "disks", rootDisk.DiskID))
-	require.ErrorIs(t, err, os.ErrNotExist)
-
-	snapAfterRootDel := memDB.Inspect()
-	require.Len(t, snapAfterRootDel.Commits, 2, "|D|==2 时必须保留全部历史切面 DAG")
-	require.Len(t, snapAfterRootDel.Lineages, 1)
-
-	commitDirEntries, err := os.ReadDir(filepath.Join(rootDir, "commits"))
-	require.NoError(t, err)
-	require.Len(t, commitDirEntries, 2)
-	// Root 自身的 1 个链接已解链，剩余 C1 + Child1 + C2 + Child2 = 4 个硬链接。
-	require.Equal(t, uint64(4), fileHardLinkCount(t, sharedPackPath))
-
-	// 阶段 2：删除兄弟盘 Child2，剩余唯一幸存盘 |D| == 1（Child1）。
-	// 必须自动清空 Child1.base_commit_id 并清理全部历史切面记录及 /commits/<id> 目录，使 Child1 .pack st_nlink 立即回落至 1！
-	require.NoError(t, mgr.DeleteDisk(ctx, child2.DiskID))
-
-	idChild1, err := parseDiskID(child1.DiskID)
-	require.NoError(t, err)
-	snapAfterSiblingDel := memDB.Inspect()
-	survivorRow := snapAfterSiblingDel.Disks[idChild1]
-
-	require.Empty(t, snapAfterSiblingDel.Commits, "|D|==1 时必须自动清空同血缘全部历史 disk_commits")
-	require.Len(t, snapAfterSiblingDel.Lineages, 1, "唯一幸存盘仍在，disk_lineages 必须保留")
-	require.Equal(t, uuid.Nil, survivorRow.BaseCommitID, "唯一幸存盘 base_commit_id 必须置空")
-
-	commitDirEntries, err = os.ReadDir(filepath.Join(rootDir, "commits"))
-	require.NoError(t, err)
-	require.Empty(t, commitDirEntries, "|D|==1 时 /commits/ 下所有切面目录必须全部回收")
-	require.Equal(t, uint64(1), fileHardLinkCount(t, sharedPackPath), "唯一幸存盘 .pack 硬链接计数必须回落至 st_nlink == 1")
-
-	// 验证唯一幸存盘数据完好可读，且仍可继续 Fork 出新子盘并删除回收至 |D| == 0。
-	child1Actor, err := mgr.Actor(ctx, child1.DiskID)
-	require.NoError(t, err)
-	require.Equal(t, packPayload, readRegularFile(t, ctx, child1Actor, "shared-pack.bin", store.BlobSize))
-
-	// 阶段 3：删除最后一块幸存盘 Child1（|D| == 0），血缘记录彻底清除。
-	require.NoError(t, mgr.DeleteDisk(ctx, child1.DiskID))
-	snapAfterLastDel := memDB.Inspect()
-	require.Empty(t, snapAfterLastDel.Disks)
-	require.Empty(t, snapAfterLastDel.Commits)
-	require.Empty(t, snapAfterLastDel.Lineages, "|D|==0 时必须清理 disk_lineages 行")
-}
-
-// TestCrossBranchSegmentCollisionFreeAndRestartRecovery 验证父子分支并发分配跨越 PackSegment 号段边界时
-// Inode 与 PackID 100% 零碰撞，以及控制面重启懒加载恢复后继续沿用数据库水位线。
-func TestCrossBranchSegmentCollisionFreeAndRestartRecovery(t *testing.T) {
-	ctx := context.Background()
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	// 将每包上限设为 1 个 Blob（256 KiB），各写 70 个文件跨越 PackSegment=64 触发二次号段申请。
-	mgr1 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
-
-	parentDisk, err := mgr1.CreateDisk(ctx, CreateDiskParams{
-		Name:     "seg-parent",
-		MaxBytes: 512 << 20,
-	})
-	require.NoError(t, err)
-	childDisk, err := mgr1.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: parentDisk.DiskID,
-		Name:         "seg-child",
-	})
-	require.NoError(t, err)
-
-	pMnt, err := mgr1.MountDisk(ctx, MountDiskParams{DiskID: parentDisk.DiskID})
-	require.NoError(t, err)
-	cMnt, err := mgr1.MountDisk(ctx, MountDiskParams{DiskID: childDisk.DiskID})
-	require.NoError(t, err)
-
-	pActor, err := mgr1.Actor(ctx, parentDisk.DiskID)
-	require.NoError(t, err)
-	cActor, err := mgr1.Actor(ctx, childDisk.DiskID)
-	require.NoError(t, err)
-
-	const filesPerBranch = 70
-	blk := bytes.Repeat([]byte{0x33}, store.BlobSize)
-
-	var (
-		pInos [filesPerBranch]uint64
-		cInos [filesPerBranch]uint64
-		pErrs [filesPerBranch]error
-		cErrs [filesPerBranch]error
-		wg    sync.WaitGroup
-	)
-	wg.Go(func() {
-		for i := range filesPerBranch {
-			attr, createErr := pActor.Create(ctx, store.CreateReq{
-				ParentIno: RootIno,
-				Name:      []byte("p-" + time.Duration(i).String()),
-				Mode:      store.S_IFREG | 0o644,
-				Epoch:     pMnt.Epoch,
-			})
-			if createErr != nil {
-				pErrs[i] = createErr
-				return
-			}
-			_, _, writeErr := pActor.Write(ctx, attr.Ino, 0, blk, pMnt.Epoch)
-			if writeErr != nil {
-				pErrs[i] = writeErr
-				return
-			}
-			pInos[i] = attr.Ino
+func createBatchFilesInBranch(actor *store.StoreActor, ctx context.Context, epoch uint64, prefix string, count int, blk []byte) ([]uint64, error) {
+	inos := make([]uint64, count)
+	for i := range count {
+		attr, err := actor.Create(ctx, store.CreateReq{
+			ParentIno: RootIno,
+			Name:      []byte(fmt.Sprintf("%s-%d.bin", prefix, i)),
+			Mode:      store.S_IFREG | 0o644,
+			Epoch:     epoch,
+		})
+		if err != nil {
+			return nil, err
 		}
-	})
-	wg.Go(func() {
-		for i := range filesPerBranch {
-			attr, createErr := cActor.Create(ctx, store.CreateReq{
-				ParentIno: RootIno,
-				Name:      []byte("c-" + time.Duration(i).String()),
-				Mode:      store.S_IFREG | 0o644,
-				Epoch:     cMnt.Epoch,
-			})
-			if createErr != nil {
-				cErrs[i] = createErr
-				return
-			}
-			_, _, writeErr := cActor.Write(ctx, attr.Ino, 0, blk, cMnt.Epoch)
-			if writeErr != nil {
-				cErrs[i] = writeErr
-				return
-			}
-			cInos[i] = attr.Ino
+		if _, _, err = actor.Write(ctx, attr.Ino, 0, blk, epoch); err != nil {
+			return nil, err
 		}
-	})
-	wg.Wait()
-
-	allInos := make(map[uint64]string, filesPerBranch*2)
-	for i := range filesPerBranch {
-		require.NoError(t, pErrs[i])
-		require.NoError(t, cErrs[i])
-		_, pDup := allInos[pInos[i]]
-		require.False(t, pDup, "父盘分配到重复 Inode %d", pInos[i])
-		allInos[pInos[i]] = "parent"
-		_, cDup := allInos[cInos[i]]
-		require.False(t, cDup, "子盘分配到冲突 Inode %d", cInos[i])
-		allInos[cInos[i]] = "child"
+		inos[i] = attr.Ino
 	}
-	require.Len(t, allInos, filesPerBranch*2)
+	return inos, nil
+}
 
-	// 模拟进程重启：关闭 mgr1，基于同一 memDB 与 rootDir 启动 mgr2，懒加载后继续分配节点与 Pack。
-	require.NoError(t, mgr1.Close())
+func assertDisjointInodes(t *testing.T, parentInos, childInos []uint64) map[uint64]struct{} {
+	t.Helper()
+	seen := make(map[uint64]struct{}, len(parentInos)+len(childInos))
+	for _, ino := range parentInos {
+		_, dup := seen[ino]
+		require.False(t, dup, "父盘分配到重复 Inode=%d", ino)
+		seen[ino] = struct{}{}
+	}
+	for _, ino := range childInos {
+		_, dup := seen[ino]
+		require.False(t, dup, "子盘与父盘或自身发生 Inode 碰撞: ino=%d", ino)
+		seen[ino] = struct{}{}
+	}
+	return seen
+}
 
-	mgr2 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
-	t.Cleanup(func() { _ = mgr2.Close() })
-
-	pActor2, err := mgr2.Actor(ctx, parentDisk.DiskID)
-	require.NoError(t, err)
-	cActor2, err := mgr2.Actor(ctx, childDisk.DiskID)
-	require.NoError(t, err)
-
-	pInoAfterRestart := writeRegularFile(t, ctx, pActor2, pMnt.Epoch, "after-restart-p.bin", blk)
-	cInoAfterRestart := writeRegularFile(t, ctx, cActor2, cMnt.Epoch, "after-restart-c.bin", blk)
-	_, pDup := allInos[pInoAfterRestart]
-	_, cDup := allInos[cInoAfterRestart]
-	require.False(t, pDup, "重启后父盘新 Inode 不得与历史号段冲突")
-	require.False(t, cDup, "重启后子盘新 Inode 不得与历史号段冲突")
-	require.NotEqual(t, pInoAfterRestart, cInoAfterRestart)
-
-	// 校验父子两盘物理 packs/ 目录下的全部 .pack 文件名零交集（由于初始盘为空才 Fork，全部 .pack 均由各自独立写入）。
-	pPacks, err := os.ReadDir(filepath.Join(rootDir, "disks", parentDisk.DiskID, "packs"))
-	require.NoError(t, err)
-	cPacks, err := os.ReadDir(filepath.Join(rootDir, "disks", childDisk.DiskID, "packs"))
-	require.NoError(t, err)
-	seenPacks := make(map[string]struct{}, len(pPacks))
+func assertDisjointPackFiles(t *testing.T, parentPacksDir, childPacksDir string) {
+	t.Helper()
+	pPacks, err := os.ReadDir(parentPacksDir)
+	require.NoError(t, err, "读取父盘 packs 目录失败")
+	cPacks, err := os.ReadDir(childPacksDir)
+	require.NoError(t, err, "读取子盘 packs 目录失败")
+	seen := make(map[string]struct{}, len(pPacks))
 	for _, e := range pPacks {
-		seenPacks[e.Name()] = struct{}{}
+		seen[e.Name()] = struct{}{}
 	}
 	for _, e := range cPacks {
-		_, exists := seenPacks[e.Name()]
-		require.False(t, exists, "同源父子分支新生成的 .pack 编号发生碰撞: %s", e.Name())
+		_, exists := seen[e.Name()]
+		require.False(t, exists, "同源父子分支新生成的封包名碰撞: %s", e.Name())
 	}
-
-	snap := memDB.Inspect()
-	require.GreaterOrEqual(t, snap.InodeReserveCalls, 4, "初始 + 重启懒加载均应通过外部 InoAllocator 预留号段")
-	require.GreaterOrEqual(t, snap.PackReserveCalls, 6, "跨越 PackSegment=64 加上重启后应多次调用 PackAllocator")
 }
 
-// TestForkDiskValidationAndTxFailureRollback 验证入参边界拦截、事务失败时子盘实例与切面目录的全量回滚无残留。
-func TestForkDiskValidationAndTxFailureRollback(t *testing.T) {
-	ctx := context.Background()
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	mgr := newManager(memDB, WithStorageRoot(rootDir))
+func gatherForkStageCount(t *testing.T, reg *prometheus.Registry, stage string) uint64 {
+	t.Helper()
+	return gatherMetricSampleCount(t, reg, "bowl_storage_control_fork_stage_duration_seconds", "stage", stage)
+}
 
-	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "rollback-src", MaxBytes: 8 << 20})
-	require.NoError(t, err)
-
-	// 1. 入参校验边界。
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: "bad-uuid", Name: "x"})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: "00000000-0000-0000-0000-000000000000", Name: "x"})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: strings.Repeat("a", MaxDiskNameBytes+1)})
-	require.ErrorIs(t, err, ErrNameTooLong)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "bad\x00name"})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "zero", MaxBytes: new(uint64(0))})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "overflow", MaxBytes: new(uint64(math.MaxInt64) + 1)})
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: "018f0000-0000-7000-8000-000000009999", Name: "missing"})
-	require.ErrorIs(t, err, ErrNotFound)
-
-	// 2. 注入不可重试的数据库事务错误，验证 childActor 关闭及 childDir / commitDir 彻底清理。
-	injectedErr := errors.New("simulated database failure")
-	memDB.SetFailNextWrite(injectedErr)
-
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{
-		SourceDiskID: src.DiskID,
-		Name:         "tx-fail-child",
-	})
-	require.ErrorIs(t, err, injectedErr)
-
-	diskDirEntries, err := os.ReadDir(filepath.Join(rootDir, "disks"))
-	require.NoError(t, err)
-	require.Len(t, diskDirEntries, 1, "事务回滚后 disks/ 下只能保留原源盘目录")
-	require.Equal(t, src.DiskID, diskDirEntries[0].Name())
-
-	commitDirEntries, err := os.ReadDir(filepath.Join(rootDir, "commits"))
-	require.NoError(t, err)
-	require.Empty(t, commitDirEntries, "事务回滚后 commits/ 下不得残留任何切面目录")
-
-	mgr.poolMu.RLock()
-	require.Len(t, mgr.actors, 1, "事务回滚后实例池不得残留失败的子盘 StoreActor")
-	mgr.poolMu.RUnlock()
-
-	// 3. 实例池关闭后调用 ForkDisk 必须返回 ErrClosed。
-	require.NoError(t, mgr.Close())
-	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "after-close"})
-	require.ErrorIs(t, err, ErrClosed)
+func gatherForkCounter(t *testing.T, reg *prometheus.Registry, result string) float64 {
+	t.Helper()
+	fams, err := reg.Gather()
+	require.NoError(t, err, "采集 Prometheus 指标失败")
+	for _, fam := range fams {
+		if fam.GetName() != "bowl_storage_control_forks_total" {
+			continue
+		}
+		for _, m := range fam.GetMetric() {
+			if hasMetricLabel(m, "result", result) && m.GetCounter() != nil {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
 }
 
 type threadSafeLogBuf struct {
@@ -580,162 +172,450 @@ func (w *threadSafeLogBuf) String() string {
 	return w.buf.String()
 }
 
-func TestForkPhysicalDeduplicationCommitsMetricsAndTracing(t *testing.T) {
-	prevTP := otel.GetTracerProvider()
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(exporter),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prevTP)
-	})
-
-	var logBuf threadSafeLogBuf
-	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	rootDir := t.TempDir()
-	memDB := db.NewMemStore()
-	mgr := newManager(memDB, WithStorageRoot(rootDir), WithLogger(logger))
+func TestForkDisk_OnlineFork_IsolatesParentAndChildWrites(t *testing.T) {
+	// Given: 源盘在在线可写挂载状态下已写入 128 KiB 文件
+	ctx := context.Background()
+	mgr := New(db.NewMemStore(), WithStorageRoot(t.TempDir()))
 	t.Cleanup(func() { _ = mgr.Close() })
 
+	parentDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "root-disk", MaxBytes: 64 << 20})
+	require.NoError(t, err, "创建源盘失败")
+	parentMount, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: parentDisk.DiskID})
+	require.NoError(t, err, "挂载源盘失败")
+	parentActor, err := mgr.Actor(ctx, parentDisk.DiskID)
+	require.NoError(t, err, "获取源盘 StoreActor 失败")
+
+	basePayload := bytes.Repeat([]byte("BASE-ROOT-CONTENT-"), 512)
+	writeRegularFile(t, ctx, parentActor, parentMount.Epoch, "shared.txt", basePayload)
+
+	// When: 在线派生子盘，随后父子各自独立覆写与新增文件
+	childDisk, err := mgr.ForkDisk(ctx, ForkDiskParams{
+		SourceDiskID: parentDisk.DiskID,
+		Name:         "child-1",
+	})
+	require.NoError(t, err, "在线 ForkDisk 失败")
+
+	// Then: 源盘 epoch 不受打断可继续写入，子盘初始 epoch=0、继承 Fork 时刻基准数据且与父盘严格隔离
+	require.Equal(t, parentDisk.DiskID, childDisk.ParentDiskID, "子盘 ParentDiskID 应指向源盘")
+	require.Equal(t, parentDisk.MaxBytes, childDisk.MaxBytes, "省略 MaxBytes 时应继承源盘配额")
+	require.Equal(t, uint64(len(basePayload)), childDisk.UsedBytes, "子盘初始 UsedBytes 应等于基准数据大小")
+	require.Equal(t, uint64(2), childDisk.UsedInodes, "子盘初始 UsedInodes 应为 2")
+	require.Equal(t, uint64(1), parentActor.WriterEpoch(), "Fork 不得扰动源盘活跃 WriterEpoch")
+
+	parentUpdated := []byte("PARENT-MUTATED-AFTER-FORK")
+	overwriteRegularFile(t, ctx, parentActor, parentMount.Epoch, "shared.txt", parentUpdated)
+	writeRegularFile(t, ctx, parentActor, parentMount.Epoch, "only-in-parent.txt", []byte("parent-only"))
+
+	childActor, err := mgr.Actor(ctx, childDisk.DiskID)
+	require.NoError(t, err, "获取子盘 StoreActor 失败")
+	require.Zero(t, childActor.WriterEpoch(), "子盘初始 WriterEpoch 必须归零")
+
+	childMount, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: childDisk.DiskID})
+	require.NoError(t, err, "挂载子盘失败")
+	require.Equal(t, uint64(1), childMount.Epoch, "子盘首次可写挂载 epoch 应为 1")
+
+	require.Equal(t, basePayload, readRegularFile(t, ctx, childActor, "shared.txt", uint32(len(basePayload)+64)), "子盘必须读取到 Fork 瞬间快照")
+	_, _, lookupErr := childActor.Lookup(ctx, RootIno, []byte("only-in-parent.txt"))
+	require.ErrorIs(t, lookupErr, ErrNotFound, "父盘 Fork 后新建文件不得泄露到子盘")
+
+	childMutated := bytes.Repeat([]byte("CHILD1-BRANCH-DATA-"), 256)
+	overwriteRegularFile(t, ctx, childActor, childMount.Epoch, "shared.txt", childMutated)
+	require.Equal(t, parentUpdated, readRegularFile(t, ctx, parentActor, "shared.txt", 128), "子盘写入不得影响父盘内容")
+	require.Equal(t, childMutated, readRegularFile(t, ctx, childActor, "shared.txt", uint32(len(childMutated)+64)), "子盘覆写内容应独立生效")
+}
+
+func TestForkDisk_CascadingDAG_MaintainsLineageAndParentLinks(t *testing.T) {
+	// Given: 创建根盘并派生 Child1，再分别从 Child1 级联派生 GrandChild 与从 Root 二次派生 Child2
+	ctx := context.Background()
+	memDB := db.NewMemStore()
+	mgr := New(memDB, WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	rootDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "root", MaxBytes: 16 << 20})
+	require.NoError(t, err, "创建根盘失败")
+	child1, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: rootDisk.DiskID, Name: "child-1"})
+	require.NoError(t, err, "派生 child-1 失败")
+	grandChild, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: child1.DiskID, Name: "grand-child"})
+	require.NoError(t, err, "级联派生 grand-child 失败")
+	child2, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: rootDisk.DiskID, Name: "child-2"})
+	require.NoError(t, err, "二次派生 child-2 失败")
+
+	// When: 通过公开接口与数据库检查血缘拓扑
+	listed, err := mgr.ListDisks(ctx, ListDisksParams{PageSize: 10})
+	require.NoError(t, err, "列出磁盘失败")
+	gotGrand, err := mgr.GetDisk(ctx, grandChild.DiskID)
+	require.NoError(t, err, "查询 grand-child 失败")
+
+	// Then: 全部 4 块盘同属单一血缘，ParentDiskID 与切面 DAG 父子指向正确
+	require.Len(t, listed.Disks, 4, "应列出 4 块磁盘: got=%d", len(listed.Disks))
+	require.Equal(t, child1.DiskID, gotGrand.ParentDiskID, "GrandChild 父盘应为 Child1")
+	require.Equal(t, rootDisk.DiskID, child2.ParentDiskID, "Child2 父盘应为 Root")
+
+	idRoot, err := parseDiskID(rootDisk.DiskID)
+	require.NoError(t, err)
+	idChild1, err := parseDiskID(child1.DiskID)
+	require.NoError(t, err)
+	idChild2, err := parseDiskID(child2.DiskID)
+	require.NoError(t, err)
+	idGrand, err := parseDiskID(grandChild.DiskID)
+	require.NoError(t, err)
+
+	snap := memDB.Inspect()
+	require.Len(t, snap.Lineages, 1, "同源级联派生应共享 1 条血缘")
+	require.Len(t, snap.Commits, 3, "3 次 Fork 应产生 3 个基准切面")
+	c2 := snap.Commits[snap.Disks[idRoot].BaseCommitID]
+	c3 := snap.Commits[snap.Disks[idChild1].BaseCommitID]
+	c1 := snap.Commits[c2.ParentCommitID]
+
+	require.Equal(t, idRoot, snap.Disks[idGrand].LineageID, "GrandChild 应归属根盘血缘")
+	require.Equal(t, uuid.Nil, c1.ParentCommitID, "首次切面父切面应为空")
+	require.Equal(t, c1.CommitID, c2.ParentCommitID, "Root 二次切面应指向首次切面 C1")
+	require.Equal(t, c1.CommitID, c3.ParentCommitID, "Child1 级联切面应指向首次切面 C1")
+	require.Equal(t, c2.CommitID, snap.Disks[idChild2].BaseCommitID, "Child2 基准切面应为 C2")
+	require.Equal(t, c3.CommitID, snap.Disks[idGrand].BaseCommitID, "GrandChild 基准切面应为 C3")
+}
+
+func TestForkDisk_QuotaShrinkWithoutOrphans_RejectsBeforeCreatingCommitDir(t *testing.T) {
+	// Given: 无孤儿节点且已写入 4096 字节的源盘
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	mgr := New(db.NewMemStore(), WithStorageRoot(rootDir))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	srcDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "quota-src", MaxBytes: 16 << 20})
+	require.NoError(t, err, "创建源盘失败")
+	mnt, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: srcDisk.DiskID})
+	require.NoError(t, err, "挂载源盘失败")
+	srcActor, err := mgr.Actor(ctx, srcDisk.DiskID)
+	require.NoError(t, err, "获取源盘 StoreActor 失败")
+	writeRegularFile(t, ctx, srcActor, mnt.Epoch, "keep.bin", bytes.Repeat([]byte{0xAA}, 4096))
+
+	// When: 以低于已用空间的 MaxBytes=2048 发起 ForkDisk
+	_, err = mgr.ForkDisk(ctx, ForkDiskParams{
+		SourceDiskID: srcDisk.DiskID,
+		Name:         "too-small-fast",
+		MaxBytes:     new(uint64(2048)),
+	})
+
+	// Then: 前置快检直接拒绝为 ErrInvalidShrink 且未创建 commits 目录
+	require.ErrorIs(t, err, ErrInvalidShrink, "配额缩容应返回 ErrInvalidShrink: want=%v got=%v", ErrInvalidShrink, err)
+	_, statErr := os.Stat(filepath.Join(rootDir, "commits"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "无孤儿前置快检拦截不得触发任何切面目录 I/O")
+}
+
+func TestForkDisk_QuotaShrinkWithOrphans_SanitizesAndEnforcesEffectiveUsage(t *testing.T) {
+	// Given: 源盘包含 4096 字节活跃文件与 256 KiB 未关闭孤儿文件（总已用 4096 + BlobSize）
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	mgr := New(db.NewMemStore(), WithStorageRoot(rootDir))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	srcDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "orphan-src", MaxBytes: 16 << 20})
+	require.NoError(t, err, "创建源盘失败")
+	mnt, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: srcDisk.DiskID})
+	require.NoError(t, err, "挂载源盘失败")
+	srcActor, err := mgr.Actor(ctx, srcDisk.DiskID)
+	require.NoError(t, err, "获取源盘 StoreActor 失败")
+
+	writeRegularFile(t, ctx, srcActor, mnt.Epoch, "keep.bin", bytes.Repeat([]byte{0xAA}, 4096))
+	orphanPayload := bytes.Repeat([]byte{0xBB}, store.BlobSize)
+	orphanIno := writeRegularFile(t, ctx, srcActor, mnt.Epoch, "temp-orphan.bin", orphanPayload)
+	require.NoError(t, srcActor.Unlink(ctx, RootIno, []byte("temp-orphan.bin"), true, mnt.Epoch), "解链构造孤儿失败")
+
+	// When 1: 目标配额 2048 仍低于净化后有效占用 4096
+	_, shrinkErr := mgr.ForkDisk(ctx, ForkDiskParams{
+		SourceDiskID: srcDisk.DiskID,
+		Name:         "too-small-after-sanitize",
+		MaxBytes:     new(uint64(2048)),
+	})
+
+	// Then 1: 净化后复核被拦截为 ErrInvalidShrink 且临时切面目录已回滚清空
+	require.ErrorIs(t, shrinkErr, ErrInvalidShrink, "净化后配额仍不足应返回 ErrInvalidShrink")
+	commitEntries, readErr := os.ReadDir(filepath.Join(rootDir, "commits"))
+	require.NoError(t, readErr, "读取 commits 目录失败")
+	require.Empty(t, commitEntries, "配额拦截回滚后 commits/ 目录必须零残留")
+
+	// When 2: 目标配额 8192 介于净化后 4096 与净化前 266240 之间
+	forked, err := mgr.ForkDisk(ctx, ForkDiskParams{
+		SourceDiskID: srcDisk.DiskID,
+		Name:         "sanitized-child",
+		MaxBytes:     new(uint64(8192)),
+	})
+
+	// Then 2: 净化孤儿后派生成功，子盘仅计入有效 4096 字节且源盘孤儿句柄仍可读
+	require.NoError(t, err, "净化孤儿后配额满足时应派生成功")
+	require.Equal(t, uint64(8192), forked.MaxBytes)
+	require.Equal(t, uint64(4096), forked.UsedBytes)
+	require.Equal(t, uint64(2), forked.UsedInodes)
+
+	orphanData, err := srcActor.Read(ctx, orphanIno, 0, store.BlobSize)
+	require.NoError(t, err, "源盘孤儿节点应仍可读取")
+	require.Equal(t, orphanPayload, orphanData, "源盘孤儿数据不得因 Fork 净化而受损")
+}
+
+func TestForkDisk_InvalidParams_RejectsWithSentinel(t *testing.T) {
+	// Given: 存在源盘与非法 Fork 入参矩阵
+	ctx := context.Background()
+	mgr := New(db.NewMemStore(), WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "valid-src", MaxBytes: 8 << 20})
+	require.NoError(t, err, "创建源盘失败")
+
+	cases := []struct {
+		name    string
+		params  ForkDiskParams
+		wantErr error
+	}{
+		{name: "格式非法源盘 UUID", params: ForkDiskParams{SourceDiskID: "bad-uuid", Name: "x"}, wantErr: ErrInvalidArgument},
+		{name: "全零 Nil 源盘 UUID", params: ForkDiskParams{SourceDiskID: "00000000-0000-0000-0000-000000000000", Name: "x"}, wantErr: ErrInvalidArgument},
+		{name: "名称超过 255 字节", params: ForkDiskParams{SourceDiskID: src.DiskID, Name: strings.Repeat("a", 256)}, wantErr: ErrNameTooLong},
+		{name: "名称包含 NUL 字节", params: ForkDiskParams{SourceDiskID: src.DiskID, Name: "bad\x00name"}, wantErr: ErrInvalidArgument},
+		{name: "配额为零", params: ForkDiskParams{SourceDiskID: src.DiskID, Name: "zero", MaxBytes: new(uint64(0))}, wantErr: ErrInvalidArgument},
+		{name: "配额超过 MaxInt64", params: ForkDiskParams{SourceDiskID: src.DiskID, Name: "overflow", MaxBytes: new(uint64(math.MaxInt64) + 1)}, wantErr: ErrInvalidArgument},
+		{name: "源盘不存在", params: ForkDiskParams{SourceDiskID: "018f0000-0000-7000-8000-000000009999", Name: "missing"}, wantErr: ErrNotFound},
+	}
+
+	// When / Then: 逐一拒绝并返回对应领域哨兵错误
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, fErr := mgr.ForkDisk(ctx, tc.params)
+			require.ErrorIs(t, fErr, tc.wantErr, "ForkDisk(%s) 错误不匹配: want=%v got=%v", tc.name, tc.wantErr, fErr)
+		})
+	}
+}
+
+func TestForkDisk_DBTxFailure_RollsBackChildDirCommitDirAndRegistry(t *testing.T) {
+	// Given: 源盘就绪并注入下一次写事务失败
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	memDB := db.NewMemStore()
+	mgr := New(memDB, WithStorageRoot(rootDir))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "rollback-src", MaxBytes: 8 << 20})
+	require.NoError(t, err, "创建源盘失败")
+
+	injectedErr := errors.New("simulated database failure")
+	memDB.SetFailNextWrite(injectedErr)
+
+	// When: 执行 ForkDisk 触发事务失败
+	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "tx-fail-child"})
+
+	// Then: 返回数据库错误，disks/ 仅余源盘、commits/ 为空且 ListDisks 无残留子盘
+	require.ErrorIs(t, err, injectedErr, "事务失败应向上返回注入错误: want=%v got=%v", injectedErr, err)
+
+	diskDirEntries, readErr := os.ReadDir(filepath.Join(rootDir, "disks"))
+	require.NoError(t, readErr, "读取 disks 目录失败")
+	require.Len(t, diskDirEntries, 1, "事务回滚后 disks/ 下只能保留源盘目录: got=%d", len(diskDirEntries))
+	require.Equal(t, src.DiskID, diskDirEntries[0].Name())
+
+	commitDirEntries, readErr := os.ReadDir(filepath.Join(rootDir, "commits"))
+	require.NoError(t, readErr, "读取 commits 目录失败")
+	require.Empty(t, commitDirEntries, "事务回滚后 commits/ 下不得残留切面目录: got=%d", len(commitDirEntries))
+
+	listed, listErr := mgr.ListDisks(ctx, ListDisksParams{})
+	require.NoError(t, listErr, "ListDisks 失败")
+	require.Len(t, listed.Disks, 1, "回滚后应仅存源盘 1 块: got=%d", len(listed.Disks))
+}
+
+func TestDeleteDisk_LineageCommitGC_ReclaimsCommitsAtSingleSurvivor(t *testing.T) {
+	// Given: 含 256 KiB 共享封包的 3 盘同血缘分支（Root, Child1, Child2），st_nlink=5
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	memDB := db.NewMemStore()
+	mgr := New(memDB, WithStorageRoot(rootDir))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	rootDisk, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "lineage-root", MaxBytes: 64 << 20})
+	require.NoError(t, err, "创建根盘失败")
+	mnt, err := mgr.MountDisk(ctx, MountDiskParams{DiskID: rootDisk.DiskID})
+	require.NoError(t, err, "挂载根盘失败")
+	rootActor, err := mgr.Actor(ctx, rootDisk.DiskID)
+	require.NoError(t, err, "获取根盘 StoreActor 失败")
+
+	packPayload := bytes.Repeat([]byte{0x5C}, store.BlobSize)
+	writeRegularFile(t, ctx, rootActor, mnt.Epoch, "shared-pack.bin", packPayload)
+
+	child1, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: rootDisk.DiskID, Name: "sibling-1"})
+	require.NoError(t, err, "派生 sibling-1 失败")
+	sharedPackPath := singlePackFilePath(t, filepath.Join(rootDir, "disks", child1.DiskID, "packs"))
+	require.Equal(t, uint64(3), fileHardLinkCount(t, sharedPackPath), "首次 Fork 后硬链接计数应为 3")
+
+	child2, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: rootDisk.DiskID, Name: "sibling-2"})
+	require.NoError(t, err, "派生 sibling-2 失败")
+	require.Equal(t, uint64(5), fileHardLinkCount(t, sharedPackPath), "二次 Fork 后硬链接计数应为 5")
+
+	// When 1: 删除父盘 Root（剩余 |D| == 2）
+	require.NoError(t, mgr.DeleteDisk(ctx, rootDisk.DiskID), "删除根盘失败")
+
+	// Then 1: 保留 2 个历史切面与物理目录，硬链接计数降为 4
+	snapAfterRoot := memDB.Inspect()
+	require.Len(t, snapAfterRoot.Commits, 2, "|D|==2 时必须保留全部切面 DAG")
+	commitDirsAfterRoot, err := os.ReadDir(filepath.Join(rootDir, "commits"))
+	require.NoError(t, err, "读取 commits 目录失败")
+	require.Len(t, commitDirsAfterRoot, 2)
+	require.Equal(t, uint64(4), fileHardLinkCount(t, sharedPackPath))
+
+	// When 2: 删除 Child2（剩余唯一幸存盘 |D| == 1）
+	require.NoError(t, mgr.DeleteDisk(ctx, child2.DiskID), "删除 sibling-2 失败")
+
+	// Then 2: 自动清空血缘切面与物理目录，幸存盘 .pack 硬链接计数回落至 1 且数据完整可读
+	idChild1, err := parseDiskID(child1.DiskID)
+	require.NoError(t, err)
+	snapAfterSibling := memDB.Inspect()
+	require.Empty(t, snapAfterSibling.Commits, "|D|==1 时必须自动清空同血缘全部切面")
+	require.Len(t, snapAfterSibling.Lineages, 1, "唯一幸存盘仍在时血缘行必须保留")
+	require.Equal(t, uuid.Nil, snapAfterSibling.Disks[idChild1].BaseCommitID, "唯一幸存盘 base_commit_id 必须置空")
+
+	commitDirsAfterSibling, err := os.ReadDir(filepath.Join(rootDir, "commits"))
+	require.NoError(t, err, "读取 commits 目录失败")
+	require.Empty(t, commitDirsAfterSibling, "|D|==1 时 commits/ 目录下切面必须全部清理")
+	require.Equal(t, uint64(1), fileHardLinkCount(t, sharedPackPath), "唯一幸存盘 .pack st_nlink 必须回落至 1")
+
+	child1Actor, err := mgr.Actor(ctx, child1.DiskID)
+	require.NoError(t, err, "获取幸存盘 StoreActor 失败")
+	require.Equal(t, packPayload, readRegularFile(t, ctx, child1Actor, "shared-pack.bin", store.BlobSize), "幸存盘数据必须完好可读")
+
+	// When 3: 删除最后一块幸存盘 Child1（|D| == 0）
+	require.NoError(t, mgr.DeleteDisk(ctx, child1.DiskID), "删除最后幸存盘失败")
+
+	// Then 3: 血缘记录彻底清空
+	snapAfterLast := memDB.Inspect()
+	require.Empty(t, snapAfterLast.Disks)
+	require.Empty(t, snapAfterLast.Commits)
+	require.Empty(t, snapAfterLast.Lineages, "|D|==0 时必须清除血缘记录")
+}
+
+func TestForkDisk_ConcurrentSegmentAllocation_CollisionFreeAcrossRestart(t *testing.T) {
+	// Given: 同血缘父子双盘并发各自写入 70 个满包文件以跨越 PackSegment=64 阈值
+	ctx := context.Background()
+	rootDir := t.TempDir()
+	memDB := db.NewMemStore()
+	mgr1 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
+
+	parentDisk, err := mgr1.CreateDisk(ctx, CreateDiskParams{Name: "seg-parent", MaxBytes: 512 << 20})
+	require.NoError(t, err, "创建父盘失败")
+	childDisk, err := mgr1.ForkDisk(ctx, ForkDiskParams{SourceDiskID: parentDisk.DiskID, Name: "seg-child"})
+	require.NoError(t, err, "派生子盘失败")
+
+	pMnt, err := mgr1.MountDisk(ctx, MountDiskParams{DiskID: parentDisk.DiskID})
+	require.NoError(t, err, "挂载父盘失败")
+	cMnt, err := mgr1.MountDisk(ctx, MountDiskParams{DiskID: childDisk.DiskID})
+	require.NoError(t, err, "挂载子盘失败")
+	pActor, err := mgr1.Actor(ctx, parentDisk.DiskID)
+	require.NoError(t, err, "获取父盘 StoreActor 失败")
+	cActor, err := mgr1.Actor(ctx, childDisk.DiskID)
+	require.NoError(t, err, "获取子盘 StoreActor 失败")
+
+	const filesPerBranch = 70
+	blk := bytes.Repeat([]byte{0x33}, store.BlobSize)
+
+	var (
+		pInos, cInos []uint64
+		pErr, cErr   error
+		wg           sync.WaitGroup
+	)
+	wg.Go(func() { pInos, pErr = createBatchFilesInBranch(pActor, ctx, pMnt.Epoch, "p", filesPerBranch, blk) })
+	wg.Go(func() { cInos, cErr = createBatchFilesInBranch(cActor, ctx, cMnt.Epoch, "c", filesPerBranch, blk) })
+	wg.Wait()
+
+	require.NoError(t, pErr, "父盘并发批量写入失败")
+	require.NoError(t, cErr, "子盘并发批量写入失败")
+	allInos := assertDisjointInodes(t, pInos, cInos)
+	require.Len(t, allInos, filesPerBranch*2, "总分配唯一 Inode 数不匹配: want=%d got=%d", filesPerBranch*2, len(allInos))
+
+	// When: 重启新管理器懒加载两盘并继续各自创建新文件
+	require.NoError(t, mgr1.Close(), "关闭首任管理器失败")
+	mgr2 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
+	t.Cleanup(func() { _ = mgr2.Close() })
+
+	pActor2, err := mgr2.Actor(ctx, parentDisk.DiskID)
+	require.NoError(t, err, "重启后获取父盘 StoreActor 失败")
+	cActor2, err := mgr2.Actor(ctx, childDisk.DiskID)
+	require.NoError(t, err, "重启后获取子盘 StoreActor 失败")
+
+	pInoRestart := writeRegularFile(t, ctx, pActor2, pMnt.Epoch, "after-restart-p.bin", blk)
+	cInoRestart := writeRegularFile(t, ctx, cActor2, cMnt.Epoch, "after-restart-c.bin", blk)
+
+	// Then: 重启后新分配的 Inode 与 .pack 编号零碰撞，且外部号段分配器被跨实例调用
+	require.NotContains(t, allInos, pInoRestart, "重启后父盘新 Inode 不得与历史冲突")
+	require.NotContains(t, allInos, cInoRestart, "重启后子盘新 Inode 不得与历史冲突")
+	require.NotEqual(t, pInoRestart, cInoRestart, "重启后父子新 Inode 不得相互冲突")
+
+	assertDisjointPackFiles(t,
+		filepath.Join(rootDir, "disks", parentDisk.DiskID, "packs"),
+		filepath.Join(rootDir, "disks", childDisk.DiskID, "packs"),
+	)
+
+	snap := memDB.Inspect()
+	require.GreaterOrEqual(t, snap.InodeReserveCalls, 4, "初始与重启懒加载应调用外部 Inode 号段分配器")
+	require.GreaterOrEqual(t, snap.PackReserveCalls, 6, "跨越 PackSegment=64 与重启后应多次调用 Pack 号段分配器")
+}
+
+func TestForkDisk_Observability_ExportsDedupMetricsSpansAndAuditLogs(t *testing.T) {
+	// Given: 配备真实 OTel Span 导出器、Prometheus Registry 与 JSON slog 记录器的控制面管理器
+	tp, exporter := setupTestTracer(t)
+	var logBuf threadSafeLogBuf
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	rootDir := t.TempDir()
+
+	mgr := New(db.NewMemStore(), WithStorageRoot(rootDir), WithLogger(logger))
+	t.Cleanup(func() { _ = mgr.Close() })
 	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(mgr.Collector()))
+	require.NoError(t, reg.Register(mgr.Collector()), "注册 Collector 失败")
 
 	ctx, rootSpan := tp.Tracer("test-fork-ctrl").Start(context.Background(), "rpc.ForkLifecycle")
-
 	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "dedup-parent", MaxBytes: 64 << 20})
-	require.NoError(t, err)
-
+	require.NoError(t, err, "创建源盘失败")
 	srcActor, err := mgr.Actor(ctx, src.DiskID)
-	require.NoError(t, err)
-	fAttr, err := srcActor.Create(ctx, store.CreateReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("payload-1m.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
+	require.NoError(t, err, "获取源盘 StoreActor 失败")
 
-	const payloadSize = 1 << 20 // 1 MiB
-	_, _, err = srcActor.Write(ctx, fAttr.Ino, 0, bytes.Repeat([]byte{0x5A}, payloadSize))
-	require.NoError(t, err)
+	const payloadSize = 1 << 20
+	writeRegularFile(t, ctx, srcActor, 0, "payload-1m.bin", bytes.Repeat([]byte{0x5A}, payloadSize))
+	writeRegularFile(t, ctx, srcActor, 0, "orphan.bin", bytes.Repeat([]byte{0x7E}, 8192))
+	require.NoError(t, srcActor.Unlink(ctx, RootIno, []byte("orphan.bin"), true), "解链构造孤儿失败")
 
-	// 写入后制造一个孤儿文件，触发 SanitizeCheckpoint（需走 openDiskActor 并产生 commit:<id> 事件日志）。
-	orphanAttr, err := srcActor.Create(ctx, store.CreateReq{
-		ParentIno: store.RootIno,
-		Name:      []byte("orphan.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	})
-	require.NoError(t, err)
-	_, _, err = srcActor.Write(ctx, orphanAttr.Ino, 0, bytes.Repeat([]byte{0x7E}, 8192))
-	require.NoError(t, err)
-	require.NoError(t, srcActor.Unlink(ctx, store.RootIno, []byte("orphan.bin"), true))
+	// When: 基于带孤儿源盘派生 2 个子盘、重命名源盘并全量删除回收
+	child1, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "child-a"})
+	require.NoError(t, err, "Fork child-a 失败")
+	child2, err := mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "child-b"})
+	require.NoError(t, err, "Fork child-b 失败")
 
-	// 1. 连续基于父盘 Fork 3 个子盘。
-	children := make([]*Disk, 0, 3)
-	for i := range 3 {
-		child, fErr := mgr.ForkDisk(ctx, ForkDiskParams{
-			SourceDiskID: src.DiskID,
-			Name:         "child-" + string(rune('a'+i)),
-		})
-		require.NoError(t, fErr)
-		children = append(children, child)
-	}
-
-	// 验证 UpdateDisk 记录结构化审计日志。
 	newName := "dedup-parent-renamed"
 	_, err = mgr.UpdateDisk(ctx, UpdateDiskParams{DiskID: src.DiskID, Name: &newName})
-	require.NoError(t, err)
+	require.NoError(t, err, "UpdateDisk 重命名失败")
 
-	gatherMap := func() map[string]*dto.MetricFamily {
-		fams, gErr := reg.Gather()
-		require.NoError(t, gErr)
-		out := make(map[string]*dto.MetricFamily, len(fams))
-		for _, f := range fams {
-			out[f.GetName()] = f
-		}
-		return out
-	}
+	// Then 1: 去重物理占用维持约 1 MiB，逻辑引用字节叠加为 3 份，各阶段直方图计数与 Span 均正确记录
+	physBytes := gatherGaugeValue(t, reg, "bowl_storage_pack_physical_bytes")
+	refBytes := gatherGaugeValue(t, reg, "bowl_storage_pack_referenced_bytes")
+	require.InDelta(t, float64(payloadSize), physBytes, 65536, "Fork 后物理占用应去重维持约 1 MiB: got=%v", physBytes)
+	require.GreaterOrEqual(t, refBytes, float64(3*payloadSize), "逻辑引用占用应累加 3 份盘: got=%v", refBytes)
+	require.InDelta(t, 2.0, gatherGaugeValue(t, reg, "bowl_storage_commits_active"), 1e-9, "应存在 2 个活跃切面")
+	require.GreaterOrEqual(t, gatherMetricSampleCount(t, reg, "bowl_storage_control_open_actor_duration_seconds", "result", "ok"), uint64(5))
+	require.Equal(t, uint64(2), gatherForkStageCount(t, reg, "checkpoint"))
+	require.Equal(t, uint64(2), gatherForkStageCount(t, reg, "sanitize"))
+	require.Equal(t, uint64(2), gatherForkStageCount(t, reg, "clone_dir"))
+	require.Equal(t, uint64(2), gatherForkStageCount(t, reg, "open_child"))
+	require.Equal(t, uint64(2), gatherForkStageCount(t, reg, "commit_tx"))
+	require.InDelta(t, 2.0, gatherForkCounter(t, reg, "ok"), 1e-9)
 
-	m1 := gatherMap()
-	physBytes := m1["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue()
-	refBytes := m1["bowl_storage_pack_referenced_bytes"].GetMetric()[0].GetGauge().GetValue()
-	require.InDelta(t, float64(payloadSize), physBytes, 65536, "3 次 Fork 后去重物理封包占用应维持约 1 MiB")
-	require.GreaterOrEqual(t, refBytes, float64(4*payloadSize), "逻辑引用字节总和应反映 4 份挂载盘的逻辑累加")
-	require.InDelta(t, float64(3), m1["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
-	require.GreaterOrEqual(t, m1["bowl_storage_commits_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
-	require.GreaterOrEqual(t, m1["bowl_storage_data_dir_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
-	require.Greater(t, m1["bowl_storage_volume_total_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(0))
-	require.Greater(t, m1["bowl_storage_volume_available_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(0))
-
-	// 检查 SanitizeCheckpoint 的 commit:<id> pebble_events.log 存在性。
-	commitEntries, err := os.ReadDir(filepath.Join(rootDir, "commits"))
-	require.NoError(t, err)
-	require.Len(t, commitEntries, 3)
-	commitID := commitEntries[0].Name()
-	rawCommitEvents, err := os.ReadFile(filepath.Join(rootDir, "commits", commitID, store.PebbleEventsLogFileName))
-	require.NoError(t, err)
-	require.Contains(t, string(rawCommitEvents), `"disk_id":"commit:`+commitID+`"`)
-
-	// 检查控制面直方图与 open_actor（Create src + Sanitize*3 + 3 open_child = 7）。
-	openOKCount := uint64(0)
-	for _, m := range m1["bowl_storage_control_open_actor_duration_seconds"].GetMetric() {
-		for _, lp := range m.GetLabel() {
-			if lp.GetName() == "result" && lp.GetValue() == "ok" {
-				openOKCount = m.GetHistogram().GetSampleCount()
-			}
-		}
-	}
-	require.GreaterOrEqual(t, openOKCount, uint64(7), "SanitizeCheckpoint 临时开盘必须纳入 open_actor_duration 统计")
-
-	stageCounts := make(map[string]uint64)
-	for _, m := range m1["bowl_storage_control_fork_stage_duration_seconds"].GetMetric() {
-		for _, lp := range m.GetLabel() {
-			if lp.GetName() == "stage" {
-				stageCounts[lp.GetValue()] = m.GetHistogram().GetSampleCount()
-			}
-		}
-	}
-	for _, stage := range []string{"checkpoint", "sanitize", "clone_dir", "open_child", "commit_tx"} {
-		require.Equal(t, uint64(3), stageCounts[stage], "stage=%s 应记录 3 次", stage)
-	}
-
-	// 2. 删除父盘与前两个子盘：尚余最后一个子盘，其基准 commit 仍然驻留不可清理。
+	// Then 2: 依次删除全部磁盘触发血缘切面物理回收与 Span 闭环
 	require.NoError(t, mgr.DeleteDisk(ctx, src.DiskID))
-	m2 := gatherMap()
-	require.GreaterOrEqual(t, m2["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), float64(1))
-	require.GreaterOrEqual(t, m2["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
-
-	require.NoError(t, mgr.DeleteDisk(ctx, children[0].DiskID))
-	require.NoError(t, mgr.DeleteDisk(ctx, children[1].DiskID))
-
-	// 删除最后一个子盘：触发血缘 Commit 目录物理回收。
-	require.NoError(t, mgr.DeleteDisk(ctx, children[2].DiskID))
-	m3 := gatherMap()
-	require.InDelta(t, float64(0), m3["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
-	require.InDelta(t, float64(0), m3["bowl_storage_commits_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
-	require.InDelta(t, float64(0), m3["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
-	require.InDelta(t, float64(3), m3["bowl_storage_control_commits_reclaimed_total"].GetMetric()[0].GetCounter().GetValue(), 1e-9)
-
+	require.NoError(t, mgr.DeleteDisk(ctx, child1.DiskID))
+	require.NoError(t, mgr.DeleteDisk(ctx, child2.DiskID))
 	rootSpan.End()
 
-	spanCounts := make(map[string]int)
-	for _, sp := range exporter.GetSpans() {
-		spanCounts[sp.Name]++
-	}
-	for _, expected := range []string{
-		"control.ReserveSegment",
-		"control.OpenDiskActor",
-		"control.ForkCommitTx",
-		"control.ReclaimCommits",
-		"store.Checkpoint",
-		"store.SanitizeCheckpoint",
-		"store.CloneCheckpointDir",
-	} {
-		require.GreaterOrEqual(t, spanCounts[expected], 1, "缺少控制面/切面链路 Span %s", expected)
-	}
+	require.InDelta(t, 0.0, gatherGaugeValue(t, reg, "bowl_storage_commits_active"), 1e-9, "全删后 commits_active 应归零")
+	require.InDelta(t, 2.0, gatherCounterValue(t, reg, "bowl_storage_control_commits_reclaimed_total"), 1e-9, "应累计回收 2 个切面")
 
-	require.Contains(t, logBuf.String(), `"msg":"disk updated"`)
+	spans := exporter.GetSpans()
+	require.GreaterOrEqual(t, countSpansByName(spans, "control.ReserveSegment"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "control.OpenDiskActor"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "control.ForkCommitTx"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "control.ReclaimCommits"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "store.Checkpoint"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "store.SanitizeCheckpoint"), 1)
+	require.GreaterOrEqual(t, countSpansByName(spans, "store.CloneCheckpointDir"), 1)
+	require.Contains(t, logBuf.String(), `"msg":"disk updated"`, "应记录 UpdateDisk 结构化审计日志")
 }

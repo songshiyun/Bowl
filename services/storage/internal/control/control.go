@@ -536,33 +536,6 @@ func (m *manager) openDiskActor(ctx context.Context, opts store.Options) (*store
 	return actor, err
 }
 
-func (m *manager) getOrOpenActorLocked(ctx context.Context, diskID string) (*store.StoreActor, error) {
-	m.poolMu.RLock()
-	if m.closed {
-		m.poolMu.RUnlock()
-		return nil, ErrClosed
-	}
-	if actor := m.actors[diskID]; actor != nil {
-		m.poolMu.RUnlock()
-		return actor, nil
-	}
-	m.poolMu.RUnlock()
-
-	var lineageID uuid.UUID
-	if m.store != nil {
-		id, err := parseDiskID(diskID)
-		if err != nil {
-			return nil, err
-		}
-		row, err := m.store.GetDisk(ctx, id)
-		if err != nil {
-			return nil, mapDBErr(err)
-		}
-		lineageID = row.LineageID
-	}
-	return m.getOrOpenActorWithLineageLocked(ctx, diskID, lineageID)
-}
-
 func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID string, lineageID uuid.UUID) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
@@ -628,52 +601,6 @@ func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID st
 		"mode", mode,
 	)
 	return actor, nil
-}
-
-func (m *manager) evictIdleActor(ctx context.Context, diskID string) (bool, error) {
-	id, err := parseDiskID(diskID)
-	if err != nil {
-		return false, err
-	}
-	diskID = id.String()
-
-	unlockDisk := m.lockDisk(ctx, diskID)
-	defer unlockDisk()
-
-	m.poolMu.Lock()
-	if m.closed {
-		m.poolMu.Unlock()
-		return false, ErrClosed
-	}
-	actor := m.actors[diskID]
-	if actor == nil {
-		m.poolMu.Unlock()
-		return false, nil
-	}
-	delete(m.actors, diskID)
-	m.poolMu.Unlock()
-
-	epoch := actor.WriterEpoch()
-	mode := actorModeLabel(actor.ReadOnly())
-	m.collector.incActorEviction()
-
-	if closeErr := actor.Close(); closeErr != nil {
-		m.collector.incCleanupError()
-		m.logger.WarnContext(ctx, "evict idle actor close failed",
-			"disk_id", diskID,
-			"epoch", epoch,
-			"mode", mode,
-			"err", closeErr,
-		)
-		return true, fmt.Errorf("驱逐空闲磁盘存储实例: %w", closeErr)
-	}
-
-	m.logger.InfoContext(ctx, "actor evicted",
-		"disk_id", diskID,
-		"epoch", epoch,
-		"mode", mode,
-	)
-	return true, nil
 }
 
 func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Disk, error) {
@@ -1013,12 +940,25 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 	return assembleDisk(&childRow, &stat), nil
 }
 
+func (m *manager) ensureOpen() error {
+	m.poolMu.RLock()
+	closed := m.closed
+	m.poolMu.RUnlock()
+	if closed {
+		return ErrClosed
+	}
+	return nil
+}
+
 func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 	id, err := parseDiskID(diskID)
 	if err != nil {
 		return nil, err
 	}
 	diskID = id.String()
+	if openErr := m.ensureOpen(); openErr != nil {
+		return nil, openErr
+	}
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
@@ -1042,6 +982,9 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListDisksResult, error) {
 	if params.PageSize > MaxListDisksPageSize {
 		return nil, fmt.Errorf("%w: page_size %d exceeds max %d", ErrInvalidArgument, params.PageSize, MaxListDisksPageSize)
+	}
+	if err := m.ensureOpen(); err != nil {
+		return nil, err
 	}
 	pageSize := params.PageSize
 	if pageSize == 0 {
@@ -1112,6 +1055,9 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	if params.MaxBytes != nil && (*params.MaxBytes == 0 || *params.MaxBytes > math.MaxInt64) {
 		return nil, ErrInvalidArgument
 	}
+	if openErr := m.ensureOpen(); openErr != nil {
+		return nil, openErr
+	}
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
@@ -1157,9 +1103,16 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		return err
 	}
 	diskID = id.String()
+	if openErr := m.ensureOpen(); openErr != nil {
+		return openErr
+	}
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
+
+	if openErr := m.ensureOpen(); openErr != nil {
+		return openErr
+	}
 
 	commitsToClean, err := m.store.DeleteDisk(ctx, id)
 	if err != nil {

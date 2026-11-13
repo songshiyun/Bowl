@@ -406,13 +406,6 @@ func (c *storageEngineCollector) incActorLoad(readOnly bool) {
 	c.actorLoadsRW.Add(1)
 }
 
-func (c *storageEngineCollector) incActorEviction() {
-	if c == nil {
-		return
-	}
-	c.actorEvictions.Add(1)
-}
-
 func (c *storageEngineCollector) incCleanupError() {
 	if c == nil {
 		return
