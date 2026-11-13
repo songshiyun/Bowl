@@ -86,6 +86,12 @@ const (
 	// StorageServiceMountDiskProcedure is the fully-qualified name of the StorageService's MountDisk
 	// RPC.
 	StorageServiceMountDiskProcedure = "/storage.v1.StorageService/MountDisk"
+	// StorageServiceRenewMountProcedure is the fully-qualified name of the StorageService's RenewMount
+	// RPC.
+	StorageServiceRenewMountProcedure = "/storage.v1.StorageService/RenewMount"
+	// StorageServiceUnmountDiskProcedure is the fully-qualified name of the StorageService's
+	// UnmountDisk RPC.
+	StorageServiceUnmountDiskProcedure = "/storage.v1.StorageService/UnmountDisk"
 	// StorageServiceCreateDiskProcedure is the fully-qualified name of the StorageService's CreateDisk
 	// RPC.
 	StorageServiceCreateDiskProcedure = "/storage.v1.StorageService/CreateDisk"
@@ -247,6 +253,10 @@ type StorageServiceClient interface {
 	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
 	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
 	MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error)
+	// RenewMount 为已建立的在线挂载软租约执行周期续期。
+	RenewMount(context.Context, *connect.Request[v1.RenewMountRequest]) (*connect.Response[v1.RenewMountResponse], error)
+	// UnmountDisk 幂等释放指定的在线挂载软租约。
+	UnmountDisk(context.Context, *connect.Request[v1.UnmountDiskRequest]) (*connect.Response[v1.UnmountDiskResponse], error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -443,6 +453,18 @@ func NewStorageServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(storageServiceMethods.ByName("MountDisk")),
 			connect.WithClientOptions(opts...),
 		),
+		renewMount: connect.NewClient[v1.RenewMountRequest, v1.RenewMountResponse](
+			httpClient,
+			baseURL+StorageServiceRenewMountProcedure,
+			connect.WithSchema(storageServiceMethods.ByName("RenewMount")),
+			connect.WithClientOptions(opts...),
+		),
+		unmountDisk: connect.NewClient[v1.UnmountDiskRequest, v1.UnmountDiskResponse](
+			httpClient,
+			baseURL+StorageServiceUnmountDiskProcedure,
+			connect.WithSchema(storageServiceMethods.ByName("UnmountDisk")),
+			connect.WithClientOptions(opts...),
+		),
 		createDisk: connect.NewClient[v1.CreateDiskRequest, v1.CreateDiskResponse](
 			httpClient,
 			baseURL+StorageServiceCreateDiskProcedure,
@@ -538,6 +560,8 @@ type storageServiceClient struct {
 	listXattr      *connect.Client[v1.ListXattrRequest, v1.ListXattrResponse]
 	removeXattr    *connect.Client[v1.RemoveXattrRequest, v1.RemoveXattrResponse]
 	mountDisk      *connect.Client[v1.MountDiskRequest, v1.MountDiskResponse]
+	renewMount     *connect.Client[v1.RenewMountRequest, v1.RenewMountResponse]
+	unmountDisk    *connect.Client[v1.UnmountDiskRequest, v1.UnmountDiskResponse]
 	createDisk     *connect.Client[v1.CreateDiskRequest, v1.CreateDiskResponse]
 	getDisk        *connect.Client[v1.GetDiskRequest, v1.GetDiskResponse]
 	listDisks      *connect.Client[v1.ListDisksRequest, v1.ListDisksResponse]
@@ -669,6 +693,16 @@ func (c *storageServiceClient) RemoveXattr(ctx context.Context, req *connect.Req
 // MountDisk calls storage.v1.StorageService.MountDisk.
 func (c *storageServiceClient) MountDisk(ctx context.Context, req *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error) {
 	return c.mountDisk.CallUnary(ctx, req)
+}
+
+// RenewMount calls storage.v1.StorageService.RenewMount.
+func (c *storageServiceClient) RenewMount(ctx context.Context, req *connect.Request[v1.RenewMountRequest]) (*connect.Response[v1.RenewMountResponse], error) {
+	return c.renewMount.CallUnary(ctx, req)
+}
+
+// UnmountDisk calls storage.v1.StorageService.UnmountDisk.
+func (c *storageServiceClient) UnmountDisk(ctx context.Context, req *connect.Request[v1.UnmountDiskRequest]) (*connect.Response[v1.UnmountDiskResponse], error) {
+	return c.unmountDisk.CallUnary(ctx, req)
 }
 
 // CreateDisk calls storage.v1.StorageService.CreateDisk.
@@ -856,6 +890,10 @@ type StorageServiceHandler interface {
 	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
 	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
 	MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error)
+	// RenewMount 为已建立的在线挂载软租约执行周期续期。
+	RenewMount(context.Context, *connect.Request[v1.RenewMountRequest]) (*connect.Response[v1.RenewMountResponse], error)
+	// UnmountDisk 幂等释放指定的在线挂载软租约。
+	UnmountDisk(context.Context, *connect.Request[v1.UnmountDiskRequest]) (*connect.Response[v1.UnmountDiskResponse], error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -1048,6 +1086,18 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 		connect.WithSchema(storageServiceMethods.ByName("MountDisk")),
 		connect.WithHandlerOptions(opts...),
 	)
+	storageServiceRenewMountHandler := connect.NewUnaryHandler(
+		StorageServiceRenewMountProcedure,
+		svc.RenewMount,
+		connect.WithSchema(storageServiceMethods.ByName("RenewMount")),
+		connect.WithHandlerOptions(opts...),
+	)
+	storageServiceUnmountDiskHandler := connect.NewUnaryHandler(
+		StorageServiceUnmountDiskProcedure,
+		svc.UnmountDisk,
+		connect.WithSchema(storageServiceMethods.ByName("UnmountDisk")),
+		connect.WithHandlerOptions(opts...),
+	)
 	storageServiceCreateDiskHandler := connect.NewUnaryHandler(
 		StorageServiceCreateDiskProcedure,
 		svc.CreateDisk,
@@ -1164,6 +1214,10 @@ func NewStorageServiceHandler(svc StorageServiceHandler, opts ...connect.Handler
 			storageServiceRemoveXattrHandler.ServeHTTP(w, r)
 		case StorageServiceMountDiskProcedure:
 			storageServiceMountDiskHandler.ServeHTTP(w, r)
+		case StorageServiceRenewMountProcedure:
+			storageServiceRenewMountHandler.ServeHTTP(w, r)
+		case StorageServiceUnmountDiskProcedure:
+			storageServiceUnmountDiskHandler.ServeHTTP(w, r)
 		case StorageServiceCreateDiskProcedure:
 			storageServiceCreateDiskHandler.ServeHTTP(w, r)
 		case StorageServiceGetDiskProcedure:
@@ -1289,6 +1343,14 @@ func (UnimplementedStorageServiceHandler) RemoveXattr(context.Context, *connect.
 
 func (UnimplementedStorageServiceHandler) MountDisk(context.Context, *connect.Request[v1.MountDiskRequest]) (*connect.Response[v1.MountDiskResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.MountDisk is not implemented"))
+}
+
+func (UnimplementedStorageServiceHandler) RenewMount(context.Context, *connect.Request[v1.RenewMountRequest]) (*connect.Response[v1.RenewMountResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.RenewMount is not implemented"))
+}
+
+func (UnimplementedStorageServiceHandler) UnmountDisk(context.Context, *connect.Request[v1.UnmountDiskRequest]) (*connect.Response[v1.UnmountDiskResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("storage.v1.StorageService.UnmountDisk is not implemented"))
 }
 
 func (UnimplementedStorageServiceHandler) CreateDisk(context.Context, *connect.Request[v1.CreateDiskRequest]) (*connect.Response[v1.CreateDiskResponse], error) {

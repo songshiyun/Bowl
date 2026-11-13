@@ -43,6 +43,8 @@ const (
 	StorageService_ListXattr_FullMethodName      = "/storage.v1.StorageService/ListXattr"
 	StorageService_RemoveXattr_FullMethodName    = "/storage.v1.StorageService/RemoveXattr"
 	StorageService_MountDisk_FullMethodName      = "/storage.v1.StorageService/MountDisk"
+	StorageService_RenewMount_FullMethodName     = "/storage.v1.StorageService/RenewMount"
+	StorageService_UnmountDisk_FullMethodName    = "/storage.v1.StorageService/UnmountDisk"
 	StorageService_CreateDisk_FullMethodName     = "/storage.v1.StorageService/CreateDisk"
 	StorageService_GetDisk_FullMethodName        = "/storage.v1.StorageService/GetDisk"
 	StorageService_ListDisks_FullMethodName      = "/storage.v1.StorageService/ListDisks"
@@ -190,6 +192,10 @@ type StorageServiceClient interface {
 	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
 	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
 	MountDisk(ctx context.Context, in *MountDiskRequest, opts ...grpc.CallOption) (*MountDiskResponse, error)
+	// RenewMount 为已建立的在线挂载软租约执行周期续期。
+	RenewMount(ctx context.Context, in *RenewMountRequest, opts ...grpc.CallOption) (*RenewMountResponse, error)
+	// UnmountDisk 幂等释放指定的在线挂载软租约。
+	UnmountDisk(ctx context.Context, in *UnmountDiskRequest, opts ...grpc.CallOption) (*UnmountDiskResponse, error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -479,6 +485,26 @@ func (c *storageServiceClient) MountDisk(ctx context.Context, in *MountDiskReque
 	return out, nil
 }
 
+func (c *storageServiceClient) RenewMount(ctx context.Context, in *RenewMountRequest, opts ...grpc.CallOption) (*RenewMountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewMountResponse)
+	err := c.cc.Invoke(ctx, StorageService_RenewMount_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *storageServiceClient) UnmountDisk(ctx context.Context, in *UnmountDiskRequest, opts ...grpc.CallOption) (*UnmountDiskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UnmountDiskResponse)
+	err := c.cc.Invoke(ctx, StorageService_UnmountDisk_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *storageServiceClient) CreateDisk(ctx context.Context, in *CreateDiskRequest, opts ...grpc.CallOption) (*CreateDiskResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateDiskResponse)
@@ -723,6 +749,10 @@ type StorageServiceServer interface {
 	// 可写挂载 (read_only = false) 原子递增并持久化 WriterEpoch，清理残留孤儿节点并返回新世代号与根 Inode。
 	// 只读挂载 (read_only = true) 校验目标磁盘存在并返回 epoch = 0 与根 Inode。
 	MountDisk(context.Context, *MountDiskRequest) (*MountDiskResponse, error)
+	// RenewMount 为已建立的在线挂载软租约执行周期续期。
+	RenewMount(context.Context, *RenewMountRequest) (*RenewMountResponse, error)
+	// UnmountDisk 幂等释放指定的在线挂载软租约。
+	UnmountDisk(context.Context, *UnmountDiskRequest) (*UnmountDiskResponse, error)
 	// CreateDisk 创建新的虚拟磁盘实体并原子创建其根目录 Inode。
 	// 分配全局唯一 UUIDv7 磁盘标识符与初始配额上限，创建根目录 Inode 并将其与磁盘一对一强绑定。
 	// 若指定参数非法（如 name 超过 255 字节或包含 '\x00'，或 max_bytes 为 0/超出 int64 最大值），必须返回 InvalidArgument (映射至 POSIX EINVAL) 或相应错误。
@@ -843,6 +873,12 @@ func (UnimplementedStorageServiceServer) RemoveXattr(context.Context, *RemoveXat
 }
 func (UnimplementedStorageServiceServer) MountDisk(context.Context, *MountDiskRequest) (*MountDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MountDisk not implemented")
+}
+func (UnimplementedStorageServiceServer) RenewMount(context.Context, *RenewMountRequest) (*RenewMountResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenewMount not implemented")
+}
+func (UnimplementedStorageServiceServer) UnmountDisk(context.Context, *UnmountDiskRequest) (*UnmountDiskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UnmountDisk not implemented")
 }
 func (UnimplementedStorageServiceServer) CreateDisk(context.Context, *CreateDiskRequest) (*CreateDiskResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateDisk not implemented")
@@ -1330,6 +1366,42 @@ func _StorageService_MountDisk_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StorageService_RenewMount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewMountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).RenewMount(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_RenewMount_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).RenewMount(ctx, req.(*RenewMountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _StorageService_UnmountDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UnmountDiskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(StorageServiceServer).UnmountDisk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: StorageService_UnmountDisk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(StorageServiceServer).UnmountDisk(ctx, req.(*UnmountDiskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _StorageService_CreateDisk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateDiskRequest)
 	if err := dec(in); err != nil {
@@ -1630,6 +1702,14 @@ var StorageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "MountDisk",
 			Handler:    _StorageService_MountDisk_Handler,
+		},
+		{
+			MethodName: "RenewMount",
+			Handler:    _StorageService_RenewMount_Handler,
+		},
+		{
+			MethodName: "UnmountDisk",
+			Handler:    _StorageService_UnmountDisk_Handler,
 		},
 		{
 			MethodName: "CreateDisk",

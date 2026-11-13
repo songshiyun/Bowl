@@ -41,6 +41,10 @@ func runValidationIntercept(t *testing.T, msg any) (bool, error) {
 		req = connect.NewRequest(m)
 	case *storagev1.MergeDiskRequest:
 		req = connect.NewRequest(m)
+	case *storagev1.RenewMountRequest:
+		req = connect.NewRequest(m)
+	case *storagev1.UnmountDiskRequest:
+		req = connect.NewRequest(m)
 	default:
 		t.Fatalf("不支持的校验测试消息类型: %T", msg)
 	}
@@ -371,4 +375,111 @@ func TestValidation_MergeDiskRequest(t *testing.T) {
 			assertValidationAccepted(t, tc.req)
 		})
 	}
+}
+
+func TestValidator_RenewMountRequest(t *testing.T) {
+	const testMountID = "44444444-4444-7444-8444-444444444444"
+
+	invalidCases := []struct {
+		name string
+		req  *storagev1.RenewMountRequest
+	}{
+		{
+			name: "非法_disk_id",
+			req:  &storagev1.RenewMountRequest{DiskId: "bad-uuid", MountId: testMountID, ReadOnly: false, Epoch: 1},
+		},
+		{
+			name: "全零_nil_disk_id",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationNilUUID, MountId: testMountID, ReadOnly: false, Epoch: 1},
+		},
+		{
+			name: "非法_mount_id",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: "bad-uuid", ReadOnly: false, Epoch: 1},
+		},
+		{
+			name: "全零_nil_mount_id",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testValidationNilUUID, ReadOnly: false, Epoch: 1},
+		},
+		{
+			name: "read_only_为_true_且_epoch_大于_0",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: true, Epoch: 1},
+		},
+		{
+			name: "read_only_为_false_且_epoch_为_0",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: false, Epoch: 0},
+		},
+		{
+			name: "epoch_溢出_MaxInt64",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: false, Epoch: uint64(math.MaxInt64) + 1},
+		},
+	}
+
+	for _, tc := range invalidCases {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			assertValidationRejected(t, tc.req)
+		})
+	}
+
+	validCases := []struct {
+		name string
+		req  *storagev1.RenewMountRequest
+	}{
+		{
+			name: "只读挂载_read_only_为_true_且_epoch_为_0",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: true, Epoch: 0},
+		},
+		{
+			name: "可写挂载_最小合法_epoch",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: false, Epoch: 1},
+		},
+		{
+			name: "可写挂载_最大合法_epoch",
+			req:  &storagev1.RenewMountRequest{DiskId: testValidationTargetDiskID, MountId: testMountID, ReadOnly: false, Epoch: math.MaxInt64},
+		},
+	}
+
+	for _, tc := range validCases {
+		t.Run("accept/"+tc.name, func(t *testing.T) {
+			assertValidationAccepted(t, tc.req)
+		})
+	}
+}
+
+func TestValidator_UnmountDiskRequest(t *testing.T) {
+	const testMountID = "44444444-4444-7444-8444-444444444444"
+
+	invalidCases := []struct {
+		name string
+		req  *storagev1.UnmountDiskRequest
+	}{
+		{
+			name: "非法_disk_id",
+			req:  &storagev1.UnmountDiskRequest{DiskId: "bad-uuid", MountId: testMountID},
+		},
+		{
+			name: "全零_nil_disk_id",
+			req:  &storagev1.UnmountDiskRequest{DiskId: testValidationNilUUID, MountId: testMountID},
+		},
+		{
+			name: "非法_mount_id",
+			req:  &storagev1.UnmountDiskRequest{DiskId: testValidationTargetDiskID, MountId: "bad-uuid"},
+		},
+		{
+			name: "全零_nil_mount_id",
+			req:  &storagev1.UnmountDiskRequest{DiskId: testValidationTargetDiskID, MountId: testValidationNilUUID},
+		},
+	}
+
+	for _, tc := range invalidCases {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			assertValidationRejected(t, tc.req)
+		})
+	}
+
+	t.Run("accept/合法_disk_id_与_mount_id", func(t *testing.T) {
+		assertValidationAccepted(t, &storagev1.UnmountDiskRequest{
+			DiskId:  testValidationTargetDiskID,
+			MountId: testMountID,
+		})
+	})
 }

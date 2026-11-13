@@ -3603,8 +3603,12 @@ type MountDiskResponse struct {
 	RootInode           *Inode                 `protobuf:"bytes,2,opt,name=root_inode,json=rootInode,proto3" json:"root_inode,omitempty"`
 	EntryTimeoutSeconds float64                `protobuf:"fixed64,3,opt,name=entry_timeout_seconds,json=entryTimeoutSeconds,proto3" json:"entry_timeout_seconds,omitempty"`
 	AttrTimeoutSeconds  float64                `protobuf:"fixed64,4,opt,name=attr_timeout_seconds,json=attrTimeoutSeconds,proto3" json:"attr_timeout_seconds,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// 本次在线挂载实例的唯一标识符（UUID 格式）。
+	MountId string `protobuf:"bytes,5,opt,name=mount_id,json=mountId,proto3" json:"mount_id,omitempty"`
+	// 在线挂载软租约的有效时长（秒）。
+	LeaseTtlSeconds uint32 `protobuf:"varint,6,opt,name=lease_ttl_seconds,json=leaseTtlSeconds,proto3" json:"lease_ttl_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *MountDiskResponse) Reset() {
@@ -3665,6 +3669,231 @@ func (x *MountDiskResponse) GetAttrTimeoutSeconds() float64 {
 	return 0
 }
 
+func (x *MountDiskResponse) GetMountId() string {
+	if x != nil {
+		return x.MountId
+	}
+	return ""
+}
+
+func (x *MountDiskResponse) GetLeaseTtlSeconds() uint32 {
+	if x != nil {
+		return x.LeaseTtlSeconds
+	}
+	return 0
+}
+
+// RenewMountRequest 定义 RenewMount 接口输入参数。
+type RenewMountRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+	DiskId string `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	// 挂载实例唯一标识符（UUID 格式，非全零 nil UUID）。
+	MountId string `protobuf:"bytes,2,opt,name=mount_id,json=mountId,proto3" json:"mount_id,omitempty"`
+	// 是否为只读挂载。
+	ReadOnly bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// 写挂载世代号（只读挂载必须为 0；可写挂载必须大于 0 且在 int64 正数范围内）。
+	Epoch         uint64 `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RenewMountRequest) Reset() {
+	*x = RenewMountRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewMountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewMountRequest) ProtoMessage() {}
+
+func (x *RenewMountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewMountRequest.ProtoReflect.Descriptor instead.
+func (*RenewMountRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *RenewMountRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *RenewMountRequest) GetMountId() string {
+	if x != nil {
+		return x.MountId
+	}
+	return ""
+}
+
+func (x *RenewMountRequest) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *RenewMountRequest) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+// RenewMountResponse 定义 RenewMount 接口输出参数。
+type RenewMountResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 续期后的在线挂载软租约有效时长（秒）。
+	LeaseTtlSeconds uint32 `protobuf:"varint,1,opt,name=lease_ttl_seconds,json=leaseTtlSeconds,proto3" json:"lease_ttl_seconds,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RenewMountResponse) Reset() {
+	*x = RenewMountResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RenewMountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RenewMountResponse) ProtoMessage() {}
+
+func (x *RenewMountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RenewMountResponse.ProtoReflect.Descriptor instead.
+func (*RenewMountResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *RenewMountResponse) GetLeaseTtlSeconds() uint32 {
+	if x != nil {
+		return x.LeaseTtlSeconds
+	}
+	return 0
+}
+
+// UnmountDiskRequest 定义 UnmountDisk 接口输入参数。
+type UnmountDiskRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 目标磁盘唯一标识符（UUID 格式，非全零 nil UUID）。
+	DiskId string `protobuf:"bytes,1,opt,name=disk_id,json=diskId,proto3" json:"disk_id,omitempty"`
+	// 挂载实例唯一标识符（UUID 格式，非全零 nil UUID）。
+	MountId       string `protobuf:"bytes,2,opt,name=mount_id,json=mountId,proto3" json:"mount_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnmountDiskRequest) Reset() {
+	*x = UnmountDiskRequest{}
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnmountDiskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnmountDiskRequest) ProtoMessage() {}
+
+func (x *UnmountDiskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnmountDiskRequest.ProtoReflect.Descriptor instead.
+func (*UnmountDiskRequest) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *UnmountDiskRequest) GetDiskId() string {
+	if x != nil {
+		return x.DiskId
+	}
+	return ""
+}
+
+func (x *UnmountDiskRequest) GetMountId() string {
+	if x != nil {
+		return x.MountId
+	}
+	return ""
+}
+
+// UnmountDiskResponse 定义 UnmountDisk 接口输出参数。
+type UnmountDiskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnmountDiskResponse) Reset() {
+	*x = UnmountDiskResponse{}
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UnmountDiskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UnmountDiskResponse) ProtoMessage() {}
+
+func (x *UnmountDiskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UnmountDiskResponse.ProtoReflect.Descriptor instead.
+func (*UnmountDiskResponse) Descriptor() ([]byte, []int) {
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{53}
+}
+
 type Inode struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// 节点的全局唯一持久化标识。
@@ -3679,7 +3908,7 @@ type Inode struct {
 
 func (x *Inode) Reset() {
 	*x = Inode{}
-	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	mi := &file_storage_v1_storage_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3691,7 +3920,7 @@ func (x *Inode) String() string {
 func (*Inode) ProtoMessage() {}
 
 func (x *Inode) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[50]
+	mi := &file_storage_v1_storage_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3704,7 +3933,7 @@ func (x *Inode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Inode.ProtoReflect.Descriptor instead.
 func (*Inode) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{50}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *Inode) GetIno() uint64 {
@@ -3761,7 +3990,7 @@ type InodeAttribute struct {
 
 func (x *InodeAttribute) Reset() {
 	*x = InodeAttribute{}
-	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	mi := &file_storage_v1_storage_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3773,7 +4002,7 @@ func (x *InodeAttribute) String() string {
 func (*InodeAttribute) ProtoMessage() {}
 
 func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[51]
+	mi := &file_storage_v1_storage_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3786,7 +4015,7 @@ func (x *InodeAttribute) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InodeAttribute.ProtoReflect.Descriptor instead.
 func (*InodeAttribute) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{51}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *InodeAttribute) GetMode() uint32 {
@@ -3900,7 +4129,7 @@ type Disk struct {
 
 func (x *Disk) Reset() {
 	*x = Disk{}
-	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	mi := &file_storage_v1_storage_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3912,7 +4141,7 @@ func (x *Disk) String() string {
 func (*Disk) ProtoMessage() {}
 
 func (x *Disk) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[52]
+	mi := &file_storage_v1_storage_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3925,7 +4154,7 @@ func (x *Disk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Disk.ProtoReflect.Descriptor instead.
 func (*Disk) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{52}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *Disk) GetDiskId() string {
@@ -4004,7 +4233,7 @@ type CreateDiskRequest struct {
 
 func (x *CreateDiskRequest) Reset() {
 	*x = CreateDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	mi := &file_storage_v1_storage_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4016,7 +4245,7 @@ func (x *CreateDiskRequest) String() string {
 func (*CreateDiskRequest) ProtoMessage() {}
 
 func (x *CreateDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[53]
+	mi := &file_storage_v1_storage_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4029,7 +4258,7 @@ func (x *CreateDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDiskRequest.ProtoReflect.Descriptor instead.
 func (*CreateDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{53}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *CreateDiskRequest) GetName() string {
@@ -4057,7 +4286,7 @@ type CreateDiskResponse struct {
 
 func (x *CreateDiskResponse) Reset() {
 	*x = CreateDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[54]
+	mi := &file_storage_v1_storage_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4069,7 +4298,7 @@ func (x *CreateDiskResponse) String() string {
 func (*CreateDiskResponse) ProtoMessage() {}
 
 func (x *CreateDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[54]
+	mi := &file_storage_v1_storage_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4082,7 +4311,7 @@ func (x *CreateDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateDiskResponse.ProtoReflect.Descriptor instead.
 func (*CreateDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{54}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *CreateDiskResponse) GetDisk() *Disk {
@@ -4103,7 +4332,7 @@ type GetDiskRequest struct {
 
 func (x *GetDiskRequest) Reset() {
 	*x = GetDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[55]
+	mi := &file_storage_v1_storage_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4115,7 +4344,7 @@ func (x *GetDiskRequest) String() string {
 func (*GetDiskRequest) ProtoMessage() {}
 
 func (x *GetDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[55]
+	mi := &file_storage_v1_storage_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4128,7 +4357,7 @@ func (x *GetDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskRequest.ProtoReflect.Descriptor instead.
 func (*GetDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{55}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *GetDiskRequest) GetDiskId() string {
@@ -4149,7 +4378,7 @@ type GetDiskResponse struct {
 
 func (x *GetDiskResponse) Reset() {
 	*x = GetDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[56]
+	mi := &file_storage_v1_storage_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4161,7 +4390,7 @@ func (x *GetDiskResponse) String() string {
 func (*GetDiskResponse) ProtoMessage() {}
 
 func (x *GetDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[56]
+	mi := &file_storage_v1_storage_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4174,7 +4403,7 @@ func (x *GetDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDiskResponse.ProtoReflect.Descriptor instead.
 func (*GetDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{56}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *GetDiskResponse) GetDisk() *Disk {
@@ -4197,7 +4426,7 @@ type ListDisksRequest struct {
 
 func (x *ListDisksRequest) Reset() {
 	*x = ListDisksRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[57]
+	mi := &file_storage_v1_storage_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4209,7 +4438,7 @@ func (x *ListDisksRequest) String() string {
 func (*ListDisksRequest) ProtoMessage() {}
 
 func (x *ListDisksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[57]
+	mi := &file_storage_v1_storage_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4222,7 +4451,7 @@ func (x *ListDisksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDisksRequest.ProtoReflect.Descriptor instead.
 func (*ListDisksRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{57}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ListDisksRequest) GetPageSize() uint32 {
@@ -4252,7 +4481,7 @@ type ListDisksResponse struct {
 
 func (x *ListDisksResponse) Reset() {
 	*x = ListDisksResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[58]
+	mi := &file_storage_v1_storage_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4264,7 +4493,7 @@ func (x *ListDisksResponse) String() string {
 func (*ListDisksResponse) ProtoMessage() {}
 
 func (x *ListDisksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[58]
+	mi := &file_storage_v1_storage_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4277,7 +4506,7 @@ func (x *ListDisksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDisksResponse.ProtoReflect.Descriptor instead.
 func (*ListDisksResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{58}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListDisksResponse) GetDisks() []*Disk {
@@ -4309,7 +4538,7 @@ type UpdateDiskRequest struct {
 
 func (x *UpdateDiskRequest) Reset() {
 	*x = UpdateDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[59]
+	mi := &file_storage_v1_storage_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4321,7 +4550,7 @@ func (x *UpdateDiskRequest) String() string {
 func (*UpdateDiskRequest) ProtoMessage() {}
 
 func (x *UpdateDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[59]
+	mi := &file_storage_v1_storage_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4334,7 +4563,7 @@ func (x *UpdateDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDiskRequest.ProtoReflect.Descriptor instead.
 func (*UpdateDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{59}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *UpdateDiskRequest) GetDiskId() string {
@@ -4369,7 +4598,7 @@ type UpdateDiskResponse struct {
 
 func (x *UpdateDiskResponse) Reset() {
 	*x = UpdateDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[60]
+	mi := &file_storage_v1_storage_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4381,7 +4610,7 @@ func (x *UpdateDiskResponse) String() string {
 func (*UpdateDiskResponse) ProtoMessage() {}
 
 func (x *UpdateDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[60]
+	mi := &file_storage_v1_storage_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4394,7 +4623,7 @@ func (x *UpdateDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateDiskResponse.ProtoReflect.Descriptor instead.
 func (*UpdateDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{60}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *UpdateDiskResponse) GetDisk() *Disk {
@@ -4415,7 +4644,7 @@ type DeleteDiskRequest struct {
 
 func (x *DeleteDiskRequest) Reset() {
 	*x = DeleteDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[61]
+	mi := &file_storage_v1_storage_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4427,7 +4656,7 @@ func (x *DeleteDiskRequest) String() string {
 func (*DeleteDiskRequest) ProtoMessage() {}
 
 func (x *DeleteDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[61]
+	mi := &file_storage_v1_storage_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4440,7 +4669,7 @@ func (x *DeleteDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDiskRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{61}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DeleteDiskRequest) GetDiskId() string {
@@ -4459,7 +4688,7 @@ type DeleteDiskResponse struct {
 
 func (x *DeleteDiskResponse) Reset() {
 	*x = DeleteDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[62]
+	mi := &file_storage_v1_storage_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4471,7 +4700,7 @@ func (x *DeleteDiskResponse) String() string {
 func (*DeleteDiskResponse) ProtoMessage() {}
 
 func (x *DeleteDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[62]
+	mi := &file_storage_v1_storage_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4484,7 +4713,7 @@ func (x *DeleteDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDiskResponse.ProtoReflect.Descriptor instead.
 func (*DeleteDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{62}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{66}
 }
 
 // ForkDiskRequest 定义 ForkDisk 接口输入参数。
@@ -4502,7 +4731,7 @@ type ForkDiskRequest struct {
 
 func (x *ForkDiskRequest) Reset() {
 	*x = ForkDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[63]
+	mi := &file_storage_v1_storage_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4514,7 +4743,7 @@ func (x *ForkDiskRequest) String() string {
 func (*ForkDiskRequest) ProtoMessage() {}
 
 func (x *ForkDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[63]
+	mi := &file_storage_v1_storage_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4527,7 +4756,7 @@ func (x *ForkDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForkDiskRequest.ProtoReflect.Descriptor instead.
 func (*ForkDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{63}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ForkDiskRequest) GetSourceDiskId() string {
@@ -4562,7 +4791,7 @@ type ForkDiskResponse struct {
 
 func (x *ForkDiskResponse) Reset() {
 	*x = ForkDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[64]
+	mi := &file_storage_v1_storage_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4574,7 +4803,7 @@ func (x *ForkDiskResponse) String() string {
 func (*ForkDiskResponse) ProtoMessage() {}
 
 func (x *ForkDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[64]
+	mi := &file_storage_v1_storage_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4587,7 +4816,7 @@ func (x *ForkDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForkDiskResponse.ProtoReflect.Descriptor instead.
 func (*ForkDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{64}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ForkDiskResponse) GetDisk() *Disk {
@@ -4610,7 +4839,7 @@ type StatFSRequest struct {
 
 func (x *StatFSRequest) Reset() {
 	*x = StatFSRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[65]
+	mi := &file_storage_v1_storage_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4622,7 +4851,7 @@ func (x *StatFSRequest) String() string {
 func (*StatFSRequest) ProtoMessage() {}
 
 func (x *StatFSRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[65]
+	mi := &file_storage_v1_storage_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4635,7 +4864,7 @@ func (x *StatFSRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatFSRequest.ProtoReflect.Descriptor instead.
 func (*StatFSRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{65}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *StatFSRequest) GetIno() uint64 {
@@ -4683,7 +4912,7 @@ type StatFSResponse struct {
 
 func (x *StatFSResponse) Reset() {
 	*x = StatFSResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[66]
+	mi := &file_storage_v1_storage_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4695,7 +4924,7 @@ func (x *StatFSResponse) String() string {
 func (*StatFSResponse) ProtoMessage() {}
 
 func (x *StatFSResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[66]
+	mi := &file_storage_v1_storage_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4708,7 +4937,7 @@ func (x *StatFSResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatFSResponse.ProtoReflect.Descriptor instead.
 func (*StatFSResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{66}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *StatFSResponse) GetTotalBytes() uint64 {
@@ -4800,7 +5029,7 @@ type ReclaimOrphanRequest struct {
 
 func (x *ReclaimOrphanRequest) Reset() {
 	*x = ReclaimOrphanRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[67]
+	mi := &file_storage_v1_storage_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4812,7 +5041,7 @@ func (x *ReclaimOrphanRequest) String() string {
 func (*ReclaimOrphanRequest) ProtoMessage() {}
 
 func (x *ReclaimOrphanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[67]
+	mi := &file_storage_v1_storage_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4825,7 +5054,7 @@ func (x *ReclaimOrphanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReclaimOrphanRequest.ProtoReflect.Descriptor instead.
 func (*ReclaimOrphanRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{67}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ReclaimOrphanRequest) GetDiskId() string {
@@ -4858,7 +5087,7 @@ type ReclaimOrphanResponse struct {
 
 func (x *ReclaimOrphanResponse) Reset() {
 	*x = ReclaimOrphanResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[68]
+	mi := &file_storage_v1_storage_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4870,7 +5099,7 @@ func (x *ReclaimOrphanResponse) String() string {
 func (*ReclaimOrphanResponse) ProtoMessage() {}
 
 func (x *ReclaimOrphanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[68]
+	mi := &file_storage_v1_storage_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4883,7 +5112,7 @@ func (x *ReclaimOrphanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReclaimOrphanResponse.ProtoReflect.Descriptor instead.
 func (*ReclaimOrphanResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{68}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{72}
 }
 
 // DiffNodeSummary 描述差异或冲突条目的节点关键元数据摘要。
@@ -4901,7 +5130,7 @@ type DiffNodeSummary struct {
 
 func (x *DiffNodeSummary) Reset() {
 	*x = DiffNodeSummary{}
-	mi := &file_storage_v1_storage_proto_msgTypes[69]
+	mi := &file_storage_v1_storage_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4913,7 +5142,7 @@ func (x *DiffNodeSummary) String() string {
 func (*DiffNodeSummary) ProtoMessage() {}
 
 func (x *DiffNodeSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[69]
+	mi := &file_storage_v1_storage_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4926,7 +5155,7 @@ func (x *DiffNodeSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffNodeSummary.ProtoReflect.Descriptor instead.
 func (*DiffNodeSummary) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{69}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *DiffNodeSummary) GetIno() uint64 {
@@ -4971,7 +5200,7 @@ type DiffEntry struct {
 
 func (x *DiffEntry) Reset() {
 	*x = DiffEntry{}
-	mi := &file_storage_v1_storage_proto_msgTypes[70]
+	mi := &file_storage_v1_storage_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4983,7 +5212,7 @@ func (x *DiffEntry) String() string {
 func (*DiffEntry) ProtoMessage() {}
 
 func (x *DiffEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[70]
+	mi := &file_storage_v1_storage_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4996,7 +5225,7 @@ func (x *DiffEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffEntry.ProtoReflect.Descriptor instead.
 func (*DiffEntry) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{70}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *DiffEntry) GetPath() []byte {
@@ -5058,7 +5287,7 @@ type DiffSummary struct {
 
 func (x *DiffSummary) Reset() {
 	*x = DiffSummary{}
-	mi := &file_storage_v1_storage_proto_msgTypes[71]
+	mi := &file_storage_v1_storage_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5070,7 +5299,7 @@ func (x *DiffSummary) String() string {
 func (*DiffSummary) ProtoMessage() {}
 
 func (x *DiffSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[71]
+	mi := &file_storage_v1_storage_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5083,7 +5312,7 @@ func (x *DiffSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffSummary.ProtoReflect.Descriptor instead.
 func (*DiffSummary) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{71}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *DiffSummary) GetAdded() uint64 {
@@ -5135,7 +5364,7 @@ type DiffDiskRequest struct {
 
 func (x *DiffDiskRequest) Reset() {
 	*x = DiffDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[72]
+	mi := &file_storage_v1_storage_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5147,7 +5376,7 @@ func (x *DiffDiskRequest) String() string {
 func (*DiffDiskRequest) ProtoMessage() {}
 
 func (x *DiffDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[72]
+	mi := &file_storage_v1_storage_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5160,7 +5389,7 @@ func (x *DiffDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffDiskRequest.ProtoReflect.Descriptor instead.
 func (*DiffDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{72}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *DiffDiskRequest) GetSourceDiskId() string {
@@ -5222,7 +5451,7 @@ type DiffDiskResponse struct {
 
 func (x *DiffDiskResponse) Reset() {
 	*x = DiffDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[73]
+	mi := &file_storage_v1_storage_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5234,7 +5463,7 @@ func (x *DiffDiskResponse) String() string {
 func (*DiffDiskResponse) ProtoMessage() {}
 
 func (x *DiffDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[73]
+	mi := &file_storage_v1_storage_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5247,7 +5476,7 @@ func (x *DiffDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffDiskResponse.ProtoReflect.Descriptor instead.
 func (*DiffDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{73}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DiffDiskResponse) GetLcaCommitId() string {
@@ -5297,7 +5526,7 @@ type ReadCommitNodeRequest struct {
 
 func (x *ReadCommitNodeRequest) Reset() {
 	*x = ReadCommitNodeRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[74]
+	mi := &file_storage_v1_storage_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5309,7 +5538,7 @@ func (x *ReadCommitNodeRequest) String() string {
 func (*ReadCommitNodeRequest) ProtoMessage() {}
 
 func (x *ReadCommitNodeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[74]
+	mi := &file_storage_v1_storage_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5322,7 +5551,7 @@ func (x *ReadCommitNodeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadCommitNodeRequest.ProtoReflect.Descriptor instead.
 func (*ReadCommitNodeRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{74}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ReadCommitNodeRequest) GetDiskId() string {
@@ -5379,7 +5608,7 @@ type ReadCommitNodeResponse struct {
 
 func (x *ReadCommitNodeResponse) Reset() {
 	*x = ReadCommitNodeResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[75]
+	mi := &file_storage_v1_storage_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5391,7 +5620,7 @@ func (x *ReadCommitNodeResponse) String() string {
 func (*ReadCommitNodeResponse) ProtoMessage() {}
 
 func (x *ReadCommitNodeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[75]
+	mi := &file_storage_v1_storage_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5404,7 +5633,7 @@ func (x *ReadCommitNodeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadCommitNodeResponse.ProtoReflect.Descriptor instead.
 func (*ReadCommitNodeResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{75}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ReadCommitNodeResponse) GetMode() uint32 {
@@ -5461,7 +5690,7 @@ type MergeConflict struct {
 
 func (x *MergeConflict) Reset() {
 	*x = MergeConflict{}
-	mi := &file_storage_v1_storage_proto_msgTypes[76]
+	mi := &file_storage_v1_storage_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5473,7 +5702,7 @@ func (x *MergeConflict) String() string {
 func (*MergeConflict) ProtoMessage() {}
 
 func (x *MergeConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[76]
+	mi := &file_storage_v1_storage_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5486,7 +5715,7 @@ func (x *MergeConflict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeConflict.ProtoReflect.Descriptor instead.
 func (*MergeConflict) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{76}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *MergeConflict) GetPath() []byte {
@@ -5541,7 +5770,7 @@ type MergeConflictReport struct {
 
 func (x *MergeConflictReport) Reset() {
 	*x = MergeConflictReport{}
-	mi := &file_storage_v1_storage_proto_msgTypes[77]
+	mi := &file_storage_v1_storage_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5553,7 +5782,7 @@ func (x *MergeConflictReport) String() string {
 func (*MergeConflictReport) ProtoMessage() {}
 
 func (x *MergeConflictReport) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[77]
+	mi := &file_storage_v1_storage_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5566,7 +5795,7 @@ func (x *MergeConflictReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeConflictReport.ProtoReflect.Descriptor instead.
 func (*MergeConflictReport) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{77}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *MergeConflictReport) GetLcaCommitId() string {
@@ -5611,14 +5840,16 @@ type MergeDiskRequest struct {
 	// 是否仅执行预演检查而不实际提交合并结果。
 	DryRun bool `protobuf:"varint,5,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	// 可选的合并后目标盘容量配额上限字节数（指定时必须在 int64 正数区间内）。
-	MaxBytes      *uint64 `protobuf:"varint,6,opt,name=max_bytes,json=maxBytes,proto3,oneof" json:"max_bytes,omitempty"`
+	MaxBytes *uint64 `protobuf:"varint,6,opt,name=max_bytes,json=maxBytes,proto3,oneof" json:"max_bytes,omitempty"`
+	// 是否忽略在线挂载软租约门禁强制执行合并。
+	Force         bool `protobuf:"varint,7,opt,name=force,proto3" json:"force,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MergeDiskRequest) Reset() {
 	*x = MergeDiskRequest{}
-	mi := &file_storage_v1_storage_proto_msgTypes[78]
+	mi := &file_storage_v1_storage_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5630,7 +5861,7 @@ func (x *MergeDiskRequest) String() string {
 func (*MergeDiskRequest) ProtoMessage() {}
 
 func (x *MergeDiskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[78]
+	mi := &file_storage_v1_storage_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5643,7 +5874,7 @@ func (x *MergeDiskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeDiskRequest.ProtoReflect.Descriptor instead.
 func (*MergeDiskRequest) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{78}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *MergeDiskRequest) GetSourceDiskId() string {
@@ -5688,6 +5919,13 @@ func (x *MergeDiskRequest) GetMaxBytes() uint64 {
 	return 0
 }
 
+func (x *MergeDiskRequest) GetForce() bool {
+	if x != nil {
+		return x.Force
+	}
+	return false
+}
+
 // MergeDiskResponse 定义 MergeDisk 接口输出参数。
 type MergeDiskResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -5709,7 +5947,7 @@ type MergeDiskResponse struct {
 
 func (x *MergeDiskResponse) Reset() {
 	*x = MergeDiskResponse{}
-	mi := &file_storage_v1_storage_proto_msgTypes[79]
+	mi := &file_storage_v1_storage_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5721,7 +5959,7 @@ func (x *MergeDiskResponse) String() string {
 func (*MergeDiskResponse) ProtoMessage() {}
 
 func (x *MergeDiskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_storage_v1_storage_proto_msgTypes[79]
+	mi := &file_storage_v1_storage_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5734,7 +5972,7 @@ func (x *MergeDiskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MergeDiskResponse.ProtoReflect.Descriptor instead.
 func (*MergeDiskResponse) Descriptor() ([]byte, []int) {
-	return file_storage_v1_storage_proto_rawDescGZIP(), []int{79}
+	return file_storage_v1_storage_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *MergeDiskResponse) GetDisk() *Disk {
@@ -6088,13 +6326,32 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x10MountDiskRequest\x12\x8e\x01\n" +
 	"\adisk_id\x18\x01 \x01(\tBu\xbaHr\xba\x01j\n" +
 	"\x1amount_disk.disk_id_not_nil\x12\x1cdisk_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\x06diskId\x12\x1b\n" +
-	"\tread_only\x18\x02 \x01(\bR\breadOnly\"\xc1\x01\n" +
+	"\tread_only\x18\x02 \x01(\bR\breadOnly\"\x88\x02\n" +
 	"\x11MountDiskResponse\x12\x14\n" +
 	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x120\n" +
 	"\n" +
 	"root_inode\x18\x02 \x01(\v2\x11.storage.v1.InodeR\trootInode\x122\n" +
 	"\x15entry_timeout_seconds\x18\x03 \x01(\x01R\x13entryTimeoutSeconds\x120\n" +
-	"\x14attr_timeout_seconds\x18\x04 \x01(\x01R\x12attrTimeoutSeconds\"z\n" +
+	"\x14attr_timeout_seconds\x18\x04 \x01(\x01R\x12attrTimeoutSeconds\x12\x19\n" +
+	"\bmount_id\x18\x05 \x01(\tR\amountId\x12*\n" +
+	"\x11lease_ttl_seconds\x18\x06 \x01(\rR\x0fleaseTtlSeconds\"\xa7\x04\n" +
+	"\x11RenewMountRequest\x12\x8f\x01\n" +
+	"\adisk_id\x18\x01 \x01(\tBv\xbaHs\xba\x01k\n" +
+	"\x1brenew_mount_disk_id_not_nil\x12\x1cdisk_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\x06diskId\x12\x93\x01\n" +
+	"\bmount_id\x18\x02 \x01(\tBx\xbaHu\xba\x01m\n" +
+	"\x1crenew_mount_mount_id_not_nil\x12\x1dmount_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\amountId\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12%\n" +
+	"\x05epoch\x18\x04 \x01(\x04B\x0f\xbaH\f2\n" +
+	"\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7fR\x05epoch:\xa5\x01\xbaH\xa1\x01\x1a\x9e\x01\n" +
+	"\x1erenew_mount_epoch_matches_mode\x12Gepoch must be 0 when read_only is true, and > 0 when read_only is false\x1a3this.read_only ? this.epoch == 0u : this.epoch > 0u\"@\n" +
+	"\x12RenewMountResponse\x12*\n" +
+	"\x11lease_ttl_seconds\x18\x01 \x01(\rR\x0fleaseTtlSeconds\"\xbe\x02\n" +
+	"\x12UnmountDiskRequest\x12\x90\x01\n" +
+	"\adisk_id\x18\x01 \x01(\tBw\xbaHt\xba\x01l\n" +
+	"\x1cunmount_disk_disk_id_not_nil\x12\x1cdisk_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\x06diskId\x12\x94\x01\n" +
+	"\bmount_id\x18\x02 \x01(\tBy\xbaHv\xba\x01n\n" +
+	"\x1dunmount_disk_mount_id_not_nil\x12\x1dmount_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\amountId\"\x15\n" +
+	"\x13UnmountDiskResponse\"z\n" +
 	"\x05Inode\x12\x19\n" +
 	"\x03ino\x18\x01 \x01(\x04B\a\xbaH\x042\x02 \x00R\x03ino\x12\x1e\n" +
 	"\n" +
@@ -6273,7 +6530,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\rlca_commit_id\x18\x01 \x01(\tR\vlcaCommitId\x12'\n" +
 	"\x0ftotal_conflicts\x18\x02 \x01(\x04R\x0etotalConflicts\x127\n" +
 	"\tconflicts\x18\x03 \x03(\v2\x19.storage.v1.MergeConflictR\tconflicts\x12/\n" +
-	"\x13conflicts_truncated\x18\x04 \x01(\bR\x12conflictsTruncated\"\xe3\a\n" +
+	"\x13conflicts_truncated\x18\x04 \x01(\bR\x12conflictsTruncated\"\xf9\a\n" +
 	"\x10MergeDiskRequest\x12\xab\x01\n" +
 	"\x0esource_disk_id\x18\x01 \x01(\tB\x84\x01\xbaH\x80\x01\xba\x01x\n" +
 	"!merge_disk_source_disk_id_not_nil\x12#source_disk_id must not be nil UUID\x1a.this != '00000000-0000-0000-0000-000000000000'r\x03\xb0\x01\x01R\fsourceDiskId\x12\xab\x01\n" +
@@ -6283,7 +6540,8 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x0fpath_strategies\x18\x04 \x03(\v20.storage.v1.MergeDiskRequest.PathStrategiesEntryB\x8c\x01\xbaH\x88\x01\x9a\x01\x84\x01\x10\x80 \"v\xba\x01l\n" +
 	"%merge_disk_path_strategies_key_no_nul\x12+path_strategies key cannot contain NUL byte\x1a\x16!this.contains('\\x00')r\x05\x10\x01\x18\x80 *\a\x82\x01\x04\x10\x01 \x00R\x0epathStrategies\x12\x17\n" +
 	"\adry_run\x18\x05 \x01(\bR\x06dryRun\x123\n" +
-	"\tmax_bytes\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\bmaxBytes\x88\x01\x01\x1a\\\n" +
+	"\tmax_bytes\x18\x06 \x01(\x04B\x11\xbaH\x0e2\f\x18\xff\xff\xff\xff\xff\xff\xff\xff\x7f \x00H\x00R\bmaxBytes\x88\x01\x01\x12\x14\n" +
+	"\x05force\x18\a \x01(\bR\x05force\x1a\\\n" +
 	"\x13PathStrategiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12/\n" +
 	"\x05value\x18\x02 \x01(\x0e2\x19.storage.v1.MergeStrategyR\x05value:\x028\x01:\x8c\x01\xbaH\x88\x01\x1a\x85\x01\n" +
@@ -6323,7 +6581,7 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\x1aMERGE_STRATEGY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13MERGE_STRATEGY_FAIL\x10\x01\x12\x17\n" +
 	"\x13MERGE_STRATEGY_OURS\x10\x02\x12\x19\n" +
-	"\x15MERGE_STRATEGY_THEIRS\x10\x032\xa7\x13\n" +
+	"\x15MERGE_STRATEGY_THEIRS\x10\x032\xc4\x14\n" +
 	"\x0eStorageService\x12?\n" +
 	"\x06Lookup\x12\x19.storage.v1.LookupRequest\x1a\x1a.storage.v1.LookupResponse\x12B\n" +
 	"\aGetAttr\x12\x1a.storage.v1.GetAttrRequest\x1a\x1b.storage.v1.GetAttrResponse\x12B\n" +
@@ -6349,6 +6607,9 @@ const file_storage_v1_storage_proto_rawDesc = "" +
 	"\tListXattr\x12\x1c.storage.v1.ListXattrRequest\x1a\x1d.storage.v1.ListXattrResponse\x12N\n" +
 	"\vRemoveXattr\x12\x1e.storage.v1.RemoveXattrRequest\x1a\x1f.storage.v1.RemoveXattrResponse\x12H\n" +
 	"\tMountDisk\x12\x1c.storage.v1.MountDiskRequest\x1a\x1d.storage.v1.MountDiskResponse\x12K\n" +
+	"\n" +
+	"RenewMount\x12\x1d.storage.v1.RenewMountRequest\x1a\x1e.storage.v1.RenewMountResponse\x12N\n" +
+	"\vUnmountDisk\x12\x1e.storage.v1.UnmountDiskRequest\x1a\x1f.storage.v1.UnmountDiskResponse\x12K\n" +
 	"\n" +
 	"CreateDisk\x12\x1d.storage.v1.CreateDiskRequest\x1a\x1e.storage.v1.CreateDiskResponse\x12B\n" +
 	"\aGetDisk\x12\x1a.storage.v1.GetDiskRequest\x1a\x1b.storage.v1.GetDiskResponse\x12H\n" +
@@ -6377,7 +6638,7 @@ func file_storage_v1_storage_proto_rawDescGZIP() []byte {
 }
 
 var file_storage_v1_storage_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 81)
+var file_storage_v1_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 85)
 var file_storage_v1_storage_proto_goTypes = []any{
 	(DiffKind)(0),                  // 0: storage.v1.DiffKind
 	(ConflictKind)(0),              // 1: storage.v1.ConflictKind
@@ -6432,82 +6693,86 @@ var file_storage_v1_storage_proto_goTypes = []any{
 	(*RemoveXattrResponse)(nil),    // 50: storage.v1.RemoveXattrResponse
 	(*MountDiskRequest)(nil),       // 51: storage.v1.MountDiskRequest
 	(*MountDiskResponse)(nil),      // 52: storage.v1.MountDiskResponse
-	(*Inode)(nil),                  // 53: storage.v1.Inode
-	(*InodeAttribute)(nil),         // 54: storage.v1.InodeAttribute
-	(*Disk)(nil),                   // 55: storage.v1.Disk
-	(*CreateDiskRequest)(nil),      // 56: storage.v1.CreateDiskRequest
-	(*CreateDiskResponse)(nil),     // 57: storage.v1.CreateDiskResponse
-	(*GetDiskRequest)(nil),         // 58: storage.v1.GetDiskRequest
-	(*GetDiskResponse)(nil),        // 59: storage.v1.GetDiskResponse
-	(*ListDisksRequest)(nil),       // 60: storage.v1.ListDisksRequest
-	(*ListDisksResponse)(nil),      // 61: storage.v1.ListDisksResponse
-	(*UpdateDiskRequest)(nil),      // 62: storage.v1.UpdateDiskRequest
-	(*UpdateDiskResponse)(nil),     // 63: storage.v1.UpdateDiskResponse
-	(*DeleteDiskRequest)(nil),      // 64: storage.v1.DeleteDiskRequest
-	(*DeleteDiskResponse)(nil),     // 65: storage.v1.DeleteDiskResponse
-	(*ForkDiskRequest)(nil),        // 66: storage.v1.ForkDiskRequest
-	(*ForkDiskResponse)(nil),       // 67: storage.v1.ForkDiskResponse
-	(*StatFSRequest)(nil),          // 68: storage.v1.StatFSRequest
-	(*StatFSResponse)(nil),         // 69: storage.v1.StatFSResponse
-	(*ReclaimOrphanRequest)(nil),   // 70: storage.v1.ReclaimOrphanRequest
-	(*ReclaimOrphanResponse)(nil),  // 71: storage.v1.ReclaimOrphanResponse
-	(*DiffNodeSummary)(nil),        // 72: storage.v1.DiffNodeSummary
-	(*DiffEntry)(nil),              // 73: storage.v1.DiffEntry
-	(*DiffSummary)(nil),            // 74: storage.v1.DiffSummary
-	(*DiffDiskRequest)(nil),        // 75: storage.v1.DiffDiskRequest
-	(*DiffDiskResponse)(nil),       // 76: storage.v1.DiffDiskResponse
-	(*ReadCommitNodeRequest)(nil),  // 77: storage.v1.ReadCommitNodeRequest
-	(*ReadCommitNodeResponse)(nil), // 78: storage.v1.ReadCommitNodeResponse
-	(*MergeConflict)(nil),          // 79: storage.v1.MergeConflict
-	(*MergeConflictReport)(nil),    // 80: storage.v1.MergeConflictReport
-	(*MergeDiskRequest)(nil),       // 81: storage.v1.MergeDiskRequest
-	(*MergeDiskResponse)(nil),      // 82: storage.v1.MergeDiskResponse
-	nil,                            // 83: storage.v1.MergeDiskRequest.PathStrategiesEntry
-	(*timestamppb.Timestamp)(nil),  // 84: google.protobuf.Timestamp
+	(*RenewMountRequest)(nil),      // 53: storage.v1.RenewMountRequest
+	(*RenewMountResponse)(nil),     // 54: storage.v1.RenewMountResponse
+	(*UnmountDiskRequest)(nil),     // 55: storage.v1.UnmountDiskRequest
+	(*UnmountDiskResponse)(nil),    // 56: storage.v1.UnmountDiskResponse
+	(*Inode)(nil),                  // 57: storage.v1.Inode
+	(*InodeAttribute)(nil),         // 58: storage.v1.InodeAttribute
+	(*Disk)(nil),                   // 59: storage.v1.Disk
+	(*CreateDiskRequest)(nil),      // 60: storage.v1.CreateDiskRequest
+	(*CreateDiskResponse)(nil),     // 61: storage.v1.CreateDiskResponse
+	(*GetDiskRequest)(nil),         // 62: storage.v1.GetDiskRequest
+	(*GetDiskResponse)(nil),        // 63: storage.v1.GetDiskResponse
+	(*ListDisksRequest)(nil),       // 64: storage.v1.ListDisksRequest
+	(*ListDisksResponse)(nil),      // 65: storage.v1.ListDisksResponse
+	(*UpdateDiskRequest)(nil),      // 66: storage.v1.UpdateDiskRequest
+	(*UpdateDiskResponse)(nil),     // 67: storage.v1.UpdateDiskResponse
+	(*DeleteDiskRequest)(nil),      // 68: storage.v1.DeleteDiskRequest
+	(*DeleteDiskResponse)(nil),     // 69: storage.v1.DeleteDiskResponse
+	(*ForkDiskRequest)(nil),        // 70: storage.v1.ForkDiskRequest
+	(*ForkDiskResponse)(nil),       // 71: storage.v1.ForkDiskResponse
+	(*StatFSRequest)(nil),          // 72: storage.v1.StatFSRequest
+	(*StatFSResponse)(nil),         // 73: storage.v1.StatFSResponse
+	(*ReclaimOrphanRequest)(nil),   // 74: storage.v1.ReclaimOrphanRequest
+	(*ReclaimOrphanResponse)(nil),  // 75: storage.v1.ReclaimOrphanResponse
+	(*DiffNodeSummary)(nil),        // 76: storage.v1.DiffNodeSummary
+	(*DiffEntry)(nil),              // 77: storage.v1.DiffEntry
+	(*DiffSummary)(nil),            // 78: storage.v1.DiffSummary
+	(*DiffDiskRequest)(nil),        // 79: storage.v1.DiffDiskRequest
+	(*DiffDiskResponse)(nil),       // 80: storage.v1.DiffDiskResponse
+	(*ReadCommitNodeRequest)(nil),  // 81: storage.v1.ReadCommitNodeRequest
+	(*ReadCommitNodeResponse)(nil), // 82: storage.v1.ReadCommitNodeResponse
+	(*MergeConflict)(nil),          // 83: storage.v1.MergeConflict
+	(*MergeConflictReport)(nil),    // 84: storage.v1.MergeConflictReport
+	(*MergeDiskRequest)(nil),       // 85: storage.v1.MergeDiskRequest
+	(*MergeDiskResponse)(nil),      // 86: storage.v1.MergeDiskResponse
+	nil,                            // 87: storage.v1.MergeDiskRequest.PathStrategiesEntry
+	(*timestamppb.Timestamp)(nil),  // 88: google.protobuf.Timestamp
 }
 var file_storage_v1_storage_proto_depIdxs = []int32{
-	53, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
-	53, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
-	84, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
-	84, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
-	53, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
-	53, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
-	53, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
-	53, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
-	53, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
-	53, // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
-	53, // 10: storage.v1.WriteResponse.inode:type_name -> storage.v1.Inode
+	57, // 0: storage.v1.LookupResponse.inode:type_name -> storage.v1.Inode
+	57, // 1: storage.v1.GetAttrResponse.inode:type_name -> storage.v1.Inode
+	88, // 2: storage.v1.SetAttrRequest.atime:type_name -> google.protobuf.Timestamp
+	88, // 3: storage.v1.SetAttrRequest.mtime:type_name -> google.protobuf.Timestamp
+	57, // 4: storage.v1.SetAttrResponse.inode:type_name -> storage.v1.Inode
+	57, // 5: storage.v1.MknodResponse.inode:type_name -> storage.v1.Inode
+	57, // 6: storage.v1.MkdirResponse.inode:type_name -> storage.v1.Inode
+	57, // 7: storage.v1.SymlinkResponse.inode:type_name -> storage.v1.Inode
+	57, // 8: storage.v1.LinkResponse.inode:type_name -> storage.v1.Inode
+	57, // 9: storage.v1.CreateResponse.inode:type_name -> storage.v1.Inode
+	57, // 10: storage.v1.WriteResponse.inode:type_name -> storage.v1.Inode
 	35, // 11: storage.v1.ReadDirResponse.entries:type_name -> storage.v1.DirEntry
-	53, // 12: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
+	57, // 12: storage.v1.DirEntryPlus.inode:type_name -> storage.v1.Inode
 	38, // 13: storage.v1.ReadDirPlusResponse.entries:type_name -> storage.v1.DirEntryPlus
-	53, // 14: storage.v1.MountDiskResponse.root_inode:type_name -> storage.v1.Inode
-	54, // 15: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
-	84, // 16: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
-	84, // 17: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
-	84, // 18: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
-	84, // 19: storage.v1.Disk.created_at:type_name -> google.protobuf.Timestamp
-	84, // 20: storage.v1.Disk.updated_at:type_name -> google.protobuf.Timestamp
-	55, // 21: storage.v1.CreateDiskResponse.disk:type_name -> storage.v1.Disk
-	55, // 22: storage.v1.GetDiskResponse.disk:type_name -> storage.v1.Disk
-	55, // 23: storage.v1.ListDisksResponse.disks:type_name -> storage.v1.Disk
-	55, // 24: storage.v1.UpdateDiskResponse.disk:type_name -> storage.v1.Disk
-	55, // 25: storage.v1.ForkDiskResponse.disk:type_name -> storage.v1.Disk
+	57, // 14: storage.v1.MountDiskResponse.root_inode:type_name -> storage.v1.Inode
+	58, // 15: storage.v1.Inode.attr:type_name -> storage.v1.InodeAttribute
+	88, // 16: storage.v1.InodeAttribute.atime:type_name -> google.protobuf.Timestamp
+	88, // 17: storage.v1.InodeAttribute.mtime:type_name -> google.protobuf.Timestamp
+	88, // 18: storage.v1.InodeAttribute.ctime:type_name -> google.protobuf.Timestamp
+	88, // 19: storage.v1.Disk.created_at:type_name -> google.protobuf.Timestamp
+	88, // 20: storage.v1.Disk.updated_at:type_name -> google.protobuf.Timestamp
+	59, // 21: storage.v1.CreateDiskResponse.disk:type_name -> storage.v1.Disk
+	59, // 22: storage.v1.GetDiskResponse.disk:type_name -> storage.v1.Disk
+	59, // 23: storage.v1.ListDisksResponse.disks:type_name -> storage.v1.Disk
+	59, // 24: storage.v1.UpdateDiskResponse.disk:type_name -> storage.v1.Disk
+	59, // 25: storage.v1.ForkDiskResponse.disk:type_name -> storage.v1.Disk
 	0,  // 26: storage.v1.DiffEntry.kind:type_name -> storage.v1.DiffKind
 	1,  // 27: storage.v1.DiffEntry.conflict:type_name -> storage.v1.ConflictKind
-	72, // 28: storage.v1.DiffEntry.base:type_name -> storage.v1.DiffNodeSummary
-	72, // 29: storage.v1.DiffEntry.target:type_name -> storage.v1.DiffNodeSummary
-	72, // 30: storage.v1.DiffEntry.source:type_name -> storage.v1.DiffNodeSummary
-	74, // 31: storage.v1.DiffDiskResponse.summary:type_name -> storage.v1.DiffSummary
-	73, // 32: storage.v1.DiffDiskResponse.entries:type_name -> storage.v1.DiffEntry
+	76, // 28: storage.v1.DiffEntry.base:type_name -> storage.v1.DiffNodeSummary
+	76, // 29: storage.v1.DiffEntry.target:type_name -> storage.v1.DiffNodeSummary
+	76, // 30: storage.v1.DiffEntry.source:type_name -> storage.v1.DiffNodeSummary
+	78, // 31: storage.v1.DiffDiskResponse.summary:type_name -> storage.v1.DiffSummary
+	77, // 32: storage.v1.DiffDiskResponse.entries:type_name -> storage.v1.DiffEntry
 	1,  // 33: storage.v1.MergeConflict.kind:type_name -> storage.v1.ConflictKind
-	72, // 34: storage.v1.MergeConflict.base:type_name -> storage.v1.DiffNodeSummary
-	72, // 35: storage.v1.MergeConflict.target:type_name -> storage.v1.DiffNodeSummary
-	72, // 36: storage.v1.MergeConflict.source:type_name -> storage.v1.DiffNodeSummary
-	79, // 37: storage.v1.MergeConflictReport.conflicts:type_name -> storage.v1.MergeConflict
+	76, // 34: storage.v1.MergeConflict.base:type_name -> storage.v1.DiffNodeSummary
+	76, // 35: storage.v1.MergeConflict.target:type_name -> storage.v1.DiffNodeSummary
+	76, // 36: storage.v1.MergeConflict.source:type_name -> storage.v1.DiffNodeSummary
+	83, // 37: storage.v1.MergeConflictReport.conflicts:type_name -> storage.v1.MergeConflict
 	2,  // 38: storage.v1.MergeDiskRequest.strategy:type_name -> storage.v1.MergeStrategy
-	83, // 39: storage.v1.MergeDiskRequest.path_strategies:type_name -> storage.v1.MergeDiskRequest.PathStrategiesEntry
-	55, // 40: storage.v1.MergeDiskResponse.disk:type_name -> storage.v1.Disk
-	80, // 41: storage.v1.MergeDiskResponse.conflict_report:type_name -> storage.v1.MergeConflictReport
+	87, // 39: storage.v1.MergeDiskRequest.path_strategies:type_name -> storage.v1.MergeDiskRequest.PathStrategiesEntry
+	59, // 40: storage.v1.MergeDiskResponse.disk:type_name -> storage.v1.Disk
+	84, // 41: storage.v1.MergeDiskResponse.conflict_report:type_name -> storage.v1.MergeConflictReport
 	2,  // 42: storage.v1.MergeDiskRequest.PathStrategiesEntry.value:type_name -> storage.v1.MergeStrategy
 	3,  // 43: storage.v1.StorageService.Lookup:input_type -> storage.v1.LookupRequest
 	5,  // 44: storage.v1.StorageService.GetAttr:input_type -> storage.v1.GetAttrRequest
@@ -6533,54 +6798,58 @@ var file_storage_v1_storage_proto_depIdxs = []int32{
 	47, // 64: storage.v1.StorageService.ListXattr:input_type -> storage.v1.ListXattrRequest
 	49, // 65: storage.v1.StorageService.RemoveXattr:input_type -> storage.v1.RemoveXattrRequest
 	51, // 66: storage.v1.StorageService.MountDisk:input_type -> storage.v1.MountDiskRequest
-	56, // 67: storage.v1.StorageService.CreateDisk:input_type -> storage.v1.CreateDiskRequest
-	58, // 68: storage.v1.StorageService.GetDisk:input_type -> storage.v1.GetDiskRequest
-	60, // 69: storage.v1.StorageService.ListDisks:input_type -> storage.v1.ListDisksRequest
-	62, // 70: storage.v1.StorageService.UpdateDisk:input_type -> storage.v1.UpdateDiskRequest
-	64, // 71: storage.v1.StorageService.DeleteDisk:input_type -> storage.v1.DeleteDiskRequest
-	66, // 72: storage.v1.StorageService.ForkDisk:input_type -> storage.v1.ForkDiskRequest
-	68, // 73: storage.v1.StorageService.StatFS:input_type -> storage.v1.StatFSRequest
-	70, // 74: storage.v1.StorageService.ReclaimOrphan:input_type -> storage.v1.ReclaimOrphanRequest
-	75, // 75: storage.v1.StorageService.DiffDisk:input_type -> storage.v1.DiffDiskRequest
-	77, // 76: storage.v1.StorageService.ReadCommitNode:input_type -> storage.v1.ReadCommitNodeRequest
-	81, // 77: storage.v1.StorageService.MergeDisk:input_type -> storage.v1.MergeDiskRequest
-	4,  // 78: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
-	6,  // 79: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
-	8,  // 80: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
-	10, // 81: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
-	12, // 82: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
-	14, // 83: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
-	16, // 84: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
-	18, // 85: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
-	20, // 86: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
-	22, // 87: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
-	24, // 88: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
-	26, // 89: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
-	28, // 90: storage.v1.StorageService.Read:output_type -> storage.v1.ReadResponse
-	30, // 91: storage.v1.StorageService.Write:output_type -> storage.v1.WriteResponse
-	32, // 92: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
-	34, // 93: storage.v1.StorageService.FsyncDir:output_type -> storage.v1.FsyncDirResponse
-	37, // 94: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
-	40, // 95: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
-	42, // 96: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
-	44, // 97: storage.v1.StorageService.SetXattr:output_type -> storage.v1.SetXattrResponse
-	46, // 98: storage.v1.StorageService.GetXattr:output_type -> storage.v1.GetXattrResponse
-	48, // 99: storage.v1.StorageService.ListXattr:output_type -> storage.v1.ListXattrResponse
-	50, // 100: storage.v1.StorageService.RemoveXattr:output_type -> storage.v1.RemoveXattrResponse
-	52, // 101: storage.v1.StorageService.MountDisk:output_type -> storage.v1.MountDiskResponse
-	57, // 102: storage.v1.StorageService.CreateDisk:output_type -> storage.v1.CreateDiskResponse
-	59, // 103: storage.v1.StorageService.GetDisk:output_type -> storage.v1.GetDiskResponse
-	61, // 104: storage.v1.StorageService.ListDisks:output_type -> storage.v1.ListDisksResponse
-	63, // 105: storage.v1.StorageService.UpdateDisk:output_type -> storage.v1.UpdateDiskResponse
-	65, // 106: storage.v1.StorageService.DeleteDisk:output_type -> storage.v1.DeleteDiskResponse
-	67, // 107: storage.v1.StorageService.ForkDisk:output_type -> storage.v1.ForkDiskResponse
-	69, // 108: storage.v1.StorageService.StatFS:output_type -> storage.v1.StatFSResponse
-	71, // 109: storage.v1.StorageService.ReclaimOrphan:output_type -> storage.v1.ReclaimOrphanResponse
-	76, // 110: storage.v1.StorageService.DiffDisk:output_type -> storage.v1.DiffDiskResponse
-	78, // 111: storage.v1.StorageService.ReadCommitNode:output_type -> storage.v1.ReadCommitNodeResponse
-	82, // 112: storage.v1.StorageService.MergeDisk:output_type -> storage.v1.MergeDiskResponse
-	78, // [78:113] is the sub-list for method output_type
-	43, // [43:78] is the sub-list for method input_type
+	53, // 67: storage.v1.StorageService.RenewMount:input_type -> storage.v1.RenewMountRequest
+	55, // 68: storage.v1.StorageService.UnmountDisk:input_type -> storage.v1.UnmountDiskRequest
+	60, // 69: storage.v1.StorageService.CreateDisk:input_type -> storage.v1.CreateDiskRequest
+	62, // 70: storage.v1.StorageService.GetDisk:input_type -> storage.v1.GetDiskRequest
+	64, // 71: storage.v1.StorageService.ListDisks:input_type -> storage.v1.ListDisksRequest
+	66, // 72: storage.v1.StorageService.UpdateDisk:input_type -> storage.v1.UpdateDiskRequest
+	68, // 73: storage.v1.StorageService.DeleteDisk:input_type -> storage.v1.DeleteDiskRequest
+	70, // 74: storage.v1.StorageService.ForkDisk:input_type -> storage.v1.ForkDiskRequest
+	72, // 75: storage.v1.StorageService.StatFS:input_type -> storage.v1.StatFSRequest
+	74, // 76: storage.v1.StorageService.ReclaimOrphan:input_type -> storage.v1.ReclaimOrphanRequest
+	79, // 77: storage.v1.StorageService.DiffDisk:input_type -> storage.v1.DiffDiskRequest
+	81, // 78: storage.v1.StorageService.ReadCommitNode:input_type -> storage.v1.ReadCommitNodeRequest
+	85, // 79: storage.v1.StorageService.MergeDisk:input_type -> storage.v1.MergeDiskRequest
+	4,  // 80: storage.v1.StorageService.Lookup:output_type -> storage.v1.LookupResponse
+	6,  // 81: storage.v1.StorageService.GetAttr:output_type -> storage.v1.GetAttrResponse
+	8,  // 82: storage.v1.StorageService.SetAttr:output_type -> storage.v1.SetAttrResponse
+	10, // 83: storage.v1.StorageService.Mknod:output_type -> storage.v1.MknodResponse
+	12, // 84: storage.v1.StorageService.Mkdir:output_type -> storage.v1.MkdirResponse
+	14, // 85: storage.v1.StorageService.Symlink:output_type -> storage.v1.SymlinkResponse
+	16, // 86: storage.v1.StorageService.Readlink:output_type -> storage.v1.ReadlinkResponse
+	18, // 87: storage.v1.StorageService.Link:output_type -> storage.v1.LinkResponse
+	20, // 88: storage.v1.StorageService.Unlink:output_type -> storage.v1.UnlinkResponse
+	22, // 89: storage.v1.StorageService.Rmdir:output_type -> storage.v1.RmdirResponse
+	24, // 90: storage.v1.StorageService.Rename:output_type -> storage.v1.RenameResponse
+	26, // 91: storage.v1.StorageService.Create:output_type -> storage.v1.CreateResponse
+	28, // 92: storage.v1.StorageService.Read:output_type -> storage.v1.ReadResponse
+	30, // 93: storage.v1.StorageService.Write:output_type -> storage.v1.WriteResponse
+	32, // 94: storage.v1.StorageService.Fsync:output_type -> storage.v1.FsyncResponse
+	34, // 95: storage.v1.StorageService.FsyncDir:output_type -> storage.v1.FsyncDirResponse
+	37, // 96: storage.v1.StorageService.ReadDir:output_type -> storage.v1.ReadDirResponse
+	40, // 97: storage.v1.StorageService.ReadDirPlus:output_type -> storage.v1.ReadDirPlusResponse
+	42, // 98: storage.v1.StorageService.Fallocate:output_type -> storage.v1.FallocateResponse
+	44, // 99: storage.v1.StorageService.SetXattr:output_type -> storage.v1.SetXattrResponse
+	46, // 100: storage.v1.StorageService.GetXattr:output_type -> storage.v1.GetXattrResponse
+	48, // 101: storage.v1.StorageService.ListXattr:output_type -> storage.v1.ListXattrResponse
+	50, // 102: storage.v1.StorageService.RemoveXattr:output_type -> storage.v1.RemoveXattrResponse
+	52, // 103: storage.v1.StorageService.MountDisk:output_type -> storage.v1.MountDiskResponse
+	54, // 104: storage.v1.StorageService.RenewMount:output_type -> storage.v1.RenewMountResponse
+	56, // 105: storage.v1.StorageService.UnmountDisk:output_type -> storage.v1.UnmountDiskResponse
+	61, // 106: storage.v1.StorageService.CreateDisk:output_type -> storage.v1.CreateDiskResponse
+	63, // 107: storage.v1.StorageService.GetDisk:output_type -> storage.v1.GetDiskResponse
+	65, // 108: storage.v1.StorageService.ListDisks:output_type -> storage.v1.ListDisksResponse
+	67, // 109: storage.v1.StorageService.UpdateDisk:output_type -> storage.v1.UpdateDiskResponse
+	69, // 110: storage.v1.StorageService.DeleteDisk:output_type -> storage.v1.DeleteDiskResponse
+	71, // 111: storage.v1.StorageService.ForkDisk:output_type -> storage.v1.ForkDiskResponse
+	73, // 112: storage.v1.StorageService.StatFS:output_type -> storage.v1.StatFSResponse
+	75, // 113: storage.v1.StorageService.ReclaimOrphan:output_type -> storage.v1.ReclaimOrphanResponse
+	80, // 114: storage.v1.StorageService.DiffDisk:output_type -> storage.v1.DiffDiskResponse
+	82, // 115: storage.v1.StorageService.ReadCommitNode:output_type -> storage.v1.ReadCommitNodeResponse
+	86, // 116: storage.v1.StorageService.MergeDisk:output_type -> storage.v1.MergeDiskResponse
+	80, // [80:117] is the sub-list for method output_type
+	43, // [43:80] is the sub-list for method input_type
 	43, // [43:43] is the sub-list for extension type_name
 	43, // [43:43] is the sub-list for extension extendee
 	0,  // [0:43] is the sub-list for field type_name
@@ -6594,21 +6863,21 @@ func file_storage_v1_storage_proto_init() {
 	file_storage_v1_storage_proto_msgTypes[4].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[16].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[20].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[52].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[59].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[56].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[63].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[70].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[72].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[67].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[74].OneofWrappers = []any{}
 	file_storage_v1_storage_proto_msgTypes[76].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[78].OneofWrappers = []any{}
-	file_storage_v1_storage_proto_msgTypes[79].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[80].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[82].OneofWrappers = []any{}
+	file_storage_v1_storage_proto_msgTypes[83].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_storage_v1_storage_proto_rawDesc), len(file_storage_v1_storage_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   81,
+			NumMessages:   85,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

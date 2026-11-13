@@ -29,6 +29,8 @@ const (
 var storageMessages = []proto.Message{
 	// 请求消息 (Requests)
 	&storagev1.MountDiskRequest{},
+	&storagev1.RenewMountRequest{},
+	&storagev1.UnmountDiskRequest{},
 	&storagev1.ReclaimOrphanRequest{},
 	&storagev1.LookupRequest{},
 	&storagev1.GetAttrRequest{},
@@ -66,6 +68,8 @@ var storageMessages = []proto.Message{
 
 	// 响应消息 (Responses)
 	&storagev1.MountDiskResponse{},
+	&storagev1.RenewMountResponse{},
+	&storagev1.UnmountDiskResponse{},
 	&storagev1.ReclaimOrphanResponse{},
 	&storagev1.LookupResponse{},
 	&storagev1.GetAttrResponse{},
@@ -295,7 +299,7 @@ func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason
 	isMaxLen := ruleID == "bytes.max_len" || strings.HasSuffix(ruleID, ".bytes.max_len") ||
 		ruleID == "string.max_bytes" || strings.HasSuffix(ruleID, ".string.max_bytes")
 
-	if ruleID == "update_disk_has_update" || ruleID == "write_request_offset_len_overflow" {
+	if ruleID == "update_disk_has_update" || ruleID == "write_request_offset_len_overflow" || ruleID == "renew_mount_epoch_matches_mode" {
 		return 10, ReasonInvalidArgument
 	}
 
@@ -312,6 +316,11 @@ func classifyViolationInternal(v *protovalidate.Violation) (priority int, reason
 	switch fullName {
 	// 第 1 优先级：基础整型/标识符与模式/标志字段校验 -> EINVAL
 	case "storage.v1.MountDiskRequest.disk_id",
+		"storage.v1.RenewMountRequest.disk_id",
+		"storage.v1.RenewMountRequest.mount_id",
+		"storage.v1.RenewMountRequest.epoch",
+		"storage.v1.UnmountDiskRequest.disk_id",
+		"storage.v1.UnmountDiskRequest.mount_id",
 		"storage.v1.LookupRequest.disk_id",
 		"storage.v1.GetAttrRequest.disk_id",
 		"storage.v1.SetAttrRequest.disk_id",

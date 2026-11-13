@@ -1508,6 +1508,14 @@ func (s *fakeStorage) MountDisk(context.Context, *connect.Request[storagev1.Moun
 	return nil, s.failFast("MountDisk")
 }
 
+func (s *fakeStorage) RenewMount(context.Context, *connect.Request[storagev1.RenewMountRequest]) (*connect.Response[storagev1.RenewMountResponse], error) {
+	return nil, s.failFast("RenewMount")
+}
+
+func (s *fakeStorage) UnmountDisk(context.Context, *connect.Request[storagev1.UnmountDiskRequest]) (*connect.Response[storagev1.UnmountDiskResponse], error) {
+	return nil, s.failFast("UnmountDisk")
+}
+
 func (s *fakeStorage) CreateDisk(context.Context, *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error) {
 	return nil, s.failFast("CreateDisk")
 }
