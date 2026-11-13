@@ -48,7 +48,7 @@ func newMockLineageAllocator() *mockLineageAllocator {
 	}
 }
 
-func (a *mockLineageAllocator) allocInodeSegment(minNext uint64) (first, last uint64, err error) {
+func (a *mockLineageAllocator) allocInodeSegment(_ context.Context, minNext uint64) (first, last uint64, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.inoCalls++
@@ -58,7 +58,7 @@ func (a *mockLineageAllocator) allocInodeSegment(minNext uint64) (first, last ui
 	return start, end, nil
 }
 
-func (a *mockLineageAllocator) allocPackSegment(minNext uint64) (first, last uint64, err error) {
+func (a *mockLineageAllocator) allocPackSegment(_ context.Context, minNext uint64) (first, last uint64, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.packCalls++
@@ -147,7 +147,7 @@ func TestCheckpointSealParallelHardLinksAndCloneMetadataCopy(t *testing.T) {
 	}
 
 	// 克隆切面目录至子盘目录（再次覆盖 >= 32 个包的并发克隆路径）。
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childDir))
 
 	// 验证子盘目录的硬链接与元数据字节复制隔离契约。
 	topEntries, err := os.ReadDir(childDir)
@@ -226,7 +226,7 @@ func TestCloneIsolationResetEpochAndMaxBytesOverride(t *testing.T) {
 	require.NoError(t, err)
 
 	// 1. 验证缩容低于已用空间时 ResetEpoch 打开被拒绝。
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childShrinkDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childShrinkDir))
 	_, err = store.Open(store.Options{
 		Dir:        childShrinkDir,
 		DiskID:     "child-shrink",
@@ -236,7 +236,7 @@ func TestCloneIsolationResetEpochAndMaxBytesOverride(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrQuotaShrinkBelowUsed)
 
 	// 2. 验证默认继承配额（MaxBytes: 0）且 ResetEpoch 归零持久化。
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childInheritDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childInheritDir))
 	childInherit, err := store.Open(store.Options{
 		Dir:        childInheritDir,
 		DiskID:     "child-inherit",
@@ -251,7 +251,7 @@ func TestCloneIsolationResetEpochAndMaxBytesOverride(t *testing.T) {
 	require.NoError(t, childInherit.Close())
 
 	// 3. 验证显式扩容 MaxBytes + ResetEpoch 持久化，并在子盘和源盘各自写入、删除，互不污染切面。
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childExpandDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childExpandDir))
 	childExpand, err := store.Open(store.Options{
 		Dir:        childExpandDir,
 		DiskID:     "child-expand",
@@ -379,7 +379,11 @@ func TestSanitizeCheckpointOrphansAndDeadPackUnlink(t *testing.T) {
 	sharedCache := pebble.NewCache(16 << 20)
 	defer sharedCache.Unref()
 
-	sanitizedStat, err := store.SanitizeCheckpoint(commitDir, sharedCache)
+	sanitizedStat, err := store.SanitizeCheckpoint(ctx, store.SanitizeOptions{
+		Dir:      commitDir,
+		CommitID: "commit-orphan-test",
+		Cache:    sharedCache,
+	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(store.BlobSize), sanitizedStat.UsedBytes)
 	require.Equal(t, uint64(2), sanitizedStat.Files)
@@ -400,7 +404,7 @@ func TestSanitizeCheckpointOrphansAndDeadPackUnlink(t *testing.T) {
 	require.Equal(t, orphanData, gotOrphanFromSrc)
 
 	// 从净化后的切面克隆出子盘打开：WriterEpoch == 0、HasOrphans == false、keep.bin 完好、孤儿彻底不存在。
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childDir))
 	childActor, err := store.Open(store.Options{
 		Dir:    childDir,
 		DiskID: "child-sanitized",
@@ -473,8 +477,8 @@ func TestExternalSegmentAllocatorsCrossBranchCollisionFree(t *testing.T) {
 	// 固化共同祖先切面并克隆两个兄弟子盘，三盘共享同一血缘分配器。
 	_, err = parentActor.Checkpoint(ctx, commitDir)
 	require.NoError(t, err)
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childADir))
-	require.NoError(t, store.CloneCheckpointDir(commitDir, childBDir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childADir))
+	require.NoError(t, store.CloneCheckpointDir(ctx, commitDir, childBDir))
 
 	childA, err := store.Open(store.Options{
 		Dir:           childADir,
@@ -645,7 +649,7 @@ func TestCheckpointUnderConcurrentWritesAndCompactPacks(t *testing.T) {
 	// 逐个克隆并打开在线并发期间生成的切面，验证所有块冷读无损且每个单块内部字节完全原子一致（无撕裂写）。
 	for i, cDir := range commitDirs {
 		cloneDir := filepath.Join(rootDir, "clones", "clone_"+strconv.Itoa(i))
-		require.NoError(t, store.CloneCheckpointDir(cDir, cloneDir))
+		require.NoError(t, store.CloneCheckpointDir(ctx, cDir, cloneDir))
 
 		cloneActor, openErr := store.Open(store.Options{
 			Dir:        cloneDir,
@@ -683,10 +687,10 @@ func TestForkErrorBoundariesAndAllocatorFailure(t *testing.T) {
 	failActor, err := store.Open(store.Options{
 		Dir:    filepath.Join(rootDir, "fail-alloc"),
 		DiskID: "fail-alloc",
-		InoAllocator: func(_ uint64) (uint64, uint64, error) {
+		InoAllocator: func(_ context.Context, _ uint64) (uint64, uint64, error) {
 			return 0, 0, allocErr
 		},
-		PackAllocator: func(_ uint64) (uint64, uint64, error) {
+		PackAllocator: func(_ context.Context, _ uint64) (uint64, uint64, error) {
 			return 0, 0, allocErr
 		},
 	})
@@ -697,7 +701,7 @@ func TestForkErrorBoundariesAndAllocatorFailure(t *testing.T) {
 		Mode:      store.S_IFREG | 0o644,
 	})
 	require.ErrorIs(t, err, allocErr)
-	_, err = failActor.Blobs().Append(2, []byte("payload"))
+	_, err = failActor.Blobs().Append(ctx, 2, []byte("payload"))
 	require.ErrorIs(t, err, allocErr)
 	require.NoError(t, failActor.Close())
 
@@ -739,9 +743,9 @@ func TestForkErrorBoundariesAndAllocatorFailure(t *testing.T) {
 	require.NoError(t, roActor.Close())
 
 	// CloneCheckpointDir 边界校验：空路径、同路径、目标已存在（不误删已有目录）。
-	require.ErrorIs(t, store.CloneCheckpointDir("", filepath.Join(rootDir, "dst")), store.ErrInvalid)
-	require.ErrorIs(t, store.CloneCheckpointDir(commitDir, commitDir), store.ErrInvalid)
-	require.ErrorIs(t, store.CloneCheckpointDir(commitDir, existingDir), store.ErrExist)
+	require.ErrorIs(t, store.CloneCheckpointDir(ctx, "", filepath.Join(rootDir, "dst")), store.ErrInvalid)
+	require.ErrorIs(t, store.CloneCheckpointDir(ctx, commitDir, commitDir), store.ErrInvalid)
+	require.ErrorIs(t, store.CloneCheckpointDir(ctx, commitDir, existingDir), store.ErrExist)
 	gotSentinel, err = os.ReadFile(sentinelPath)
 	require.NoError(t, err)
 	require.Equal(t, []byte("safe"), gotSentinel, "CloneCheckpointDir 拒绝已存在目标目录时不得破坏已有文件")

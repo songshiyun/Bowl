@@ -247,6 +247,7 @@ func TestAsyncDeadPackReclaimNonBlockingFsyncAndDrainOnClose(t *testing.T) {
 }
 
 func TestActivePackIDLockFreeWritebackHintsAndExtendHotDoubling(t *testing.T) {
+	ctx := context.Background()
 	blobs := store.NewBlobStore(t.TempDir())
 	defer func() { require.NoError(t, blobs.Close()) }()
 
@@ -256,7 +257,7 @@ func TestActivePackIDLockFreeWritebackHintsAndExtendHotDoubling(t *testing.T) {
 	chunk := bytes.Repeat([]byte{0x5C}, 4096)
 	var ref store.BlobRef
 	allocs := testing.AllocsPerRun(5, func() {
-		cur, appErr := blobs.Append(10, chunk)
+		cur, appErr := blobs.Append(ctx, 10, chunk)
 		if appErr != nil {
 			t.Fatalf("Append failed: %v", appErr)
 		}
@@ -301,7 +302,7 @@ func TestActivePackIDLockFreeWritebackHintsAndExtendHotDoubling(t *testing.T) {
 
 	buf4M := bytes.Repeat([]byte{0xA7}, 4<<20)
 	for range 4 {
-		_, err := blobs.AppendBlocks(10, buf4M)
+		_, err := blobs.AppendBlocks(ctx, 10, buf4M)
 		require.NoError(t, err)
 	}
 	close(stopReader)

@@ -117,6 +117,7 @@ type Params struct {
 	Pool          *pgxpool.Pool                  `optional:"true"`
 	ObsReady      observability.Ready            `optional:"true"`
 	FineBuckets   FineBucketsReady               `optional:"true"`
+	Tracing       TracingReady                   `optional:"true"`
 	HTTPMetrics   *HTTPMetrics                   `optional:"true"`
 	Logger        *slog.Logger                   `optional:"true"`
 	Lifecycle     fx.Lifecycle                   `optional:"true"`

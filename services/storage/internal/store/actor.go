@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"runtime/pprof"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -398,7 +399,9 @@ func Open(opts Options) (*StoreActor, error) {
 		close(s.loopDone)
 	} else {
 		s.batch = s.db.NewIndexedBatch()
-		go s.runLoop()
+		go pprof.Do(context.Background(), pprof.Labels("component", "store_actor", "disk_id", s.diskID), func(context.Context) {
+			s.runLoop()
+		})
 	}
 
 	return s, nil
@@ -1008,9 +1011,9 @@ func (s *StoreActor) enqueueAndWait(ctx context.Context, cmd *writeCmd) error {
 }
 
 // prepareIno 在 Phase A 检查本地 Inode 号段余量；若已耗尽则按 4096 步长向分配器预留新号段。
-func (s *StoreActor) prepareIno() (uint64, error) {
+func (s *StoreActor) prepareIno(parentSC trace.SpanContext) (uint64, error) {
 	if s.nextIno == 0 || s.nextIno > s.reservedIno {
-		if err := s.reserveInoSegment(); err != nil {
+		if err := s.reserveInoSegment(parentSC); err != nil {
 			return 0, err
 		}
 	}
@@ -1020,13 +1023,17 @@ func (s *StoreActor) prepareIno() (uint64, error) {
 	return s.nextIno, nil
 }
 
-func (s *StoreActor) reserveInoSegment() error {
+func (s *StoreActor) reserveInoSegment(parentSC trace.SpanContext) error {
 	last := max(s.maxExistingIno, s.reservedIno, RootIno)
 	if last >= uint64(math.MaxInt64) {
 		return ErrInodeExhausted
 	}
 	if s.inoAllocator != nil {
-		first, reserved, err := s.inoAllocator(last + 1)
+		allocCtx := context.Background()
+		if parentSC.IsValid() {
+			allocCtx = trace.ContextWithRemoteSpanContext(allocCtx, parentSC)
+		}
+		first, reserved, err := s.inoAllocator(allocCtx, last+1)
 		if err != nil {
 			return err
 		}
@@ -1279,17 +1286,7 @@ func (s *StoreActor) processTick() {
 		finishSpan(syncSpan, commitErr)
 	}
 
-	if tickSpan != nil {
-		tickSpan.SetAttributes(
-			attribute.Bool("has_sync_barrier", hasSyncBarrier),
-			attribute.Int("reclaimed_packs", reclaimedPacks),
-		)
-		finishSpan(tickSpan, commitErr)
-	}
-
-	s.tickCount.Add(1)
-
-	// Step 4：防膨胀重置与唤醒调用方（Reset & Wake）
+	// Step 4：防膨胀重置与执行切面固化（仍在 tickSpan 生命周期内）、唤醒调用方（Reset & Wake）
 	if len(s.batch.Repr()) > BatchResetMaxReprBytes || s.batch.Count() > BatchResetMaxCount {
 		s.batch = s.db.NewIndexedBatch()
 		s.batchResetCnt.Add(1)
@@ -1297,13 +1294,54 @@ func (s *StoreActor) processTick() {
 		s.batch.Reset()
 	}
 
+	tickErr := commitErr
+	var checkpointDur time.Duration
 	if hasCheckpoint && commitErr == nil {
+		ckStart := time.Now()
+		ckCtx := context.Background()
+		var ckSpan trace.Span
+		if tickSpan != nil {
+			ckCtx, ckSpan = startChildSpan(tickCtx, "store.Checkpoint")
+		}
+		var (
+			firstCkErr error
+			livePacks  int
+			hasOrphans bool
+		)
 		for _, cmd := range cmds {
 			if cmd.op == opCheckpoint && cmd.err == nil {
-				cmd.err = s.execCheckpointCmd(cmd)
+				cmd.err = s.execCheckpointCmd(ckCtx, cmd)
+				if op, ok := cmd.req.(*checkpointOp); ok && op != nil {
+					livePacks = op.stats.LivePacks
+					hasOrphans = op.stats.HasOrphans
+				}
+				if cmd.err != nil && firstCkErr == nil {
+					firstCkErr = cmd.err
+				}
 			}
 		}
+		checkpointDur = time.Since(ckStart)
+		s.metrics.observePhaseCheckpoint(checkpointDur, sampledSpanContext(ckCtx))
+		if ckSpan != nil {
+			ckSpan.SetAttributes(
+				attribute.Int("checkpoint.live_packs", livePacks),
+				attribute.Bool("checkpoint.has_orphans", hasOrphans),
+			)
+			finishSpan(ckSpan, firstCkErr)
+		}
+		tickErr = firstCkErr
 	}
+
+	if tickSpan != nil {
+		tickSpan.SetAttributes(
+			attribute.Bool("has_sync_barrier", hasSyncBarrier),
+			attribute.Bool("has_checkpoint", hasCheckpoint),
+			attribute.Int("reclaimed_packs", reclaimedPacks),
+		)
+		finishSpan(tickSpan, tickErr)
+	}
+
+	s.tickCount.Add(1)
 
 	for i, cmd := range cmds {
 		if cmd.err == nil && commitErr != nil {
@@ -1315,9 +1353,14 @@ func (s *StoreActor) processTick() {
 
 	totalDur := time.Since(tickStart)
 	if s.slowTickThreshold > 0 && totalDur > s.slowTickThreshold && s.logger != nil {
-		s.logger.Warn("slow actor tick",
+		logCtx := tickCtx
+		if logCtx == nil {
+			logCtx = context.Background()
+		}
+		s.logger.WarnContext(logCtx, "slow actor tick",
 			"batch_size", batchSize,
 			"has_sync_barrier", hasSyncBarrier,
+			"has_checkpoint", hasCheckpoint,
 			"fsync_inodes", len(fsyncFileInodes),
 			"reclaimed_packs", reclaimedPacks,
 			"total_ms", totalDur.Milliseconds(),
@@ -1326,6 +1369,7 @@ func (s *StoreActor) processTick() {
 			"pack_sync_ms", packSyncDur.Milliseconds(),
 			"wal_apply_ms", walApplyDur.Milliseconds(),
 			"dead_pack_remove_ms", deadRemoveDur.Milliseconds(),
+			"checkpoint_ms", checkpointDur.Milliseconds(),
 		)
 	}
 }

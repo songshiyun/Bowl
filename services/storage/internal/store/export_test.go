@@ -1,5 +1,12 @@
 package store
 
+import "time"
+
+// SetSlowTickThresholdForTest 设置慢 Tick 日志告警阈值（仅供单测使用）。
+func (s *StoreActor) SetSlowTickThresholdForTest(d time.Duration) {
+	s.slowTickThreshold = d
+}
+
 // SetBeforeCompactRelocateHookForTest 注册在搬迁活块读取追加完成、向 StoreActor 投递 opCompactRelocate 前触发的测试钩子。
 func (s *StoreActor) SetBeforeCompactRelocateHookForTest(hook func()) {
 	s.beforeCompactRelocateHook = hook

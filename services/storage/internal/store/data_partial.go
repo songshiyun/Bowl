@@ -86,7 +86,7 @@ func (s *StoreActor) prepareTruncateTailBlock(ctx context.Context, blobs *BlobSt
 			keep:     false,
 		}, nil
 	}
-	ref, err := s.stageAppend(blobs, ino, data, staged)
+	ref, err := s.stageAppend(ctx, blobs, ino, data, staged)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}
@@ -244,7 +244,7 @@ func (s *StoreActor) preparePunchPartialBlock(ctx context.Context, blobs *BlobSt
 		}, true, nil
 	}
 
-	ref, err := s.stageAppend(blobs, ino, data, staged)
+	ref, err := s.stageAppend(ctx, blobs, ino, data, staged)
 	if err != nil {
 		return writeBlockSpec{}, false, err
 	}

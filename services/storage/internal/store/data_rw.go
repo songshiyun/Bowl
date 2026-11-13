@@ -113,7 +113,7 @@ func (s *StoreActor) writeFullBlocks(ctx context.Context, ino, offset uint64, da
 			attribute.String("write.mode", "full_block"),
 		)
 	}
-	refs, writeErr := s.stageAppendBlocks(blobs, ino, data, &staged)
+	refs, writeErr := s.stageAppendBlocks(ctx, blobs, ino, data, &staged)
 	finishSpan(blobSpan, writeErr)
 	if writeErr != nil {
 		s.unpinStagedBlobs(staged)
@@ -230,7 +230,7 @@ func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *BlobSt
 				keep:     false,
 			}, nil
 		}
-		ref, err := s.stageAppend(blobs, ino, chunk, staged)
+		ref, err := s.stageAppend(ctx, blobs, ino, chunk, staged)
 		if err != nil {
 			return writeBlockSpec{}, err
 		}
@@ -302,7 +302,7 @@ func (s *StoreActor) preparePartialWriteBlock(ctx context.Context, blobs *BlobSt
 		}, nil
 	}
 
-	ref, err := s.stageAppend(blobs, ino, merged, staged)
+	ref, err := s.stageAppend(ctx, blobs, ino, merged, staged)
 	if err != nil {
 		return writeBlockSpec{}, err
 	}

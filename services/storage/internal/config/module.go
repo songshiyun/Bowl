@@ -11,14 +11,19 @@ import (
 )
 
 // noDefaultMetricsObsConfig 包装 *EnvConfig，在 obsfx.Module 调用 observability.Setup 时
-// 抑制默认 5ms 首桶 MeterProvider 的创建（使 rt.MeterProvider() 为 nil，避免与 server 模块
-// 18 级亚毫秒桶 MeterProvider 产生二次 Shutdown 冲突），其余日志、追踪与参数校验契约原样透传。
-// 真实的 METRICS_ENABLED 开关仍由 AdminRouteConfig (*Config) 向内网管理路由与精细桶装配器提供。
+// 同时抑制默认 5ms 首桶 MeterProvider 与默认 TracerProvider 的创建（避免与 server 模块
+// 18 级亚毫秒桶 MeterProvider 及控制面提权 TracerProvider 产生二次创建与二次 Shutdown 冲突），
+// 其余日志与参数校验契约原样透传。
+// 真实的 METRICS_ENABLED 开关由 AdminRouteConfig (*Config) 提供，OTEL_ENABLED 由 telemetry.Config 提供。
 type noDefaultMetricsObsConfig struct {
 	*ObservabilityConfig
 }
 
 func (noDefaultMetricsObsConfig) IsMetricsEnabled() bool {
+	return false
+}
+
+func (noDefaultMetricsObsConfig) Enabled() bool {
 	return false
 }
 

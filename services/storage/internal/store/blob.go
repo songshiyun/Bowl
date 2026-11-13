@@ -24,7 +24,7 @@ const PackSegment uint64 = 64
 
 // PackSegmentAllocator 定义同源血缘树跨实例防撞的 PackID 连续号段分配函数。
 // minNext 为当前实例已知最小可用起始编号（本地最大已有 PackID + 1），返回的闭区间 [first, last] 须满足 first >= minNext 且 last >= first。
-type PackSegmentAllocator func(minNext uint64) (first, last uint64, err error)
+type PackSegmentAllocator func(ctx context.Context, minNext uint64) (first, last uint64, err error)
 
 // BlobStore 规格与分片热块缓存参数。
 const (
@@ -289,7 +289,7 @@ func (s *BlobStore) existingPackIDs() []uint64 {
 }
 
 // NextPackID 无锁分配下一个唯一 PackID；当本地号段耗尽时加 allocMu 向外部血缘分配器或按本地 4096 步长预留新号段。
-func (s *BlobStore) NextPackID() (uint64, error) {
+func (s *BlobStore) NextPackID(ctx context.Context) (uint64, error) {
 	for {
 		next := s.nextPackID.Load()
 		reserved := s.reservedPackID.Load()
@@ -315,8 +315,12 @@ func (s *BlobStore) NextPackID() (uint64, error) {
 		}
 		var first, last uint64
 		if s.packAlloc != nil {
+			allocCtx := ctx
+			if allocCtx == nil {
+				allocCtx = context.Background()
+			}
 			var err error
-			first, last, err = s.packAlloc(s.lastReserved + 1)
+			first, last, err = s.packAlloc(allocCtx, s.lastReserved+1)
 			if err != nil {
 				s.allocMu.Unlock()
 				return 0, err
@@ -369,7 +373,7 @@ func packFilePath(dir string, packID uint64) string {
 // Append 将有效块数据（1..256 KiB）追加写入当前活跃 .pack：
 //   - 若当前活跃包剩余空间不足 MaxPackSize（64 MiB），自动将当前活跃包封口并分配新 PackID 创建下一个活跃 .pack；
 //   - 在 activeOffset 处执行 WriteAt，推进 activeOffset，登记 ino 脏包并写入 hotShard 热缓存。
-func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
+func (s *BlobStore) Append(ctx context.Context, ino uint64, data []byte) (BlobRef, error) {
 	if len(data) == 0 || len(data) > BlobSize {
 		return BlobRef{}, ErrInvalidValue
 	}
@@ -385,7 +389,7 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 	}
 
 	if s.activeFile == nil || uint64(s.activeOffset)+uint64(len(data)) > uint64(maxCap) {
-		if err := s.openNextActivePackLocked(); err != nil {
+		if err := s.openNextActivePackLocked(ctx); err != nil {
 			s.mu.Unlock()
 			return BlobRef{}, err
 		}
@@ -419,7 +423,7 @@ func (s *BlobStore) Append(ino uint64, data []byte) (BlobRef, error) {
 // AppendBlocks 将一个或多个连续的 256 KiB（BlobSize）满块批量追加写入活跃 .pack：
 //   - 当当前活跃 .pack 剩余容量可容纳连续多个满块时，在单次锁与单次 WriteAt 系统调用内合并写入整段数据；
 //   - 跨 MaxPackSize（64 MiB）封口边界时自动分段切入新 .pack，按块顺序返回对应的 BlobRef 序列（满块批量写已落入内核页缓存，跳过用户态分片热缓存二次拷贝）。
-func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
+func (s *BlobStore) AppendBlocks(ctx context.Context, ino uint64, data []byte) ([]BlobRef, error) {
 	if len(data) == 0 || len(data)%BlobSize != 0 {
 		return nil, ErrInvalidValue
 	}
@@ -446,7 +450,7 @@ func (s *BlobStore) AppendBlocks(ino uint64, data []byte) ([]BlobRef, error) {
 
 	for consumed := 0; consumed < len(data); {
 		if s.activeFile == nil || uint64(s.activeOffset)+BlobSize > uint64(maxCap) {
-			if err := s.openNextActivePackLocked(); err != nil {
+			if err := s.openNextActivePackLocked(ctx); err != nil {
 				s.mu.Unlock()
 				return nil, err
 			}
@@ -571,14 +575,14 @@ func (s *BlobStore) ExtendTail(ino uint64, oldRef BlobRef, patchOffset uint32, p
 	return newRef, true, nil
 }
 
-func (s *BlobStore) openNextActivePackLocked() error {
+func (s *BlobStore) openNextActivePackLocked(ctx context.Context) error {
 	if !s.dirReady.Load() {
 		if err := os.MkdirAll(s.dir, 0o755); err != nil {
 			return err
 		}
 		s.dirReady.Store(true)
 	}
-	packID, err := s.NextPackID()
+	packID, err := s.NextPackID(ctx)
 	if err != nil {
 		return err
 	}
@@ -1112,12 +1116,15 @@ func (s *BlobStore) SyncAll(ctx context.Context) error {
 
 // SealAndLinkPacks 排空待回收死包、同步所有脏包并封口当前活跃 .pack（使其永久只读），
 // 随后在常驻句柄表读锁保护下将 livePackIDs 硬链接至 destPacksDir。
-func (s *BlobStore) SealAndLinkPacks(destPacksDir string, livePackIDs []uint64) error {
+func (s *BlobStore) SealAndLinkPacks(ctx context.Context, destPacksDir string, livePackIDs []uint64) error {
 	if destPacksDir == "" {
 		return ErrInvalid
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.WaitPendingReclaims()
-	if err := s.SyncAll(context.Background()); err != nil {
+	if err := s.SyncAll(ctx); err != nil {
 		return err
 	}
 
@@ -1198,7 +1205,15 @@ func (s *BlobStore) SealAndLinkPacks(destPacksDir string, livePackIDs []uint64) 
 			return linkErr
 		}
 	}
-	return syncDirPath(destPacksDir)
+	var dirSyncStart time.Time
+	if s.metrics != nil {
+		dirSyncStart = time.Now()
+	}
+	dirSyncErr := syncDirPath(destPacksDir)
+	if s.metrics != nil {
+		s.metrics.observeBlobSync(syncTargetPacksDir, syncTriggerFlushWAL, time.Since(dirSyncStart))
+	}
+	return dirSyncErr
 }
 
 func (s *BlobStore) clearDirtyTrackingOnSealLocked(packID uint64) {

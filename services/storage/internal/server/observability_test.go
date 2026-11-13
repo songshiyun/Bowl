@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -21,10 +22,12 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/fx"
 
 	"github.com/starsrc/pkg/observability"
 	"github.com/starsrc/pkg/observability/obsfx"
+	"github.com/starsrc/pkg/observability/telemetry"
 	"github.com/starsrc/pkg/serverx"
 	"github.com/starsrc/pkg/tx"
 
@@ -514,19 +517,36 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	// 3. 断言 Server -> Control -> StoreActor 全链路 OTel Span 已真实打通
 	spans := spanExporter.GetSpans()
 	spanNames := make(map[string]int)
-	forkSpanDiskIDs := make(map[string]bool)
-	for _, sp := range spans {
+	var forkSuccessSpan, forkFailureSpan *tracetest.SpanStub
+	for i := range spans {
+		sp := &spans[i]
 		spanNames[sp.Name]++
 		if sp.Name == "storage.v1.StorageService/ForkDisk" || sp.Name == storagev1connect.StorageServiceForkDiskProcedure {
+			var dID, srcID string
 			for _, attr := range sp.Attributes {
-				if string(attr.Key) == attrKeyBowlDiskID {
-					forkSpanDiskIDs[attr.Value.AsString()] = true
+				switch string(attr.Key) {
+				case attrKeyBowlDiskID:
+					dID = attr.Value.AsString()
+				case attrKeyBowlSourceDiskID:
+					srcID = attr.Value.AsString()
 				}
+			}
+			if dID == forkedDiskID {
+				forkSuccessSpan = sp
+			} else if srcID == missingSourceDiskID && dID == "" {
+				forkFailureSpan = sp
 			}
 		}
 	}
-	require.True(t, forkSpanDiskIDs[forkedDiskID], "ForkDisk 成功 Span 必须记录新建子盘 bowl.disk_id")
-	require.True(t, forkSpanDiskIDs[missingSourceDiskID], "ForkDisk 失败 Span 必须通过 GetSourceDiskId 兜底记录源盘 bowl.disk_id")
+	require.NotNil(t, forkSuccessSpan, "ForkDisk 成功 Span 必须记录新建子盘 bowl.disk_id")
+	var forkSuccessSrc string
+	for _, attr := range forkSuccessSpan.Attributes {
+		if string(attr.Key) == attrKeyBowlSourceDiskID {
+			forkSuccessSrc = attr.Value.AsString()
+		}
+	}
+	require.Equal(t, diskID, forkSuccessSrc, "ForkDisk 成功 Span 必须同时记录源盘 bowl.source_disk_id")
+	require.NotNil(t, forkFailureSpan, "ForkDisk 失败 Span 必须独立记录源盘 bowl.source_disk_id 且不得混入 bowl.disk_id")
 	for _, expected := range []string{
 		"control.OpenDiskActor",
 		"store.BlobWrite",
@@ -594,6 +614,8 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 	}
 	cfg.LogLevel = "error"
 	cfg.AdminAddr = "off"
+	cfg.OtelEnabled = true
+	cfg.OtelTracesExporter = telemetry.ExporterNone
 
 	var (
 		srv *Server
@@ -616,6 +638,7 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 
 	require.NoError(t, app.Start(ctx))
 	require.Nil(t, rt.MeterProvider(), "obsfx Runtime 默认 MeterProvider 必须被抑制以避免二次 Shutdown")
+	require.Nil(t, rt.TracerProvider(), "obsfx Runtime 默认 TracerProvider 必须被抑制以避免二次 Shutdown")
 
 	pubSrv := httptest.NewServer(srv.Handler())
 	defer pubSrv.Close()
@@ -634,4 +657,85 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 	require.Contains(t, body, "rpc_server_call_duration_seconds_bucket")
 
 	require.NoError(t, app.Stop(ctx), "Fx 应用优雅停机必须零错误退出（不得触发 reader is shutdown）")
+}
+
+func TestStorageSamplerPromotesControlPlaneOverRemoteUnsampledParent(t *testing.T) {
+	ctx := context.Background()
+	prevTP := otel.GetTracerProvider()
+	prevProp := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		otel.SetTextMapPropagator(prevProp)
+	})
+
+	spanExporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(spanExporter),
+		sdktrace.WithSampler(NewStorageSampler(0.0001)),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	mgr := control.New(newMemDiskDB(), control.WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	obsCfg := observability.DefaultConfig()
+	obsCfg.OtelEnabled = true
+	obsCfg.OtelTrustRemote = true
+
+	srv, err := New(Params{
+		Config: config.ServerConfig{
+			ServerPort:         0,
+			InternalServerPort: 0,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		Control:       mgr,
+		Observability: obsCfg,
+		Telemetry:     obsCfg,
+	})
+	require.NoError(t, err)
+
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	// 模拟短命客户端携带未采样 traceparent (flags=00) 调用 ForkDisk，服务端必须提权采样并继承同一 TraceID。
+	const traceIDHex = "0af7651916cd43dd8448eb211c80319c"
+	const parentSpanHex = "b7ad6b7169203331"
+	req := connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: "018f0000-0000-7000-8000-000000009998",
+		Name:         "unsampled-parent-fork",
+	})
+	req.Header().Set("Traceparent", "00-"+traceIDHex+"-"+parentSpanHex+"-00")
+
+	client := storagev1connect.NewStorageServiceClient(httpSrv.Client(), httpSrv.URL)
+	_, forkErr := client.ForkDisk(ctx, req)
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkErr))
+
+	wantTraceID, err := trace.TraceIDFromHex(traceIDHex)
+	require.NoError(t, err)
+
+	spans := spanExporter.GetSpans()
+	var found bool
+	for _, sp := range spans {
+		if sp.Name == "storage.v1.StorageService/ForkDisk" || sp.Name == storagev1connect.StorageServiceForkDiskProcedure {
+			require.Equal(t, wantTraceID, sp.SpanContext.TraceID(), "提权采样后必须沿用客户端 traceparent TraceID")
+			found = true
+		}
+	}
+	require.True(t, found, "携带未采样 traceparent 的控制面 ForkDisk 必须被服务端 100%% 提权录制")
+}
+
+func TestClassifyStorageLogLevel(t *testing.T) {
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceWriteProcedure, 0, nil))
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceReadProcedure, 0, nil))
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceListDisksProcedure, 0, nil))
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceGetDiskProcedure, 0, nil))
+	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceForkDiskProcedure, 0, nil))
+	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceCreateDiskProcedure, 0, nil))
+	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceUpdateDiskProcedure, 0, nil))
+	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceDeleteDiskProcedure, 0, nil))
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceLookupProcedure, connect.CodeNotFound, connect.NewError(connect.CodeNotFound, nil)))
+	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceReadProcedure, connect.CodeCanceled, connect.NewError(connect.CodeCanceled, context.Canceled)))
+	require.Equal(t, slog.LevelWarn, classifyStorageLogLevel(storagev1connect.StorageServiceForkDiskProcedure, connect.CodeNotFound, connect.NewError(connect.CodeNotFound, nil)))
 }

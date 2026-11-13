@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,12 +14,14 @@ import (
 	"sync/atomic"
 
 	"github.com/cockroachdb/pebble/v2"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // InodeSegmentAllocator 定义同源血缘树跨实例防撞的 Inode 连续号段分配函数。
 // minNext 为当前实例已知最小可用起始节点号（max(本地最大已有 Inode, RootIno) + 1），
 // 返回的闭区间 [first, last] 须满足 first >= minNext 且 last >= first。
-type InodeSegmentAllocator func(minNext uint64) (first, last uint64, err error)
+type InodeSegmentAllocator func(ctx context.Context, minNext uint64) (first, last uint64, err error)
 
 // CheckpointStats 承载在线无感 Checkpoint 固化时刻的一致性统计快照。
 type CheckpointStats struct {
@@ -26,6 +29,7 @@ type CheckpointStats struct {
 	Inodes       uint64
 	MaxBytes     uint64
 	HasOrphans   bool
+	LivePacks    int
 }
 
 type checkpointOp struct {
@@ -110,7 +114,7 @@ func (s *StoreActor) mutateCheckpointCmd(cmd *writeCmd) {
 	cmd.syncBarrier = true
 }
 
-func (s *StoreActor) execCheckpointCmd(cmd *writeCmd) error {
+func (s *StoreActor) execCheckpointCmd(ctx context.Context, cmd *writeCmd) error {
 	op, ok := cmd.req.(*checkpointOp)
 	if !ok || op == nil {
 		return ErrInvalid
@@ -142,7 +146,7 @@ func (s *StoreActor) execCheckpointCmd(cmd *writeCmd) error {
 	if ckErr := s.db.Checkpoint(op.destDir); ckErr != nil {
 		return ckErr
 	}
-	if linkErr := s.blobs.SealAndLinkPacks(filepath.Join(op.destDir, "packs"), livePackIDs); linkErr != nil {
+	if linkErr := s.blobs.SealAndLinkPacks(ctx, filepath.Join(op.destDir, "packs"), livePackIDs); linkErr != nil {
 		_ = os.RemoveAll(op.destDir)
 		return linkErr
 	}
@@ -162,26 +166,62 @@ func (s *StoreActor) execCheckpointCmd(cmd *writeCmd) error {
 		Inodes:       s.stat.Inodes,
 		MaxBytes:     maxB,
 		HasOrphans:   hasOrphans,
+		LivePacks:    len(livePackIDs),
 	}
 	return nil
 }
 
+// SanitizeOptions 定义独立执行 Checkpoint 孤儿净化与统计恢复的可观测配置。
+type SanitizeOptions struct {
+	Dir       string
+	CommitID  string
+	Cache     *pebble.Cache
+	Logger    *slog.Logger
+	Metrics   *Metrics
+	OpenActor func(context.Context, Options) (*StoreActor, error)
+}
+
 // SanitizeCheckpoint 在临时可写 StoreActor（ResetEpoch: true）上清理切面目录中残留的孤儿节点及其独占死包，
 // 刷盘并关闭临时实例后返回净化后的容量与节点统计。
-func SanitizeCheckpoint(dir string, cache *pebble.Cache) (StatFSResult, error) {
-	if dir == "" {
+func SanitizeCheckpoint(ctx context.Context, opts SanitizeOptions) (st StatFSResult, retErr error) {
+	if opts.Dir == "" {
 		return StatFSResult{}, ErrInvalid
 	}
-	actor, err := Open(Options{
-		Dir:        dir,
-		Cache:      cache,
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var span trace.Span
+	if isSpanRecording(ctx) {
+		ctx, span = startChildSpan(ctx, "store.SanitizeCheckpoint",
+			attribute.String("bowl.commit_id", opts.CommitID),
+		)
+		defer func() { finishSpan(span, retErr) }()
+	}
+
+	diskID := "commit:" + opts.CommitID
+	if opts.CommitID == "" {
+		diskID = "commit:" + filepath.Base(filepath.Clean(opts.Dir))
+	}
+
+	openFn := opts.OpenActor
+	if openFn == nil {
+		openFn = func(_ context.Context, o Options) (*StoreActor, error) {
+			return Open(o)
+		}
+	}
+
+	actor, err := openFn(ctx, Options{
+		Dir:        opts.Dir,
+		DiskID:     diskID,
+		Cache:      opts.Cache,
+		Logger:     opts.Logger,
+		Metrics:    opts.Metrics,
 		ResetEpoch: true,
 	})
 	if err != nil {
 		return StatFSResult{}, err
 	}
 
-	ctx := context.Background()
 	if cleanErr := actor.CleanOrphans(ctx); cleanErr != nil {
 		_ = actor.Close()
 		return StatFSResult{}, cleanErr
@@ -202,6 +242,12 @@ func SanitizeCheckpoint(dir string, cache *pebble.Cache) (StatFSResult, error) {
 	if closeErr := actor.Close(); closeErr != nil {
 		return StatFSResult{}, closeErr
 	}
+	if span != nil {
+		span.SetAttributes(
+			attribute.Int64("sanitize.used_bytes", int64(st.UsedBytes)),
+			attribute.Int64("sanitize.files", int64(st.Files)),
+		)
+	}
 	return st, nil
 }
 
@@ -209,9 +255,17 @@ func SanitizeCheckpoint(dir string, cache *pebble.Cache) (StatFSResult, error) {
 //   - 对不可变数据文件（*.sst、*.blob、packs/*.pack）执行 os.Link 零拷贝硬链接；
 //   - 对其余 Pebble 元数据文件（CURRENT、MANIFEST-*、OPTIONS-*、format-version.*、marker.*、*.log，跳过 LOCK）执行字节复制；
 //   - 同步目标目录与父目录，任意步骤失败时自动清理 dstDir。
-func CloneCheckpointDir(srcDir, dstDir string) (retErr error) {
+func CloneCheckpointDir(ctx context.Context, srcDir, dstDir string) (retErr error) {
 	if srcDir == "" || dstDir == "" {
 		return ErrInvalid
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var span trace.Span
+	if isSpanRecording(ctx) {
+		_, span = startChildSpan(ctx, "store.CloneCheckpointDir")
+		defer func() { finishSpan(span, retErr) }()
 	}
 	srcClean := filepath.Clean(srcDir)
 	dstClean := filepath.Clean(dstDir)

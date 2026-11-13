@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"math"
 	"os"
@@ -17,7 +18,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/starsrc/pkg/tx"
 
@@ -829,4 +835,181 @@ func TestForkDiskValidationAndTxFailureRollback(t *testing.T) {
 	require.NoError(t, mgr.Close())
 	_, err = mgr.ForkDisk(ctx, ForkDiskParams{SourceDiskID: src.DiskID, Name: "after-close"})
 	require.ErrorIs(t, err, ErrClosed)
+}
+
+type threadSafeLogBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (w *threadSafeLogBuf) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *threadSafeLogBuf) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestForkPhysicalDeduplicationCommitsMetricsAndTracing(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prevTP)
+	})
+
+	var logBuf threadSafeLogBuf
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	rootDir := t.TempDir()
+	memDB := newMemControlDB()
+	mgr := newManager(memDB, WithStorageRoot(rootDir), WithLogger(logger))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	reg := prometheus.NewRegistry()
+	require.NoError(t, reg.Register(mgr.Collector()))
+
+	ctx, rootSpan := tp.Tracer("test-fork-ctrl").Start(context.Background(), "rpc.ForkLifecycle")
+
+	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "dedup-parent", MaxBytes: 64 << 20})
+	require.NoError(t, err)
+
+	srcActor, err := mgr.Actor(ctx, src.DiskID)
+	require.NoError(t, err)
+	fAttr, err := srcActor.Create(ctx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("payload-1m.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+
+	const payloadSize = 1 << 20 // 1 MiB
+	_, _, err = srcActor.Write(ctx, fAttr.Ino, 0, bytes.Repeat([]byte{0x5A}, payloadSize))
+	require.NoError(t, err)
+
+	// 写入后制造一个孤儿文件，触发 SanitizeCheckpoint（需走 openDiskActor 并产生 commit:<id> 事件日志）。
+	orphanAttr, err := srcActor.Create(ctx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("orphan.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+	_, _, err = srcActor.Write(ctx, orphanAttr.Ino, 0, bytes.Repeat([]byte{0x7E}, 8192))
+	require.NoError(t, err)
+	require.NoError(t, srcActor.Unlink(ctx, store.RootIno, []byte("orphan.bin"), true))
+
+	// 1. 连续基于父盘 Fork 3 个子盘。
+	children := make([]*Disk, 0, 3)
+	for i := range 3 {
+		child, fErr := mgr.ForkDisk(ctx, ForkDiskParams{
+			SourceDiskID: src.DiskID,
+			Name:         "child-" + string(rune('a'+i)),
+		})
+		require.NoError(t, fErr)
+		children = append(children, child)
+	}
+
+	// 验证 UpdateDisk 记录结构化审计日志。
+	newName := "dedup-parent-renamed"
+	_, err = mgr.UpdateDisk(ctx, UpdateDiskParams{DiskID: src.DiskID, Name: &newName})
+	require.NoError(t, err)
+
+	gatherMap := func() map[string]*dto.MetricFamily {
+		fams, gErr := reg.Gather()
+		require.NoError(t, gErr)
+		out := make(map[string]*dto.MetricFamily, len(fams))
+		for _, f := range fams {
+			out[f.GetName()] = f
+		}
+		return out
+	}
+
+	m1 := gatherMap()
+	physBytes := m1["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue()
+	refBytes := m1["bowl_storage_pack_referenced_bytes"].GetMetric()[0].GetGauge().GetValue()
+	require.InDelta(t, float64(payloadSize), physBytes, 65536, "3 次 Fork 后去重物理封包占用应维持约 1 MiB")
+	require.GreaterOrEqual(t, refBytes, float64(4*payloadSize), "逻辑引用字节总和应反映 4 份挂载盘的逻辑累加")
+	require.InDelta(t, float64(3), m1["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
+	require.GreaterOrEqual(t, m1["bowl_storage_commits_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
+	require.GreaterOrEqual(t, m1["bowl_storage_data_dir_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
+	require.Greater(t, m1["bowl_storage_volume_total_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(0))
+	require.Greater(t, m1["bowl_storage_volume_available_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(0))
+
+	// 检查 SanitizeCheckpoint 的 commit:<id> pebble_events.log 存在性。
+	commitEntries, err := os.ReadDir(filepath.Join(rootDir, "commits"))
+	require.NoError(t, err)
+	require.Len(t, commitEntries, 3)
+	commitID := commitEntries[0].Name()
+	rawCommitEvents, err := os.ReadFile(filepath.Join(rootDir, "commits", commitID, store.PebbleEventsLogFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(rawCommitEvents), `"disk_id":"commit:`+commitID+`"`)
+
+	// 检查控制面直方图与 open_actor（Create src + Sanitize*3 + 3 open_child = 7）。
+	openOKCount := uint64(0)
+	for _, m := range m1["bowl_storage_control_open_actor_duration_seconds"].GetMetric() {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "result" && lp.GetValue() == "ok" {
+				openOKCount = m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	require.GreaterOrEqual(t, openOKCount, uint64(7), "SanitizeCheckpoint 临时开盘必须纳入 open_actor_duration 统计")
+
+	stageCounts := make(map[string]uint64)
+	for _, m := range m1["bowl_storage_control_fork_stage_duration_seconds"].GetMetric() {
+		for _, lp := range m.GetLabel() {
+			if lp.GetName() == "stage" {
+				stageCounts[lp.GetValue()] = m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	for _, stage := range []string{"checkpoint", "sanitize", "clone_dir", "open_child", "commit_tx"} {
+		require.Equal(t, uint64(3), stageCounts[stage], "stage=%s 应记录 3 次", stage)
+	}
+
+	// 2. 删除父盘与前两个子盘：尚余最后一个子盘，其基准 commit 仍然驻留不可清理。
+	require.NoError(t, mgr.DeleteDisk(ctx, src.DiskID))
+	m2 := gatherMap()
+	require.GreaterOrEqual(t, m2["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), float64(1))
+	require.GreaterOrEqual(t, m2["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), float64(payloadSize))
+
+	require.NoError(t, mgr.DeleteDisk(ctx, children[0].DiskID))
+	require.NoError(t, mgr.DeleteDisk(ctx, children[1].DiskID))
+
+	// 删除最后一个子盘：触发血缘 Commit 目录物理回收。
+	require.NoError(t, mgr.DeleteDisk(ctx, children[2].DiskID))
+	m3 := gatherMap()
+	require.InDelta(t, float64(0), m3["bowl_storage_commits_active"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
+	require.InDelta(t, float64(0), m3["bowl_storage_commits_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
+	require.InDelta(t, float64(0), m3["bowl_storage_pack_physical_bytes"].GetMetric()[0].GetGauge().GetValue(), 1e-9)
+	require.InDelta(t, float64(3), m3["bowl_storage_control_commits_reclaimed_total"].GetMetric()[0].GetCounter().GetValue(), 1e-9)
+
+	rootSpan.End()
+
+	spanCounts := make(map[string]int)
+	for _, sp := range exporter.GetSpans() {
+		spanCounts[sp.Name]++
+	}
+	for _, expected := range []string{
+		"control.ReserveSegment",
+		"control.OpenDiskActor",
+		"control.ForkCommitTx",
+		"control.ReclaimCommits",
+		"store.Checkpoint",
+		"store.SanitizeCheckpoint",
+		"store.CloneCheckpointDir",
+	} {
+		require.GreaterOrEqual(t, spanCounts[expected], 1, "缺少控制面/切面链路 Span %s", expected)
+	}
+
+	require.Contains(t, logBuf.String(), `"msg":"disk updated"`)
 }

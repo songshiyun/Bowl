@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"slices"
@@ -199,8 +200,8 @@ func (s *StoreActor) activePackID() uint64 {
 }
 
 // stageAppend 在 Stage 1 向活跃 .pack 追加写入数据块，并将生成的 BlobRef 纳入命令级预写租约（自动 Pin 所属 PackID）。
-func (s *StoreActor) stageAppend(blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) (BlobRef, error) {
-	ref, err := blobs.Append(ino, data)
+func (s *StoreActor) stageAppend(ctx context.Context, blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) (BlobRef, error) {
+	ref, err := blobs.Append(ctx, ino, data)
 	if err != nil {
 		return BlobRef{}, err
 	}
@@ -212,8 +213,8 @@ func (s *StoreActor) stageAppend(blobs *BlobStore, ino uint64, data []byte, stag
 }
 
 // stageAppendBlocks 在 Stage 1 向活跃 .pack 批量追加连续的 256 KiB 满块，并将生成的 BlobRef 序列单次批量加锁纳入预写租约。
-func (s *StoreActor) stageAppendBlocks(blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) ([]BlobRef, error) {
-	refs, err := blobs.AppendBlocks(ino, data)
+func (s *StoreActor) stageAppendBlocks(ctx context.Context, blobs *BlobStore, ino uint64, data []byte, staged *[]BlobRef) ([]BlobRef, error) {
+	refs, err := blobs.AppendBlocks(ctx, ino, data)
 	if err != nil {
 		return nil, err
 	}

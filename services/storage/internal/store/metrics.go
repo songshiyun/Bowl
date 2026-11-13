@@ -6,6 +6,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var _ prometheus.Collector = (*Metrics)(nil)
@@ -169,6 +170,7 @@ type Metrics struct {
 	phaseWALApplySync    prometheus.Observer
 	phaseWALApplyNoSync  prometheus.Observer
 	phaseDeadPackRemove  prometheus.Observer
+	phaseCheckpoint      prometheus.Observer
 	blobSyncObservers    [syncTargetCount][syncTriggerCount]prometheus.Observer
 	readOpObservers      [readOpCount]prometheus.Observer
 	kvPointGetObserver   prometheus.Observer
@@ -271,6 +273,7 @@ func NewMetrics() *Metrics {
 		phaseWALApplySync:    phaseVec.WithLabelValues("wal_apply_sync"),
 		phaseWALApplyNoSync:  phaseVec.WithLabelValues("wal_apply_nosync"),
 		phaseDeadPackRemove:  phaseVec.WithLabelValues("dead_pack_remove"),
+		phaseCheckpoint:      phaseVec.WithLabelValues("checkpoint"),
 
 		kvPointGetObserver:   kvReadVec.WithLabelValues("point_get"),
 		kvPrefixScanObserver: kvReadVec.WithLabelValues("prefix_scan"),
@@ -498,6 +501,24 @@ func (m *Metrics) observePhaseWALApplyNoSync(d time.Duration) {
 		return
 	}
 	m.phaseWALApplyNoSync.Observe(max(0, d.Seconds()))
+}
+
+func observeWithExemplar(obs prometheus.Observer, d time.Duration, sc trace.SpanContext) {
+	v := max(0, d.Seconds())
+	if sc.IsSampled() {
+		if ex, ok := obs.(prometheus.ExemplarObserver); ok {
+			ex.ObserveWithExemplar(v, prometheus.Labels{"trace_id": sc.TraceID().String()})
+			return
+		}
+	}
+	obs.Observe(v)
+}
+
+func (m *Metrics) observePhaseCheckpoint(d time.Duration, sc trace.SpanContext) {
+	if m == nil {
+		return
+	}
+	observeWithExemplar(m.phaseCheckpoint, d, sc)
 }
 
 func (m *Metrics) observePhaseDeadPackRemove(d time.Duration) {

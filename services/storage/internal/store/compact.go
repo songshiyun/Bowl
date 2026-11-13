@@ -75,7 +75,7 @@ func (s *StoreActor) CompactPacks(ctx context.Context) error {
 				s.unpinPackIDs(candidates)
 				return readErr
 			}
-			newRef, writeErr := s.stageAppend(blobs, blk.ino, data, &staged)
+			newRef, writeErr := s.stageAppend(ctx, blobs, blk.ino, data, &staged)
 			if writeErr != nil {
 				s.unpinStagedBlobs(staged)
 				s.unpinPackIDs(candidates)

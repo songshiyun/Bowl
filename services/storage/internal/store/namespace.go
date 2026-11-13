@@ -360,7 +360,7 @@ func (s *StoreActor) validateCreateNodeCmd(cmd *writeCmd) error {
 	if err := s.checkQuota(size, 1); err != nil {
 		return err
 	}
-	if _, err := s.prepareIno(); err != nil {
+	if _, err := s.prepareIno(cmd.spanCtx); err != nil {
 		return err
 	}
 	op.parent = parent

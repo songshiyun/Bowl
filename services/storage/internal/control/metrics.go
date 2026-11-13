@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
@@ -53,17 +55,23 @@ type storageEngineCollector struct {
 
 	disksLoadedDesc *prometheus.Desc
 
-	// ActorMetricsSnapshot 池级聚合指标
-	logicalBytesDesc      *prometheus.Desc
-	inodesDesc            *prometheus.Desc
-	packPhysicalBytesDesc *prometheus.Desc
-	packLiveBytesDesc     *prometheus.Desc
-	packLowWatermarkDesc  *prometheus.Desc
-	packPendingDeadDesc   *prometheus.Desc
-	packOpenFDsDesc       *prometheus.Desc
-	hotCacheBytesDesc     *prometheus.Desc
-	hotCacheBlocksDesc    *prometheus.Desc
-	pebbleStallActiveDesc *prometheus.Desc
+	// ActorMetricsSnapshot 池级聚合指标与底层物理占用去重指标
+	logicalBytesDesc         *prometheus.Desc
+	inodesDesc               *prometheus.Desc
+	packPhysicalBytesDesc    *prometheus.Desc
+	packReferencedBytesDesc  *prometheus.Desc
+	packLiveBytesDesc        *prometheus.Desc
+	packLowWatermarkDesc     *prometheus.Desc
+	packPendingDeadDesc      *prometheus.Desc
+	packOpenFDsDesc          *prometheus.Desc
+	hotCacheBytesDesc        *prometheus.Desc
+	hotCacheBlocksDesc       *prometheus.Desc
+	pebbleStallActiveDesc    *prometheus.Desc
+	dataDirPhysicalBytesDesc *prometheus.Desc
+	commitsActiveDesc        *prometheus.Desc
+	commitsPhysicalBytesDesc *prometheus.Desc
+	volumeTotalBytesDesc     *prometheus.Desc
+	volumeAvailableBytesDesc *prometheus.Desc
 
 	// Pebble 活跃盘聚合指标
 	pebbleWALBytesInDesc          *prometheus.Desc
@@ -85,18 +93,34 @@ type storageEngineCollector struct {
 	pebbleBlockCacheHitsDesc   *prometheus.Desc
 	pebbleBlockCacheMissesDesc *prometheus.Desc
 
-	// 控制面自身生命周期与错误指标
-	controlActorLoadsDesc     *prometheus.Desc
-	controlActorEvictionsDesc *prometheus.Desc
-	controlCleanupErrorsDesc  *prometheus.Desc
-	openActorDurVec           *prometheus.HistogramVec
-	openActorOK               prometheus.Observer
-	openActorErr              prometheus.Observer
+	// 控制面自身生命周期、Fork 阶段与错误指标
+	controlActorLoadsDesc       *prometheus.Desc
+	controlActorEvictionsDesc   *prometheus.Desc
+	controlCleanupErrorsDesc    *prometheus.Desc
+	controlForksDesc            *prometheus.Desc
+	controlCommitsReclaimedDesc *prometheus.Desc
+	openActorDurVec             *prometheus.HistogramVec
+	openActorOK                 prometheus.Observer
+	openActorErr                prometheus.Observer
+	forkStageDurVec             *prometheus.HistogramVec
+	forkStageCheckpoint         prometheus.Observer
+	forkStageSanitize           prometheus.Observer
+	forkStageCloneDir           prometheus.Observer
+	forkStageOpenChild          prometheus.Observer
+	forkStageCommitTx           prometheus.Observer
+	segmentReserveDurVec        *prometheus.HistogramVec
+	segmentInodeOK              prometheus.Observer
+	segmentInodeErr             prometheus.Observer
+	segmentPackOK               prometheus.Observer
+	segmentPackErr              prometheus.Observer
 
-	actorLoadsRW   atomic.Uint64
-	actorLoadsRO   atomic.Uint64
-	actorEvictions atomic.Uint64
-	cleanupErrors  atomic.Uint64
+	actorLoadsRW     atomic.Uint64
+	actorLoadsRO     atomic.Uint64
+	actorEvictions   atomic.Uint64
+	cleanupErrors    atomic.Uint64
+	forksOK          atomic.Uint64
+	forksErr         atomic.Uint64
+	commitsReclaimed atomic.Uint64
 }
 
 func newStorageEngineCollector() *storageEngineCollector {
@@ -105,6 +129,18 @@ func newStorageEngineCollector() *storageEngineCollector {
 		Help:    "Duration of opening and recovering StoreActor instances on cold paths in seconds.",
 		Buckets: controlOpenActorBuckets,
 	}, []string{"result"})
+
+	forkStageVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bowl_storage_control_fork_stage_duration_seconds",
+		Help:    "Duration of each ForkDisk stage (checkpoint, sanitize, clone_dir, open_child, commit_tx) in seconds.",
+		Buckets: controlOpenActorBuckets,
+	}, []string{"stage"})
+
+	segReserveVec := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "bowl_storage_control_segment_reserve_duration_seconds",
+		Help:    "Duration of lineage ID segment reservation RPC/DB transactions by kind and result in seconds.",
+		Buckets: controlOpenActorBuckets,
+	}, []string{"kind", "result"})
 
 	return &storageEngineCollector{
 		disksLoadedDesc: prometheus.NewDesc(
@@ -127,7 +163,13 @@ func newStorageEngineCollector() *storageEngineCollector {
 		),
 		packPhysicalBytesDesc: prometheus.NewDesc(
 			"bowl_storage_pack_physical_bytes",
-			"Total physical bytes occupied by pack files across all loaded disks.",
+			"Total deduplicated physical bytes occupied by pack files across disks and commits directories.",
+			nil,
+			nil,
+		),
+		packReferencedBytesDesc: prometheus.NewDesc(
+			"bowl_storage_pack_referenced_bytes",
+			"Sum of referenced pack file bytes reported across all loaded StoreActor instances (includes hardlink sharing).",
 			nil,
 			nil,
 		),
@@ -170,6 +212,36 @@ func newStorageEngineCollector() *storageEngineCollector {
 		pebbleStallActiveDesc: prometheus.NewDesc(
 			"bowl_storage_pebble_stall_active",
 			"Number of loaded disks currently experiencing a Pebble write stall.",
+			nil,
+			nil,
+		),
+		dataDirPhysicalBytesDesc: prometheus.NewDesc(
+			"bowl_storage_data_dir_physical_bytes",
+			"Total deduplicated physical bytes across the entire storage data directory (disks and commits).",
+			nil,
+			nil,
+		),
+		commitsActiveDesc: prometheus.NewDesc(
+			"bowl_storage_commits_active",
+			"Current number of active fork base commit directories under commits/.",
+			nil,
+			nil,
+		),
+		commitsPhysicalBytesDesc: prometheus.NewDesc(
+			"bowl_storage_commits_physical_bytes",
+			"Total deduplicated physical bytes across files retained inside commits/ directories.",
+			nil,
+			nil,
+		),
+		volumeTotalBytesDesc: prometheus.NewDesc(
+			"bowl_storage_volume_total_bytes",
+			"Total capacity in bytes of the filesystem hosting the storage data directory.",
+			nil,
+			nil,
+		),
+		volumeAvailableBytesDesc: prometheus.NewDesc(
+			"bowl_storage_volume_available_bytes",
+			"Available unprivileged bytes of the filesystem hosting the storage data directory.",
 			nil,
 			nil,
 		),
@@ -287,9 +359,32 @@ func newStorageEngineCollector() *storageEngineCollector {
 			nil,
 			nil,
 		),
-		openActorDurVec: openDurVec,
-		openActorOK:     openDurVec.WithLabelValues("ok"),
-		openActorErr:    openDurVec.WithLabelValues("error"),
+		controlForksDesc: prometheus.NewDesc(
+			"bowl_storage_control_forks_total",
+			"Total number of ForkDisk control operations by result.",
+			[]string{"result"},
+			nil,
+		),
+		controlCommitsReclaimedDesc: prometheus.NewDesc(
+			"bowl_storage_control_commits_reclaimed_total",
+			"Total number of unreferenced fork commit directories physically reclaimed by DeleteDisk.",
+			nil,
+			nil,
+		),
+		openActorDurVec:      openDurVec,
+		openActorOK:          openDurVec.WithLabelValues("ok"),
+		openActorErr:         openDurVec.WithLabelValues("error"),
+		forkStageDurVec:      forkStageVec,
+		forkStageCheckpoint:  forkStageVec.WithLabelValues("checkpoint"),
+		forkStageSanitize:    forkStageVec.WithLabelValues("sanitize"),
+		forkStageCloneDir:    forkStageVec.WithLabelValues("clone_dir"),
+		forkStageOpenChild:   forkStageVec.WithLabelValues("open_child"),
+		forkStageCommitTx:    forkStageVec.WithLabelValues("commit_tx"),
+		segmentReserveDurVec: segReserveVec,
+		segmentInodeOK:       segReserveVec.WithLabelValues("inode", "ok"),
+		segmentInodeErr:      segReserveVec.WithLabelValues("inode", "error"),
+		segmentPackOK:        segReserveVec.WithLabelValues("pack", "ok"),
+		segmentPackErr:       segReserveVec.WithLabelValues("pack", "error"),
 	}
 }
 
@@ -325,16 +420,92 @@ func (c *storageEngineCollector) incCleanupError() {
 	c.cleanupErrors.Add(1)
 }
 
-func (c *storageEngineCollector) observeOpenActor(ok bool, d time.Duration) {
+func observeWithExemplar(ctx context.Context, obs prometheus.Observer, d time.Duration) {
+	secs := max(0, d.Seconds())
+	if ctx != nil {
+		if sc := trace.SpanContextFromContext(ctx); sc.IsSampled() {
+			if ex, ok := obs.(prometheus.ExemplarObserver); ok {
+				ex.ObserveWithExemplar(secs, prometheus.Labels{"trace_id": sc.TraceID().String()})
+				return
+			}
+		}
+	}
+	obs.Observe(secs)
+}
+
+func (c *storageEngineCollector) observeOpenActor(ctx context.Context, ok bool, d time.Duration) {
 	if c == nil {
 		return
 	}
-	secs := max(0, d.Seconds())
 	if ok {
-		c.openActorOK.Observe(secs)
+		observeWithExemplar(ctx, c.openActorOK, d)
 		return
 	}
-	c.openActorErr.Observe(secs)
+	observeWithExemplar(ctx, c.openActorErr, d)
+}
+
+func (c *storageEngineCollector) observeForkStage(ctx context.Context, stage string, d time.Duration) {
+	if c == nil {
+		return
+	}
+	var obs prometheus.Observer
+	switch stage {
+	case "checkpoint":
+		obs = c.forkStageCheckpoint
+	case "sanitize":
+		obs = c.forkStageSanitize
+	case "clone_dir":
+		obs = c.forkStageCloneDir
+	case "open_child":
+		obs = c.forkStageOpenChild
+	case "commit_tx":
+		obs = c.forkStageCommitTx
+	default:
+		return
+	}
+	observeWithExemplar(ctx, obs, d)
+}
+
+func (c *storageEngineCollector) observeSegmentReserve(ctx context.Context, kind string, ok bool, d time.Duration) {
+	if c == nil {
+		return
+	}
+	var obs prometheus.Observer
+	switch kind {
+	case "inode":
+		if ok {
+			obs = c.segmentInodeOK
+		} else {
+			obs = c.segmentInodeErr
+		}
+	case "pack":
+		if ok {
+			obs = c.segmentPackOK
+		} else {
+			obs = c.segmentPackErr
+		}
+	default:
+		return
+	}
+	observeWithExemplar(ctx, obs, d)
+}
+
+func (c *storageEngineCollector) incForkResult(ok bool) {
+	if c == nil {
+		return
+	}
+	if ok {
+		c.forksOK.Add(1)
+		return
+	}
+	c.forksErr.Add(1)
+}
+
+func (c *storageEngineCollector) addCommitsReclaimed(n uint64) {
+	if c == nil || n == 0 {
+		return
+	}
+	c.commitsReclaimed.Add(n)
 }
 
 // Describe 实现 prometheus.Collector。
@@ -347,6 +518,7 @@ func (c *storageEngineCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.logicalBytesDesc
 	ch <- c.inodesDesc
 	ch <- c.packPhysicalBytesDesc
+	ch <- c.packReferencedBytesDesc
 	ch <- c.packLiveBytesDesc
 	ch <- c.packLowWatermarkDesc
 	ch <- c.packPendingDeadDesc
@@ -354,6 +526,11 @@ func (c *storageEngineCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.hotCacheBytesDesc
 	ch <- c.hotCacheBlocksDesc
 	ch <- c.pebbleStallActiveDesc
+	ch <- c.dataDirPhysicalBytesDesc
+	ch <- c.commitsActiveDesc
+	ch <- c.commitsPhysicalBytesDesc
+	ch <- c.volumeTotalBytesDesc
+	ch <- c.volumeAvailableBytesDesc
 
 	ch <- c.pebbleWALBytesInDesc
 	ch <- c.pebbleWALBytesWrittenDesc
@@ -376,26 +553,32 @@ func (c *storageEngineCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.controlActorLoadsDesc
 	ch <- c.controlActorEvictionsDesc
 	ch <- c.controlCleanupErrorsDesc
+	ch <- c.controlForksDesc
+	ch <- c.controlCommitsReclaimedDesc
 	c.openActorDurVec.Describe(ch)
+	c.forkStageDurVec.Describe(ch)
+	c.segmentReserveDurVec.Describe(ch)
 }
 
 // Collect 实现 prometheus.Collector。
 // 严格遵守锁粒度红线：仅在 m.poolMu.RLock() 内拷贝活跃 Actor 切片、统计加载模式并对共享 Cache 增加引用计数，
-// 立即释放 RLock 后再逐盘调用 MetricsSnapshot() 与单次 cache.Metrics()。
+// 立即释放 RLock 后再逐盘调用 MetricsSnapshot()、单次 cache.Metrics() 与目录物理占用去重扫描。
 func (c *storageEngineCollector) Collect(ch chan<- prometheus.Metric) {
 	if c == nil {
 		return
 	}
 
 	var (
-		actors   []*store.StoreActor
-		rwLoaded int
-		roLoaded int
-		cache    *pebble.Cache
+		actors      []*store.StoreActor
+		rwLoaded    int
+		roLoaded    int
+		cache       *pebble.Cache
+		storageRoot string
 	)
 	if m := c.mgr.Load(); m != nil {
 		m.poolMu.RLock()
 		if !m.closed {
+			storageRoot = m.storageRoot
 			if len(m.actors) > 0 {
 				actors = make([]*store.StoreActor, 0, len(m.actors))
 				for _, actor := range m.actors {
@@ -516,12 +699,15 @@ func (c *storageEngineCollector) Collect(ch chan<- prometheus.Metric) {
 		}
 	}
 
+	usage := scanStorageRootUsage(storageRoot)
+
 	ch <- prometheus.MustNewConstMetric(c.disksLoadedDesc, prometheus.GaugeValue, float64(rwLoaded), actorModeRW)
 	ch <- prometheus.MustNewConstMetric(c.disksLoadedDesc, prometheus.GaugeValue, float64(roLoaded), actorModeRO)
 
 	ch <- prometheus.MustNewConstMetric(c.logicalBytesDesc, prometheus.GaugeValue, float64(logicalBytes))
 	ch <- prometheus.MustNewConstMetric(c.inodesDesc, prometheus.GaugeValue, float64(inodes))
-	ch <- prometheus.MustNewConstMetric(c.packPhysicalBytesDesc, prometheus.GaugeValue, float64(packPhysicalBytes))
+	ch <- prometheus.MustNewConstMetric(c.packPhysicalBytesDesc, prometheus.GaugeValue, float64(usage.PackPhysicalBytes))
+	ch <- prometheus.MustNewConstMetric(c.packReferencedBytesDesc, prometheus.GaugeValue, float64(packPhysicalBytes))
 	ch <- prometheus.MustNewConstMetric(c.packLiveBytesDesc, prometheus.GaugeValue, float64(packLiveBytes))
 	ch <- prometheus.MustNewConstMetric(c.packLowWatermarkDesc, prometheus.GaugeValue, float64(lowWatermarkPacks))
 	ch <- prometheus.MustNewConstMetric(c.packPendingDeadDesc, prometheus.GaugeValue, float64(pendingDeadPacks))
@@ -529,6 +715,11 @@ func (c *storageEngineCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.hotCacheBytesDesc, prometheus.GaugeValue, float64(hotCacheBytes))
 	ch <- prometheus.MustNewConstMetric(c.hotCacheBlocksDesc, prometheus.GaugeValue, float64(hotCacheBlocks))
 	ch <- prometheus.MustNewConstMetric(c.pebbleStallActiveDesc, prometheus.GaugeValue, float64(pebbleStallActive))
+	ch <- prometheus.MustNewConstMetric(c.dataDirPhysicalBytesDesc, prometheus.GaugeValue, float64(usage.DataDirPhysicalBytes))
+	ch <- prometheus.MustNewConstMetric(c.commitsActiveDesc, prometheus.GaugeValue, float64(usage.CommitsActive))
+	ch <- prometheus.MustNewConstMetric(c.commitsPhysicalBytesDesc, prometheus.GaugeValue, float64(usage.CommitsPhysicalBytes))
+	ch <- prometheus.MustNewConstMetric(c.volumeTotalBytesDesc, prometheus.GaugeValue, float64(usage.VolumeTotalBytes))
+	ch <- prometheus.MustNewConstMetric(c.volumeAvailableBytesDesc, prometheus.GaugeValue, float64(usage.VolumeAvailableBytes))
 
 	ch <- prometheus.MustNewConstMetric(c.pebbleWALBytesInDesc, prometheus.CounterValue, float64(walBytesIn))
 	ch <- prometheus.MustNewConstMetric(c.pebbleWALBytesWrittenDesc, prometheus.CounterValue, float64(walBytesWritten))
@@ -552,5 +743,10 @@ func (c *storageEngineCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.controlActorLoadsDesc, prometheus.CounterValue, float64(c.actorLoadsRO.Load()), actorModeRO)
 	ch <- prometheus.MustNewConstMetric(c.controlActorEvictionsDesc, prometheus.CounterValue, float64(c.actorEvictions.Load()))
 	ch <- prometheus.MustNewConstMetric(c.controlCleanupErrorsDesc, prometheus.CounterValue, float64(c.cleanupErrors.Load()))
+	ch <- prometheus.MustNewConstMetric(c.controlForksDesc, prometheus.CounterValue, float64(c.forksOK.Load()), "ok")
+	ch <- prometheus.MustNewConstMetric(c.controlForksDesc, prometheus.CounterValue, float64(c.forksErr.Load()), "error")
+	ch <- prometheus.MustNewConstMetric(c.controlCommitsReclaimedDesc, prometheus.CounterValue, float64(c.commitsReclaimed.Load()))
 	c.openActorDurVec.Collect(ch)
+	c.forkStageDurVec.Collect(ch)
+	c.segmentReserveDurVec.Collect(ch)
 }

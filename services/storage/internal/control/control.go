@@ -343,7 +343,8 @@ func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmen
 	if m.store == nil || !lineageID.Valid {
 		return nil, nil
 	}
-	inoAlloc := func(minNext uint64) (uint64, uint64, error) {
+	lineageStr := lineageID.String()
+	inoAlloc := func(reqCtx context.Context, minNext uint64) (uint64, uint64, error) {
 		if minNext < 2 {
 			minNext = 2
 		}
@@ -358,9 +359,25 @@ func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmen
 			count = rem
 		}
 
-		allocCtx, cancel := context.WithTimeout(context.Background(), segmentReserveTimeout)
+		baseCtx := context.Background()
+		if reqCtx != nil {
+			baseCtx = context.WithoutCancel(reqCtx)
+		}
+		allocCtx, cancel := context.WithTimeout(baseCtx, segmentReserveTimeout)
 		defer cancel()
 
+		var span trace.Span
+		if trace.SpanFromContext(allocCtx).IsRecording() {
+			allocCtx, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(allocCtx, "control.ReserveSegment",
+				trace.WithAttributes(
+					attribute.String("segment.kind", "inode"),
+					attribute.String("lineage.id", lineageStr),
+					attribute.Int64("segment.min_next", int64(minNext)),
+				),
+			)
+		}
+
+		start := time.Now()
 		var row db.ReserveInodeSegmentRow
 		err := tx.Retry(allocCtx, func(attemptCtx context.Context) error {
 			var rErr error
@@ -372,18 +389,40 @@ func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmen
 			return rErr
 		}, tx.WithDefaultRetry())
 		if err != nil {
+			m.collector.observeSegmentReserve(allocCtx, "inode", false, time.Since(start))
 			if errors.Is(err, pgx.ErrNoRows) {
-				return 0, 0, ErrNotFound
+				err = ErrNotFound
+			} else {
+				err = fmt.Errorf("预留 Inode 号段: %w", err)
 			}
-			return 0, 0, fmt.Errorf("预留 Inode 号段: %w", err)
+			if span != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
+			}
+			return 0, 0, err
 		}
 		if row.FirstIno < 2 || row.LastIno < row.FirstIno {
+			m.collector.observeSegmentReserve(allocCtx, "inode", false, time.Since(start))
+			if span != nil {
+				span.RecordError(store.ErrInodeExhausted)
+				span.SetStatus(codes.Error, store.ErrInodeExhausted.Error())
+				span.End()
+			}
 			return 0, 0, store.ErrInodeExhausted
+		}
+		m.collector.observeSegmentReserve(allocCtx, "inode", true, time.Since(start))
+		if span != nil {
+			span.SetAttributes(
+				attribute.Int64("segment.first", row.FirstIno),
+				attribute.Int64("segment.last", row.LastIno),
+			)
+			span.End()
 		}
 		return uint64(row.FirstIno), uint64(row.LastIno), nil
 	}
 
-	packAlloc := func(minNext uint64) (uint64, uint64, error) {
+	packAlloc := func(reqCtx context.Context, minNext uint64) (uint64, uint64, error) {
 		if minNext < 1 {
 			minNext = 1
 		}
@@ -398,9 +437,25 @@ func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmen
 			count = rem
 		}
 
-		allocCtx, cancel := context.WithTimeout(context.Background(), segmentReserveTimeout)
+		baseCtx := context.Background()
+		if reqCtx != nil {
+			baseCtx = context.WithoutCancel(reqCtx)
+		}
+		allocCtx, cancel := context.WithTimeout(baseCtx, segmentReserveTimeout)
 		defer cancel()
 
+		var span trace.Span
+		if trace.SpanFromContext(allocCtx).IsRecording() {
+			allocCtx, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(allocCtx, "control.ReserveSegment",
+				trace.WithAttributes(
+					attribute.String("segment.kind", "pack"),
+					attribute.String("lineage.id", lineageStr),
+					attribute.Int64("segment.min_next", int64(minNext)),
+				),
+			)
+		}
+
+		start := time.Now()
 		var row db.ReservePackSegmentRow
 		err := tx.Retry(allocCtx, func(attemptCtx context.Context) error {
 			var rErr error
@@ -412,20 +467,42 @@ func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmen
 			return rErr
 		}, tx.WithDefaultRetry())
 		if err != nil {
+			m.collector.observeSegmentReserve(allocCtx, "pack", false, time.Since(start))
 			if errors.Is(err, pgx.ErrNoRows) {
-				return 0, 0, ErrNotFound
+				err = ErrNotFound
+			} else {
+				err = fmt.Errorf("预留 Pack 号段: %w", err)
 			}
-			return 0, 0, fmt.Errorf("预留 Pack 号段: %w", err)
+			if span != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
+			}
+			return 0, 0, err
 		}
 		if row.FirstPackID < 1 || row.LastPackID < row.FirstPackID {
+			m.collector.observeSegmentReserve(allocCtx, "pack", false, time.Since(start))
+			if span != nil {
+				span.RecordError(store.ErrNoSpace)
+				span.SetStatus(codes.Error, store.ErrNoSpace.Error())
+				span.End()
+			}
 			return 0, 0, store.ErrNoSpace
+		}
+		m.collector.observeSegmentReserve(allocCtx, "pack", true, time.Since(start))
+		if span != nil {
+			span.SetAttributes(
+				attribute.Int64("segment.first", row.FirstPackID),
+				attribute.Int64("segment.last", row.LastPackID),
+			)
+			span.End()
 		}
 		return uint64(row.FirstPackID), uint64(row.LastPackID), nil
 	}
 	return inoAlloc, packAlloc
 }
 
-func (m *manager) lockDisk(diskID string) func() {
+func (m *manager) lockDisk(ctx context.Context, diskID string) func() {
 	m.diskLocksMu.Lock()
 	entry := m.diskLocks[diskID]
 	if entry == nil {
@@ -435,7 +512,18 @@ func (m *manager) lockDisk(diskID string) func() {
 	entry.refs++
 	m.diskLocksMu.Unlock()
 
-	entry.mu.Lock()
+	if !entry.mu.TryLock() {
+		var span trace.Span
+		if ctx != nil && trace.SpanFromContext(ctx).IsRecording() {
+			_, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(ctx, "control.LockDiskWait",
+				trace.WithAttributes(attribute.String("disk.id", diskID)),
+			)
+		}
+		entry.mu.Lock()
+		if span != nil {
+			span.End()
+		}
+	}
 	return func() {
 		entry.mu.Unlock()
 		m.diskLocksMu.Lock()
@@ -512,7 +600,7 @@ func (m *manager) openDiskActor(ctx context.Context, opts store.Options) (*store
 	}
 	openStart := time.Now()
 	actor, err := store.Open(opts)
-	m.collector.observeOpenActor(err == nil, time.Since(openStart))
+	m.collector.observeOpenActor(ctx, err == nil, time.Since(openStart))
 	if span != nil {
 		if err != nil {
 			span.RecordError(err)
@@ -626,7 +714,7 @@ func (m *manager) evictIdleActor(ctx context.Context, diskID string) (bool, erro
 	}
 	diskID = pgID.String()
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	m.poolMu.Lock()
@@ -679,7 +767,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	diskID := id.String()
 	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	m.poolMu.RLock()
@@ -771,7 +859,11 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	return assembleDisk(&row, &stat), nil
 }
 
-func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, error) {
+func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk, retErr error) {
+	defer func() {
+		m.collector.incForkResult(retErr == nil)
+	}()
+
 	sourcePGID, err := parseDiskID(params.SourceDiskID)
 	if err != nil {
 		return nil, err
@@ -786,7 +878,7 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 		return nil, ErrInvalidArgument
 	}
 
-	unlockSource := m.lockDisk(sourceDiskID)
+	unlockSource := m.lockDisk(ctx, sourceDiskID)
 	defer unlockSource()
 
 	m.poolMu.RLock()
@@ -842,11 +934,13 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 	pgCommitID := pgtype.UUID{Bytes: commitUUID, Valid: true}
 	pgChildID := pgtype.UUID{Bytes: childUUID, Valid: true}
 
-	unlockChild := m.lockDisk(childDiskID)
+	unlockChild := m.lockDisk(ctx, childDiskID)
 	defer unlockChild()
 
 	commitDir := m.commitDir(commitID)
+	ckStart := time.Now()
 	ckStats, err := sourceActor.Checkpoint(ctx, commitDir)
+	m.collector.observeForkStage(ctx, "checkpoint", time.Since(ckStart))
 	if err != nil {
 		return nil, fmt.Errorf("固化源盘基准切面: %w", err)
 	}
@@ -866,7 +960,16 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 
 	effectiveUsedBytes := ckStats.LogicalBytes
 	if ckStats.HasOrphans {
-		sanitizedStat, sanErr := store.SanitizeCheckpoint(commitDir, cache)
+		sanStart := time.Now()
+		sanitizedStat, sanErr := store.SanitizeCheckpoint(ctx, store.SanitizeOptions{
+			Dir:       commitDir,
+			CommitID:  commitID,
+			Cache:     cache,
+			Logger:    m.baseLogger,
+			Metrics:   m.storeMetrics,
+			OpenActor: m.openDiskActor,
+		})
+		m.collector.observeForkStage(ctx, "sanitize", time.Since(sanStart))
 		if sanErr != nil {
 			removeCommitDirOnRollback("sanitize")
 			return nil, fmt.Errorf("净化基准切面孤儿节点: %w", sanErr)
@@ -884,7 +987,10 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 	}
 
 	childDir := m.diskDir(childDiskID)
-	if err = store.CloneCheckpointDir(commitDir, childDir); err != nil {
+	cloneStart := time.Now()
+	err = store.CloneCheckpointDir(ctx, commitDir, childDir)
+	m.collector.observeForkStage(ctx, "clone_dir", time.Since(cloneStart))
+	if err != nil {
 		removeCommitDirOnRollback("clone")
 		return nil, fmt.Errorf("克隆派生子盘目录: %w", err)
 	}
@@ -902,6 +1008,7 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 	}
 
 	inoAlloc, packAlloc := m.newSegmentAllocators(sourceRow.LineageID)
+	openChildStart := time.Now()
 	childActor, err := m.openDiskActor(ctx, store.Options{
 		Dir:           childDir,
 		DiskID:        childDiskID,
@@ -914,14 +1021,29 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 		PackAllocator: packAlloc,
 		ResetEpoch:    true,
 	})
+	m.collector.observeForkStage(ctx, "open_child", time.Since(openChildStart))
 	if err != nil {
 		removeChildDirOnRollback("open_child")
 		removeCommitDirOnRollback("open_child")
 		return nil, fmt.Errorf("打开派生子盘存储实例: %w", err)
 	}
 
-	var childRow db.Disk
-	err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
+	var (
+		childRow  db.Disk
+		txSpan    trace.Span
+		txCtxWrap = ctx
+	)
+	if ctx != nil && trace.SpanFromContext(ctx).IsRecording() {
+		txCtxWrap, txSpan = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(ctx, "control.ForkCommitTx",
+			trace.WithAttributes(
+				attribute.String("source_disk_id", sourceDiskID),
+				attribute.String("disk.id", childDiskID),
+				attribute.String("bowl.commit_id", commitID),
+			),
+		)
+	}
+	commitTxStart := time.Now()
+	err = m.execSyncWriteTxWithRetry(txCtxWrap, func(txCtx context.Context, q db.Querier) error {
 		if _, lockErr := q.LockDiskLineage(txCtx, sourceRow.LineageID); lockErr != nil {
 			if errors.Is(lockErr, pgx.ErrNoRows) {
 				return ErrNotFound
@@ -959,6 +1081,14 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (*Disk, e
 		})
 		return createErr
 	})
+	m.collector.observeForkStage(ctx, "commit_tx", time.Since(commitTxStart))
+	if txSpan != nil {
+		if err != nil {
+			txSpan.RecordError(err)
+			txSpan.SetStatus(codes.Error, err.Error())
+		}
+		txSpan.End()
+	}
 	if err != nil {
 		if closeErr := childActor.CloseDiscard(); closeErr != nil {
 			m.collector.incCleanupError()
@@ -1013,7 +1143,7 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 	}
 	diskID = pgID.String()
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	row, err := m.store.GetDisk(ctx, pgID)
@@ -1153,7 +1283,7 @@ func (m *manager) actorForDisk(ctx context.Context, diskID string, lineageID pgt
 	}
 	m.poolMu.RUnlock()
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 	return m.getOrOpenActorWithLineageLocked(ctx, diskID, lineageID)
 }
@@ -1177,7 +1307,7 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 		return nil, ErrInvalidArgument
 	}
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	row, err := m.store.GetDisk(ctx, pgID)
@@ -1220,6 +1350,11 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	if err != nil {
 		return nil, err
 	}
+	m.logger.InfoContext(ctx, "disk updated",
+		"disk_id", diskID,
+		"name", row.Name,
+		"max_bytes", stat.TotalBytes,
+	)
 	return assembleDisk(&row, &stat), nil
 }
 
@@ -1230,7 +1365,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	}
 	diskID = pgID.String()
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	var commitsToClean []pgtype.UUID
@@ -1337,21 +1472,44 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		cleanupErrs = append(cleanupErrs, fmt.Errorf("清理磁盘存储目录: %w", removeErr))
 	}
 
-	for _, cID := range commitsToClean {
-		if !cID.Valid {
-			continue
-		}
-		cidStr := cID.String()
-		cDir := m.commitDir(cidStr)
-		if removeErr := m.removeAll(cDir); removeErr != nil {
-			m.collector.incCleanupError()
-			m.logger.WarnContext(ctx, "delete disk commit directory cleanup failed",
-				"disk_id", diskID,
-				"commit_id", cidStr,
-				"dir", cDir,
-				"err", removeErr,
+	if len(commitsToClean) > 0 {
+		var reclaimSpan trace.Span
+		if ctx != nil && trace.SpanFromContext(ctx).IsRecording() {
+			_, reclaimSpan = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(ctx, "control.ReclaimCommits",
+				trace.WithAttributes(
+					attribute.String("disk.id", diskID),
+					attribute.Int("reclaimed_commits", len(commitsToClean)),
+				),
 			)
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("清理切面快照目录 %s: %w", cidStr, removeErr))
+		}
+		var reclaimErrs []error
+		for _, cID := range commitsToClean {
+			if !cID.Valid {
+				continue
+			}
+			cidStr := cID.String()
+			cDir := m.commitDir(cidStr)
+			if removeErr := m.removeAll(cDir); removeErr != nil {
+				m.collector.incCleanupError()
+				m.logger.WarnContext(ctx, "delete disk commit directory cleanup failed",
+					"disk_id", diskID,
+					"commit_id", cidStr,
+					"dir", cDir,
+					"err", removeErr,
+				)
+				rErr := fmt.Errorf("清理切面快照目录 %s: %w", cidStr, removeErr)
+				cleanupErrs = append(cleanupErrs, rErr)
+				reclaimErrs = append(reclaimErrs, rErr)
+			} else {
+				m.collector.addCommitsReclaimed(1)
+			}
+		}
+		if reclaimSpan != nil {
+			if errJoined := errors.Join(reclaimErrs...); errJoined != nil {
+				reclaimSpan.RecordError(errJoined)
+				reclaimSpan.SetStatus(codes.Error, errJoined.Error())
+			}
+			reclaimSpan.End()
 		}
 	}
 
@@ -1444,7 +1602,7 @@ func (m *manager) Actor(ctx context.Context, diskID string) (*store.StoreActor, 
 	}
 	m.poolMu.RUnlock()
 
-	unlockDisk := m.lockDisk(diskID)
+	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
 	m.poolMu.RLock()

@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
@@ -405,4 +406,178 @@ func TestStoreOTelSpansWhenSampledAndZeroAllocsWhenUnsampled(t *testing.T) {
 		require.GreaterOrEqual(t, spanNames[expected], 1, "采样请求缺少预期子 Span %s", expected)
 	}
 	require.True(t, foundTickWithLink, "store.Tick 必须通过 SpanLink 关联批内采样请求的 SpanContext")
+}
+
+func TestForkObservabilityCheckpointPhaseSpansAndAllocatorTrace(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() {
+		_ = tp.Shutdown(context.Background())
+		otel.SetTracerProvider(prevTP)
+	})
+
+	metrics := store.NewMetrics()
+	reg := prometheus.NewRegistry()
+	require.NoError(t, reg.Register(metrics))
+
+	var logMu sync.Mutex
+	var logBuf bytes.Buffer
+	warnLogger := slog.New(slog.NewJSONHandler(&syncWriter{mu: &logMu, buf: &logBuf}, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	var inoTraceIDs, packTraceIDs []string
+	var allocMu sync.Mutex
+
+	rootDir := t.TempDir()
+	srcDir := filepath.Join(rootDir, "src")
+	actor, err := store.Open(store.Options{
+		Dir:      srcDir,
+		DiskID:   "disk-fork-obs",
+		MaxBytes: 64 << 20,
+		Metrics:  metrics,
+		Logger:   warnLogger,
+		InoAllocator: func(allocCtx context.Context, minNext uint64) (uint64, uint64, error) {
+			allocMu.Lock()
+			inoTraceIDs = append(inoTraceIDs, mustTraceIDFromCtx(allocCtx))
+			allocMu.Unlock()
+			return minNext, minNext + store.InodeSegment - 1, nil
+		},
+		PackAllocator: func(allocCtx context.Context, minNext uint64) (uint64, uint64, error) {
+			allocMu.Lock()
+			packTraceIDs = append(packTraceIDs, mustTraceIDFromCtx(allocCtx))
+			allocMu.Unlock()
+			return minNext, minNext + store.PackSegment - 1, nil
+		},
+	})
+	require.NoError(t, err)
+	actor.SetSlowTickThresholdForTest(time.Nanosecond)
+	defer func() { require.NoError(t, actor.Close()) }()
+
+	tracer := tp.Tracer("test-fork-rpc")
+	sampledCtx, rootSpan := tracer.Start(context.Background(), "rpc.ForkSource")
+	wantTraceID := rootSpan.SpanContext().TraceID().String()
+
+	f, err := actor.Create(sampledCtx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("seed.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+	_, _, err = actor.Write(sampledCtx, f.Ino, 0, bytes.Repeat([]byte{0x3C}, 4096))
+	require.NoError(t, err)
+
+	// 写入后删除留一个已挂载孤儿，使 SanitizeCheckpoint 产生实盘日志。
+	orphan, err := actor.Create(sampledCtx, store.CreateReq{
+		ParentIno: store.RootIno,
+		Name:      []byte("orphan.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	})
+	require.NoError(t, err)
+	_, _, err = actor.Write(sampledCtx, orphan.Ino, 0, bytes.Repeat([]byte{0x4D}, 4096))
+	require.NoError(t, err)
+	require.NoError(t, actor.Unlink(sampledCtx, store.RootIno, []byte("orphan.bin"), true))
+
+	commitID := "01900000-0000-7000-8000-0000000000ab"
+	commitDir := filepath.Join(rootDir, "commits", commitID)
+	ckStats, err := actor.Checkpoint(sampledCtx, commitDir)
+	require.NoError(t, err)
+	require.True(t, ckStats.HasOrphans)
+	require.GreaterOrEqual(t, ckStats.LivePacks, 1)
+
+	_, err = store.SanitizeCheckpoint(sampledCtx, store.SanitizeOptions{
+		Dir:      commitDir,
+		CommitID: commitID,
+		Logger:   warnLogger,
+		Metrics:  metrics,
+	})
+	require.NoError(t, err)
+
+	childDir := filepath.Join(rootDir, "disks", "child")
+	require.NoError(t, store.CloneCheckpointDir(sampledCtx, commitDir, childDir))
+	rootSpan.End()
+
+	allocMu.Lock()
+	require.Contains(t, inoTraceIDs, wantTraceID, "InoAllocator 必须继承采样请求的 TraceID")
+	require.Contains(t, packTraceIDs, wantTraceID, "PackAllocator 必须继承采样请求的 TraceID")
+	allocMu.Unlock()
+
+	spans := exporter.GetSpans()
+	var tickSpan, ckSpan *tracetest.SpanStub
+	spanCounts := make(map[string]int)
+	for i := range spans {
+		sp := &spans[i]
+		spanCounts[sp.Name]++
+		if sp.Name == "store.Checkpoint" {
+			ckSpan = sp
+		}
+		if sp.Name == "store.Tick" && ckSpan != nil && sp.SpanContext.SpanID() == ckSpan.Parent.SpanID() {
+			tickSpan = sp
+		}
+	}
+	if tickSpan == nil && ckSpan != nil {
+		for i := range spans {
+			if spans[i].SpanContext.SpanID() == ckSpan.Parent.SpanID() {
+				tickSpan = &spans[i]
+				break
+			}
+		}
+	}
+	require.NotNil(t, ckSpan, "必须采集到 store.Checkpoint span")
+	require.NotNil(t, tickSpan, "store.Checkpoint 的父 Span 必须是 store.Tick")
+	require.Equal(t, "store.Tick", tickSpan.Name)
+	require.False(t, tickSpan.EndTime.Before(ckSpan.EndTime), "store.Tick 必须包裹完整的 store.Checkpoint 阶段")
+	require.GreaterOrEqual(t, spanCounts["store.SanitizeCheckpoint"], 1)
+	require.GreaterOrEqual(t, spanCounts["store.CloneCheckpointDir"], 1)
+
+	gathered := gatherHistogramMap(t, reg)
+	ckMetric := findMetricByLabel(gathered["bowl_storage_actor_tick_phase_duration_seconds"], "phase", "checkpoint")
+	require.NotNil(t, ckMetric, "必须注册并观测 phase=checkpoint")
+	require.GreaterOrEqual(t, ckMetric.GetHistogram().GetSampleCount(), uint64(1))
+	var sawExemplar bool
+	for _, b := range ckMetric.GetHistogram().GetBucket() {
+		if ex := b.GetExemplar(); ex != nil {
+			for _, lp := range ex.GetLabel() {
+				if lp.GetName() == "trace_id" && lp.GetValue() == wantTraceID {
+					sawExemplar = true
+				}
+			}
+		}
+	}
+	require.True(t, sawExemplar, "采样态 phase=checkpoint 直方图必须附带匹配的 trace_id Exemplar")
+
+	rawCommitLog, err := os.ReadFile(filepath.Join(commitDir, store.PebbleEventsLogFileName))
+	require.NoError(t, err)
+	require.Contains(t, string(rawCommitLog), `"disk_id":"commit:`+commitID+`"`, "SanitizeCheckpoint 的 pebble_events.log 必须带有 commit:<id> 前缀标识")
+
+	logMu.Lock()
+	logText := logBuf.String()
+	logMu.Unlock()
+	require.Contains(t, logText, `"has_checkpoint":true`)
+	require.Contains(t, logText, `"checkpoint_ms"`)
+}
+
+type syncWriter struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func mustTraceIDFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	sc := trace.SpanContextFromContext(ctx)
+	if !sc.IsValid() {
+		return ""
+	}
+	return sc.TraceID().String()
 }

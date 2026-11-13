@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -26,6 +27,7 @@ func requireHotAndColdRead(t *testing.T, blobs *store.BlobStore, ref store.BlobR
 }
 
 func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
+	ctx := context.Background()
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
@@ -33,10 +35,10 @@ func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 	require.Equal(t, filepath.Join(base, "packs"), blobs.Root())
 	require.Equal(t, filepath.Join(base, "packs", "00000000000001ab.pack"), blobs.Path(0x1ab))
 
-	firstID, err := blobs.NextPackID()
+	firstID, err := blobs.NextPackID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), firstID)
-	secondID, err := blobs.NextPackID()
+	secondID, err := blobs.NextPackID(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), secondID)
 
@@ -48,12 +50,13 @@ func TestBlobStorePackPathAllocationAndReopenScan(t *testing.T) {
 
 	reopened := store.NewBlobStore(base2)
 	defer func() { require.NoError(t, reopened.Close()) }()
-	ref, err := reopened.Append(10, []byte("hello-pack"))
+	ref, err := reopened.Append(ctx, 10, []byte("hello-pack"))
 	require.NoError(t, err)
 	require.Greater(t, ref.PackID, uint64(0x0250))
 }
 
 func TestBlobStoreAppendAutoRolloverAndAppendBlocksCrossPack(t *testing.T) {
+	ctx := context.Background()
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
@@ -69,27 +72,27 @@ func TestBlobStoreAppendAutoRolloverAndAppendBlocksCrossPack(t *testing.T) {
 	b2 := bytes.Repeat([]byte{0x33}, 128*1024)
 	b3 := bytes.Repeat([]byte{0x44}, 128*1024)
 
-	ref0, err := blobs.Append(2, b0)
+	ref0, err := blobs.Append(ctx, 2, b0)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: store.BlobSize}, ref0)
 
-	ref1, err := blobs.Append(2, b1)
+	ref1, err := blobs.Append(ctx, 2, b1)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: store.BlobSize, Length: store.BlobSize}, ref1)
 
-	ref2, err := blobs.Append(2, b2)
+	ref2, err := blobs.Append(ctx, 2, b2)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: 2 * store.BlobSize, Length: 128 * 1024}, ref2)
 
 	// Pack 1 已用 640 KiB，剩余 128 KiB 容纳不下 256 KiB 新块；先验证追加 256 KiB 自动封口 Pack 1 并切入 Pack 2
 	fullInPack2 := bytes.Repeat([]byte{0x55}, store.BlobSize)
-	ref3, err := blobs.Append(2, fullInPack2)
+	ref3, err := blobs.Append(ctx, 2, fullInPack2)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 2, Offset: 0, Length: store.BlobSize}, ref3)
 	require.Equal(t, uint64(2), blobs.ActivePackID())
 
 	// 在 Pack 2 再追加 128 KiB (b3)，此时 Pack 2 已用 384 KiB，剩余 384 KiB（仅够再容纳 1 个 256 KiB 满块）
-	ref4, err := blobs.Append(2, b3)
+	ref4, err := blobs.Append(ctx, 2, b3)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize, Length: 128 * 1024}, ref4)
 
@@ -101,7 +104,7 @@ func TestBlobStoreAppendAutoRolloverAndAppendBlocksCrossPack(t *testing.T) {
 	m2 := bytes.Repeat([]byte{0x63}, store.BlobSize)
 	batchPayload := bytes.Join([][]byte{m0, m1, m2}, nil)
 
-	refs, err := blobs.AppendBlocks(2, batchPayload)
+	refs, err := blobs.AppendBlocks(ctx, 2, batchPayload)
 	require.NoError(t, err)
 	require.Len(t, refs, 3)
 	require.Equal(t, store.BlobRef{PackID: 2, Offset: store.BlobSize + 128*1024, Length: store.BlobSize}, refs[0])
@@ -129,13 +132,14 @@ func TestBlobStoreAppendAutoRolloverAndAppendBlocksCrossPack(t *testing.T) {
 }
 
 func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
+	ctx := context.Background()
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
 
 	// 1. 首次追加 4 KiB 块（位于 Pack 1, Offset 0, Length 4096，处于活跃包最末尾）
 	chunk0 := bytes.Repeat([]byte{0xaa}, 4096)
-	ref, err := blobs.Append(5, chunk0)
+	ref, err := blobs.Append(ctx, 5, chunk0)
 	require.NoError(t, err)
 	require.Equal(t, store.BlobRef{PackID: 1, Offset: 0, Length: 4096}, ref)
 
@@ -170,7 +174,7 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 	requireHotAndColdRead(t, blobs, extRef3, expected)
 
 	// 5. 当后续追加了另一个块后，extRef3 不再位于活跃包最末尾，ExtendTail 必须返回 ok=false 且不篡改历史偏移数据
-	otherRef, err := blobs.Append(6, []byte("tail-breaker"))
+	otherRef, err := blobs.Append(ctx, 6, []byte("tail-breaker"))
 	require.NoError(t, err)
 	require.Equal(t, uint32(14336), otherRef.Offset)
 
@@ -180,7 +184,7 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 
 	// 6. 滚动封口后原末尾块 otherRef 也不再允许 ExtendTail
 	blobs.SetMaxPackSize(otherRef.Offset + otherRef.Length)
-	nextPackRef, err := blobs.Append(6, []byte("next-pack"))
+	nextPackRef, err := blobs.Append(ctx, 6, []byte("next-pack"))
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), nextPackRef.PackID)
 	_, ok, err = blobs.ExtendTail(6, otherRef, otherRef.Length, []byte("more"), otherRef.Length+4)
@@ -189,6 +193,7 @@ func TestBlobStoreExtendTailAndNonTailRejection(t *testing.T) {
 }
 
 func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing.T) {
+	ctx := context.Background()
 	base := t.TempDir()
 	blobs := store.NewBlobStore(base)
 	defer func() { require.NoError(t, blobs.Close()) }()
@@ -197,13 +202,13 @@ func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing
 
 	// 1. ino=10 写满 Pack 1（2 个 256 KiB 块）
 	payload1 := bytes.Repeat([]byte{0x11}, 2*store.BlobSize)
-	refs1, err := blobs.AppendBlocks(10, payload1)
+	refs1, err := blobs.AppendBlocks(ctx, 10, payload1)
 	require.NoError(t, err)
 	require.Len(t, refs1, 2)
 	require.Equal(t, uint64(1), refs1[0].PackID)
 
 	// 2. ino=20 追加 1 个块触发 Pack 1 封口并切入新活跃包 Pack 2
-	ref2, err := blobs.Append(20, bytes.Repeat([]byte{0x22}, store.BlobSize))
+	ref2, err := blobs.Append(ctx, 20, bytes.Repeat([]byte{0x22}, store.BlobSize))
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), ref2.PackID)
 
@@ -227,7 +232,7 @@ func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing
 	require.Equal(t, uint64(2), blobs.SyncDirCount())
 	require.False(t, blobs.HasDirty())
 
-	_, err = blobs.Append(20, bytes.Repeat([]byte{0x33}, 4096))
+	_, err = blobs.Append(ctx, 20, bytes.Repeat([]byte{0x33}, 4096))
 	require.NoError(t, err)
 	require.NoError(t, blobs.SyncInode(20))
 	require.Equal(t, uint64(3), blobs.SyncFileCount())
@@ -239,19 +244,20 @@ func TestBlobStoreSealedPackBackgroundPreSyncAndDirBarrierInheritance(t *testing
 }
 
 func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {
+	ctx := context.Background()
 	blobs := store.NewBlobStore(t.TempDir())
 
 	// 1. Append / AppendBlocks 边界与非法长度校验
-	_, err := blobs.Append(1, nil)
+	_, err := blobs.Append(ctx, 1, nil)
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = blobs.Append(1, make([]byte, store.BlobSize+1))
+	_, err = blobs.Append(ctx, 1, make([]byte, store.BlobSize+1))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = blobs.AppendBlocks(1, nil)
+	_, err = blobs.AppendBlocks(ctx, 1, nil)
 	require.ErrorIs(t, err, store.ErrInvalidValue)
-	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize+1024))
+	_, err = blobs.AppendBlocks(ctx, 1, make([]byte, store.BlobSize+1024))
 	require.ErrorIs(t, err, store.ErrInvalidValue)
 
-	ref, err := blobs.Append(1, []byte("hello-pack"))
+	ref, err := blobs.Append(ctx, 1, []byte("hello-pack"))
 	require.NoError(t, err)
 
 	// 2. ExtendTail 非法参数校验
@@ -277,9 +283,9 @@ func TestBlobStoreCloseAndValidationErrorPaths(t *testing.T) {
 	require.NoError(t, blobs.Close())
 	require.NoError(t, blobs.Close())
 
-	_, err = blobs.Append(1, []byte("after-close"))
+	_, err = blobs.Append(ctx, 1, []byte("after-close"))
 	require.ErrorIs(t, err, store.ErrClosed)
-	_, err = blobs.AppendBlocks(1, make([]byte, store.BlobSize))
+	_, err = blobs.AppendBlocks(ctx, 1, make([]byte, store.BlobSize))
 	require.ErrorIs(t, err, store.ErrClosed)
 	_, _, err = blobs.ExtendTail(1, ref, ref.Length, []byte("!"), ref.Length+1)
 	require.ErrorIs(t, err, store.ErrClosed)

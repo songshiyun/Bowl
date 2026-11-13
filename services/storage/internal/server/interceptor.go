@@ -26,17 +26,22 @@ const (
 	// SlowStorageRPCThreshold 定义数据面/元数据面单次 RPC 慢操作告警阈值。
 	SlowStorageRPCThreshold = 50 * time.Millisecond
 
+	// SlowControlRPCThreshold 定义控制面（Create/Fork/Delete/Mount 等）单次 RPC 慢操作告警阈值。
+	SlowControlRPCThreshold = 200 * time.Millisecond
+
 	headerRequestID = "X-Request-Id"
 
-	attrKeyBowlDiskID    = "bowl.disk_id"
-	attrKeyBowlEpoch     = "bowl.epoch"
-	attrKeyBowlIno       = "bowl.ino"
-	attrKeyBowlRequestID = "bowl.request_id"
+	attrKeyBowlDiskID       = "bowl.disk_id"
+	attrKeyBowlSourceDiskID = "bowl.source_disk_id"
+	attrKeyBowlEpoch        = "bowl.epoch"
+	attrKeyBowlIno          = "bowl.ino"
+	attrKeyBowlRequestID    = "bowl.request_id"
 
-	logKeyDiskID    = "disk_id"
-	logKeyEpoch     = "epoch"
-	logKeyIno       = "ino"
-	logKeyRequestID = "request_id"
+	logKeyDiskID       = "disk_id"
+	logKeySourceDiskID = "source_disk_id"
+	logKeyEpoch        = "epoch"
+	logKeyIno          = "ino"
+	logKeyRequestID    = "request_id"
 )
 
 type (
@@ -78,6 +83,23 @@ func toObservabilityConfig(cfg telemetry.Config) serverx.ObservabilityConfig {
 }
 
 func classifyStorageLogLevel(procedure string, code connect.Code, err error) slog.Level {
+	if err == nil {
+		switch procedure {
+		case storagev1connect.StorageServiceCreateDiskProcedure, "CreateDisk",
+			storagev1connect.StorageServiceForkDiskProcedure, "ForkDisk",
+			storagev1connect.StorageServiceUpdateDiskProcedure, "UpdateDisk",
+			storagev1connect.StorageServiceDeleteDiskProcedure, "DeleteDisk",
+			storagev1connect.StorageServiceMountDiskProcedure, "MountDisk",
+			storagev1connect.StorageServiceReclaimOrphanProcedure, "ReclaimOrphan":
+			return slog.LevelInfo
+		default:
+			// 高频数据面/元数据面读写与只读查询成功路径降为 Debug，避免 LOG_LEVEL=info 下刷屏。
+			return slog.LevelDebug
+		}
+	}
+	if code == connect.CodeCanceled {
+		return slog.LevelDebug
+	}
 	if code == connect.CodeNotFound {
 		switch procedure {
 		case storagev1connect.StorageServiceLookupProcedure, "Lookup",
@@ -96,18 +118,22 @@ func isControlPlaneProcedure(procedure string) bool {
 		storagev1connect.StorageServiceListDisksProcedure, "ListDisks",
 		storagev1connect.StorageServiceUpdateDiskProcedure, "UpdateDisk",
 		storagev1connect.StorageServiceDeleteDiskProcedure, "DeleteDisk",
-		storagev1connect.StorageServiceMountDiskProcedure, "MountDisk":
+		storagev1connect.StorageServiceMountDiskProcedure, "MountDisk",
+		storagev1connect.StorageServiceReclaimOrphanProcedure, "ReclaimOrphan":
 		return true
 	default:
 		return false
 	}
 }
 
-func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err error) (diskID string, epoch, ino uint64) {
+func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err error) (diskID, sourceDiskID string, epoch, ino uint64) {
 	if req != nil {
 		msg := req.Any()
 		if g, ok := msg.(diskIDGetter); ok {
 			diskID = g.GetDiskId()
+		}
+		if g, ok := msg.(sourceDiskIDGetter); ok {
+			sourceDiskID = g.GetSourceDiskId()
 		}
 		if g, ok := msg.(epochGetter); ok {
 			epoch = g.GetEpoch()
@@ -137,12 +163,7 @@ func extractStorageFields(req connect.AnyRequest, res connect.AnyResponse, err e
 			}
 		}
 	}
-	if diskID == "" && req != nil {
-		if g, ok := req.Any().(sourceDiskIDGetter); ok {
-			diskID = g.GetSourceDiskId()
-		}
-	}
-	return diskID, epoch, ino
+	return diskID, sourceDiskID, epoch, ino
 }
 
 func extractRequestID(req connect.AnyRequest) string {
@@ -153,14 +174,17 @@ func extractRequestID(req connect.AnyRequest) string {
 }
 
 func extractStorageAttrs(_ context.Context, req connect.AnyRequest, res connect.AnyResponse, err error) []slog.Attr {
-	diskID, epoch, ino := extractStorageFields(req, res, err)
+	diskID, sourceDiskID, epoch, ino := extractStorageFields(req, res, err)
 	reqID := extractRequestID(req)
-	if diskID == "" && epoch == 0 && ino == 0 && reqID == "" {
+	if diskID == "" && sourceDiskID == "" && epoch == 0 && ino == 0 && reqID == "" {
 		return nil
 	}
-	attrs := make([]slog.Attr, 0, 4)
+	attrs := make([]slog.Attr, 0, 5)
 	if diskID != "" {
 		attrs = append(attrs, slog.String(logKeyDiskID, diskID))
+	}
+	if sourceDiskID != "" {
+		attrs = append(attrs, slog.String(logKeySourceDiskID, sourceDiskID))
 	}
 	if epoch != 0 {
 		attrs = append(attrs, slog.Uint64(logKeyEpoch, epoch))
@@ -176,8 +200,8 @@ func extractStorageAttrs(_ context.Context, req connect.AnyRequest, res connect.
 
 // NewStorageObservabilityInterceptor 构造 Storage 专属服务端可观测性拦截器：
 // 1. 使用 pprof.Labels("rpc", procedure) 标记协程热点归因；
-// 2. 仅当 Span 处于录制态时注入 bowl.disk_id / bowl.epoch / bowl.ino / bowl.request_id 属性（未采样时 0 alloc）；
-// 3. 单次数据面/元数据面 RPC 耗时超过 50ms 时输出慢操作告警日志。
+// 2. 仅当 Span 处于录制态时注入 bowl.disk_id / bowl.source_disk_id / bowl.epoch / bowl.ino / bowl.request_id 属性（未采样时 0 alloc）；
+// 3. 数据面耗时超 50ms 或控制面耗时超 200ms 时输出慢操作告警日志。
 func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -197,12 +221,16 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 			duration := time.Since(start)
 
 			if span := trace.SpanFromContext(ctx); span.IsRecording() {
-				diskID, epoch, ino := extractStorageFields(req, res, err)
+				diskID, sourceDiskID, epoch, ino := extractStorageFields(req, res, err)
 				reqID := extractRequestID(req)
-				var kv [4]attribute.KeyValue
+				var kv [5]attribute.KeyValue
 				n := 0
 				if diskID != "" {
 					kv[n] = attribute.String(attrKeyBowlDiskID, diskID)
+					n++
+				}
+				if sourceDiskID != "" {
+					kv[n] = attribute.String(attrKeyBowlSourceDiskID, sourceDiskID)
 					n++
 				}
 				if epoch != 0 && epoch <= math.MaxInt64 {
@@ -222,7 +250,8 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 				}
 			}
 
-			if duration > SlowStorageRPCThreshold && !isControlPlaneProcedure(procedure) {
+			isCtrl := isControlPlaneProcedure(procedure)
+			if (!isCtrl && duration > SlowStorageRPCThreshold) || (isCtrl && duration > SlowControlRPCThreshold) {
 				logSlowStorageRPC(ctx, logger, procedure, duration, req, res, err)
 			}
 
