@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -97,15 +98,22 @@ func (c *MetaConfig) Validate() error {
 		return fmt.Errorf("invalid atime mode %q: must be one of 'noatime', 'relatime', 'strictatime'", c.AtimeModeVal)
 	}
 
-	if c.EntryTimeoutSecondsVal < 0 {
-		return fmt.Errorf("invalid entry timeout %v: must be non-negative", c.EntryTimeoutSecondsVal)
+	if err := validateNonNegativeTimeout("entry timeout", c.EntryTimeoutSecondsVal); err != nil {
+		return err
 	}
-	if c.AttrTimeoutSecondsVal < 0 {
-		return fmt.Errorf("invalid attr timeout %v: must be non-negative", c.AttrTimeoutSecondsVal)
+	if err := validateNonNegativeTimeout("attr timeout", c.AttrTimeoutSecondsVal); err != nil {
+		return err
 	}
-	if c.DirEntryTimeoutSecondsVal < 0 {
-		return fmt.Errorf("invalid dir entry timeout %v: must be non-negative", c.DirEntryTimeoutSecondsVal)
+	if err := validateNonNegativeTimeout("dir entry timeout", c.DirEntryTimeoutSecondsVal); err != nil {
+		return err
 	}
 
+	return nil
+}
+
+func validateNonNegativeTimeout(field string, v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return fmt.Errorf("invalid %s %v: must be finite and non-negative", field, v)
+	}
 	return nil
 }

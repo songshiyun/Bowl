@@ -1,4 +1,4 @@
-package rpccodec
+package rpccodec_test
 
 import (
 	"bytes"
@@ -11,22 +11,23 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/pkg/rpccodec"
 )
 
 type testPayloadMsg struct {
 	Data []byte
 }
 
-func registerOrphanMsg(pool *PayloadLeasePool[testPayloadMsg], policyCheck byte) *[MaxPayloadSize]byte {
+func registerOrphanMsg(pool *rpccodec.PayloadLeasePool[testPayloadMsg], marker byte) *[rpccodec.MaxPayloadSize]byte {
 	buf := pool.AcquireBuf()
-	buf[0] = policyCheck
+	buf[0] = marker
 	msg := &testPayloadMsg{Data: buf[:64:64]}
 	pool.Register(msg, buf)
 	runtime.KeepAlive(msg)
 	return buf
 }
 
-func claimOrphanGuard(pool *PayloadLeasePool[testPayloadMsg]) {
+func claimOrphanGuard(pool *rpccodec.PayloadLeasePool[testPayloadMsg]) {
 	buf := pool.AcquireBuf()
 	msg := &testPayloadMsg{Data: buf[:128:128]}
 	pool.Register(msg, buf)
@@ -35,146 +36,30 @@ func claimOrphanGuard(pool *PayloadLeasePool[testPayloadMsg]) {
 	runtime.KeepAlive(guard)
 }
 
-func TestPayloadLeasePoolIsolationAndDuplicateRegister(t *testing.T) {
-	poolA := NewPayloadLeasePool[testPayloadMsg](2, OrphanRecycleBuffer)
-	poolB := NewPayloadLeasePool[testPayloadMsg](-3, OrphanDropEntryOnly)
-
-	// 1. 不同池实例的缓冲通道与租约表完全隔离
-	bufA := poolA.AcquireBuf()
-	bufB := poolB.AcquireBuf()
-	require.NotEqual(t, unsafe.Pointer(bufA), unsafe.Pointer(bufB))
-
-	msgA := &testPayloadMsg{Data: bufA[:16:16]}
-	msgB := &testPayloadMsg{Data: bufB[:16:16]}
-	poolA.Register(msgA, bufA)
-	poolB.Register(msgB, bufB)
-	require.Equal(t, 1, poolA.LeasedCount())
-	require.Equal(t, 1, poolB.LeasedCount())
-
-	// 跨池 Release/Claim 无效，不影响各自租约
-	require.False(t, poolB.Release(msgA, func(m *testPayloadMsg) { m.Data = nil }))
-	require.Nil(t, poolA.Claim(msgB))
-	require.Equal(t, 1, poolA.LeasedCount())
-	require.Equal(t, 1, poolB.LeasedCount())
-
-	// 2. 同一消息重复 Register 时先回收旧租约且计数保持为 1，释放后可复用原缓冲
-	bufA2 := poolA.AcquireBuf()
-	require.NotEqual(t, unsafe.Pointer(bufA), unsafe.Pointer(bufA2))
-	msgA.Data = bufA2[:32:32]
-	poolA.Register(msgA, bufA2)
-	require.Equal(t, 1, poolA.LeasedCount())
-
-	// 原 bufA 已被回收进 poolA.freeCh，下一次 AcquireBuf 必须立即取回 bufA
-	reacquiredA := poolA.AcquireBuf()
-	require.Equal(t, unsafe.Pointer(bufA), unsafe.Pointer(reacquiredA))
-	poolA.RecycleBuf(reacquiredA)
-
-	// 显式释放 msgA 与 msgB
-	require.True(t, poolA.Release(msgA, func(m *testPayloadMsg) { m.Data = nil }))
-	require.Nil(t, msgA.Data)
-	require.Zero(t, poolA.LeasedCount())
-	require.False(t, poolA.Release(msgA, nil))
-
-	msgB.Data = nil
-	guardB := poolB.Claim(msgB)
-	require.NotNil(t, guardB)
-	require.Zero(t, poolB.LeasedCount())
-	guardB.Release()
-	guardB.Release() // 幂等
-
-	// 零值与 nil Guard 安全空操作
-	var nilGuard *Guard
-	nilGuard.Release()
-	(&Guard{}).Release()
-
-	// nil msg / nil buf 边界安全：Register(nil, buf) 立即回收缓冲，不污染租约表
-	poolEmpty := NewPayloadLeasePool[testPayloadMsg](1, OrphanRecycleBuffer)
-	bufNilMsg := poolEmpty.AcquireBuf()
-	poolEmpty.Register(nil, bufNilMsg)
-	poolEmpty.Register(msgA, nil)
-	require.Zero(t, poolEmpty.LeasedCount())
-	reclaimed := poolEmpty.AcquireBuf()
-	require.Equal(t, unsafe.Pointer(bufNilMsg), unsafe.Pointer(reclaimed))
-	poolEmpty.RecycleBuf(reclaimed)
-	poolEmpty.RecycleBuf(nil)
+func waitForGCCleanup(t *testing.T, msg string, cond func() bool) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		runtime.GC()
+		return cond()
+	}, 2*time.Second, 10*time.Millisecond, "%s", msg)
 }
 
-func TestPayloadLeasePoolOrphanPoliciesAndGuardCleanup(t *testing.T) {
-	// 1. OrphanDropEntryOnly：孤儿对象 GC 后仅清理表项，绝不回收底层缓冲（防止外部切片 UAF）
-	dropPool := NewPayloadLeasePool[testPayloadMsg](2, OrphanDropEntryOnly)
-	droppedBuf := registerOrphanMsg(dropPool, 0x5A)
-	require.Equal(t, 1, dropPool.LeasedCount())
-	require.Eventually(t, func() bool {
-		runtime.GC()
-		return dropPool.LeasedCount() == 0
-	}, 2*time.Second, 10*time.Millisecond)
-
-	nextFromDropPool := dropPool.AcquireBuf()
-	require.NotEqual(t, unsafe.Pointer(droppedBuf), unsafe.Pointer(nextFromDropPool), "OrphanDropEntryOnly 不得回收孤儿缓冲")
-	require.Equal(t, byte(0x5A), droppedBuf[0])
-	dropPool.RecycleBuf(nextFromDropPool)
-
-	// 2. OrphanRecycleBuffer：孤儿对象 GC 后清理表项并立即归还缓冲
-	recyclePool := NewPayloadLeasePool[testPayloadMsg](2, OrphanRecycleBuffer)
-	recycledBuf := registerOrphanMsg(recyclePool, 0xA5)
-	require.Equal(t, 1, recyclePool.LeasedCount())
-	require.Eventually(t, func() bool {
-		runtime.GC()
-		return recyclePool.LeasedCount() == 0
-	}, 2*time.Second, 10*time.Millisecond)
-
-	reacquired := recyclePool.AcquireBuf()
-	require.Equal(t, unsafe.Pointer(recycledBuf), unsafe.Pointer(reacquired), "OrphanRecycleBuffer 必须在 GC 后归还孤儿缓冲")
-	recyclePool.RecycleBuf(reacquired)
-
-	// 3. 接管后遗漏 Guard.Release()，Guard 被 GC 时触发兜底回收
-	guardPool := NewPayloadLeasePool[testPayloadMsg](1, OrphanDropEntryOnly)
-	seedBuf := guardPool.AcquireBuf()
-	guardPool.RecycleBuf(seedBuf)
-	claimOrphanGuard(guardPool)
-	require.Zero(t, guardPool.LeasedCount())
-
-	var reusedAfterGuardGC bool
-	require.Eventually(t, func() bool {
-		runtime.GC()
-		cand := guardPool.AcquireBuf()
-		matched := unsafe.Pointer(cand) == unsafe.Pointer(seedBuf)
-		guardPool.RecycleBuf(cand)
-		if matched {
-			reusedAfterGuardGC = true
-			return true
-		}
-		return false
-	}, 2*time.Second, 10*time.Millisecond)
-	require.True(t, reusedAfterGuardGC, "遗漏 Guard.Release() 时必须在 Guard 被 GC 后兜底回收缓冲")
+func requireZeroAllocs(t *testing.T, msg string, fn func()) {
+	t.Helper()
+	got := testing.AllocsPerRun(50, fn)
+	require.Zero(t, got, "%s: want 0 allocs/op, got %v", msg, got)
 }
 
-func TestPayloadLeasePoolAndCodecZeroAllocs(t *testing.T) {
-	pool := NewPayloadLeasePool[storagev1.ReadResponse](4, OrphanRecycleBuffer)
-	warm := pool.AcquireBuf()
-	pool.RecycleBuf(warm)
-
-	msg := &storagev1.ReadResponse{}
-	require.Zero(t, testing.AllocsPerRun(50, func() {
-		buf := pool.AcquireBuf()
-		pool.RecycleBuf(buf)
-	}), "预热后的 AcquireBuf/RecycleBuf 必须严格 0 allocs/op")
-
-	require.Zero(t, testing.AllocsPerRun(50, func() {
-		if pool.Release(msg, nil) {
-			t.Fatal("active == 0 时 Release 必须返回 false")
-		}
-	}), "active == 0 时 Release 快路径必须严格 0 allocs/op")
-
-	reusableDst := make([]byte, 0, 1024)
-	readReq := &storagev1.ReadRequest{
-		Ino:    42,
-		Fh:     7,
-		Offset: 4096,
-		Size:   128 << 10,
-		DiskId: "11111111-1111-4111-8111-111111111111",
+func requireMarshalAppendSuccess(t *testing.T, codec *rpccodec.ProtoBinaryCodec, dst []byte, msg any) {
+	t.Helper()
+	out, err := codec.MarshalAppend(dst, msg)
+	if err != nil || len(out) == 0 {
+		t.Fatalf("MarshalAppend 失败: len=%d err=%v", len(out), err)
 	}
-	codecWithHook := NewProtoBinaryCodec(CodecHooks{
+}
+
+func newZeroAllocReadRespCodec(pool *rpccodec.PayloadLeasePool[storagev1.ReadResponse]) *rpccodec.ProtoBinaryCodec {
+	return rpccodec.NewProtoBinaryCodec(rpccodec.CodecHooks{
 		MarshalAppend: func(dst []byte, m any) ([]byte, bool, error) {
 			if resp, ok := m.(*storagev1.ReadResponse); ok {
 				return append(dst, resp.Data...), true, nil
@@ -187,29 +72,13 @@ func TestPayloadLeasePoolAndCodecZeroAllocs(t *testing.T) {
 			}
 		},
 	})
-	resp := &storagev1.ReadResponse{Data: []byte("fast-path")}
-
-	require.Zero(t, testing.AllocsPerRun(50, func() {
-		out, err := codecWithHook.MarshalAppend(reusableDst[:0], resp)
-		if err != nil || len(out) == 0 {
-			t.Fatalf("unexpected hook MarshalAppend: len=%d err=%v", len(out), err)
-		}
-	}), "命中 MarshalAppend 钩子时必须严格 0 allocs/op")
-
-	require.Zero(t, testing.AllocsPerRun(50, func() {
-		out, err := codecWithHook.MarshalAppend(reusableDst[:0], readReq)
-		if err != nil || len(out) == 0 {
-			t.Fatalf("unexpected fallback MarshalAppend: len=%d err=%v", len(out), err)
-		}
-	}), "未命中钩子回退标准 proto.MarshalAppend 时必须严格 0 allocs/op")
 }
 
-func TestProtoBinaryCodecBehaviorAndFallbacks(t *testing.T) {
-	var afterMarshalCalled int
-	codec := NewProtoBinaryCodec(CodecHooks{
+func newSpyHookCodec(afterMarshalCalled *int) *rpccodec.ProtoBinaryCodec {
+	return rpccodec.NewProtoBinaryCodec(rpccodec.CodecHooks{
 		AfterMarshal: func(msg any) {
 			if _, ok := msg.(*storagev1.ReadResponse); ok {
-				afterMarshalCalled++
+				*afterMarshalCalled++
 			}
 		},
 		Unmarshal: func(data []byte, msg any) (bool, error) {
@@ -220,11 +89,159 @@ func TestProtoBinaryCodecBehaviorAndFallbacks(t *testing.T) {
 			return false, nil
 		},
 	})
+}
 
-	require.Equal(t, CodecNameProto, codec.Name())
+func TestPayloadLeasePool_GivenTwoPools_WhenCrossPoolOperationsCalled_ThenIsolated(t *testing.T) {
+	poolA := rpccodec.NewPayloadLeasePool[testPayloadMsg](2, rpccodec.OrphanRecycleBuffer)
+	poolB := rpccodec.NewPayloadLeasePool[testPayloadMsg](-3, rpccodec.OrphanDropEntryOnly)
+
+	bufA := poolA.AcquireBuf()
+	bufB := poolB.AcquireBuf()
+	require.NotEqual(t, unsafe.Pointer(bufA), unsafe.Pointer(bufB), "不同池实例不得共享同一块缓冲")
+
+	msgA := &testPayloadMsg{Data: bufA[:16:16]}
+	msgB := &testPayloadMsg{Data: bufB[:16:16]}
+	poolA.Register(msgA, bufA)
+	poolB.Register(msgB, bufB)
+
+	require.False(t, poolB.Release(msgA, func(m *testPayloadMsg) { m.Data = nil }), "跨池 Release 不得命中租约")
+	require.Nil(t, poolA.Claim(msgB), "跨池 Claim 不得命中租约")
+	require.Equal(t, 1, poolA.LeasedCount(), "poolA LeasedCount want=1, got=%d", poolA.LeasedCount())
+	require.Equal(t, 1, poolB.LeasedCount(), "poolB LeasedCount want=1, got=%d", poolB.LeasedCount())
+
+	require.True(t, poolA.Release(msgA, func(m *testPayloadMsg) { m.Data = nil }), "poolA 释放自身租约应返回 true")
+	require.Nil(t, msgA.Data, "Release 后消息切片引用应被清空")
+	require.Zero(t, poolA.LeasedCount(), "释放后 poolA LeasedCount want=0, got=%d", poolA.LeasedCount())
+	require.False(t, poolA.Release(msgA, nil), "重复 Release 应幂等返回 false")
+
+	msgB.Data = nil
+	guardB := poolB.Claim(msgB)
+	require.NotNil(t, guardB, "poolB Claim 自身租约应返回有效 Guard")
+	require.Zero(t, poolB.LeasedCount(), "Claim 后 poolB LeasedCount want=0, got=%d", poolB.LeasedCount())
+	guardB.Release()
+	guardB.Release()
+}
+
+func TestPayloadLeasePool_GivenExistingLease_WhenRegisteredAgain_ThenRecyclesPreviousBuffer(t *testing.T) {
+	pool := rpccodec.NewPayloadLeasePool[testPayloadMsg](2, rpccodec.OrphanRecycleBuffer)
+	buf1 := pool.AcquireBuf()
+	msg := &testPayloadMsg{Data: buf1[:16:16]}
+	pool.Register(msg, buf1)
+
+	buf2 := pool.AcquireBuf()
+	require.NotEqual(t, unsafe.Pointer(buf1), unsafe.Pointer(buf2))
+	msg.Data = buf2[:32:32]
+	pool.Register(msg, buf2)
+
+	require.Equal(t, 1, pool.LeasedCount(), "重复注册同一消息后 LeasedCount want=1, got=%d", pool.LeasedCount())
+	reacquired := pool.AcquireBuf()
+	require.Equal(t, unsafe.Pointer(buf1), unsafe.Pointer(reacquired), "旧缓冲应已立即回收到池中并可被再次获取")
+	pool.RecycleBuf(reacquired)
+	require.True(t, pool.Release(msg, func(m *testPayloadMsg) { m.Data = nil }))
+}
+
+func TestPayloadLeasePool_GivenNilInputs_WhenMethodsCalled_ThenHandlesSafely(t *testing.T) {
+	var nilGuard *rpccodec.Guard
+	nilGuard.Release()
+	(&rpccodec.Guard{}).Release()
+
+	pool := rpccodec.NewPayloadLeasePool[testPayloadMsg](1, rpccodec.OrphanRecycleBuffer)
+	buf := pool.AcquireBuf()
+	pool.Register(nil, buf)
+	pool.Register(&testPayloadMsg{}, nil)
+	require.Zero(t, pool.LeasedCount(), "nil 消息或 nil 缓冲不得写入租约表")
+
+	reclaimed := pool.AcquireBuf()
+	require.Equal(t, unsafe.Pointer(buf), unsafe.Pointer(reclaimed), "Register(nil, buf) 应立即归还缓冲")
+	pool.RecycleBuf(reclaimed)
+	pool.RecycleBuf(nil)
+}
+
+func TestPayloadLeasePool_GivenOrphanDropPolicy_WhenMsgCollected_ThenDropsEntryWithoutRecyclingBuffer(t *testing.T) {
+	dropPool := rpccodec.NewPayloadLeasePool[testPayloadMsg](2, rpccodec.OrphanDropEntryOnly)
+	droppedBuf := registerOrphanMsg(dropPool, 0x5A)
+	require.Equal(t, 1, dropPool.LeasedCount())
+
+	waitForGCCleanup(t, "OrphanDropEntryOnly 应在对象被 GC 后清除租约表项", func() bool {
+		return dropPool.LeasedCount() == 0
+	})
+
+	nextBuf := dropPool.AcquireBuf()
+	require.NotEqual(t, unsafe.Pointer(droppedBuf), unsafe.Pointer(nextBuf), "OrphanDropEntryOnly 不得回收孤儿缓冲")
+	require.Equal(t, byte(0x5A), droppedBuf[0])
+	dropPool.RecycleBuf(nextBuf)
+}
+
+func TestPayloadLeasePool_GivenOrphanRecyclePolicy_WhenMsgCollected_ThenRecyclesBuffer(t *testing.T) {
+	recyclePool := rpccodec.NewPayloadLeasePool[testPayloadMsg](2, rpccodec.OrphanRecycleBuffer)
+	recycledBuf := registerOrphanMsg(recyclePool, 0xA5)
+	require.Equal(t, 1, recyclePool.LeasedCount())
+
+	waitForGCCleanup(t, "OrphanRecycleBuffer 应在对象被 GC 后清除租约表项", func() bool {
+		return recyclePool.LeasedCount() == 0
+	})
+
+	reacquired := recyclePool.AcquireBuf()
+	require.Equal(t, unsafe.Pointer(recycledBuf), unsafe.Pointer(reacquired), "OrphanRecycleBuffer 必须在 GC 后归还孤儿缓冲")
+	recyclePool.RecycleBuf(reacquired)
+}
+
+func TestPayloadLeasePool_GivenUnreleasedGuard_WhenGuardCollected_ThenRecyclesBuffer(t *testing.T) {
+	guardPool := rpccodec.NewPayloadLeasePool[testPayloadMsg](1, rpccodec.OrphanDropEntryOnly)
+	seedBuf := guardPool.AcquireBuf()
+	guardPool.RecycleBuf(seedBuf)
+
+	claimOrphanGuard(guardPool)
+	require.Zero(t, guardPool.LeasedCount())
+
+	waitForGCCleanup(t, "遗漏 Guard.Release() 时必须在 Guard 被 GC 后兜底回收缓冲", func() bool {
+		cand := guardPool.AcquireBuf()
+		matched := unsafe.Pointer(cand) == unsafe.Pointer(seedBuf)
+		guardPool.RecycleBuf(cand)
+		return matched
+	})
+}
+
+func TestPayloadLeasePool_GivenWarmedPool_WhenAcquireRecycleOrFastRelease_ThenZeroAllocs(t *testing.T) {
+	pool := rpccodec.NewPayloadLeasePool[storagev1.ReadResponse](4, rpccodec.OrphanRecycleBuffer)
+	pool.RecycleBuf(pool.AcquireBuf())
+	msg := &storagev1.ReadResponse{}
+
+	requireZeroAllocs(t, "预热后的 AcquireBuf/RecycleBuf", func() {
+		buf := pool.AcquireBuf()
+		pool.RecycleBuf(buf)
+	})
+	requireZeroAllocs(t, "active == 0 时 Release 快路径", func() {
+		require.False(t, pool.Release(msg, nil), "active == 0 时 Release 必须返回 false")
+	})
+}
+
+func TestProtoBinaryCodec_GivenMarshalAppendHook_WhenHitOrFallback_ThenZeroAllocs(t *testing.T) {
+	pool := rpccodec.NewPayloadLeasePool[storagev1.ReadResponse](4, rpccodec.OrphanRecycleBuffer)
+	reusableDst := make([]byte, 0, 1024)
+	readReq := &storagev1.ReadRequest{
+		Ino:    42,
+		Fh:     7,
+		Offset: 4096,
+		Size:   128 << 10,
+		DiskId: "11111111-1111-4111-8111-111111111111",
+	}
+	codecWithHook := newZeroAllocReadRespCodec(pool)
+	resp := &storagev1.ReadResponse{Data: []byte("fast-path")}
+
+	requireZeroAllocs(t, "命中 MarshalAppend 钩子", func() {
+		requireMarshalAppendSuccess(t, codecWithHook, reusableDst[:0], resp)
+	})
+	requireZeroAllocs(t, "未命中钩子回退标准 proto.MarshalAppend", func() {
+		requireMarshalAppendSuccess(t, codecWithHook, reusableDst[:0], readReq)
+	})
+}
+
+func TestProtoBinaryCodec_GivenNonProtoMessage_WhenEncodedOrDecoded_ThenReturnsTypeError(t *testing.T) {
+	codec := rpccodec.NewProtoBinaryCodec(rpccodec.CodecHooks{})
+	require.Equal(t, rpccodec.CodecNameProto, codec.Name())
 	require.True(t, codec.IsBinary())
 
-	// 1. 非 proto.Message 错误
 	_, err := codec.Marshal(struct{}{})
 	require.ErrorContains(t, err, "does not implement proto.Message")
 	_, err = codec.MarshalAppend(nil, struct{}{})
@@ -233,19 +250,22 @@ func TestProtoBinaryCodecBehaviorAndFallbacks(t *testing.T) {
 	require.ErrorContains(t, err, "does not implement proto.Message")
 	err = codec.Unmarshal([]byte("abc"), struct{}{})
 	require.ErrorContains(t, err, "does not implement proto.Message")
+}
 
-	// 2. Marshal / MarshalStable 均触发 AfterMarshal
+func TestProtoBinaryCodec_GivenHooks_WhenMarshalAndUnmarshalInvoked_ThenAppliesHooksAndFallbacks(t *testing.T) {
+	var afterMarshalCalled int
+	codec := newSpyHookCodec(&afterMarshalCalled)
+
 	resp := &storagev1.ReadResponse{Data: []byte("hello")}
 	wire, err := codec.Marshal(resp)
 	require.NoError(t, err)
-	require.Equal(t, 1, afterMarshalCalled)
+	require.Equal(t, 1, afterMarshalCalled, "Marshal 后 AfterMarshal 调用次数 want=1, got=%d", afterMarshalCalled)
 
 	stableWire, err := codec.MarshalStable(resp)
 	require.NoError(t, err)
 	require.Equal(t, wire, stableWire)
-	require.Equal(t, 2, afterMarshalCalled)
+	require.Equal(t, 2, afterMarshalCalled, "MarshalStable 后 AfterMarshal 调用次数 want=2, got=%d", afterMarshalCalled)
 
-	// 3. Unmarshal 钩子命中与回退标准 proto.Unmarshal
 	var hooked storagev1.ReadResponse
 	require.NoError(t, codec.Unmarshal([]byte("hook-magic"), &hooked))
 	require.Equal(t, []byte("from-hook"), hooked.Data)
@@ -254,14 +274,11 @@ func TestProtoBinaryCodecBehaviorAndFallbacks(t *testing.T) {
 	require.NoError(t, codec.Unmarshal(wire, &decoded))
 	require.Equal(t, []byte("hello"), decoded.Data)
 
-	// 4. 畸形 Wire 数据报错并保留 %T 上下文
-	var malformed storagev1.ReadRequest
-	err = codec.Unmarshal([]byte{0xff, 0xff, 0xff}, &malformed)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "unmarshal into *storagev1.ReadRequest")
-
-	// 验证标准 proto.Equal 兼容性
 	var direct storagev1.ReadResponse
 	require.NoError(t, proto.Unmarshal(wire, &direct))
 	require.True(t, proto.Equal(resp, &direct))
+
+	var malformed storagev1.ReadRequest
+	err = codec.Unmarshal([]byte{0xff, 0xff, 0xff}, &malformed)
+	require.ErrorContains(t, err, "unmarshal into *storagev1.ReadRequest")
 }
