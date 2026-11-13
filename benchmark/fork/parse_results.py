@@ -76,6 +76,7 @@ def summarize_samples(samples: list[float], trim_fraction: float = 0.05) -> dict
         }
     ordered = sorted(float(x) for x in samples)
     trim_each = int(len(ordered) * trim_fraction) if len(ordered) >= 20 else 0
+    trim_each = min(trim_each, (len(ordered) - 1) // 2)
     trimmed = ordered[trim_each : len(ordered) - trim_each] if trim_each > 0 else ordered
     return {
         "count": len(ordered),
@@ -103,9 +104,14 @@ def compute_composite_score(fork_ms: float, first_read_ms: float, verified: bool
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
+    """安全加载 JSON 字典，空文件、畸形 JSON 或非字典对象返回空字典。"""
+    if not path.exists() or path.stat().st_size == 0:
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def fmt_ms_triple(stats_obj: dict[str, Any] | None) -> str:
@@ -152,8 +158,14 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
     timings_path = results_dir / "stage_timings.jsonl"
     if timings_path.exists():
         for line in timings_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                stage_timings.append(json.loads(line))
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                stage_timings.append(row)
 
     out: dict[str, Any] = {
         "env_metadata": env_meta,
@@ -168,29 +180,57 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
     return out
 
 
-def render_report(summary: dict[str, Any]) -> str:
-    env = summary.get("env_metadata", {})
-    cloud = env.get("cloud", {})
-    srv = env.get("server_node", {})
-    cli = env.get("client_node", {})
-    net = env.get("network_baseline", {})
-    disk_base = env.get("server_disk_baseline", {})
-    bowl_cfg = env.get("bowl_config", {})
-    audit = env.get("cleanup_audit", {})
+def _as_dict(val: Any) -> dict[str, Any]:
+    return val if isinstance(val, dict) else {}
 
-    s1 = summary.get("suite1_matrix", {})
-    presets = s1.get("presets", {})
+
+def _as_num(val: Any, default: float = 0.0) -> float:
+    if val is None or isinstance(val, bool):
+        return default
+    try:
+        num = float(val)
+    except (ValueError, TypeError):
+        return default
+    return num if math.isfinite(num) else default
+
+
+def _as_int(val: Any, default: int = 0) -> int:
+    if val is None or isinstance(val, bool):
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _med(container: Any, key: str, default: float = 0.0) -> float:
+    return _as_num(_as_dict(_as_dict(container).get(key)).get("median"), default)
+
+
+def render_report(summary: dict[str, Any]) -> str:
+    summary = _as_dict(summary)
+    env = _as_dict(summary.get("env_metadata"))
+    cloud = _as_dict(env.get("cloud"))
+    srv = _as_dict(env.get("server_node"))
+    cli = _as_dict(env.get("client_node"))
+    net = _as_dict(env.get("network_baseline"))
+    disk_base = _as_dict(env.get("server_disk_baseline"))
+    bowl_cfg = _as_dict(env.get("bowl_config"))
+    audit = _as_dict(env.get("cleanup_audit"))
+
+    s1 = _as_dict(summary.get("suite1_matrix"))
+    presets = _as_dict(s1.get("presets"))
     preset_order = s1.get("preset_order") or [k for k in DEFAULT_PRESET_ORDER if k in presets]
-    s2 = summary.get("suite2_online_fork", {})
-    s3 = summary.get("suite3_fanout_cow", {})
-    s3_ck = s3.get("checkpoints", {})
+    s2 = _as_dict(summary.get("suite2_online_fork"))
+    s3 = _as_dict(summary.get("suite3_fanout_cow"))
+    s3_ck = _as_dict(s3.get("checkpoints"))
 
     bowl_cp_label = "PostgreSQL 18（deploy/prod 容器栈）" if bowl_cfg.get("deploy_profile") else "PostgreSQL 16"
 
     lines: list[str] = []
     lines.append("# Bowl Disk Fork — 阿里云硅谷双机内网分叉性能与一致性基准测试报告")
     lines.append("")
-    for note in env.get("execution_notes", []):
+    for note in env.get("execution_notes") or []:
         lines.extend([f"> {note}", ""])
 
     lines.append("## 1. 执行摘要（Executive Summary）")
@@ -219,66 +259,66 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| 测试套件 | 场景 / 指标项 | 实测结果 (`bowl_fork`) | 同机全量拷贝基线 / 预期不变量 | 加速比 / 结论 |")
     lines.append("| :--- | :--- | ---: | ---: | :--- |")
 
-    small_p = presets.get("small", {})
-    large_p = presets.get("large_1gib", {})
-    tree_p = presets.get("tree_5k", {})
+    small_p = _as_dict(presets.get("small"))
+    large_p = _as_dict(presets.get("large_1gib"))
+    tree_p = _as_dict(presets.get("tree_5k"))
 
     if small_p:
-        sf = small_p.get("bowl_fork", {})
-        sc = small_p.get("bowl_copy", {})
-        scomp = small_p.get("comparison", {})
+        sf = _as_dict(small_p.get("bowl_fork"))
+        sc = _as_dict(small_p.get("bowl_copy"))
+        scomp = _as_dict(small_p.get("comparison"))
         lines.append(
             f"| **Suite 1 (`small` · 10 MiB)** | `ForkDisk` RPC 中位数 (`P95`) / 端到端可用 TTI | "
-            f"`{fmt_ms_pair(sf.get('fork_rpc_ms'))} ms` / `{sf.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"拷贝同步 `{sc.get('copy_sync_ms', {}).get('median', 0):.2f} ms` / TTI `{sc.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"**RPC 快 `{scomp.get('fork_rpc_vs_copy_sync_speedup', 0):.2f}x` · TTI 快 `{scomp.get('end_to_end_tti_speedup', 0):.2f}x`** |"
+            f"`{fmt_ms_pair(sf.get('fork_rpc_ms'))} ms` / `{_med(sf, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"拷贝同步 `{_med(sc, 'copy_sync_ms'):.2f} ms` / TTI `{_med(sc, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"**RPC 快 `{_as_num(scomp.get('fork_rpc_vs_copy_sync_speedup')):.2f}x` · TTI 快 `{_as_num(scomp.get('end_to_end_tti_speedup')):.2f}x`** |"
         )
     if large_p:
-        lf = large_p.get("bowl_fork", {})
-        lc = large_p.get("bowl_copy", {})
-        lcomp = large_p.get("comparison", {})
+        lf = _as_dict(large_p.get("bowl_fork"))
+        lc = _as_dict(large_p.get("bowl_copy"))
+        lcomp = _as_dict(large_p.get("comparison"))
         lines.append(
             f"| **Suite 1 (`large_1gib` · 1 GiB)** | `ForkDisk` RPC 中位数 (`P95`) / 端到端可用 TTI | "
-            f"`{fmt_ms_pair(lf.get('fork_rpc_ms'))} ms` / `{lf.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"拷贝同步 `{lc.get('copy_sync_ms', {}).get('median', 0):.2f} ms` / TTI `{lc.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"**RPC 快 `{lcomp.get('fork_rpc_vs_copy_sync_speedup', 0):.2f}x` · TTI 快 `{lcomp.get('end_to_end_tti_speedup', 0):.2f}x`** |"
+            f"`{fmt_ms_pair(lf.get('fork_rpc_ms'))} ms` / `{_med(lf, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"拷贝同步 `{_med(lc, 'copy_sync_ms'):.2f} ms` / TTI `{_med(lc, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"**RPC 快 `{_as_num(lcomp.get('fork_rpc_vs_copy_sync_speedup')):.2f}x` · TTI 快 `{_as_num(lcomp.get('end_to_end_tti_speedup')):.2f}x`** |"
         )
         lines.append(
             f"| **Suite 1 (`large_1gib` · 物理增量)** | 单次分叉服务端新增物理落盘 (`du -sb`) | "
             f"`{fmt_bytes_human(lf.get('physical_delta_bytes_on_fork'))}` | "
             f"整盘拷贝新增 `{fmt_bytes_human(lc.get('physical_delta_bytes_on_copy'))}` | "
-            f"**节省 `{fmt_bytes_human(lcomp.get('physical_bytes_saved_bytes'))}` (`{lcomp.get('physical_bytes_ratio_copy_over_fork', 0):.1f}x`)** |"
+            f"**节省 `{fmt_bytes_human(lcomp.get('physical_bytes_saved_bytes'))}` (`{_as_num(lcomp.get('physical_bytes_ratio_copy_over_fork')):.1f}x`)** |"
         )
     if tree_p:
-        tf = tree_p.get("bowl_fork", {})
-        tc = tree_p.get("bowl_copy", {})
-        tcomp = tree_p.get("comparison", {})
+        tf = _as_dict(tree_p.get("bowl_fork"))
+        tc = _as_dict(tree_p.get("bowl_copy"))
+        tcomp = _as_dict(tree_p.get("comparison"))
         lines.append(
             f"| **Suite 1 (`tree_5k` · 5,000 小文件)** | `ForkDisk` RPC 中位数 (`P95`) / 端到端可用 TTI | "
-            f"`{fmt_ms_pair(tf.get('fork_rpc_ms'))} ms` / `{tf.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"拷贝同步 `{tc.get('copy_sync_ms', {}).get('median', 0):.2f} ms` / TTI `{tc.get('end_to_end_tti_ms', {}).get('median', 0):.2f} ms` | "
-            f"**RPC 快 `{tcomp.get('fork_rpc_vs_copy_sync_speedup', 0):.2f}x` · TTI 快 `{tcomp.get('end_to_end_tti_speedup', 0):.2f}x`** |"
+            f"`{fmt_ms_pair(tf.get('fork_rpc_ms'))} ms` / `{_med(tf, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"拷贝同步 `{_med(tc, 'copy_sync_ms'):.2f} ms` / TTI `{_med(tc, 'end_to_end_tti_ms'):.2f} ms` | "
+            f"**RPC 快 `{_as_num(tcomp.get('fork_rpc_vs_copy_sync_speedup')):.2f}x` · TTI 快 `{_as_num(tcomp.get('end_to_end_tti_speedup')):.2f}x`** |"
         )
     if s2:
-        ws = s2.get("writer_summary", {})
+        ws = _as_dict(s2.get("writer_summary"))
         lines.append(
             f"| **Suite 2 (并发写在线分叉 ×10)** | 父盘持续写吞吐 / 在线 `ForkDisk` 中位数 (`P95`) | "
-            f"`{ws.get('aggregate_throughput_mib_s', 0):.2f} MiB/s` / `{fmt_ms_pair(s2.get('online_fork_rpc_ms'))} ms` | "
+            f"`{_as_num(ws.get('aggregate_throughput_mib_s')):.2f} MiB/s` / `{fmt_ms_pair(s2.get('online_fork_rpc_ms'))} ms` | "
             f"写错误 `0` 次 · 16 MiB 孤儿句柄保持打开 | "
-            f"**`{s2.get('online_fork_count', 0)}/10` 子盘 SHA-256 全绿且孤儿 100% 清洗** |"
+            f"**`{_as_int(s2.get('online_fork_count'))}/10` 子盘 SHA-256 全绿且孤儿 100% 清洗** |"
         )
     if s3_ck:
-        ck_cow = s3_ck.get("after_concurrent_cow_writes", {})
-        ck_surv = s3_ck.get("after_15_children_delete_sole_survivor", {})
+        ck_cow = _as_dict(s3_ck.get("after_concurrent_cow_writes"))
+        ck_surv = _as_dict(s3_ck.get("after_15_children_delete_sole_survivor"))
         lines.append(
             f"| **Suite 3 (`1 -> 16` 扇出 + CoW)** | 17 盘总逻辑容量 vs 服务端 `du -sb` 物理占用 | "
             f"`{fmt_bytes_human(ck_cow.get('du_sb_bytes'))}` (物理) | "
             f"`{fmt_bytes_human(ck_cow.get('logical_bytes'))}` (逻辑总容量) | "
-            f"**相对唯一数据空间放大 `{ck_cow.get('space_amplification_vs_unique', 0):.3f}x` · 节省 `{ck_cow.get('physical_savings_pct', 0):.1f}%`** |"
+            f"**相对唯一数据空间放大 `{_as_num(ck_cow.get('space_amplification_vs_unique')):.3f}x` · 节省 `{_as_num(ck_cow.get('physical_savings_pct')):.1f}%`** |"
         )
         lines.append(
             f"| **Suite 3 (父盘+15 子盘销毁 GC)** | 唯一幸存子盘保留时 `commits/` 残留与 `.pack` `st_nlink` | "
-            f"`commits={ck_surv.get('commits_dir_count', -1)}` · `st_nlink={ck_surv.get('survivor_pack_max_nlink', -1)}` | "
+            f"`commits={_as_int(ck_surv.get('commits_dir_count'), -1)}` · `st_nlink={_as_int(ck_surv.get('survivor_pack_max_nlink'), -1)}` | "
             f"预期 `commits == 0` 且全部 `.pack` `st_nlink == 1` | "
             f"**血统提交 100% 自动回收且幸存盘全量 SHA-256 通过** |"
         )
@@ -296,21 +336,21 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| 方案 / 口径 | 分叉耗时 `forkFromLive` (ms) | 首次校验读 `firstRead` (ms) | ComputeSDK 综合得分 | 架构层级与边界说明 |")
     lines.append("| :--- | ---: | ---: | ---: | :--- |")
     if small_p:
-        sf = small_p.get("bowl_fork", {})
-        sc = small_p.get("bowl_copy", {})
+        sf = _as_dict(small_p.get("bowl_fork"))
+        sc = _as_dict(small_p.get("bowl_copy"))
         lines.append(
-            f"| **Bowl `bowl_fork` (ConnectRPC 口径)** | `{sf.get('fork_rpc_ms', {}).get('median', 0):.2f}` | "
-            f"`{sf.get('cold_first_read_ms', {}).get('median', 0):.2f}` | **`{sf.get('computesdk_score_rpc', 0):.2f}`** | "
+            f"| **Bowl `bowl_fork` (ConnectRPC 口径)** | `{_med(sf, 'fork_rpc_ms'):.2f}` | "
+            f"`{_med(sf, 'cold_first_read_ms'):.2f}` | **`{_as_num(sf.get('computesdk_score_rpc')):.2f}`** | "
             "同 VPC 双机 POSIX 存储控制面单步在线分叉 + 双端 `drop_caches` 后 FUSE 冷首读 SHA-256 校验 |"
         )
         lines.append(
-            f"| **Bowl `bowl_fork` (含 FUSE 挂载就绪口径)** | `{sf.get('fork_plus_mount_ms', {}).get('median', 0):.2f}` | "
-            f"`{sf.get('cold_first_read_ms', {}).get('median', 0):.2f}` | **`{sf.get('computesdk_score_with_mount', 0):.2f}`** | "
+            f"| **Bowl `bowl_fork` (含 FUSE 挂载就绪口径)** | `{_med(sf, 'fork_plus_mount_ms'):.2f}` | "
+            f"`{_med(sf, 'cold_first_read_ms'):.2f}` | **`{_as_num(sf.get('computesdk_score_with_mount')):.2f}`** | "
             "包含 `ForkDisk` RPC + 客户端 `bowl mount` 守护进程拉起与 `MountDisk` 握手 + 双端清缓存冷首读 |"
         )
         lines.append(
-            f"| **Bowl `bowl_copy` (同机全量拷贝基线)** | `{sc.get('provision_plus_copy_ms', {}).get('median', 0):.2f}` | "
-            f"`{sc.get('cold_first_read_ms', {}).get('median', 0):.2f}` | `{sc.get('computesdk_score', 0):.2f}` | "
+            f"| **Bowl `bowl_copy` (同机全量拷贝基线)** | `{_med(sc, 'provision_plus_copy_ms'):.2f}` | "
+            f"`{_med(sc, 'cold_first_read_ms'):.2f}` | `{_as_num(sc.get('computesdk_score')):.2f}` | "
             "同 VPC 双机 `CreateDisk` + `bowl mount` + 多线程全量文件拷贝与 `fsync` 基线 |"
         )
     for ref in COMPUTESDK_PUBLISHED_SMALL_REF:
@@ -333,7 +373,7 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append(f"| **CPU 型号** | {srv.get('cpu_model', '')} | {cli.get('cpu_model', '')} |")
     lines.append(f"| **操作系统与内核** | {srv.get('os_release', '')} (`{srv.get('kernel', '')}`) | {cli.get('os_release', '')} (`{cli.get('kernel', '')}`) |")
     lines.append(f"| **本地数据盘规格** | `{cloud.get('data_disk_category', 'local_ssd_pro (NVMe)')}` `{srv.get('data_disk_size_gib', '')} GiB` (`{srv.get('data_disk_device', '')}`) | `{cloud.get('data_disk_category', 'local_ssd_pro (NVMe)')}` `{cli.get('data_disk_size_gib', '')} GiB` (`{cli.get('data_disk_device', '')}`) |")
-    lines.append(f"| **部署编排与数据库** | `{bowl_cfg.get('deploy_profile', 'systemd')}` · `{srv.get('bowl_pg_version', srv.get('pg_version', ''))}` | `{cli.get('fusermount_version', '')}` · `{cli.get('python_version', '')}` |")
+    lines.append(f"| **部署编排与数据库** | `{bowl_cfg.get('deploy_profile') or 'systemd'}` · `{srv.get('bowl_pg_version') or srv.get('pg_version') or ''}` | `{cli.get('fusermount_version') or ''}` · `{cli.get('python_version') or ''}` |")
     lines.append(f"| **可观测性栈** | `{bowl_cfg.get('observability_stack', 'n/a')}` | `bowl stats (:9567)` + OTLP Trace + Prometheus Metrics |")
     lines.append(f"| **VPC 私网基线** | `ping` RTT: `{net.get('ping_rtt_ms', '')}` | `iperf3` 单流带宽: `{net.get('iperf3_gbps', '')} Gbps` |")
     lines.append(
@@ -360,17 +400,17 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| 数据集预设 | 规模 (`文件数 × 大小`) | 源盘写入 `seed_ms` | `ForkDisk` RPC (`ms`) | `bowl disk fork` CLI P50 (`ms`) | `bowl mount` 就绪 (`ms`) | 双端清缓存首读 (`ms`) | 端到端可用 TTI (`ms`) | 卸载+删盘 (`ms`) | 全量 SHA-256 校验 | ComputeSDK 得分 (RPC / 含挂载) |")
     lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :---: | ---: |")
     for pname in preset_order:
-        p = presets.get(pname)
+        p = _as_dict(presets.get(pname))
         if not p:
             continue
-        bf = p.get("bowl_fork", {})
+        bf = _as_dict(p.get("bowl_fork"))
         lines.append(
-            f"| `{pname}` | {p.get('label', '')} (`{p.get('dataset_mib', 0):.1f} MiB`) | "
-            f"`{p.get('seed_ms', 0):.1f}` | `{fmt_ms_triple(bf.get('fork_rpc_ms'))}` | "
-            f"`{bf.get('fork_cli_ms', {}).get('median', 0):.2f}` | `{fmt_ms_triple(bf.get('mount_ready_ms'))}` | "
+            f"| `{pname}` | {p.get('label', '')} (`{_as_num(p.get('dataset_mib')):.1f} MiB`) | "
+            f"`{_as_num(p.get('seed_ms')):.1f}` | `{fmt_ms_triple(bf.get('fork_rpc_ms'))}` | "
+            f"`{_med(bf, 'fork_cli_ms'):.2f}` | `{fmt_ms_triple(bf.get('mount_ready_ms'))}` | "
             f"`{fmt_ms_triple(bf.get('cold_first_read_ms'))}` | `{fmt_ms_triple(bf.get('end_to_end_tti_ms'))}` | "
-            f"`{fmt_ms_triple(bf.get('delete_ms'))}` | `{bf.get('verified_count', 0)}/{bf.get('iterations', 0)}` | "
-            f"**`{bf.get('computesdk_score_rpc', 0):.2f}`** / `{bf.get('computesdk_score_with_mount', 0):.2f}` |"
+            f"`{fmt_ms_triple(bf.get('delete_ms'))}` | `{_as_int(bf.get('verified_count'))}/{_as_int(bf.get('iterations'))}` | "
+            f"**`{_as_num(bf.get('computesdk_score_rpc')):.2f}`** / `{_as_num(bf.get('computesdk_score_with_mount')):.2f}` |"
         )
     lines.append("")
 
@@ -379,19 +419,19 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| 数据集预设 | `bowl_copy` 拷贝+`fsync` P50 (`ms`) | `bowl_copy` 端到端 TTI P50 (`ms`) | `bowl_fork` 端到端 TTI P50 (`ms`) | 纯分叉 RPC vs 拷贝加速比 | 含挂载分叉 vs 建盘拷贝加速比 | 端到端 TTI 加速比 | 分叉新增物理字节 (`du -sb`) | 拷贝新增物理字节 (`du -sb`) |")
     lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for pname in preset_order:
-        p = presets.get(pname)
+        p = _as_dict(presets.get(pname))
         if not p:
             continue
-        bf = p.get("bowl_fork", {})
-        bc = p.get("bowl_copy", {})
-        comp = p.get("comparison", {})
+        bf = _as_dict(p.get("bowl_fork"))
+        bc = _as_dict(p.get("bowl_copy"))
+        comp = _as_dict(p.get("comparison"))
         lines.append(
-            f"| `{pname}` | `{bc.get('copy_sync_ms', {}).get('median', 0):.2f}` | "
-            f"`{bc.get('end_to_end_tti_ms', {}).get('median', 0):.2f}` | "
-            f"`{bf.get('end_to_end_tti_ms', {}).get('median', 0):.2f}` | "
-            f"**`{comp.get('fork_rpc_vs_copy_sync_speedup', 0):.2f}x`** | "
-            f"**`{comp.get('fork_mount_vs_provision_copy_speedup', 0):.2f}x`** | "
-            f"**`{comp.get('end_to_end_tti_speedup', 0):.2f}x`** | "
+            f"| `{pname}` | `{_med(bc, 'copy_sync_ms'):.2f}` | "
+            f"`{_med(bc, 'end_to_end_tti_ms'):.2f}` | "
+            f"`{_med(bf, 'end_to_end_tti_ms'):.2f}` | "
+            f"**`{_as_num(comp.get('fork_rpc_vs_copy_sync_speedup')):.2f}x`** | "
+            f"**`{_as_num(comp.get('fork_mount_vs_provision_copy_speedup')):.2f}x`** | "
+            f"**`{_as_num(comp.get('end_to_end_tti_speedup')):.2f}x`** | "
             f"`{fmt_bytes_human(bf.get('physical_delta_bytes_on_fork'))}` | "
             f"`{fmt_bytes_human(bc.get('physical_delta_bytes_on_copy'))}` |"
         )
@@ -408,28 +448,28 @@ def render_report(summary: dict[str, Any]) -> str:
     )
     lines.append("")
     if s2:
-        ws = s2.get("writer_summary", {})
-        sb_pre = ws.get("stream_4mib_before_fork_ms", {})
-        sb_dur = ws.get("stream_4mib_during_fork_ms", {})
-        sm_pre = ws.get("small_4kib_before_fork_ms", {})
-        sm_dur = ws.get("small_4kib_during_fork_ms", {})
+        ws = _as_dict(s2.get("writer_summary"))
+        sb_pre = _as_dict(ws.get("stream_4mib_before_fork_ms"))
+        sb_dur = _as_dict(ws.get("stream_4mib_during_fork_ms"))
+        sm_pre = _as_dict(ws.get("small_4kib_before_fork_ms"))
+        sm_dur = _as_dict(ws.get("small_4kib_during_fork_ms"))
 
         lines.append("### 4.1 父盘并发写入吞吐、写延迟对比与孤儿回收审计")
         lines.append("")
         lines.append("| 观测项 | 分叉前稳态窗口 (`Before Fork`) | 连续 10 次在线分叉窗口 (`During Fork`) | 全程汇总 / 核验结论 |")
         lines.append("| :--- | ---: | ---: | :--- |")
         lines.append(
-            f"| **4 MiB 顺序写+`fsync` 延迟 (`Median / P95 / P99`)** | `{fmt_ms_triple(sb_pre)} ms` (`n={sb_pre.get('count', 0)}`) | "
-            f"`{fmt_ms_triple(sb_dur)} ms` (`n={sb_dur.get('count', 0)}`) | 全程完成 `{ws.get('stream_4mib_ops', 0)}` 次 · 写错误 `{s2.get('writer_errors', 0)}` 次 |"
+            f"| **4 MiB 顺序写+`fsync` 延迟 (`Median / P95 / P99`)** | `{fmt_ms_triple(sb_pre)} ms` (`n={_as_int(sb_pre.get('count'))}`) | "
+            f"`{fmt_ms_triple(sb_dur)} ms` (`n={_as_int(sb_dur.get('count'))}`) | 全程完成 `{_as_int(ws.get('stream_4mib_ops'))}` 次 · 写错误 `{_as_int(s2.get('writer_errors'))}` 次 |"
         )
         lines.append(
-            f"| **4 KiB 小文件写+`fsync` 延迟 (`Median / P95 / P99`)** | `{fmt_ms_triple(sm_pre)} ms` (`n={sm_pre.get('count', 0)}`) | "
-            f"`{fmt_ms_triple(sm_dur)} ms` (`n={sm_dur.get('count', 0)}`) | 全程完成 `{ws.get('small_4kib_ops', 0)}` 次 (`{ws.get('small_4kib_ops_per_sec', 0):.1f} ops/s`) |"
+            f"| **4 KiB 小文件写+`fsync` 延迟 (`Median / P95 / P99`)** | `{fmt_ms_triple(sm_pre)} ms` (`n={_as_int(sm_pre.get('count'))}`) | "
+            f"`{fmt_ms_triple(sm_dur)} ms` (`n={_as_int(sm_dur.get('count'))}`) | 全程完成 `{_as_int(ws.get('small_4kib_ops'))}` 次 (`{_as_num(ws.get('small_4kib_ops_per_sec')):.1f} ops/s`) |"
         )
         lines.append(
             f"| **父盘聚合写入吞吐与孤儿句柄回收** | 初始含孤儿占用 `{fmt_bytes_human(s2.get('parent_used_bytes_after_seed_and_orphans'))}` | "
             f"在线 `ForkDisk` RPC `{fmt_ms_triple(s2.get('online_fork_rpc_ms'))} ms` | "
-            f"聚合写吞吐 **`{ws.get('aggregate_throughput_mib_s', 0):.2f} MiB/s`** · 关句柄后父盘精确回收 **`{fmt_bytes_human(s2.get('parent_reclaimed_orphan_bytes_on_close'))}`** |"
+            f"聚合写吞吐 **`{_as_num(ws.get('aggregate_throughput_mib_s')):.2f} MiB/s`** · 关句柄后父盘精确回收 **`{fmt_bytes_human(s2.get('parent_reclaimed_orphan_bytes_on_close'))}`** |"
         )
         lines.append("")
 
@@ -437,13 +477,14 @@ def render_report(summary: dict[str, Any]) -> str:
         lines.append("")
         lines.append("| 分叉序号 | `ForkDisk` RPC (`ms`) | 子盘 `used_bytes` | 子盘可见常规文件字节和 | 子盘残留孤儿字节 | 已清洗孤儿字节 | 基线文件 SHA-256 | 并发 4K 文件自校验数 | 损坏/撕裂文件数 |")
         lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | :---: | ---: | ---: |")
-        for row in s2.get("online_forks", []):
+        for raw_row in s2.get("online_forks") or []:
+            row = _as_dict(raw_row)
             lines.append(
-                f"| `fork_{row.get('fork_index', 0):02d}` | `{row.get('fork_rpc_ms', 0):.2f}` | "
-                f"`{row.get('child_used_bytes', 0):,}` | `{row.get('child_live_visible_bytes', 0):,}` | "
-                f"`{row.get('orphan_bytes_in_child', -1)}` | `{fmt_bytes_human(row.get('sanitized_orphan_bytes'))}` | "
-                f"`{row.get('committed_files_verified', 0)}/32` | `{row.get('small_files_verified', 0)}` | "
-                f"`{row.get('corrupted_files', -1)}` |"
+                f"| `fork_{_as_int(row.get('fork_index')):02d}` | `{_as_num(row.get('fork_rpc_ms')):.2f}` | "
+                f"`{_as_int(row.get('child_used_bytes')):,}` | `{_as_int(row.get('child_live_visible_bytes')):,}` | "
+                f"`{_as_int(row.get('orphan_bytes_in_child'), -1)}` | `{fmt_bytes_human(row.get('sanitized_orphan_bytes'))}` | "
+                f"`{_as_int(row.get('committed_files_verified'))}/32` | `{_as_int(row.get('small_files_verified'))}` | "
+                f"`{_as_int(row.get('corrupted_files'), -1)}` |"
             )
         lines.append("")
 
@@ -459,58 +500,58 @@ def render_report(summary: dict[str, Any]) -> str:
     )
     lines.append("")
     if s3_ck:
-        ck_seed = s3_ck.get("after_parent_seed", {})
-        ck_f16 = s3_ck.get("after_16_forks", {})
-        ck_cow = s3_ck.get("after_concurrent_cow_writes", {})
-        ck_pdel = s3_ck.get("after_parent_delete", {})
-        ck_surv = s3_ck.get("after_15_children_delete_sole_survivor", {})
+        ck_seed = _as_dict(s3_ck.get("after_parent_seed"))
+        ck_f16 = _as_dict(s3_ck.get("after_16_forks"))
+        ck_cow = _as_dict(s3_ck.get("after_concurrent_cow_writes"))
+        ck_pdel = _as_dict(s3_ck.get("after_parent_delete"))
+        ck_surv = _as_dict(s3_ck.get("after_15_children_delete_sole_survivor"))
 
         lines.append("| 生命周期阶段 | 活跃逻辑总容量 | 服务端 `du -sb` 物理占用 | `commits/` 目录数 | 共享 `.pack` `st_nlink` | 一致性与隔离核验结果 |")
         lines.append("| :--- | ---: | ---: | ---: | ---: | :--- |")
         lines.append(
             f"| **1. 父盘写入 `1 GiB` (`16 × 64 MiB`)** | `{fmt_bytes_human(ck_seed.get('logical_bytes'))}` | "
-            f"`{fmt_bytes_human(ck_seed.get('du_sb_bytes'))}` | `{ck_seed.get('commits_dir_count', 0)}` | "
-            f"`{ck_seed.get('parent_pack_max_nlink', 0)}` | 源盘 `{ck_seed.get('parent_pack_count', 0)}` 个 `.pack` 封包落盘 (`seed={s3.get('parent_seed_ms', 0):.1f} ms`) |"
+            f"`{fmt_bytes_human(ck_seed.get('du_sb_bytes'))}` | `{_as_int(ck_seed.get('commits_dir_count'))}` | "
+            f"`{_as_int(ck_seed.get('parent_pack_max_nlink'))}` | 源盘 `{_as_int(ck_seed.get('parent_pack_count'))}` 个 `.pack` 封包落盘 (`seed={_as_num(s3.get('parent_seed_ms')):.1f} ms`) |"
         )
         lines.append(
             f"| **2. 扇出分叉 `16` 个子盘 (`17 GiB` 逻辑)** | `{fmt_bytes_human(ck_f16.get('logical_bytes'))}` | "
-            f"`{fmt_bytes_human(ck_f16.get('du_sb_bytes'))}` | `{ck_f16.get('commits_dir_count', 0)}` | "
-            f"`{ck_f16.get('shared_pack_max_nlink', 0)}` | 16 次分叉总耗时 `{s3.get('fanout_fork_total_ms', 0):.2f} ms` (P50 `{s3.get('fanout_fork_rpc_ms', {}).get('median', 0):.2f} ms`) · 逻辑/物理比 `{ck_f16.get('logical_to_physical_ratio', 0):.2f}x` |"
+            f"`{fmt_bytes_human(ck_f16.get('du_sb_bytes'))}` | `{_as_int(ck_f16.get('commits_dir_count'))}` | "
+            f"`{_as_int(ck_f16.get('shared_pack_max_nlink'))}` | 16 次分叉总耗时 `{_as_num(s3.get('fanout_fork_total_ms')):.2f} ms` (P50 `{_med(s3, 'fanout_fork_rpc_ms'):.2f} ms`) · 逻辑/物理比 `{_as_num(ck_f16.get('logical_to_physical_ratio')):.2f}x` |"
         )
         lines.append(
             f"| **3. 16 子盘并发挂载读 + 各写 `4 MiB` 增量** | `{fmt_bytes_human(ck_cow.get('logical_bytes'))}` | "
-            f"`{fmt_bytes_human(ck_cow.get('du_sb_bytes'))}` | `{ck_cow.get('commits_dir_count', 0)}` | "
-            f"`{ck_cow.get('shared_pack_max_nlink', 0)}` (增量包 `{ck_cow.get('delta_pack_nlink', 0)}`) | 相对唯一数据空间放大 **`{ck_cow.get('space_amplification_vs_unique', 0):.3f}x`** · 父子与兄弟间私有文件 100% 不可见 |"
+            f"`{fmt_bytes_human(ck_cow.get('du_sb_bytes'))}` | `{_as_int(ck_cow.get('commits_dir_count'))}` | "
+            f"`{_as_int(ck_cow.get('shared_pack_max_nlink'))}` (增量包 `{_as_int(ck_cow.get('delta_pack_nlink'))}`) | 相对唯一数据空间放大 **`{_as_num(ck_cow.get('space_amplification_vs_unique')):.3f}x`** · 父子与兄弟间私有文件 100% 不可见 |"
         )
         lines.append(
             f"| **4. 销毁父盘后双端清缓存冷读核验** | `{fmt_bytes_human(ck_pdel.get('logical_bytes'))}` | "
-            f"`{fmt_bytes_human(ck_pdel.get('du_sb_bytes'))}` | `{ck_pdel.get('commits_dir_count', 0)}` | "
-            f"`{ck_pdel.get('shared_pack_max_nlink', 0)}` | 全部 `{ck_pdel.get('children_verified', 0)}/16` 个子盘共享数据与私有增量冷读 SHA-256 100% 通过 |"
+            f"`{fmt_bytes_human(ck_pdel.get('du_sb_bytes'))}` | `{_as_int(ck_pdel.get('commits_dir_count'))}` | "
+            f"`{_as_int(ck_pdel.get('shared_pack_max_nlink'))}` | 全部 `{_as_int(ck_pdel.get('children_verified'))}/16` 个子盘共享数据与私有增量冷读 SHA-256 100% 通过 |"
         )
         lines.append(
             f"| **5. 再销毁 15 个子盘保留唯一幸存盘** | `{fmt_bytes_human(ck_surv.get('logical_bytes'))}` | "
-            f"`{fmt_bytes_human(ck_surv.get('du_sb_bytes'))}` | **`{ck_surv.get('commits_dir_count', -1)}`** | "
-            f"**`{ck_surv.get('survivor_pack_min_nlink', -1)}..{ck_surv.get('survivor_pack_max_nlink', -1)}`** | `commits/` 归零回收 · 幸存盘全部 `{ck_surv.get('survivor_pack_count', 0)}` 个 `.pack` `st_nlink == 1` 且全量冷读 SHA-256 通过 |"
+            f"`{fmt_bytes_human(ck_surv.get('du_sb_bytes'))}` | **`{_as_int(ck_surv.get('commits_dir_count'), -1)}`** | "
+            f"**`{_as_int(ck_surv.get('survivor_pack_min_nlink'), -1)}..{_as_int(ck_surv.get('survivor_pack_max_nlink'), -1)}`** | `commits/` 归零回收 · 幸存盘全部 `{_as_int(ck_surv.get('survivor_pack_count'))}` 个 `.pack` `st_nlink == 1` 且全量冷读 SHA-256 通过 |"
         )
         lines.append("")
 
     # Section 6: Observations & Boundaries
     lines.extend(["---", "", "## 6. 本轮观测与比较边界", ""])
     if small_p and large_p:
-        s_rpc = small_p.get("bowl_fork", {}).get("fork_rpc_ms", {}).get("median", 0.0)
-        l_rpc = large_p.get("bowl_fork", {}).get("fork_rpc_ms", {}).get("median", 0.0)
+        s_rpc = _med(_as_dict(small_p.get("bowl_fork")), "fork_rpc_ms")
+        l_rpc = _med(_as_dict(large_p.get("bowl_fork")), "fork_rpc_ms")
         lines.append(
             f"- **$O(1)$ 容量无关性实证**：数据集从 `small`（`10 MiB`）增长 `102.4` 倍至 `large_1gib`（`1,024 MiB`），"
             f"`ForkDisk` ConnectRPC 中位数延迟由 `{s_rpc:.2f} ms` 变为 `{l_rpc:.2f} ms`，而同机 `bowl_copy` 拷贝同步耗时由 "
-            f"`{small_p.get('bowl_copy', {}).get('copy_sync_ms', {}).get('median', 0):.2f} ms` 线性增长至 "
-            f"`{large_p.get('bowl_copy', {}).get('copy_sync_ms', {}).get('median', 0):.2f} ms`。"
+            f"`{_med(_as_dict(small_p.get('bowl_copy')), 'copy_sync_ms'):.2f} ms` 线性增长至 "
+            f"`{_med(_as_dict(large_p.get('bowl_copy')), 'copy_sync_ms'):.2f} ms`。"
         )
     if tree_p:
-        t_rpc = tree_p.get("bowl_fork", {}).get("fork_rpc_ms", {}).get("median", 0.0)
-        t_copy = tree_p.get("bowl_copy", {}).get("copy_sync_ms", {}).get("median", 0.0)
+        t_rpc = _med(_as_dict(tree_p.get("bowl_fork")), "fork_rpc_ms")
+        t_copy = _med(_as_dict(tree_p.get("bowl_copy")), "copy_sync_ms")
         lines.append(
             f"- **高密度目录与小文件元数据场景（`tree_5k`）**：面对 50 个子目录共 `5,000` 个 `4 KiB` 小文件，逐文件创建的 `bowl_copy` 需要 `{t_copy:.2f} ms`，"
-            f"而直接硬链接底层 Pebble SST 树与 `.pack` 文件的 `bowl_fork` 仅需 `{t_rpc:.2f} ms`（纯分叉加速 `{tree_p.get('comparison', {}).get('fork_rpc_vs_copy_sync_speedup', 0):.2f}x`）。"
+            f"而直接硬链接底层 Pebble SST 树与 `.pack` 文件的 `bowl_fork` 仅需 `{t_rpc:.2f} ms`（纯分叉加速 `{_as_num(_as_dict(tree_p.get('comparison')).get('fork_rpc_vs_copy_sync_speedup')):.2f}x`）。"
         )
     lines.append(
         "- **冷缓存定义边界**：每轮冷首读前在 Client 与 Server 双端执行 `sync && echo 3 > /proc/sys/vm/drop_caches` 清空双端内核页缓存、目录项与 Inode 缓存，但不重启 `storage-service` 容器进程（保留服务端进程内 128 MiB Pebble BlockCache 与 64 MiB 尾块缓存）。对于超过 64 MiB 的 `wide`、`deep`、`large_1gib` 场景，数据读取穿透至本地 NVMe SSD。"

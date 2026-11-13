@@ -112,10 +112,15 @@ def parse_juicefs_bench(log_path: Path) -> dict[str, dict[str, Any]]:
         m = row_re.search(line)
         if m:
             item = m.group(1)
+            try:
+                val = float(m.group(2))
+                cost = float(m.group(4))
+            except ValueError:
+                continue
             results[item] = {
-                "value": float(m.group(2)),
+                "value": val,
                 "value_unit": m.group(3),
-                "cost": float(m.group(4)),
+                "cost": cost,
                 "cost_unit": m.group(5),
             }
     return results
@@ -130,35 +135,45 @@ def parse_fio_json(json_path: Path, direction: str) -> dict[str, Any]:
     end = raw.rfind("}")
     if start == -1 or end == -1 or end <= start:
         return {}
-    data = json.loads(raw[start : end + 1])
-    jobs = data.get("jobs", [])
+    try:
+        data = json.loads(raw[start : end + 1])
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    jobs = data.get("jobs") or []
     if not jobs:
         return {}
     # fio 即使失败也输出吞吐；错误结果不能进入成功指标表。
-    if any(job.get("error", 0) != 0 for job in jobs):
+    if any((job or {}).get("error", 0) != 0 for job in jobs):
         return {}
-    job = jobs[0]
-    stat = job.get(direction, {})
-    bw_bytes = float(stat.get("bw_bytes", stat.get("bw", 0) * 1024))
+    job = jobs[0] or {}
+    stat = job.get(direction)
+    if not isinstance(stat, dict) or not stat:
+        return {}
+    bw_val = stat.get("bw_bytes")
+    if bw_val is None:
+        bw_val = (stat.get("bw") or 0) * 1024
+    bw_bytes = float(bw_val)
     bw_mib_s = round(bw_bytes / (1024.0 * 1024.0), 2)
-    iops = round(float(stat.get("iops", 0.0)), 2)
-    runtime_ms = int(stat.get("runtime", job.get("job_runtime", 0)))
-    io_bytes = int(stat.get("io_bytes", 0))
+    iops = round(float(stat.get("iops") or 0.0), 2)
+    runtime_ms = int(stat.get("runtime") if stat.get("runtime") is not None else (job.get("job_runtime") or 0))
+    io_bytes = int(stat.get("io_bytes") or 0)
 
     lat_ns = stat.get("lat_ns") or {}
     slat_ns = stat.get("slat_ns") or {}
     clat_ns = stat.get("clat_ns") or {}
 
-    slat_mean = float(slat_ns.get("mean", 0.0))
-    clat_mean = float(clat_ns.get("mean", 0.0))
-    lat_mean = float(lat_ns.get("mean", 0.0))
+    slat_mean = float(slat_ns.get("mean") or 0.0)
+    clat_mean = float(clat_ns.get("mean") or 0.0)
+    lat_mean = float(lat_ns.get("mean") or 0.0)
     total_mean_ns = lat_mean if lat_mean > 0 else (slat_mean + clat_mean)
     mean_ms = round(total_mean_ns / 1e6, 3)
 
     lat_pct = lat_ns.get("percentile") or {}
     if lat_pct:
-        p95_ms = round(float(lat_pct["95.000000"]) / 1e6, 3) if "95.000000" in lat_pct else None
-        p99_ms = round(float(lat_pct["99.000000"]) / 1e6, 3) if "99.000000" in lat_pct else None
+        p95_ms = round(float(lat_pct["95.000000"]) / 1e6, 3) if lat_pct.get("95.000000") is not None else None
+        p99_ms = round(float(lat_pct["99.000000"]) / 1e6, 3) if lat_pct.get("99.000000") is not None else None
     elif slat_mean > clat_mean:
         # 旧版 fio JSON 未开启 --lat_percentiles=1，且 libaio+direct=1 下真实耗时落在 slat_ns，
         # 严禁用微秒级 clat_ns 分位数冒充总延迟。
@@ -166,8 +181,8 @@ def parse_fio_json(json_path: Path, direction: str) -> dict[str, Any]:
         p99_ms = None
     else:
         clat_pct = clat_ns.get("percentile") or {}
-        p95_ms = round(float(clat_pct["95.000000"]) / 1e6, 3) if "95.000000" in clat_pct else None
-        p99_ms = round(float(clat_pct["99.000000"]) / 1e6, 3) if "99.000000" in clat_pct else None
+        p95_ms = round(float(clat_pct["95.000000"]) / 1e6, 3) if clat_pct.get("95.000000") is not None else None
+        p99_ms = round(float(clat_pct["99.000000"]) / 1e6, 3) if clat_pct.get("99.000000") is not None else None
 
     return {
         "bw_mib_s": bw_mib_s,
@@ -200,12 +215,15 @@ def parse_mdtest_log(log_path: Path) -> dict[str, Any]:
         m = op_re.match(line)
         if m:
             op_name = m.group(1)
-            ops[op_name] = {
-                "max": float(m.group(2)),
-                "min": float(m.group(3)),
-                "mean": float(m.group(4)),
-                "stddev": float(m.group(5)),
-            }
+            try:
+                ops[op_name] = {
+                    "max": float(m.group(2)),
+                    "min": float(m.group(3)),
+                    "mean": float(m.group(4)),
+                    "stddev": float(m.group(5)),
+                }
+            except ValueError:
+                continue
     return {
         "command": cmd_line,
         "scale": tasks_info,
@@ -220,9 +238,18 @@ def fmt_ratio(bowl_val: float | None, other_val: float | None) -> str:
     return f"{ratio:.2f}x"
 
 
+def _safe_load_json_dict(path: Path) -> dict[str, Any]:
+    if not path.exists() or path.stat().st_size == 0:
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def build_summary(results_dir: Path) -> dict[str, Any]:
-    env_meta_path = results_dir / "env_metadata.json"
-    env_meta = json.loads(env_meta_path.read_text(encoding="utf-8")) if env_meta_path.exists() else {}
+    env_meta = _safe_load_json_dict(results_dir / "env_metadata.json")
 
     bench_data: dict[str, Any] = {}
     fio_data: dict[str, dict[str, Any]] = {}
@@ -243,8 +270,14 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
     timings_path = results_dir / "stage_timings.jsonl"
     if timings_path.exists():
         for line in timings_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                stage_timings.append(json.loads(line))
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                stage_timings.append(row)
 
     out: dict[str, Any] = {
         "env_metadata": env_meta,
@@ -567,16 +600,16 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| :--- | ---: | ---: | ---: | ---: | ---: |")
 
     for item_name, val_unit, cost_unit in BENCH_ITEMS:
-        b_it = b_bench.get(item_name, {})
-        pg_it = pg_bench.get(item_name, {})
-        rd_it = rd_bench.get(item_name, {})
+        b_it = b_bench.get(item_name) or {}
+        pg_it = pg_bench.get(item_name) or {}
+        rd_it = rd_bench.get(item_name) or {}
         vb = b_it.get("value")
         vpg = pg_it.get("value")
         vrd = rd_it.get("value")
 
-        sb = f"{vb:.2f} {val_unit} ({b_it.get('cost', 0):.2f} {cost_unit})" if vb is not None else "—"
-        spg = f"{vpg:.2f} {val_unit} ({pg_it.get('cost', 0):.2f} {cost_unit})" if vpg is not None else "—"
-        srd = f"{vrd:.2f} {val_unit} ({rd_it.get('cost', 0):.2f} {cost_unit})" if vrd is not None else "—"
+        sb = f"{vb:.2f} {val_unit} ({b_it.get('cost') or 0:.2f} {cost_unit})" if vb is not None else "—"
+        spg = f"{vpg:.2f} {val_unit} ({pg_it.get('cost') or 0:.2f} {cost_unit})" if vpg is not None else "—"
+        srd = f"{vrd:.2f} {val_unit} ({rd_it.get('cost') or 0:.2f} {cost_unit})" if vrd is not None else "—"
         lines.append(
             f"| **{item_name}** | `{sb}` | `{spg}` | `{srd}` | **{fmt_ratio(vb, vpg)}** | **{fmt_ratio(vb, vrd)}** |"
         )
@@ -593,17 +626,17 @@ def render_report(summary: dict[str, Any]) -> str:
     lines.append("| :--- | :--- | ---: | ---: | ---: | ---: | ---: |")
 
     for case_key, case_label, _, case_desc in FIO_CASES:
-        fb = b_fio.get(case_key, {})
-        fpg = pg_fio.get(case_key, {})
-        frd = rd_fio.get(case_key, {})
+        fb = b_fio.get(case_key) or {}
+        fpg = pg_fio.get(case_key) or {}
+        frd = rd_fio.get(case_key) or {}
 
         bwb = fb.get("bw_mib_s")
         bwpg = fpg.get("bw_mib_s")
         bwrd = frd.get("bw_mib_s")
 
-        sb = f"{bwb:.2f} MiB/s ({fb.get('iops', 0):.1f} IOPS)" if bwb is not None else "—"
-        spg = f"{bwpg:.2f} MiB/s ({fpg.get('iops', 0):.1f} IOPS)" if bwpg is not None else "—"
-        srd = f"{bwrd:.2f} MiB/s ({frd.get('iops', 0):.1f} IOPS)" if bwrd is not None else "—"
+        sb = f"{bwb:.2f} MiB/s ({fb.get('iops') or 0:.1f} IOPS)" if bwb is not None else "—"
+        spg = f"{bwpg:.2f} MiB/s ({fpg.get('iops') or 0:.1f} IOPS)" if bwpg is not None else "—"
+        srd = f"{bwrd:.2f} MiB/s ({frd.get('iops') or 0:.1f} IOPS)" if bwrd is not None else "—"
 
         lines.append(
             f"| **{case_label}** | `{case_desc}` | `{sb}` | `{spg}` | `{srd}` | **{fmt_ratio(bwb, bwpg)}** | **{fmt_ratio(bwb, bwrd)}** |"

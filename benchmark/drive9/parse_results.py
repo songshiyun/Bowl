@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -71,33 +72,51 @@ def parse_juicefs_bench(log_path: Path) -> dict[str, dict[str, Any]]:
         m = row_re.search(line)
         if m:
             item = m.group(1)
+            try:
+                val = float(m.group(2))
+                cost = float(m.group(4))
+            except ValueError:
+                continue
             results[item] = {
-                "value": float(m.group(2)),
+                "value": val,
                 "value_unit": m.group(3),
-                "cost": float(m.group(4)),
+                "cost": cost,
                 "cost_unit": m.group(5),
             }
     return results
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
+    """安全加载 JSON 字典，空文件、畸形 JSON 或非字典对象返回空字典。"""
+    if not path.exists() or path.stat().st_size == 0:
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def fmt_throughput_ratio(bowl_val: float | None, other_val: float | None) -> str:
     """Format throughput ratio where higher is better (bowl / other)."""
-    if bowl_val is None or other_val is None or other_val <= 0:
+    if bowl_val is None or other_val is None:
         return "—"
-    return f"{bowl_val / other_val:.2f}x"
+    b_num = float(bowl_val)
+    o_num = float(other_val)
+    if not (math.isfinite(b_num) and math.isfinite(o_num)) or o_num <= 0:
+        return "—"
+    return f"{b_num / o_num:.2f}x"
 
 
 def fmt_latency_speedup(bowl_sec: float | None, other_sec: float | None) -> str:
     """Format latency speedup where lower is better (other_sec / bowl_sec)."""
-    if bowl_sec is None or other_sec is None or bowl_sec <= 0:
+    if bowl_sec is None or other_sec is None:
         return "—"
-    return f"{other_sec / bowl_sec:.2f}x"
+    b_num = float(bowl_sec)
+    o_num = float(other_sec)
+    if not (math.isfinite(b_num) and math.isfinite(o_num)) or b_num <= 0:
+        return "—"
+    return f"{o_num / b_num:.2f}x"
 
 
 def build_summary(results_dir: Path) -> dict[str, Any]:
@@ -116,8 +135,14 @@ def build_summary(results_dir: Path) -> dict[str, Any]:
     timings_path = results_dir / "stage_timings.jsonl"
     if timings_path.exists():
         for line in timings_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                stage_timings.append(json.loads(line))
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                stage_timings.append(row)
 
     out: dict[str, Any] = {
         "env_metadata": env_meta,
@@ -144,30 +169,30 @@ def render_report(summary: dict[str, Any]) -> str:
     d9_cfg = env.get("drive9_config", {})
     audit = env.get("cleanup_audit", {})
 
-    bench = summary.get("juicefs_bench", {})
-    d9_cold = summary.get("drive9_fuse_bench_cold", {}).get("targets", {})
-    d9_hot = summary.get("drive9_fuse_bench_hot", {}).get("targets", {})
-    pbase = summary.get("fuse_perf_baseline", {})
+    bench = summary.get("juicefs_bench") or {}
+    d9_cold = (summary.get("drive9_fuse_bench_cold") or {}).get("targets") or {}
+    d9_hot = (summary.get("drive9_fuse_bench_hot") or {}).get("targets") or {}
+    pbase = summary.get("fuse_perf_baseline") or {}
 
-    b_bench = bench.get("bowl", {})
-    d9d_bench = bench.get("drive9_default", {})
-    d9s_bench = bench.get("drive9_sync", {})
+    b_bench = bench.get("bowl") or {}
+    d9d_bench = bench.get("drive9_default") or {}
+    d9s_bench = bench.get("drive9_sync") or {}
 
     def get_bench_val(d: dict, k: str) -> float | None:
-        return d.get(k, {}).get("value")
+        return (d.get(k) or {}).get("value")
 
     def get_d9_median(targets_dict: dict, target_key: str, workload: str) -> float | None:
-        res = targets_dict.get(target_key, {}).get("results", {}).get(workload, {})
+        res = ((targets_dict.get(target_key) or {}).get("results") or {}).get(workload) or {}
         val = res.get("median")
         return float(val) if val is not None else None
 
     def get_d9_p95(targets_dict: dict, target_key: str, workload: str) -> float | None:
-        res = targets_dict.get(target_key, {}).get("results", {}).get(workload, {})
+        res = ((targets_dict.get(target_key) or {}).get("results") or {}).get(workload) or {}
         val = res.get("p95")
         return float(val) if val is not None else None
 
     def get_pbase_work(target_key: str, workload: str) -> dict[str, Any]:
-        return pbase.get(target_key, {}).get("workloads", {}).get(workload, {})
+        return ((pbase.get(target_key) or {}).get("workloads") or {}).get(workload) or {}
 
     lines: list[str] = []
     lines.append("# Bowl vs Drive9 (mem9-ai/drive9) — 阿里云硅谷双机内网性能基准测试报告")
@@ -446,9 +471,9 @@ def render_report(summary: dict[str, Any]) -> str:
         vd = d_it.get("value")
         vs = s_it.get("value")
 
-        sb = f"{vb:.2f} {val_unit} ({b_it.get('cost', 0):.2f} {cost_unit})" if vb is not None else "—"
-        sd = f"{vd:.2f} {val_unit} ({d_it.get('cost', 0):.2f} {cost_unit})" if vd is not None else "—"
-        ss = f"{vs:.2f} {val_unit} ({s_it.get('cost', 0):.2f} {cost_unit})" if vs is not None else "—"
+        sb = f"{vb:.2f} {val_unit} ({b_it.get('cost') or 0:.2f} {cost_unit})" if vb is not None else "—"
+        sd = f"{vd:.2f} {val_unit} ({d_it.get('cost') or 0:.2f} {cost_unit})" if vd is not None else "—"
+        ss = f"{vs:.2f} {val_unit} ({s_it.get('cost') or 0:.2f} {cost_unit})" if vs is not None else "—"
 
         lines.append(
             f"| **{item_name}** | `{sb}` | `{sd}` | `{ss}` | **{fmt_throughput_ratio(vb, vd)}** | **{fmt_throughput_ratio(vb, vs)}** |"
