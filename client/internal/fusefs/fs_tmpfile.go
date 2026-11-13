@@ -134,8 +134,12 @@ func (m *rawFSTmpMaterializer) LinkInode(ctx context.Context, serverIno, newPare
 
 // Tmpfile 创建只存在于客户端内存的匿名文件。
 func (fs *RawFS) Tmpfile(_ <-chan struct{}, input *fuse.CreateIn, out *fuse.CreateOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpTmpfile)
 	_, endSpan := fs.startFuseOp(OpTmpfile)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpTmpfile, start, status, 0)
+	}()
 
 	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
@@ -169,6 +173,9 @@ func (fs *RawFS) Tmpfile(_ <-chan struct{}, input *fuse.CreateIn, out *fuse.Crea
 
 // Forget 释放内核对具名匿名节点的引用。
 func (fs *RawFS) Forget(nodeID, nlookup uint64) {
+	start := fs.metrics.beginOp(OpForget)
+	defer fs.metrics.endOp(OpForget, start, fuse.OK, 0)
+
 	if nodeID == VirtualStatsIno {
 		return
 	}

@@ -22,8 +22,16 @@ import (
 //  4. 当 want > MaxRPCChunkSize 时按 4 MiB 顺序循环分片读取；
 //  5. 遇到 EOF 或短读立即停止分片循环并返回已读数据；中途分片报错但已有数据读取成功时按短读返回 fuse.OK，首片失败返回对应 errno。
 func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (res fuse.ReadResult, status fuse.Status) {
+	start := fs.metrics.beginOp(OpRead)
 	opCtx, endSpan := fs.startFuseOp(OpRead)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		var n uint64
+		if status == fuse.OK && res != nil {
+			n = uint64(res.Size())
+		}
+		fs.metrics.endOp(OpRead, start, status, n)
+	}()
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
@@ -99,8 +107,20 @@ func (fs *RawFS) Read(cancel <-chan struct{}, input *fuse.ReadIn, buf []byte) (r
 // 4. 当 len(data) > MaxRPCChunkSize 时按 4 MiB 顺序分片调用，并累加实际写入字节数；
 // 5. 遵循 POSIX 短写语义：若中途分片报错（如 ENOSPC）且已有数据写入成功，返回已写入字节数与 fuse.OK；首片即失败返回对应 errno。
 func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (written uint32, status fuse.Status) {
+	start := fs.metrics.beginOp(OpWrite)
 	opCtx, endSpan := fs.startFuseOp(OpWrite)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		var n uint64
+		if status == fuse.OK {
+			n = uint64(written)
+		}
+		fs.metrics.endOp(OpWrite, start, status, n)
+	}()
+	return fs.writeData(opCtx, cancel, input, data)
+}
+
+func (fs *RawFS) writeData(opCtx context.Context, cancel <-chan struct{}, input *fuse.WriteIn, data []byte) (written uint32, status fuse.Status) {
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
@@ -266,13 +286,24 @@ func (fs *RawFS) Write(cancel <-chan struct{}, input *fuse.WriteIn, data []byte)
 }
 
 // Writev 实现聚集向量写入，消除 go-fuse 默认返回 ENOSYS 导致的首次写入回退往返开销：
-// 空段传 nil、单段零拷贝直传 data[0]、多段连续拼接后委托 Write 处理。
-func (fs *RawFS) Writev(cancel <-chan struct{}, input *fuse.WriteIn, data [][]byte) (uint32, fuse.Status) {
+// 空段传 nil、单段零拷贝直传 data[0]、多段连续拼接后委托共享写路径 writeData 处理，避免触发 OpWrite 双计。
+func (fs *RawFS) Writev(cancel <-chan struct{}, input *fuse.WriteIn, data [][]byte) (written uint32, status fuse.Status) {
+	start := fs.metrics.beginOp(OpWritev)
+	opCtx, endSpan := fs.startFuseOp(OpWritev)
+	defer func() {
+		endSpan(status)
+		var n uint64
+		if status == fuse.OK {
+			n = uint64(written)
+		}
+		fs.metrics.endOp(OpWritev, start, status, n)
+	}()
+
 	switch len(data) {
 	case 0:
-		return fs.Write(cancel, input, nil)
+		return fs.writeData(opCtx, cancel, input, nil)
 	case 1:
-		return fs.Write(cancel, input, data[0])
+		return fs.writeData(opCtx, cancel, input, data[0])
 	default:
 		var total int
 		for _, seg := range data {
@@ -282,6 +313,6 @@ func (fs *RawFS) Writev(cancel <-chan struct{}, input *fuse.WriteIn, data [][]by
 		for _, seg := range data {
 			merged = append(merged, seg...)
 		}
-		return fs.Write(cancel, input, merged)
+		return fs.writeData(opCtx, cancel, input, merged)
 	}
 }

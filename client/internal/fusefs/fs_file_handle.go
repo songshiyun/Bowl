@@ -42,8 +42,12 @@ func ToProtoOpenFlags(sysFlags uint32) uint32 {
 
 // Create 创建服务端目录项并分配本地句柄。
 func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name string, out *fuse.CreateOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpCreate)
 	opCtx, endSpan := fs.startFuseOp(OpCreate)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpCreate, start, status, 0)
+	}()
 
 	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
@@ -121,8 +125,12 @@ func (fs *RawFS) Create(cancel <-chan struct{}, input *fuse.CreateIn, name strin
 
 // Open 读取缓存中的节点类型并在本地分配句柄。
 func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.OpenOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpOpen)
 	opCtx, endSpan := fs.startFuseOp(OpOpen)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpOpen, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(input.NodeId) {
 		fs.lifecycleMu.RLock()
@@ -201,8 +209,12 @@ func (fs *RawFS) Open(cancel <-chan struct{}, input *fuse.OpenIn, out *fuse.Open
 // Flush 在 close(fd) 时排空内核页缓存写入并释放本地 POSIX 记录锁。
 // 常规文件不再发起跨机物理 Fsync RPC；显式 Fsync、FsyncDir 与 OnUnmount 才确认物理落盘。
 func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpFlush)
 	opCtx, endSpan := fs.startFuseOp(OpFlush)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpFlush, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(input.NodeId) {
 		fs.lifecycleMu.RLock()
@@ -247,8 +259,12 @@ func (fs *RawFS) Flush(cancel <-chan struct{}, input *fuse.FlushIn) (status fuse
 
 // Fsync 等待服务端完成文件持久化。
 func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpFsync)
 	opCtx, endSpan := fs.startFuseOp(OpFsync)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpFsync, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(input.NodeId) {
 		fs.lifecycleMu.RLock()
@@ -295,8 +311,12 @@ func (fs *RawFS) Fsync(cancel <-chan struct{}, input *fuse.FsyncIn) (status fuse
 
 // Release 在本地释放句柄与 flock；最后一个孤儿句柄触发回收。
 func (fs *RawFS) Release(_ <-chan struct{}, input *fuse.ReleaseIn) {
+	start := fs.metrics.beginOp(OpRelease)
 	opCtx, endSpan := fs.startFuseOp(OpRelease)
-	defer endSpan(fuse.OK)
+	defer func() {
+		endSpan(fuse.OK)
+		fs.metrics.endOp(OpRelease, start, fuse.OK, 0)
+	}()
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()

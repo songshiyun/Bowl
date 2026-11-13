@@ -259,16 +259,25 @@ func (fs *RawFS) setFuseSysfsDir(dir string) {
 
 // Metrics 返回绑定的统一指标数据源。
 func (fs *RawFS) Metrics() *Metrics {
+	if fs == nil {
+		return nil
+	}
 	return fs.metrics
 }
 
 // Collector 返回可直接注册至自定义 prometheus.Registerer 的指标收集器。
 func (fs *RawFS) Collector() prometheus.Collector {
+	if fs == nil || fs.metrics == nil {
+		return nil
+	}
 	return fs.metrics
 }
 
 // Snapshot 抓取当前时刻客户端 FUSE 41 操作与 9 大子系统的结构化一致性快照。
 func (fs *RawFS) Snapshot() Snapshot {
+	if fs == nil {
+		return Snapshot{}
+	}
 	return fs.metrics.Snapshot()
 }
 
@@ -426,10 +435,50 @@ func (fs *RawFS) NextRequestID() uint64 {
 	}
 }
 
+// Access 记录操作指标后委托内嵌 fuse.RawFileSystem 默认实现处理。
+func (fs *RawFS) Access(cancel <-chan struct{}, input *fuse.AccessIn) fuse.Status {
+	start := fs.metrics.beginOp(OpAccess)
+	status := fs.RawFileSystem.Access(cancel, input)
+	fs.metrics.endOp(OpAccess, start, status, 0)
+	return status
+}
+
+// Lseek 记录操作指标后委托内嵌 fuse.RawFileSystem 默认实现处理。
+func (fs *RawFS) Lseek(cancel <-chan struct{}, in *fuse.LseekIn, out *fuse.LseekOut) fuse.Status {
+	start := fs.metrics.beginOp(OpLseek)
+	status := fs.RawFileSystem.Lseek(cancel, in, out)
+	fs.metrics.endOp(OpLseek, start, status, 0)
+	return status
+}
+
+// CopyFileRange 记录操作指标及传输字节数后委托内嵌 fuse.RawFileSystem 默认实现处理。
+func (fs *RawFS) CopyFileRange(cancel <-chan struct{}, input *fuse.CopyFileRangeIn) (uint32, fuse.Status) {
+	start := fs.metrics.beginOp(OpCopyFileRange)
+	written, status := fs.RawFileSystem.CopyFileRange(cancel, input)
+	var n uint64
+	if status == fuse.OK {
+		n = uint64(written)
+	}
+	fs.metrics.endOp(OpCopyFileRange, start, status, n)
+	return written, status
+}
+
+// Statx 记录操作指标后委托内嵌 fuse.RawFileSystem 默认实现处理。
+func (fs *RawFS) Statx(cancel <-chan struct{}, input *fuse.StatxIn, out *fuse.StatxOut) fuse.Status {
+	start := fs.metrics.beginOp(OpStatx)
+	status := fs.RawFileSystem.Statx(cancel, input, out)
+	fs.metrics.endOp(OpStatx, start, status, 0)
+	return status
+}
+
 // OnUnmount 在文件系统卸载完成时被调用。
 func (fs *RawFS) OnUnmount() {
+	start := fs.metrics.beginOp(OpOnUnmount)
 	opCtx, endSpan := fs.startFuseOp(OpOnUnmount)
-	defer endSpan(fuse.OK)
+	defer func() {
+		endSpan(fuse.OK)
+		fs.metrics.endOp(OpOnUnmount, start, fuse.OK, 0)
+	}()
 
 	fs.locks.Close()
 	// 排他锁等待所有在途请求释放读锁，先排空异步写缓冲确保 dirtyInodes 完整，再逐一同步落盘。

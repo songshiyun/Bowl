@@ -18,8 +18,12 @@ const (
 
 // SetAttr 实现按需部分更新 Inode 属性或截断文件空间，对应 Linux FUSE FUSE_SETATTR 协议。
 func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpSetAttr)
 	opCtx, endSpan := fs.startFuseOp(OpSetAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpSetAttr, start, status, 0)
+	}()
 
 	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
@@ -150,8 +154,12 @@ func (fs *RawFS) SetAttr(cancel <-chan struct{}, input *fuse.SetAttrIn, out *fus
 
 // Fallocate 实现文件空间预分配与稀疏空洞打洞，对应 Linux FUSE FUSE_FALLOCATE 协议。
 func (fs *RawFS) Fallocate(cancel <-chan struct{}, input *fuse.FallocateIn) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpFallocate)
 	opCtx, endSpan := fs.startFuseOp(OpFallocate)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpFallocate, start, status, 0)
+	}()
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()

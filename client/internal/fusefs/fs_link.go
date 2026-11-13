@@ -14,8 +14,12 @@ import (
 // 校验只读挂载、重写父 Inode，透传调用进程 UID/GID、目标路径与链接名称。
 // 注意 go-fuse 参数顺序：pointedTo 为符号链接指向的目标路径，linkName 为待创建的目录项名称。
 func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedTo, linkName string, out *fuse.EntryOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpSymlink)
 	opCtx, endSpan := fs.startFuseOp(OpSymlink)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpSymlink, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
@@ -71,8 +75,12 @@ func (fs *RawFS) Symlink(cancel <-chan struct{}, header *fuse.InHeader, pointedT
 // Readlink 实现读取符号链接目标路径操作。
 // 在受 TTL 管控的缓存有效期（attrTimeout > 0）内直接命中本地缓存；strict 0s 模式下自动穿透服务端。
 func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) (target []byte, status fuse.Status) {
+	start := fs.metrics.beginOp(OpReadlink)
 	opCtx, endSpan := fs.startFuseOp(OpReadlink)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpReadlink, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(header.NodeId) {
 		return nil, fuse.EINVAL
@@ -113,8 +121,12 @@ func (fs *RawFS) Readlink(cancel <-chan struct{}, header *fuse.InHeader) (target
 // Link 实现为非目录已有文件创建同盘硬链接操作。
 // 校验只读挂载，同时对源文件节点与目标父目录执行根 Inode 双向重写，回填递增 nlink 后的 Inode 属性。
 func (fs *RawFS) Link(cancel <-chan struct{}, input *fuse.LinkIn, filename string, out *fuse.EntryOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpLink)
 	opCtx, endSpan := fs.startFuseOp(OpLink)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpLink, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st

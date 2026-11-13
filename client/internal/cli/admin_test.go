@@ -107,13 +107,13 @@ func TestSetupObservability_SubMillisecondRPCBucketsAndAdminEndpoints(t *testing
 	require.NoError(t, err)
 	hist.Record(context.Background(), 0.00003) // 30µs，落在 (25µs, 50µs] 桶
 
-	instFS := fusefs.NewInstrumentedRawFS(fusefs.NewRawFS(nil, fusefs.Config{
+	rawFS := fusefs.NewRawFS(nil, fusefs.Config{
 		DiskID:  "test-disk",
 		RootIno: 1,
-	}))
-	require.NoError(t, obs.RegisterCollector(instFS.Collector()))
+	})
+	require.NoError(t, obs.RegisterCollector(rawFS.Collector()))
 
-	admin, err := startAdminServer("127.0.0.1:0", obs, instFS)
+	admin, err := startAdminServer("127.0.0.1:0", obs, rawFS)
 	require.NoError(t, err)
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

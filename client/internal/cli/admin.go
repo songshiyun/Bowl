@@ -308,7 +308,7 @@ type adminServer struct {
 
 // startAdminServer 在 addr 上启动管理面：/metrics、/debug/pprof/*、/healthz、/readyz 与 /debug/stats。
 // addr 为 "off" 时返回 nil（方法对 nil 安全）。
-func startAdminServer(addr string, obs *clientRuntime, fs *fusefs.InstrumentedRawFS) (*adminServer, error) {
+func startAdminServer(addr string, obs *clientRuntime, fs *fusefs.RawFS) (*adminServer, error) {
 	if strings.EqualFold(addr, adminAddrOff) {
 		return nil, nil
 	}
@@ -351,7 +351,7 @@ func (a *adminServer) shutdown(ctx context.Context) {
 }
 
 // statsHandler 渲染 FUSE 统计快照：默认 JSON，?format=text 为人类可读文本，?format=stats 为 .stats 键值格式。
-func statsHandler(fs *fusefs.InstrumentedRawFS) http.Handler {
+func statsHandler(fs *fusefs.RawFS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		snap := fs.Snapshot()
 		switch format := r.URL.Query().Get("format"); format {

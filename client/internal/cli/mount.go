@@ -112,7 +112,7 @@ func mountHandshake(ctx context.Context, client storagev1connect.StorageServiceC
 }
 
 // defaultServeFUSE 启动 FUSE 服务，就绪后调用 ready，并阻塞到卸载（信号或 ctx 取消触发）。
-func defaultServeFUSE(ctx context.Context, fs *fusefs.InstrumentedRawFS, cfg *fusefs.Config, mountpoint string, ready func()) error {
+func defaultServeFUSE(ctx context.Context, fs *fusefs.RawFS, cfg *fusefs.Config, mountpoint string, ready func()) error {
 	opts := fusefs.BuildMountOptions(*cfg)
 
 	server, err := fuse.NewServer(fs, mountpoint, opts)
@@ -189,12 +189,12 @@ func runMount(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, m
 	cfg.Metrics = fusefs.NewMetrics()
 	cfg.TracerProvider = obs.TracerProvider()
 
-	instFS := fusefs.NewInstrumentedRawFS(fusefs.NewRawFS(client, *cfg))
-	if regErr := obs.RegisterCollector(rpcMetrics, instFS.Collector()); regErr != nil {
+	rawFS := fusefs.NewRawFS(client, *cfg)
+	if regErr := obs.RegisterCollector(rpcMetrics, rawFS.Collector()); regErr != nil {
 		return fmt.Errorf("注册指标收集器失败: %w", regErr)
 	}
 
-	admin, err := startAdminServer(opts.adminAddr, obs, instFS)
+	admin, err := startAdminServer(opts.adminAddr, obs, rawFS)
 	if err != nil {
 		return err
 	}
@@ -237,7 +237,7 @@ func runMount(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, m
 		}
 	}
 
-	serveErr := serveFUSE(ctx, instFS, cfg, mountpoint, ready)
+	serveErr := serveFUSE(ctx, rawFS, cfg, mountpoint, ready)
 	if metaPath != "" {
 		_ = os.Remove(metaPath)
 	}

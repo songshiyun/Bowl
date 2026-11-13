@@ -11,8 +11,12 @@ import (
 
 // Mkdir 实现创建子目录操作，校验只读挂载、重写父 Inode，透传模式位与调用进程 UID/GID。
 func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string, out *fuse.EntryOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpMkdir)
 	opCtx, endSpan := fs.startFuseOp(OpMkdir)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpMkdir, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
@@ -65,8 +69,12 @@ func (fs *RawFS) Mkdir(cancel <-chan struct{}, input *fuse.MkdirIn, name string,
 
 // Mknod 实现非目录特殊节点（如 FIFO 命名管道、设备节点、普通文件）的创建操作。
 func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string, out *fuse.EntryOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpMknod)
 	opCtx, endSpan := fs.startFuseOp(OpMknod)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpMknod, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
@@ -118,8 +126,12 @@ func (fs *RawFS) Mknod(cancel <-chan struct{}, input *fuse.MknodIn, name string,
 
 // Rmdir 移除指定父目录下的空目录项。
 func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name string) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpRmdir)
 	opCtx, endSpan := fs.startFuseOp(OpRmdir)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpRmdir, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st
@@ -173,8 +185,12 @@ func (fs *RawFS) Rmdir(cancel <-chan struct{}, header *fuse.InHeader, name strin
 
 // Unlink 删除指定父目录下的非目录项（解链）。
 func (fs *RawFS) Unlink(cancel <-chan struct{}, header *fuse.InHeader, name string) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpUnlink)
 	opCtx, endSpan := fs.startFuseOp(OpUnlink)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpUnlink, start, status, 0)
+	}()
 
 	if st := fs.CheckWritable(); st != fuse.OK {
 		return st

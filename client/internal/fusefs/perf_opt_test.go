@@ -205,7 +205,7 @@ func TestWriteBehind_SmallWriteCoalescingAndCreateSeed(t *testing.T) {
 		require.Zero(t, prodSrv.writeCalls.Load())
 
 		// 模拟该节点属性被本地缓存淘汰。
-		prodFS.Raw().cache.invalidateInode(cProd.NodeId)
+		prodFS.cache.invalidateInode(cProd.NodeId)
 		var out fuse.AttrOut
 		require.Equal(t, fuse.OK, prodFS.GetAttr(nil, &fuse.GetAttrIn{
 			InHeader: fuse.InHeader{NodeId: cProd.NodeId},
@@ -262,14 +262,14 @@ func TestNamespaceCache_CompleteDirSynthesisAndStreamDemotion(t *testing.T) {
 			}, name, &cOut))
 			inst.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: cOut.NodeId}, Fh: cOut.Fh})
 		}
-		inst.Raw().cache.putEntry(dirOut.NodeId, "ghost-negative", 0)
+		inst.cache.putEntry(dirOut.NodeId, "ghost-negative", 0)
 
 		var openDirOut fuse.OpenOut
 		require.Equal(t, fuse.OK, inst.OpenDir(nil, &fuse.OpenIn{
 			InHeader: fuse.InHeader{NodeId: dirOut.NodeId},
 		}, &openDirOut))
 
-		entries, st := inst.Raw().readDirEntries(context.Background(), nil, &fuse.ReadIn{
+		entries, st := inst.readDirEntries(context.Background(), nil, &fuse.ReadIn{
 			InHeader: fuse.InHeader{NodeId: dirOut.NodeId},
 			Fh:       openDirOut.Fh,
 			Offset:   0,
@@ -315,10 +315,10 @@ func TestNamespaceCache_CompleteDirSynthesisAndStreamDemotion(t *testing.T) {
 		inst.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: f1.NodeId}, Fh: f1.Fh})
 
 		// 1) 失效子项 f1 的属性项 'i' -> ReadDirPlus 必须安全回退远端 RPC。
-		inst.Raw().cache.invalidateInode(f1.NodeId)
+		inst.cache.invalidateInode(f1.NodeId)
 		var od1 fuse.OpenOut
 		require.Equal(t, fuse.OK, inst.OpenDir(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: d1.NodeId}}, &od1))
-		_, st := inst.Raw().readDirEntries(context.Background(), nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: d1.NodeId}, Fh: od1.Fh, Size: 4096})
+		st := inst.ReadDirPlus(nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: d1.NodeId}, Fh: od1.Fh, Size: 64 << 10}, fuse.NewDirEntryList(make([]byte, 64<<10), 0))
 		require.Equal(t, fuse.OK, st)
 		require.Equal(t, int64(1), readDirRPCs.Load(), "子项属性缺失时严禁合成残缺目录流，必须回退远端 RPC")
 		inst.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: d1.NodeId}, Fh: od1.Fh})
@@ -330,7 +330,7 @@ func TestNamespaceCache_CompleteDirSynthesisAndStreamDemotion(t *testing.T) {
 		}, "d2", "d2-moved"))
 		var od2 fuse.OpenOut
 		require.Equal(t, fuse.OK, inst.OpenDir(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: d2.NodeId}}, &od2))
-		_, st = inst.Raw().readDirEntries(context.Background(), nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: d2.NodeId}, Fh: od2.Fh, Size: 4096})
+		st = inst.ReadDirPlus(nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: d2.NodeId}, Fh: od2.Fh, Size: 64 << 10}, fuse.NewDirEntryList(make([]byte, 64<<10), 0))
 		require.Equal(t, fuse.OK, st)
 		require.Equal(t, int64(2), readDirRPCs.Load(), "目录跨父目录移动后必须清除旧父目录映射并回退远端 RPC")
 		inst.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: d2.NodeId}, Fh: od2.Fh})
@@ -378,7 +378,7 @@ func TestNamespaceCache_CompleteDirSynthesisAndStreamDemotion(t *testing.T) {
 		inst := setupTestClientFS(t, srv, nil, 1.0, 1.0)
 		var rootDH fuse.OpenOut
 		require.Equal(t, fuse.OK, inst.OpenDir(nil, &fuse.OpenIn{InHeader: fuse.InHeader{NodeId: 1}}, &rootDH))
-		_, st := inst.Raw().readDirEntries(context.Background(), nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: rootDH.Fh, Size: 65536})
+		st := inst.ReadDirPlus(nil, &fuse.ReadIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: rootDH.Fh, Size: 65536}, fuse.NewDirEntryList(make([]byte, 64<<10), 0))
 		require.Equal(t, fuse.OK, st)
 		inst.ReleaseDir(&fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: 1}, Fh: rootDH.Fh})
 
@@ -471,36 +471,39 @@ func TestWritevAndIoctlFastShortCircuit(t *testing.T) {
 
 func TestLookupAndGetAttrReadOnlyFastPath_ZeroAllocAndRaceSafe(t *testing.T) {
 	srv := newTestStorageServer(1.0, 1.0)
-	inst := setupTestClientFS(t, srv, nil, 1.0, 1.0)
-	raw := inst.Raw()
+	fs := setupTestClientFS(t, srv, nil, 1.0, 1.0)
 
 	var cOut fuse.CreateOut
-	require.Equal(t, fuse.OK, inst.Create(nil, &fuse.CreateIn{
+	require.Equal(t, fuse.OK, fs.Create(nil, &fuse.CreateIn{
 		InHeader: fuse.InHeader{NodeId: 1},
 		Flags:    syscall.O_RDWR,
 		Mode:     0o644,
 	}, "hot.txt", &cOut))
 
-	// 1) 验证单锁只读快路径在本地命中时零堆内存分配。
+	// 1) 验证单锁只读快路径在本地命中时（含指标埋点）零堆内存分配。
 	var entryOut fuse.EntryOut
 	lookupHeader := &fuse.InHeader{NodeId: 1}
 	lookupAllocs := testing.AllocsPerRun(100, func() {
-		st := raw.Lookup(nil, lookupHeader, "hot.txt", &entryOut)
+		st := fs.Lookup(nil, lookupHeader, "hot.txt", &entryOut)
 		if st != fuse.OK {
 			t.Fatalf("unexpected status: %v", st)
 		}
 	})
-	require.Zero(t, lookupAllocs, "Lookup 本地缓存命中快路径必须为 0 allocs/op")
+	require.Zero(t, lookupAllocs, "Lookup 本地缓存命中快路径含指标埋点必须保持 0 allocs/op")
 
 	var attrOut fuse.AttrOut
 	getAttrIn := &fuse.GetAttrIn{InHeader: fuse.InHeader{NodeId: cOut.NodeId}}
 	getAttrAllocs := testing.AllocsPerRun(100, func() {
-		st := raw.GetAttr(nil, getAttrIn, &attrOut)
+		st := fs.GetAttr(nil, getAttrIn, &attrOut)
 		if st != fuse.OK {
 			t.Fatalf("unexpected status: %v", st)
 		}
 	})
-	require.Zero(t, getAttrAllocs, "GetAttr 本地缓存命中快路径必须为 0 allocs/op")
+	require.Zero(t, getAttrAllocs, "GetAttr 本地缓存命中快路径含指标埋点必须保持 0 allocs/op")
+
+	snap := fs.Snapshot()
+	require.GreaterOrEqual(t, snap.FUSE.Ops[OpLookup].Calls, uint64(100))
+	require.GreaterOrEqual(t, snap.FUSE.Ops[OpGetAttr].Calls, uint64(100))
 
 	// 2) 并发 -race 压力检验：多协程高频 Lookup/GetAttr 只读访问与并发写缓冲刷新（OnStage/OnCommit）零数据竞争且尺寸单调不减。
 	stopCh := make(chan struct{})
@@ -516,14 +519,14 @@ func TestLookupAndGetAttrReadOnlyFastPath_ZeroAllocAndRaceSafe(t *testing.T) {
 					return
 				default:
 				}
-				if raw.Lookup(nil, lookupHeader, "hot.txt", &eo) == fuse.OK {
+				if fs.Lookup(nil, lookupHeader, "hot.txt", &eo) == fuse.OK {
 					if eo.Size < prevSize {
 						t.Errorf("Lookup 观测到尺寸倒退: %d < %d", eo.Size, prevSize)
 						return
 					}
 					prevSize = eo.Size
 				}
-				if raw.GetAttr(nil, getAttrIn, &ao) == fuse.OK {
+				if fs.GetAttr(nil, getAttrIn, &ao) == fuse.OK {
 					if ao.Size < prevSize {
 						t.Errorf("GetAttr 观测到尺寸倒退: %d < %d", ao.Size, prevSize)
 						return
@@ -536,7 +539,7 @@ func TestLookupAndGetAttrReadOnlyFastPath_ZeroAllocAndRaceSafe(t *testing.T) {
 
 	chunk := bytes.Repeat([]byte("m"), 4096)
 	for i := range 128 {
-		_, st := inst.Write(nil, &fuse.WriteIn{
+		_, st := fs.Write(nil, &fuse.WriteIn{
 			InHeader: fuse.InHeader{NodeId: cOut.NodeId},
 			Fh:       cOut.Fh,
 			Offset:   uint64(i) * 4096,
@@ -544,17 +547,17 @@ func TestLookupAndGetAttrReadOnlyFastPath_ZeroAllocAndRaceSafe(t *testing.T) {
 		}, chunk)
 		require.Equal(t, fuse.OK, st)
 		if i%32 == 31 {
-			require.Equal(t, fuse.OK, inst.Flush(nil, &fuse.FlushIn{
+			require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
 				InHeader: fuse.InHeader{NodeId: cOut.NodeId},
 				Fh:       cOut.Fh,
 			}))
 		}
 	}
-	require.Equal(t, fuse.OK, inst.Flush(nil, &fuse.FlushIn{
+	require.Equal(t, fuse.OK, fs.Flush(nil, &fuse.FlushIn{
 		InHeader: fuse.InHeader{NodeId: cOut.NodeId},
 		Fh:       cOut.Fh,
 	}))
 	close(stopCh)
 	wg.Wait()
-	inst.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: cOut.NodeId}, Fh: cOut.Fh})
+	fs.Release(nil, &fuse.ReleaseIn{InHeader: fuse.InHeader{NodeId: cOut.NodeId}, Fh: cOut.Fh})
 }

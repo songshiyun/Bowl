@@ -12,8 +12,12 @@ import (
 // SetXAttr 实现设置扩展属性请求，透传属性名、属性值与创建/替换标志位。
 // 在只读挂载模式下直接拦截返回 EROFS。
 func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr string, data []byte) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpSetXAttr)
 	opCtx, endSpan := fs.startFuseOp(OpSetXAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpSetXAttr, start, status, 0)
+	}()
 
 	if status = fs.CheckWritable(); status != fuse.OK {
 		return status
@@ -54,8 +58,12 @@ func (fs *RawFS) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr s
 
 // GetXAttr 实现读取扩展属性请求，支持零长度探测与 ERANGE 缓冲区过小语义。
 func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (sz uint32, status fuse.Status) {
+	start := fs.metrics.beginOp(OpGetXAttr)
 	opCtx, endSpan := fs.startFuseOp(OpGetXAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpGetXAttr, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(header.NodeId) {
 		return 0, fuse.Status(syscall.ENODATA)
@@ -106,8 +114,12 @@ func (fs *RawFS) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr st
 
 // ListXAttr 实现列出扩展属性名称请求，组装以 '\x00' 结尾的连续字节序列。
 func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest []byte) (sz uint32, status fuse.Status) {
+	start := fs.metrics.beginOp(OpListXAttr)
 	opCtx, endSpan := fs.startFuseOp(OpListXAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpListXAttr, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(header.NodeId) {
 		return 0, fuse.OK
@@ -159,8 +171,12 @@ func (fs *RawFS) ListXAttr(cancel <-chan struct{}, header *fuse.InHeader, dest [
 // RemoveXAttr 实现删除指定扩展属性请求。
 // 在只读挂载模式下直接拦截返回 EROFS。
 func (fs *RawFS) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpRemoveXAttr)
 	opCtx, endSpan := fs.startFuseOp(OpRemoveXAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpRemoveXAttr, start, status, 0)
+	}()
 
 	if status = fs.CheckWritable(); status != fuse.OK {
 		return status

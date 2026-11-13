@@ -44,8 +44,12 @@ const (
 
 // Ioctl 实现 FUSE_IOCTL 请求处理，将 Linux 标准 FS_IOC_GETFLAGS / FS_IOC_SETFLAGS 双向桥接至 StorageService RPC。
 func (fs *RawFS) Ioctl(cancel <-chan struct{}, input *fuse.IoctlIn, inbuf []byte, output *fuse.IoctlOut, outbuf []byte) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpIoctl)
 	opCtx, endSpan := fs.startFuseOp(OpIoctl)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpIoctl, start, status, 0)
+	}()
 
 	// 在加锁与写回屏障前先短路不支持的命令（如终端探测 TCGETS 等），避免触发无谓的 BarrierInode 同步刷盘；
 	// 严格返回 ENOTTY，切勿返回 ENOSYS 导致整挂载点禁用合法 FS_IOC_* 命令。

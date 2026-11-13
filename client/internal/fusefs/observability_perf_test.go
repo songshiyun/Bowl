@@ -382,7 +382,7 @@ func (s *testStorageServer) ReadDirPlus(ctx context.Context, req *connect.Reques
 	return connect.NewResponse(&storagev1.ReadDirPlusResponse{}), nil
 }
 
-func setupTestClientFS(t *testing.T, srv *testStorageServer, tp trace.TracerProvider, entryTTL, attrTTL float64) *InstrumentedRawFS {
+func setupTestClientFS(t *testing.T, srv *testStorageServer, tp trace.TracerProvider, entryTTL, attrTTL float64) *RawFS {
 	t.Helper()
 	var handlerOpts []connect.HandlerOption
 	if tp != nil {
@@ -418,7 +418,7 @@ func setupTestClientFS(t *testing.T, srv *testStorageServer, tp trace.TracerProv
 	})
 	require.NoError(t, err)
 
-	raw := NewRawFS(client, Config{
+	return NewRawFS(client, Config{
 		DiskID:              "disk-test",
 		Epoch:               1,
 		RootIno:             1,
@@ -427,32 +427,52 @@ func setupTestClientFS(t *testing.T, srv *testStorageServer, tp trace.TracerProv
 		AttrTimeoutSeconds:  attrTTL,
 		TracerProvider:      tp,
 	})
-	return NewInstrumentedRawFS(raw)
 }
 
 func TestMetrics_26Buckets41OpsAndSysfsGauges(t *testing.T) {
+	var nilFS *RawFS
+	if nilFS.Collector() != nil {
+		t.Fatal("nil RawFS 的 Collector() 必须返回无类型 nil")
+	}
+	var emptyFS RawFS
+	if emptyFS.Collector() != nil {
+		t.Fatal("未绑定 metrics 的 RawFS 的 Collector() 必须返回无类型 nil")
+	}
+
 	srv := newTestStorageServer(1.0, 1.0)
-	inst := setupTestClientFS(t, srv, nil, 1.0, 1.0)
-	m := inst.Metrics()
+	fs := setupTestClientFS(t, srv, nil, 1.0, 1.0)
+	m := fs.Metrics()
 
 	// 1. 验证 26 桶覆盖至 ~33.55s：模拟 2.5s 慢操作，落入桶 22 (<= 4.19s)，绝不被旧 524ms 截断。
 	m.beginOp(OpFsync)
 	m.endOp(OpFsync, time.Now().Add(-2500*time.Millisecond), fuse.OK, 0)
 
-	// 2. 验证新增补齐的 5 个 FUSE 操作埋点（Access / Lseek / Writev / CopyFileRange / Statx）。
-	_ = inst.Access(nil, &fuse.AccessIn{})
-	_ = inst.Lseek(nil, &fuse.LseekIn{}, &fuse.LseekOut{})
-	_, _ = inst.Writev(nil, &fuse.WriteIn{}, [][]byte{[]byte("abc")})
-	_, _ = inst.CopyFileRange(nil, &fuse.CopyFileRangeIn{})
-	_ = inst.Statx(nil, &fuse.StatxIn{}, &fuse.StatxOut{})
+	// 2. 验证新增补齐的 5 个 FUSE 操作埋点（Access / Lseek / Writev / CopyFileRange / Statx），并确保 Writev 不双计 OpWrite。
+	var cOut fuse.CreateOut
+	require.Equal(t, fuse.OK, fs.Create(nil, &fuse.CreateIn{
+		InHeader: fuse.InHeader{NodeId: 1},
+		Flags:    syscall.O_RDWR,
+		Mode:     0o644,
+	}, "metrics-writev.bin", &cOut))
+	_ = fs.Access(nil, &fuse.AccessIn{})
+	_ = fs.Lseek(nil, &fuse.LseekIn{}, &fuse.LseekOut{})
+	written, st := fs.Writev(nil, &fuse.WriteIn{
+		InHeader: fuse.InHeader{NodeId: cOut.NodeId},
+		Fh:       cOut.Fh,
+		Size:     3,
+	}, [][]byte{[]byte("abc")})
+	require.Equal(t, fuse.OK, st)
+	require.Equal(t, uint32(3), written)
+	_, _ = fs.CopyFileRange(nil, &fuse.CopyFileRangeIn{})
+	_ = fs.Statx(nil, &fuse.StatxIn{}, &fuse.StatxOut{})
 
 	// 3. 验证 Linux /sys/fs/fuse/connections/<dev> waiting 与 congestion_threshold 采集。
 	fakeSysfs := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(fakeSysfs, "waiting"), []byte("7\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(fakeSysfs, "congestion_threshold"), []byte("48\n"), 0o600))
-	inst.Raw().setFuseSysfsDir(fakeSysfs)
+	fs.setFuseSysfsDir(fakeSysfs)
 
-	snap := inst.Snapshot()
+	snap := fs.Snapshot()
 	require.Len(t, snap.FUSE.Ops, 41)
 	require.Len(t, snap.FUSE.Ops[OpFsync].Buckets, 26)
 	var highBucketSum uint64
@@ -464,11 +484,13 @@ func TestMetrics_26Buckets41OpsAndSysfsGauges(t *testing.T) {
 	for _, op := range []FuseOp{OpAccess, OpLseek, OpWritev, OpCopyFileRange, OpStatx} {
 		require.Equal(t, uint64(1), snap.FUSE.Ops[op].Calls, "%s 调用计数应被精确记录", op.String())
 	}
+	require.Equal(t, uint64(3), snap.FUSE.Ops[OpWritev].Bytes, "Writev 字节数应精确累加至 OpWritev")
+	require.Zero(t, snap.FUSE.Ops[OpWrite].Calls, "Writev 不得重复触发 OpWrite 计数")
 	require.Equal(t, 7, snap.Queues.FuseWaiting)
 	require.Equal(t, 48, snap.Queues.FuseCongestionThreshold)
 
 	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(inst.Collector()))
+	require.NoError(t, reg.Register(fs.Collector()))
 	require.InDelta(t, float64(7), testutil.ToFloat64(collectSingleGauge(t, reg, "bowl_client_fuse_connection_waiting")), 1e-9)
 	require.InDelta(t, float64(48), testutil.ToFloat64(collectSingleGauge(t, reg, "bowl_client_fuse_connection_congestion_threshold")), 1e-9)
 

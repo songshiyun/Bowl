@@ -3,6 +3,7 @@ package fusefs
 import (
 	"context"
 	"syscall"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -136,7 +137,9 @@ func (fs *RawFS) getInodeMissWithContext(parentCtx context.Context, cancel <-cha
 }
 
 // Lookup 在缓存命中时直接返回目录项。
+// 主体保持零 defer、零闭包，确保本地缓存命中快路径 0 allocs/op。
 func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpLookup)
 	if !fs.isVirtualStatsName(header.NodeId, name) && len(name) <= MaxFilenameBytes && fs.cfg.AttrTimeoutSeconds > 0 {
 		if parentIno, st := fs.ToServerIno(header.NodeId); st == fuse.OK {
 			fs.lifecycleMu.RLock()
@@ -146,6 +149,7 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 				out.NodeId = fs.tmpMgr.ObserveKernelLookup(cached.inode.GetIno())
 				out.Ino = out.NodeId
 				fs.lifecycleMu.RUnlock()
+				fs.metrics.endOp(OpLookup, start, fuse.OK, 0)
 				return fuse.OK
 			}
 			opCtx, endSpan := fs.startFuseOp(OpLookup)
@@ -157,12 +161,19 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 			}
 			fs.lifecycleMu.RUnlock()
 			endSpan(status)
+			fs.metrics.endOp(OpLookup, start, status, 0)
 			return status
 		}
 	}
+	return fs.lookupSlow(cancel, header, name, out, start)
+}
 
+func (fs *RawFS) lookupSlow(cancel <-chan struct{}, header *fuse.InHeader, name string, out *fuse.EntryOut, start time.Time) (status fuse.Status) {
 	opCtx, endSpan := fs.startFuseOp(OpLookup)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpLookup, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsName(header.NodeId, name) {
 		fs.fillVirtualStatsEntryOut(out)
@@ -183,13 +194,16 @@ func (fs *RawFS) Lookup(cancel <-chan struct{}, header *fuse.InHeader, name stri
 }
 
 // GetAttr 在缓存命中时直接返回节点属性。
+// 主体保持零 defer、零闭包，确保本地缓存命中快路径 0 allocs/op。
 func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpGetAttr)
 	if !fs.isVirtualStatsIno(in.NodeId) && fs.cfg.AttrTimeoutSeconds > 0 {
 		if serverIno, st := fs.ToServerIno(in.NodeId); st == fuse.OK {
 			fs.lifecycleMu.RLock()
 			if inode, removed := fs.handles.RemovedDir(in.NodeId); removed {
 				fs.FillAttrOut(out, inode, 0)
 				fs.lifecycleMu.RUnlock()
+				fs.metrics.endOp(OpGetAttr, start, fuse.OK, 0)
 				return fuse.OK
 			}
 			if handled, tmpSt := fs.tmpMgr.GetAttr(in.NodeId, &out.Attr); handled {
@@ -199,11 +213,13 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 					_, endSpan := fs.startFuseOp(OpGetAttr)
 					endSpan(tmpSt)
 				}
+				fs.metrics.endOp(OpGetAttr, start, tmpSt, 0)
 				return tmpSt
 			}
 			if cached, ok := fs.cache.inodeReadOnly(in.NodeId); ok {
 				fs.FillAttrOut(out, cached.inode, cached.attrTimeout)
 				fs.lifecycleMu.RUnlock()
+				fs.metrics.endOp(OpGetAttr, start, fuse.OK, 0)
 				return fuse.OK
 			}
 			opCtx, endSpan := fs.startFuseOp(OpGetAttr)
@@ -214,12 +230,19 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 			}
 			fs.lifecycleMu.RUnlock()
 			endSpan(status)
+			fs.metrics.endOp(OpGetAttr, start, status, 0)
 			return status
 		}
 	}
+	return fs.getAttrSlow(cancel, in, out, start)
+}
 
+func (fs *RawFS) getAttrSlow(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.AttrOut, start time.Time) (status fuse.Status) {
 	opCtx, endSpan := fs.startFuseOp(OpGetAttr)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpGetAttr, start, status, 0)
+	}()
 
 	if fs.isVirtualStatsIno(in.NodeId) {
 		out.SetTimeout(0)
@@ -248,8 +271,12 @@ func (fs *RawFS) GetAttr(cancel <-chan struct{}, in *fuse.GetAttrIn, out *fuse.A
 
 // StatFs 实现文件系统容量与 Inode 配额统计查询，对应 Linux FUSE FUSE_STATFS 协议。
 func (fs *RawFS) StatFs(cancel <-chan struct{}, in *fuse.InHeader, out *fuse.StatfsOut) (status fuse.Status) {
+	start := fs.metrics.beginOp(OpStatFs)
 	opCtx, endSpan := fs.startFuseOp(OpStatFs)
-	defer func() { endSpan(status) }()
+	defer func() {
+		endSpan(status)
+		fs.metrics.endOp(OpStatFs, start, status, 0)
+	}()
 
 	fs.lifecycleMu.RLock()
 	defer fs.lifecycleMu.RUnlock()
