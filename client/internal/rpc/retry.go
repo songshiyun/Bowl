@@ -70,24 +70,26 @@ func (c RetryConfig) withDefaults() RetryConfig {
 	return c
 }
 
-// idempotentProcedures 记录 13 个只读与幂等 RPC 白名单集合。
+// idempotentProcedures 记录 15 个只读与幂等 RPC 白名单集合。
 var idempotentProcedures = map[string]struct{}{
-	storagev1connect.StorageServiceGetDiskProcedure:     {},
-	storagev1connect.StorageServiceListDisksProcedure:   {},
-	storagev1connect.StorageServiceLookupProcedure:      {},
-	storagev1connect.StorageServiceGetAttrProcedure:     {},
-	storagev1connect.StorageServiceReadlinkProcedure:    {},
-	storagev1connect.StorageServiceReadProcedure:        {},
-	storagev1connect.StorageServiceFsyncProcedure:       {},
-	storagev1connect.StorageServiceFsyncDirProcedure:    {},
-	storagev1connect.StorageServiceReadDirProcedure:     {},
-	storagev1connect.StorageServiceReadDirPlusProcedure: {},
-	storagev1connect.StorageServiceGetXattrProcedure:    {},
-	storagev1connect.StorageServiceListXattrProcedure:   {},
-	storagev1connect.StorageServiceStatFSProcedure:      {},
+	storagev1connect.StorageServiceGetDiskProcedure:        {},
+	storagev1connect.StorageServiceListDisksProcedure:      {},
+	storagev1connect.StorageServiceDiffDiskProcedure:       {},
+	storagev1connect.StorageServiceReadCommitNodeProcedure: {},
+	storagev1connect.StorageServiceLookupProcedure:         {},
+	storagev1connect.StorageServiceGetAttrProcedure:        {},
+	storagev1connect.StorageServiceReadlinkProcedure:       {},
+	storagev1connect.StorageServiceReadProcedure:           {},
+	storagev1connect.StorageServiceFsyncProcedure:          {},
+	storagev1connect.StorageServiceFsyncDirProcedure:       {},
+	storagev1connect.StorageServiceReadDirProcedure:        {},
+	storagev1connect.StorageServiceReadDirPlusProcedure:    {},
+	storagev1connect.StorageServiceGetXattrProcedure:       {},
+	storagev1connect.StorageServiceListXattrProcedure:      {},
+	storagev1connect.StorageServiceStatFSProcedure:         {},
 }
 
-// IsIdempotentProcedure 判定指定 procedure 是否属于 13 个只读与幂等 RPC 白名单。
+// IsIdempotentProcedure 判定指定 procedure 是否属于 15 个只读与幂等 RPC 白名单。
 func IsIdempotentProcedure(procedure string) bool {
 	_, ok := idempotentProcedures[procedure]
 	return ok
@@ -183,7 +185,7 @@ func shouldRetry(procedure string, err error) bool {
 		return true
 	}
 
-	// 4. 针对 13 个只读与幂等 RPC 白名单：
+	// 4. 针对 15 个只读与幂等 RPC 白名单：
 	// 在遇到 CodeUnavailable（且未携带 ErrorInfo）或底层传输错误时允许重试
 	if IsIdempotentProcedure(procedure) {
 		if connectErr != nil && connectErr.Code() == connect.CodeUnavailable {

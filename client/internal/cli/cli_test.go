@@ -100,6 +100,18 @@ type fakeStorage struct {
 	lastRequestID   string
 	deleteCalls     int
 	updateCalls     int
+	diffCalls       int
+	readCommitCalls int
+	readCalls       int
+	readlinkCalls   int
+	mergeCalls      int
+	lastDiffReq     *storagev1.DiffDiskRequest
+	lastMergeReq    *storagev1.MergeDiskRequest
+	diffResponse    *storagev1.DiffDiskResponse
+	commitNodes     map[string]*storagev1.ReadCommitNodeResponse
+	liveFiles       map[string][]byte
+	liveSymlinks    map[string][]byte
+	mergeResponse   *storagev1.MergeDiskResponse
 	forcedErr       map[string]error
 	returnNilDisk   map[string]bool
 	mountZeroRoot   bool
@@ -110,6 +122,9 @@ func newFakeStorage() *fakeStorage {
 	return &fakeStorage{
 		disks:         make(map[string]*storagev1.Disk),
 		mounted:       make(map[string]bool),
+		commitNodes:   make(map[string]*storagev1.ReadCommitNodeResponse),
+		liveFiles:     make(map[string][]byte),
+		liveSymlinks:  make(map[string][]byte),
 		forcedErr:     make(map[string]error),
 		returnNilDisk: make(map[string]bool),
 	}
@@ -347,6 +362,186 @@ func (f *fakeStorage) MountDisk(_ context.Context, req *connect.Request[storagev
 		},
 		EntryTimeoutSeconds: 1.0,
 		AttrTimeoutSeconds:  1.0,
+	}), nil
+}
+
+func fakeCommitNodeKey(diskID, commitID string, ino uint64) string {
+	return fmt.Sprintf("%s|%s|%d", diskID, commitID, ino)
+}
+
+func fakeLiveNodeKey(diskID string, ino uint64) string {
+	return fmt.Sprintf("%s|%d", diskID, ino)
+}
+
+func (f *fakeStorage) seedCommitFile(diskID, commitID string, ino uint64, mode uint32, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commitNodes[fakeCommitNodeKey(diskID, commitID, ino)] = &storagev1.ReadCommitNodeResponse{
+		Mode:     mode,
+		FileSize: uint64(len(data)),
+		Data:     append([]byte(nil), data...),
+	}
+}
+
+func (f *fakeStorage) seedCommitSymlink(diskID, commitID string, ino uint64, target string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commitNodes[fakeCommitNodeKey(diskID, commitID, ino)] = &storagev1.ReadCommitNodeResponse{
+		Mode:          0o120777,
+		FileSize:      uint64(len(target)),
+		SymlinkTarget: []byte(target),
+		Eof:           true,
+	}
+}
+
+func (f *fakeStorage) seedLiveFile(diskID string, ino uint64, data []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.liveFiles[fakeLiveNodeKey(diskID, ino)] = append([]byte(nil), data...)
+}
+
+func (f *fakeStorage) seedLiveSymlink(diskID string, ino uint64, target string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.liveSymlinks[fakeLiveNodeKey(diskID, ino)] = []byte(target)
+}
+
+func (f *fakeStorage) DiffDisk(_ context.Context, req *connect.Request[storagev1.DiffDiskRequest]) (*connect.Response[storagev1.DiffDiskResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.diffCalls++
+	f.recordHeaders(req.Header())
+	f.lastDiffReq = req.Msg
+	if err := f.forcedErr["DiffDisk"]; err != nil {
+		return nil, err
+	}
+	if f.diffResponse == nil {
+		return connect.NewResponse(&storagev1.DiffDiskResponse{
+			Summary: &storagev1.DiffSummary{},
+		}), nil
+	}
+	return connect.NewResponse(f.diffResponse), nil
+}
+
+func (f *fakeStorage) ReadCommitNode(_ context.Context, req *connect.Request[storagev1.ReadCommitNodeRequest]) (*connect.Response[storagev1.ReadCommitNodeResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readCommitCalls++
+	f.recordHeaders(req.Header())
+	if err := f.forcedErr["ReadCommitNode"]; err != nil {
+		return nil, err
+	}
+	node, ok := f.commitNodes[fakeCommitNodeKey(req.Msg.GetDiskId(), req.Msg.GetCommitId(), req.Msg.GetIno())]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("commit node not found"))
+	}
+	if len(node.GetSymlinkTarget()) > 0 || node.GetMode()&0o170000 == 0o120000 {
+		return connect.NewResponse(&storagev1.ReadCommitNodeResponse{
+			Mode:          node.GetMode(),
+			FileSize:      node.GetFileSize(),
+			Eof:           true,
+			SymlinkTarget: append([]byte(nil), node.GetSymlinkTarget()...),
+		}), nil
+	}
+	data := node.GetData()
+	off := int(req.Msg.GetOffset())
+	if off >= len(data) {
+		return connect.NewResponse(&storagev1.ReadCommitNodeResponse{
+			Mode:     node.GetMode(),
+			FileSize: uint64(len(data)),
+			Eof:      true,
+		}), nil
+	}
+	end := len(data)
+	if sz := int(req.Msg.GetSize()); sz > 0 && off+sz < end {
+		end = off + sz
+	}
+	return connect.NewResponse(&storagev1.ReadCommitNodeResponse{
+		Mode:     node.GetMode(),
+		FileSize: uint64(len(data)),
+		Data:     append([]byte(nil), data[off:end]...),
+		Eof:      end >= len(data),
+	}), nil
+}
+
+func (f *fakeStorage) Read(_ context.Context, req *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readCalls++
+	f.recordHeaders(req.Header())
+	if err := f.forcedErr["Read"]; err != nil {
+		return nil, err
+	}
+	data, ok := f.liveFiles[fakeLiveNodeKey(req.Msg.GetDiskId(), req.Msg.GetIno())]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("live file not found"))
+	}
+	off := int(req.Msg.GetOffset())
+	if off >= len(data) {
+		return connect.NewResponse(&storagev1.ReadResponse{}), nil
+	}
+	end := len(data)
+	if sz := int(req.Msg.GetSize()); sz > 0 && off+sz < end {
+		end = off + sz
+	}
+	return connect.NewResponse(&storagev1.ReadResponse{
+		Data: append([]byte(nil), data[off:end]...),
+	}), nil
+}
+
+func (f *fakeStorage) Readlink(_ context.Context, req *connect.Request[storagev1.ReadlinkRequest]) (*connect.Response[storagev1.ReadlinkResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readlinkCalls++
+	f.recordHeaders(req.Header())
+	if err := f.forcedErr["Readlink"]; err != nil {
+		return nil, err
+	}
+	target, ok := f.liveSymlinks[fakeLiveNodeKey(req.Msg.GetDiskId(), req.Msg.GetIno())]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("live symlink not found"))
+	}
+	return connect.NewResponse(&storagev1.ReadlinkResponse{
+		Target: append([]byte(nil), target...),
+	}), nil
+}
+
+func (f *fakeStorage) MergeDisk(_ context.Context, req *connect.Request[storagev1.MergeDiskRequest]) (*connect.Response[storagev1.MergeDiskResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mergeCalls++
+	f.recordHeaders(req.Header())
+	f.lastMergeReq = req.Msg
+	if err := f.forcedErr["MergeDisk"]; err != nil {
+		return nil, err
+	}
+	if f.mergeResponse != nil {
+		return connect.NewResponse(f.mergeResponse), nil
+	}
+	target, ok := f.disks[req.Msg.GetTargetDiskId()]
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("target disk not found"))
+	}
+	if _, srcOK := f.disks[req.Msg.GetSourceDiskId()]; !srcOK {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("source disk not found"))
+	}
+	if req.Msg.GetDryRun() {
+		maxB := target.GetMaxBytes()
+		if req.Msg.MaxBytes != nil {
+			maxB = req.Msg.GetMaxBytes()
+		}
+		return connect.NewResponse(&storagev1.MergeDiskResponse{
+			LcaCommitId:        "01950000-0000-7000-8000-000000000090",
+			EstimatedUsedBytes: target.GetUsedBytes() + 4096,
+			TargetMaxBytes:     maxB,
+		}), nil
+	}
+	return connect.NewResponse(&storagev1.MergeDiskResponse{
+		Disk:               target,
+		LcaCommitId:        "01950000-0000-7000-8000-000000000090",
+		MergeCommitId:      "01950000-0000-7000-8000-000000000091",
+		EstimatedUsedBytes: target.GetUsedBytes(),
+		TargetMaxBytes:     target.GetMaxBytes(),
 	}), nil
 }
 

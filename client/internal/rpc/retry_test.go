@@ -47,9 +47,14 @@ func TestIsIdempotentProcedure_GivenWhitelistAndMutatingProcedures_ReturnsExpect
 	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceListXattrProcedure))
 	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceStatFSProcedure))
 
+	// 其余新增只读与幂等接口判定为 true
+	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceDiffDiskProcedure))
+	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceReadCommitNodeProcedure))
+
 	// 非幂等写接口判定为 false
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceCreateDiskProcedure))
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceForkDiskProcedure))
+	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceMergeDiskProcedure))
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceCreateProcedure))
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceWriteProcedure))
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceUnlinkProcedure))
@@ -436,4 +441,138 @@ func TestRetry_GivenSyscallConnectError_ShouldRetryEvenForNonIdempotentProcedure
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, connect.NewError(connect.CodeResourceExhausted, nil)))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, connect.NewError(connect.CodeAborted, nil)))
 	require.False(t, shouldRetry(storagev1connect.StorageServiceReadProcedure, connect.NewError(connect.CodeUnimplemented, nil)))
+}
+
+type scriptedDiffMergeHandler struct {
+	storagev1connect.UnimplementedStorageServiceHandler
+
+	diffCalls   int
+	diffErrs    []error
+	commitCalls int
+	commitErrs  []error
+	mergeCalls  int
+	mergeErrs   []error
+}
+
+func (h *scriptedDiffMergeHandler) DiffDisk(_ context.Context, _ *connect.Request[storagev1.DiffDiskRequest]) (*connect.Response[storagev1.DiffDiskResponse], error) {
+	idx := h.diffCalls
+	h.diffCalls++
+	if idx < len(h.diffErrs) && h.diffErrs[idx] != nil {
+		return nil, h.diffErrs[idx]
+	}
+	return connect.NewResponse(&storagev1.DiffDiskResponse{LcaCommitId: "01950000-0000-7000-8000-000000000099"}), nil
+}
+
+func (h *scriptedDiffMergeHandler) ReadCommitNode(_ context.Context, _ *connect.Request[storagev1.ReadCommitNodeRequest]) (*connect.Response[storagev1.ReadCommitNodeResponse], error) {
+	idx := h.commitCalls
+	h.commitCalls++
+	if idx < len(h.commitErrs) && h.commitErrs[idx] != nil {
+		return nil, h.commitErrs[idx]
+	}
+	return connect.NewResponse(&storagev1.ReadCommitNodeResponse{Data: []byte("commit-data"), Eof: true}), nil
+}
+
+func (h *scriptedDiffMergeHandler) MergeDisk(_ context.Context, _ *connect.Request[storagev1.MergeDiskRequest]) (*connect.Response[storagev1.MergeDiskResponse], error) {
+	idx := h.mergeCalls
+	h.mergeCalls++
+	if idx < len(h.mergeErrs) && h.mergeErrs[idx] != nil {
+		return nil, h.mergeErrs[idx]
+	}
+	return connect.NewResponse(&storagev1.MergeDiskResponse{MergeCommitId: "01950000-0000-7000-8000-000000000088"}), nil
+}
+
+func TestRetry_GivenDiffAndReadCommitNode_WhenUnavailableRecovers_RetriesAndSucceeds(t *testing.T) {
+	// Given
+	clk := newAutoAdvanceClock(time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC))
+	handler := &scriptedDiffMergeHandler{
+		diffErrs: []error{
+			connect.NewError(connect.CodeUnavailable, errors.New("diff-transient")),
+		},
+		commitErrs: []error{
+			connect.NewError(connect.CodeUnavailable, errors.New("commit-transient")),
+		},
+	}
+	client, err := newClientWithClock(ClientConfig{
+		Endpoint:   "http://127.0.0.1:9000",
+		HTTPClient: newInMemoryHTTPClient(handler),
+		RetryConfig: &RetryConfig{
+			InitialInterval: 50 * time.Millisecond,
+			RandFloat64:     func() float64 { return 1.0 },
+		},
+	}, clk)
+	require.NoError(t, err)
+
+	// When
+	diffResp, err := client.DiffDisk(context.Background(), connect.NewRequest(&storagev1.DiffDiskRequest{}))
+	require.NoError(t, err)
+	require.Equal(t, "01950000-0000-7000-8000-000000000099", diffResp.Msg.GetLcaCommitId())
+	require.Equal(t, 2, handler.diffCalls)
+
+	commitResp, err := client.ReadCommitNode(context.Background(), connect.NewRequest(&storagev1.ReadCommitNodeRequest{Ino: 1}))
+	require.NoError(t, err)
+	require.Equal(t, []byte("commit-data"), commitResp.Msg.GetData())
+	require.Equal(t, 2, handler.commitCalls)
+	require.Equal(t, []time.Duration{50 * time.Millisecond, 50 * time.Millisecond}, clk.Sleeps())
+}
+
+func TestRetry_GivenMergeDisk_WhenUnavailableOrTransportEOF_DoesNotRetryButRetriesDialError(t *testing.T) {
+	// Given: CodeUnavailable 不重试
+	clk := newAutoAdvanceClock(time.Date(2026, 11, 13, 10, 0, 0, 0, time.UTC))
+	handler := &scriptedDiffMergeHandler{
+		mergeErrs: []error{
+			connect.NewError(connect.CodeUnavailable, errors.New("mid-flight")),
+		},
+	}
+	client, err := newClientWithClock(ClientConfig{
+		Endpoint:   "http://127.0.0.1:9000",
+		HTTPClient: newInMemoryHTTPClient(handler),
+	}, clk)
+	require.NoError(t, err)
+
+	// When
+	_, err = client.MergeDisk(context.Background(), connect.NewRequest(&storagev1.MergeDiskRequest{}))
+
+	// Then
+	require.Error(t, err)
+	require.Equal(t, 1, handler.mergeCalls)
+	require.Empty(t, clk.Sleeps())
+
+	// Given: 传输层 io.ErrUnexpectedEOF 不重试
+	innerClient := newInMemoryHTTPClient(&scriptedDiffMergeHandler{})
+	transport := &scriptedTransport{
+		errs: []error{io.ErrUnexpectedEOF},
+		next: innerClient.Transport,
+	}
+	client2, err := newClientWithClock(ClientConfig{
+		Endpoint:   "http://127.0.0.1:9000",
+		HTTPClient: transport.HTTPClient(),
+	}, clk)
+	require.NoError(t, err)
+
+	_, err = client2.MergeDisk(context.Background(), connect.NewRequest(&storagev1.MergeDiskRequest{}))
+	require.Error(t, err)
+	require.Equal(t, 1, transport.calls)
+
+	// Given: 建连阶段 ECONNREFUSED 允许重试并成功
+	var dialAttempts int
+	dialErrClient := &httpClientWithFirstErr{
+		firstErr: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED},
+		next:     innerClient.Transport,
+		attempts: &dialAttempts,
+	}
+	client3, err := newClientWithClock(ClientConfig{
+		Endpoint:   "http://127.0.0.1:9000",
+		HTTPClient: dialErrClient.HTTPClient(),
+		RetryConfig: &RetryConfig{
+			InitialInterval: 40 * time.Millisecond,
+			RandFloat64:     func() float64 { return 1.0 },
+		},
+	}, clk)
+	require.NoError(t, err)
+
+	mergeResp, err := client3.MergeDisk(context.Background(), connect.NewRequest(&storagev1.MergeDiskRequest{}))
+	require.NoError(t, err)
+	require.Equal(t, "01950000-0000-7000-8000-000000000088", mergeResp.Msg.GetMergeCommitId())
+	require.Equal(t, 2, dialAttempts)
+	require.Equal(t, []time.Duration{40 * time.Millisecond}, clk.Sleeps())
 }

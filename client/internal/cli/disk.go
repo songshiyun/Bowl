@@ -34,6 +34,8 @@ const diskUsageHelp = `用法:
   get         查看指定虚拟磁盘详情
   update      更新虚拟磁盘名称或配额容量 (别名: resize)
   delete      安全删除指定虚拟磁盘实例
+  diff        比较源盘与共同祖先或目标盘之间的差异与冲突
+  merge       将源盘变更三路合并至目标盘
   help        查看命令帮助
 
 标志:
@@ -84,6 +86,7 @@ type diskRequestAdapter interface {
 // diskOutcome 统一承接单盘或非单盘 RPC 执行结果以供渲染与 Span 属性回填。
 type diskOutcome struct {
 	disk          *storagev1.Disk
+	quietID       string
 	jsonPayload   any
 	renderHuman   func(w io.Writer)
 	setSpanDiskID bool
@@ -91,9 +94,11 @@ type diskOutcome struct {
 
 // diskCLIError 表示携带退出码与可选根因（用于 Span 标错）的 CLI 错误。
 type diskCLIError struct {
-	exitCode int
-	msg      string
-	cause    error
+	exitCode     int
+	msg          string
+	cause        error
+	jsonPayload  any
+	renderStderr func(w io.Writer)
 }
 
 // diskRPCErrorPolicy 控制不同子命令对 Connect 错误码与业务 Reason 的映射策略。
@@ -294,6 +299,10 @@ func executeDiskWithPorts(args []string, stdout, stderr io.Writer, ports diskPor
 		spec = &diskUpdateSpec
 	case "delete":
 		spec = &diskDeleteSpec
+	case "diff":
+		spec = &diskDiffSpec
+	case "merge":
+		spec = &diskMergeSpec
 	default:
 		fmt.Fprintf(stderr, "错误: 未知 disk 子命令 \"%s\"\n\n%s", subcmd, diskUsageHelp)
 		return 2
@@ -451,7 +460,15 @@ func runDiskSubcommand(
 		if cliErr.cause != nil {
 			finishDiskCLISpanError(span, cliErr.cause)
 		}
-		if cliErr.msg != "" {
+		if jsonOut && cliErr.jsonPayload != nil {
+			if code := writeDiskJSON(stdout, stderr, cliErr.jsonPayload); code != 0 {
+				return code
+			}
+			return cliErr.exitCode
+		}
+		if cliErr.renderStderr != nil {
+			cliErr.renderStderr(stderr)
+		} else if cliErr.msg != "" {
 			fmt.Fprintf(stderr, "错误: %s\n", cliErr.msg)
 		}
 		return cliErr.exitCode
@@ -461,9 +478,15 @@ func runDiskSubcommand(
 		span.SetAttributes(attribute.String("bowl.disk_id", outcome.disk.GetDiskId()))
 	}
 
-	if quiet && outcome.disk != nil {
-		fmt.Fprintln(stdout, outcome.disk.GetDiskId())
-		return 0
+	if quiet {
+		switch {
+		case outcome.disk != nil:
+			fmt.Fprintln(stdout, outcome.disk.GetDiskId())
+			return 0
+		case outcome.quietID != "":
+			fmt.Fprintln(stdout, outcome.quietID)
+			return 0
+		}
 	}
 
 	if jsonOut {
