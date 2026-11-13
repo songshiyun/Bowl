@@ -759,10 +759,6 @@ func (c *NamespaceCache) entry(parent uint64, name string) (uint64, bool) {
 	return 0, false
 }
 
-func (c *NamespaceCache) putEntry(parent uint64, name string, ino uint64) {
-	c.putEntryAt(^uint64(0), parent, name, ino)
-}
-
 func (c *NamespaceCache) putEntryAt(epoch, parent uint64, name string, ino uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -896,12 +892,6 @@ func (c *NamespaceCache) demoteDirStreamToEntriesLocked(parent uint64) {
 			weight: 1,
 		})
 	}
-}
-
-// markNewDirAt 把刚由 Mkdir 创建的空目录登记为权威完整目录。
-// 新建目录在本次会话内没有任何子项，缺失名字可直接返回 ENOENT。
-func (c *NamespaceCache) markNewDirAt(epoch, dirIno uint64) {
-	c.markNewDirWithParentAt(epoch, dirIno, 0)
 }
 
 // markNewDirWithParentAt 把刚由 Mkdir 创建的空目录登记为权威完整目录并记录其权威父目录。
@@ -1147,20 +1137,6 @@ func (c *NamespaceCache) synthesizeCompleteDirLocked(dirIno uint64) ([]*storagev
 		return itemOf(el).dir, true
 	}
 	return cloneDir(entries), true
-}
-
-func (c *NamespaceCache) putDir(ino uint64, entries []*storagev1.DirEntryPlus) {
-	c.putDirAt(^uint64(0), ino, entries)
-}
-
-func (c *NamespaceCache) putDirAt(epoch, ino uint64, entries []*storagev1.DirEntryPlus) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if epoch != ^uint64(0) && epoch != c.epoch {
-		return
-	}
-	c.putDirLocked(ino, entries)
-	c.mutations++
 }
 
 // putDirAtIf 仅在缓存未被任何目录变更改写时回填，避免在途目录流覆盖新目录项。
