@@ -1,0 +1,282 @@
+//go:build e2e
+
+package e2e_test
+
+import (
+	"bytes"
+	"context"
+	"net/http"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"connectrpc.com/connect"
+	"github.com/stretchr/testify/require"
+
+	"github.com/starsrc/bowl/e2e/testutil"
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
+)
+
+func registerDiskCleanup(t *testing.T, client storagev1connect.StorageServiceClient, diskID string) {
+	t.Helper()
+	t.Cleanup(func() {
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		_, _ = client.DeleteDisk(cleanupCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: diskID}))
+	})
+}
+
+// TestStorageLive_ProbesAndMetricsReachable 验证容器栈中运行的 `storage-service` 健康探针与指标端点可达。
+func TestStorageLive_ProbesAndMetricsReachable(t *testing.T) {
+	adminAddr := testutil.GetStorageAdminAddr()
+
+	healthBody := getHTTPStatusAndBody(t, adminAddr+"/healthz", http.StatusOK)
+	require.Contains(t, healthBody, `"status":"ok"`)
+
+	readyBody := getHTTPStatusAndBody(t, adminAddr+"/readyz", http.StatusOK)
+	require.Contains(t, readyBody, `"postgres":"ok"`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := testutil.NewStorageClient().ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{PageSize: 1}))
+	require.NoError(t, err)
+
+	metricsBody := getHTTPStatusAndBody(t, adminAddr+"/metrics", http.StatusOK)
+	require.Contains(t, metricsBody, "bowl_storage_disks_loaded")
+	require.Contains(t, metricsBody, "rpc_server_call_duration")
+}
+
+// TestStorageLive_DiskLifecycleResizeH2CAndEpochFence 验证真实容器与 PostgreSQL 下的盘创建、列表分页、
+// 在线扩容、h2c 并发 4 MiB 大块读写、写入世代号抢占围栏与删盘清理。
+func TestStorageLive_DiskLifecycleResizeH2CAndEpochFence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client := testutil.NewStorageClient()
+
+	// Given: 创建测试盘并验证初始元数据与列表可达
+	created, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "e2e-live-lifecycle",
+		MaxBytes: 4 << 20,
+	}))
+	require.NoError(t, err)
+	diskID := created.Msg.GetDisk().GetDiskId()
+	registerDiskCleanup(t, client, diskID)
+
+	got, err := client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), got.Msg.GetDisk().GetRootIno())
+	require.Equal(t, uint64(4<<20), got.Msg.GetDisk().GetMaxBytes())
+
+	page, err := client.ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{PageSize: 50}))
+	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(page.Msg.GetDisks(), func(d *storagev1.Disk) bool {
+		return d.GetDiskId() == diskID
+	}), "磁盘列表必须包含新创建的磁盘 %s", diskID)
+
+	// When: 只读挂载返回 Epoch=0，可写挂载返回 Epoch=1，写入后在线扩容至 16 MiB
+	mountRO, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
+		DiskId:   diskID,
+		ReadOnly: true,
+	}))
+	require.NoError(t, err)
+	require.Zero(t, mountRO.Msg.GetEpoch())
+
+	mount1, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	epoch1 := mount1.Msg.GetEpoch()
+	require.Equal(t, uint64(1), epoch1)
+
+	expanded, err := client.UpdateDisk(ctx, connect.NewRequest(&storagev1.UpdateDiskRequest{
+		DiskId:   diskID,
+		Name:     new("e2e-live-expanded"),
+		MaxBytes: new(uint64(16 << 20)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, "e2e-live-expanded", expanded.Msg.GetDisk().GetName())
+	require.Equal(t, uint64(16<<20), expanded.Msg.GetDisk().GetMaxBytes())
+
+	statfs, err := client.StatFS(ctx, connect.NewRequest(&storagev1.StatFSRequest{DiskId: diskID, Ino: 1}))
+	require.NoError(t, err)
+	require.Equal(t, uint64(16<<20), statfs.Msg.GetTotalBytes())
+
+	// When: 通过 h2c 单连接并发写入两个 4 MiB 分片并回读校验
+	h2cClient := testutil.NewH2CStorageClient(testutil.GetStorageServiceAddr())
+	bigFile, err := h2cClient.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    diskID,
+		Epoch:     epoch1,
+		ParentIno: 1,
+		Name:      []byte("h2c_8m.bin"),
+		Mode:      0o644,
+	}))
+	require.NoError(t, err)
+	bigIno := bigFile.Msg.GetInode().GetIno()
+
+	const chunkBytes = 4 * 1024 * 1024
+	chunk0 := bytes.Repeat([]byte{0x11, 0xa1, 0x3c, 0xc3}, chunkBytes/4)
+	chunk1 := bytes.Repeat([]byte{0x22, 0xb2, 0x5a, 0xa5}, chunkBytes/4)
+
+	var (
+		wg           sync.WaitGroup
+		wResp0       *connect.Response[storagev1.WriteResponse]
+		wResp1       *connect.Response[storagev1.WriteResponse]
+		wErr0, wErr1 error
+	)
+	wg.Go(func() {
+		wResp0, wErr0 = h2cClient.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+			DiskId: diskID, Epoch: epoch1, Ino: bigIno, Offset: 0, Data: chunk0,
+		}))
+	})
+	wg.Go(func() {
+		wResp1, wErr1 = h2cClient.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+			DiskId: diskID, Epoch: epoch1, Ino: bigIno, Offset: chunkBytes, Data: chunk1,
+		}))
+	})
+	wg.Wait()
+	require.NoError(t, wErr0)
+	require.NoError(t, wErr1)
+	require.Equal(t, uint32(chunkBytes), wResp0.Msg.GetSize())
+	require.Equal(t, uint32(chunkBytes), wResp1.Msg.GetSize())
+
+	r0, err := h2cClient.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{DiskId: diskID, Ino: bigIno, Offset: 0, Size: chunkBytes}))
+	require.NoError(t, err)
+	r1, err := h2cClient.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{DiskId: diskID, Ino: bigIno, Offset: chunkBytes, Size: chunkBytes}))
+	require.NoError(t, err)
+	require.Equal(t, chunk0, r0.Msg.GetData())
+	require.Equal(t, chunk1, r1.Msg.GetData())
+
+	// Then: 新可写挂载抢占 Epoch=2 后，旧 Epoch=1 写入被拦截返回 EBUSY；删盘后返回 ENOENT
+	mount2, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), mount2.Msg.GetEpoch())
+
+	_, fencedErr := client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: diskID, Epoch: epoch1, Ino: bigIno, Offset: 0, Data: []byte("stale"),
+	}))
+	testutil.RequireConnectError(t, fencedErr, connect.CodeFailedPrecondition, "EBUSY")
+
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	_, getDeletedErr := client.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
+	testutil.RequireConnectError(t, getDeletedErr, connect.CodeNotFound, "ENOENT")
+}
+
+// TestStorageLive_OnlineForkIsolationAndLineageDelete 验证在线无感 `ForkDisk`、
+// 孤儿净化配额水位、级联派生及真实 PostgreSQL 外键约束下的同血缘删盘回收。
+func TestStorageLive_OnlineForkIsolationAndLineageDelete(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client := testutil.NewStorageClient()
+
+	// Given: 创建父盘，写入 300 KiB 常规文件与 256 KiB 未回收孤儿文件
+	createdParent, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "e2e-live-fork-parent",
+		MaxBytes: 16 << 20,
+	}))
+	require.NoError(t, err)
+	parentID := createdParent.Msg.GetDisk().GetDiskId()
+	registerDiskCleanup(t, client, parentID)
+
+	parentMount, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: parentID}))
+	require.NoError(t, err)
+	parentEpoch := parentMount.Msg.GetEpoch()
+
+	sharedCreate, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: parentID, Epoch: parentEpoch, ParentIno: 1, Name: []byte("shared.bin"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	sharedIno := sharedCreate.Msg.GetInode().GetIno()
+	sharedPayload := bytes.Repeat([]byte("FORK-BASE-DATA-"), 20480) // 300 KiB
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID, Epoch: parentEpoch, Ino: sharedIno, Offset: 0, Data: sharedPayload,
+	}))
+	require.NoError(t, err)
+
+	orphanCreate, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: parentID, Epoch: parentEpoch, ParentIno: 1, Name: []byte("orphan.bin"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	orphanIno := orphanCreate.Msg.GetInode().GetIno()
+	orphanPayload := bytes.Repeat([]byte{0xEE}, 256*1024)
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID, Epoch: parentEpoch, Ino: orphanIno, Offset: 0, Data: orphanPayload,
+	}))
+	require.NoError(t, err)
+	_, err = client.Unlink(ctx, connect.NewRequest(&storagev1.UnlinkRequest{
+		DiskId: parentID, Epoch: parentEpoch, ParentIno: 1, Name: []byte("orphan.bin"), OpenInClient: new(true),
+	}))
+	require.NoError(t, err)
+
+	// When: 以 512 KiB 配额在线派生 child1（低于含孤儿 556 KiB、高于净化后 300 KiB）并级联派生 grandchild
+	child1Resp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: parentID,
+		Name:         "e2e-live-fork-child1",
+		MaxBytes:     new(uint64(512 * 1024)),
+	}))
+	require.NoError(t, err)
+	child1 := child1Resp.Msg.GetDisk()
+	child1ID := child1.GetDiskId()
+	registerDiskCleanup(t, client, child1ID)
+	require.Equal(t, parentID, child1.GetParentDiskId())
+	require.Equal(t, uint64(len(sharedPayload)), child1.GetUsedBytes())
+
+	// 父盘原 Epoch=1 继续覆写，孤儿句柄仍可读；子盘保持 Fork 时刻数据且新分配 Inode 不冲突
+	parentMutated := []byte("PARENT-NEW-PAYLOAD-AFTER-FORK")
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: parentID, Epoch: parentEpoch, Ino: sharedIno, Offset: 0, Data: parentMutated,
+	}))
+	require.NoError(t, err)
+	orphanRead, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: parentID, Ino: orphanIno, Offset: 0, Size: uint32(len(orphanPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, orphanPayload, orphanRead.Msg.GetData())
+
+	child1Mount, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: child1ID}))
+	require.NoError(t, err)
+	child1Epoch := child1Mount.Msg.GetEpoch()
+	child1Lookup, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		DiskId: child1ID, ParentIno: 1, Name: []byte("shared.bin"),
+	}))
+	require.NoError(t, err)
+	child1Read, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: child1ID, Ino: child1Lookup.Msg.GetInode().GetIno(), Offset: 0, Size: uint32(len(sharedPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, sharedPayload, child1Read.Msg.GetData())
+
+	parentNewFile, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: parentID, Epoch: parentEpoch, ParentIno: 1, Name: []byte("p-new.txt"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	childNewFile, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId: child1ID, Epoch: child1Epoch, ParentIno: 1, Name: []byte("c-new.txt"), Mode: 0o644,
+	}))
+	require.NoError(t, err)
+	require.NotEqual(t, parentNewFile.Msg.GetInode().GetIno(), childNewFile.Msg.GetInode().GetIno())
+
+	grandResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: child1ID,
+		Name:         "e2e-live-fork-grandchild",
+	}))
+	require.NoError(t, err)
+	grandID := grandResp.Msg.GetDisk().GetDiskId()
+	registerDiskCleanup(t, client, grandID)
+	require.Equal(t, child1ID, grandResp.Msg.GetDisk().GetParentDiskId())
+
+	// Then: 按 |D|>=2 -> |D|==1 -> |D|==0 顺序删盘，唯一幸存盘数据完好且最终全部清理
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: parentID}))
+	require.NoError(t, err)
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: grandID}))
+	require.NoError(t, err)
+
+	child1AfterGC, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: child1ID, Ino: child1Lookup.Msg.GetInode().GetIno(), Offset: 0, Size: uint32(len(sharedPayload)),
+	}))
+	require.NoError(t, err)
+	require.Equal(t, sharedPayload, child1AfterGC.Msg.GetData())
+
+	_, err = client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: child1ID}))
+	require.NoError(t, err)
+}

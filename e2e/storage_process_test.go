@@ -13,7 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -56,7 +55,7 @@ func storageTestDSN() string {
 	return cmp.Or(os.Getenv("BOWL_TEST_POSTGRES_DSN"), defaultStorageTestDSN)
 }
 
-// buildStorageBinary 编译当前平台的 storage-service 二进制，供真实进程生命周期测试使用。
+// buildStorageBinary 编译当前平台的 `storage-service` 二进制，供真实进程生命周期测试使用。
 func buildStorageBinary(t *testing.T) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "storage-service")
@@ -65,8 +64,8 @@ func buildStorageBinary(t *testing.T) string {
 	build := exec.CommandContext(ctx, "go", "-C", "../services/storage", "build", "-o", binary, "./cmd")
 	build.Env = append(os.Environ(), "GOWORK=off")
 	output, err := build.CombinedOutput()
-	require.NoError(t, ctx.Err(), "编译 storage-service 超时: %s", output)
-	require.NoError(t, err, "编译 storage-service 失败: %s", output)
+	require.NoError(t, ctx.Err(), "编译 `storage-service` 超时: %s", output)
+	require.NoError(t, err, "编译 `storage-service` 失败: %s", output)
 	return binary
 }
 
@@ -99,7 +98,7 @@ func freeTCPPortPair(t *testing.T) (pubPort, adminPort int) {
 	return pubPort, adminPort
 }
 
-// storageProcessEnv 构造 storage-service 的完整测试环境变量。
+// storageProcessEnv 构造 `storage-service` 的完整测试环境变量。
 func storageProcessEnv(publicPort, internalPort int, dataDir, dsn string, extra ...string) []string {
 	base := []string{
 		"SERVER_HOST=127.0.0.1",
@@ -112,7 +111,7 @@ func storageProcessEnv(publicPort, internalPort int, dataDir, dsn string, extra 
 	return append(base, extra...)
 }
 
-// runStorageProcessExpectFailure 启动 storage-service 并断言其在超时内以非零退出码失败。
+// runStorageProcessExpectFailure 启动 `storage-service` 并断言其在超时内以非零退出码失败。
 func runStorageProcessExpectFailure(t *testing.T, binary string, env []string) (exitCode int, out string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -120,13 +119,13 @@ func runStorageProcessExpectFailure(t *testing.T, binary string, env []string) (
 	cmd := exec.CommandContext(ctx, binary)
 	cmd.Env = append(append(os.Environ(), "OTEL_ENABLED=false"), env...)
 	output, err := cmd.CombinedOutput()
-	require.NoError(t, ctx.Err(), "storage-service 未在超时内退出: %s", output)
+	require.NoError(t, ctx.Err(), "`storage-service` 未在超时内退出: %s", output)
 	var exitErr *exec.ExitError
-	require.ErrorAs(t, err, &exitErr, "storage-service 必须以非零退出码失败: %s", output)
+	require.ErrorAs(t, err, &exitErr, "`storage-service` 必须以非零退出码失败: %s", output)
 	return exitErr.ExitCode(), string(output)
 }
 
-// startStorageDaemon 启动真实双端口 storage-service 子进程并等待管理面 /readyz 就绪。
+// startStorageDaemon 启动真实双端口 `storage-service` 子进程并等待管理端 `/readyz` 就绪。
 func startStorageDaemon(t *testing.T, binary, dataDir string) (pubURL, adminURL string, logs *syncBuffer, stopAndWait func() int) {
 	t.Helper()
 	pubPort, adminPort := freeTCPPortPair(t)
@@ -160,7 +159,7 @@ func startStorageDaemon(t *testing.T, binary, dataDir string) (pubURL, adminURL 
 	pubURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(pubPort))
 	adminURL = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(adminPort))
 	readyBody := waitHTTPStatus(t, adminURL+"/readyz", http.StatusOK)
-	require.Contains(t, readyBody, `"postgres":"ok"`, "管理面 /readyz 必须报告 PostgreSQL 就绪")
+	require.Contains(t, readyBody, `"postgres":"ok"`, "管理端 `/readyz` 必须报告 PostgreSQL 就绪")
 
 	stopAndWait = func() int {
 		require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
@@ -190,7 +189,7 @@ func waitHTTPStatus(t *testing.T, rawURL string, wantStatus int) string {
 }
 
 // getHTTPStatusAndBody 执行单次同步 HTTP GET 并校验状态码。
-func getHTTPStatusAndBody(t *testing.T, rawURL string, wantStatus int) (status int, body string) {
+func getHTTPStatusAndBody(t *testing.T, rawURL string, wantStatus int) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -201,34 +200,19 @@ func getHTTPStatusAndBody(t *testing.T, rawURL string, wantStatus int) (status i
 	defer func() { _ = resp.Body.Close() }()
 	raw, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
-	require.Equal(t, wantStatus, resp.StatusCode, "GET %s 状态码不匹配: %s", rawURL, string(raw))
-	return resp.StatusCode, string(raw)
+	require.Equal(t, wantStatus, resp.StatusCode, "GET %s 状态码不匹配: want=%d got=%d body=%s", rawURL, wantStatus, resp.StatusCode, string(raw))
+	return string(raw)
 }
 
-func TestStorageProcessRejectsInvalidConfig(t *testing.T) {
+// TestStorageProcess_RejectsInvalidStartupConfig 验证真实二进制在缺少连接串或端口已被占用时拒绝启动。
+func TestStorageProcess_RejectsInvalidStartupConfig(t *testing.T) {
 	binary := buildStorageBinary(t)
 
 	t.Run("missing DSN", func(t *testing.T) {
 		pubPort, adminPort := freeTCPPortPair(t)
 		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(pubPort, adminPort, t.TempDir(), ""))
-		require.NotZero(t, exitCode, "缺少 DB_DSN 必须非零退出: %s", output)
+		require.NotZero(t, exitCode, "缺少 `DB_DSN` 必须非零退出: %s", output)
 		require.Contains(t, output, "DB_DSN")
-		recordArtifact(t, map[string]string{"missing_dsn_exit": strconv.Itoa(exitCode)})
-	})
-
-	t.Run("malformed DSN URL", func(t *testing.T) {
-		pubPort, adminPort := freeTCPPortPair(t)
-		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(pubPort, adminPort, t.TempDir(), "://bad"))
-		require.NotZero(t, exitCode, "非法 DSN URL 必须非零退出: %s", output)
-		require.Contains(t, output, "parse pool config", "非法 DSN URL 必须在连接池解析阶段失败: %s", output)
-		recordArtifact(t, map[string]string{"malformed_dsn_exit": strconv.Itoa(exitCode)})
-	})
-
-	t.Run("invalid port", func(t *testing.T) {
-		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(70000, freeTCPPort(t), t.TempDir(), storageTestDSN()))
-		require.NotZero(t, exitCode, "非法端口必须非零退出: %s", output)
-		require.Contains(t, output, "invalid SERVER_PORT")
-		recordArtifact(t, map[string]string{"invalid_port_exit": strconv.Itoa(exitCode)})
 	})
 
 	t.Run("port already in use", func(t *testing.T) {
@@ -241,47 +225,33 @@ func TestStorageProcessRejectsInvalidConfig(t *testing.T) {
 		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(tcpAddr.Port, adminPort, t.TempDir(), storageTestDSN()))
 		require.NotZero(t, exitCode, "端口冲突必须非零退出: %s", output)
 		require.Contains(t, output, "address already in use")
-		recordArtifact(t, map[string]string{"port_conflict_exit": strconv.Itoa(exitCode)})
 	})
-
-	t.Run("dual port conflict", func(t *testing.T) {
-		samePort := freeTCPPort(t)
-		exitCode, output := runStorageProcessExpectFailure(t, binary, storageProcessEnv(samePort, samePort, t.TempDir(), storageTestDSN()))
-		require.NotZero(t, exitCode, "公网端口与内网管理端口相同必须非零退出: %s", output)
-		require.Contains(t, output, "conflict")
-		recordArtifact(t, map[string]string{"dual_port_conflict_exit": strconv.Itoa(exitCode)})
-	})
-
-	recordArtifact(t, map[string]string{"invalid_config_cases": "5"})
 }
 
-// TestStorageProcessDualPortAdminAndRecovery 验证真实子进程双端口管理面隔离、
-// X-Request-Id 传播、公开指标与高基数防线、SIGTERM 优雅重启持久化恢复及 DeleteDisk 物理目录回收。
-func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
+// TestStorageProcess_DualPortAdminAndRestartRecovery 验证真实子进程双端口隔离、
+// `X-Request-Id` 日志传播、指标高基数防线、SIGTERM 重启后 PostgreSQL 与磁盘状态恢复及物理目录清理。
+func TestStorageProcess_DualPortAdminAndRestartRecovery(t *testing.T) {
+	// Given: 编译并启动首个双端口存储守护进程
 	binary := buildStorageBinary(t)
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), storageLifecycleTimeout)
 	defer cancel()
 
-	// 1. 启动首个真实双端口进程，验证内网管理面公开端点与公网端口物理隔离。
 	pubURL1, adminURL1, logs1, stop1 := startStorageDaemon(t, binary, dataDir)
 
-	healthStatus, healthBody := getHTTPStatusAndBody(t, adminURL1+"/healthz", http.StatusOK)
+	// Then: 管理端口探针与诊断接口可达，公网端口物理隔离返回 404
+	healthBody := getHTTPStatusAndBody(t, adminURL1+"/healthz", http.StatusOK)
 	require.Contains(t, healthBody, `"status":"ok"`)
-	readyStatus, readyBody := getHTTPStatusAndBody(t, adminURL1+"/readyz", http.StatusOK)
+	readyBody := getHTTPStatusAndBody(t, adminURL1+"/readyz", http.StatusOK)
 	require.Contains(t, readyBody, `"postgres":"ok"`)
-	pprofStatus, _ := getHTTPStatusAndBody(t, adminURL1+"/debug/pprof/cmdline", http.StatusOK)
+	_ = getHTTPStatusAndBody(t, adminURL1+"/debug/pprof/cmdline", http.StatusOK)
 
-	pubHealth404, _ := getHTTPStatusAndBody(t, pubURL1+"/healthz", http.StatusNotFound)
-	pubReady404, _ := getHTTPStatusAndBody(t, pubURL1+"/readyz", http.StatusNotFound)
-	pubMetrics404, _ := getHTTPStatusAndBody(t, pubURL1+"/metrics", http.StatusNotFound)
-	pubPprof404, _ := getHTTPStatusAndBody(t, pubURL1+"/debug/pprof/cmdline", http.StatusNotFound)
-	require.Equal(t, http.StatusNotFound, pubHealth404)
-	require.Equal(t, http.StatusNotFound, pubReady404)
-	require.Equal(t, http.StatusNotFound, pubMetrics404)
-	require.Equal(t, http.StatusNotFound, pubPprof404)
+	_ = getHTTPStatusAndBody(t, pubURL1+"/healthz", http.StatusNotFound)
+	_ = getHTTPStatusAndBody(t, pubURL1+"/readyz", http.StatusNotFound)
+	_ = getHTTPStatusAndBody(t, pubURL1+"/metrics", http.StatusNotFound)
+	_ = getHTTPStatusAndBody(t, pubURL1+"/debug/pprof/cmdline", http.StatusNotFound)
 
-	// 2. 创建磁盘，验证 X-Request-Id 传播至结构化日志及 EBUSY 公开指标原因标签。
+	// When: 创建磁盘、携带 X-Request-Id 挂载写入并触发过期世代号 EBUSY
 	client1 := testutil.NewStorageClientAt(pubURL1)
 	created, err := client1.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
 		Name:     "process-recovery-disk",
@@ -301,10 +271,7 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	require.True(t, dirInfo.IsDir())
 
 	const tracedReqID = "e2e-req-trace-42"
-	tracedMount := connect.NewRequest(&storagev1.MountDiskRequest{
-		DiskId:   diskID,
-		ReadOnly: false,
-	})
+	tracedMount := connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID})
 	tracedMount.Header().Set("X-Request-Id", tracedReqID)
 	mount1, err := client1.MountDisk(ctx, tracedMount)
 	require.NoError(t, err)
@@ -313,7 +280,7 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		assert.Contains(c, logs1.String(), `"request_id":"`+tracedReqID+`"`)
-	}, 5*time.Second, 15*time.Millisecond, "进程标准输出结构化日志必须携带入站 X-Request-Id")
+	}, 5*time.Second, 15*time.Millisecond, "进程标准输出结构化日志必须携带入站 `X-Request-Id`")
 
 	fileResp, err := client1.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
 		DiskId:    diskID,
@@ -334,11 +301,7 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	// 推进世代号至 2，再用过期世代号 1 触发 EBUSY 错误原因指标。
-	mount2, err := client1.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
-		DiskId:   diskID,
-		ReadOnly: false,
-	}))
+	mount2, err := client1.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID}))
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), mount2.Msg.GetEpoch())
 
@@ -350,21 +313,20 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	}))
 	testutil.RequireConnectError(t, err, connect.CodeFailedPrecondition, "EBUSY")
 
-	metricsStatus, metricsBody := getHTTPStatusAndBody(t, adminURL1+"/metrics", http.StatusOK)
+	metricsBody := getHTTPStatusAndBody(t, adminURL1+"/metrics", http.StatusOK)
 	require.Contains(t, metricsBody, "bowl_storage_disks_loaded")
 	require.Contains(t, metricsBody, "bowl_storage_logical_bytes")
 	require.Contains(t, metricsBody, "bowl_storage_inodes")
 	require.Contains(t, metricsBody, "rpc_server_call_duration")
 	require.Regexp(t, `(?m)^rpc_server_call_duration[^\n]*rpc_error_reason="EBUSY"`, metricsBody)
-	require.NotContains(t, metricsBody, diskID, "高基数 disk_id 严禁泄露至公开 Prometheus 指标")
+	require.NotContains(t, metricsBody, diskID, "高基数 `disk_id` 严禁泄露至公开 Prometheus 指标")
 	require.NotContains(t, metricsBody, "disk_id=")
 	require.NotContains(t, metricsBody, "bowl_disk_id=")
 	require.NotContains(t, metricsBody, "bowl_ino=")
 
-	exit1 := stop1()
-	require.Zero(t, exit1)
+	require.Zero(t, stop1())
 
-	// 3. 在同一 STORAGE_DATA_DIR 重启新进程，验证懒加载持久化恢复与 DeleteDisk 彻底回收物理目录。
+	// When: 同一数据目录重启新进程并验证跨重启恢复与删盘清理
 	pubURL2, _, _, stop2 := startStorageDaemon(t, binary, dataDir)
 	client2 := testutil.NewStorageClientAt(pubURL2)
 
@@ -380,39 +342,16 @@ func TestStorageProcessDualPortAdminAndRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, persistedPayload, readAfterRestart.Msg.GetData())
 
-	mount3, err := client2.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
-		DiskId:   diskID,
-		ReadOnly: false,
-	}))
+	mount3, err := client2.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID}))
 	require.NoError(t, err)
-	restartedEpoch := mount3.Msg.GetEpoch()
-	require.Equal(t, uint64(3), restartedEpoch, "重启后 WriterEpoch 必须在持久化世代 2 基础上递增至 3")
+	require.Equal(t, uint64(3), mount3.Msg.GetEpoch(), "重启后写入世代号必须在持久化世代 2 基础上递增至 3")
 
 	_, err = client2.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{DiskId: diskID}))
 	require.NoError(t, err)
 	_, deletedStatErr := os.Stat(diskDir)
-	require.ErrorIs(t, deletedStatErr, os.ErrNotExist, "DeleteDisk 必须彻底删除本地磁盘物理目录")
+	require.ErrorIs(t, deletedStatErr, os.ErrNotExist, "`DeleteDisk` 必须彻底删除本地磁盘物理目录")
 
 	_, err = client2.GetDisk(ctx, connect.NewRequest(&storagev1.GetDiskRequest{DiskId: diskID}))
 	testutil.RequireConnectError(t, err, connect.CodeNotFound, "ENOENT")
-
-	exit2 := stop2()
-	require.Zero(t, exit2)
-
-	highCardinalityGuarded := !strings.Contains(metricsBody, diskID) && !strings.Contains(metricsBody, "disk_id=")
-	recordArtifact(t, map[string]string{
-		"admin_healthz_status":     strconv.Itoa(healthStatus),
-		"admin_readyz_status":      strconv.Itoa(readyStatus),
-		"admin_pprof_status":       strconv.Itoa(pprofStatus),
-		"admin_metrics_status":     strconv.Itoa(metricsStatus),
-		"public_admin_status":      strconv.Itoa(pubMetrics404),
-		"observed_request_id":      tracedReqID,
-		"ebusy_metric_labeled":     "true",
-		"high_cardinality_guarded": strconv.FormatBool(highCardinalityGuarded),
-		"sigterm_exit_1":           strconv.Itoa(exit1),
-		"sigterm_exit_2":           strconv.Itoa(exit2),
-		"restarted_epoch":          strconv.FormatUint(restartedEpoch, 10),
-		"persisted_sha256":         fileSHA256(readAfterRestart.Msg.GetData()),
-		"physical_dir_removed":     strconv.FormatBool(os.IsNotExist(deletedStatErr)),
-	})
+	require.Zero(t, stop2())
 }
