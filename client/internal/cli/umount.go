@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const umountUsageHelp = `用法:
@@ -19,13 +22,54 @@ const umountUsageHelp = `用法:
   -h, --help      查看帮助信息
 `
 
-// runCommand 与 lookPath 允许在单元测试中替身注入系统卸载命令。
+// runCommand、lookPath 与排空等待参数允许在单元测试中替身注入。
 var (
 	lookPath   = exec.LookPath
 	runCommand = func(name string, args ...string) ([]byte, error) {
 		return exec.Command(name, args...).CombinedOutput()
 	}
+	umountDrainTimeout      = 5 * time.Second
+	umountDrainPollInterval = 20 * time.Millisecond
 )
+
+func findUmountCommand(absMountpoint string, force bool) (binPath string, cmdArgs []string, found bool) {
+	candidates := []struct {
+		bin       string
+		args      []string
+		forceArgs []string
+	}{
+		{bin: "fusermount3", args: []string{"-u", absMountpoint}, forceArgs: []string{"-uz", absMountpoint}},
+		{bin: "fusermount", args: []string{"-u", absMountpoint}, forceArgs: []string{"-uz", absMountpoint}},
+		{bin: "umount", args: []string{absMountpoint}, forceArgs: []string{"-l", absMountpoint}},
+	}
+	for _, c := range candidates {
+		path, err := lookPath(c.bin)
+		if err != nil {
+			continue
+		}
+		if force {
+			return path, c.forceArgs, true
+		}
+		return path, c.args, true
+	}
+	return "", nil, false
+}
+
+func waitMountMetaDrained(metaPath string, pid int) error {
+	deadline := time.Now().Add(umountDrainTimeout)
+	for {
+		if _, err := os.Stat(metaPath); errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if pid > 0 && !processAlive(pid) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("卸载命令已返回，但等待挂载进程完成刷盘与租约释放超时 (%s)", metaPath)
+		}
+		time.Sleep(umountDrainPollInterval)
+	}
+}
 
 // executeUmount 解析 umount / unmount 命令参数并调用系统卸载工具。
 func executeUmount(args []string, stdout, stderr io.Writer) int {
@@ -86,47 +130,34 @@ func executeUmount(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// 2. 按优先级查找并执行系统卸载工具
-	// 优先级 1: fusermount3 (-u, force: -uz)
-	if path, err := lookPath("fusermount3"); err == nil {
-		cmdArgs := []string{"-u", absMountpoint}
-		if force {
-			cmdArgs = []string{"-uz", absMountpoint}
-		}
-		if out, err := runCommand(path, cmdArgs...); err != nil {
-			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
-			return 1
-		}
-		return 0
+	binPath, cmdArgs, found := findUmountCommand(absMountpoint, force)
+	if !found {
+		fmt.Fprintln(stderr, "错误: 未找到系统卸载工具 (fusermount3/fusermount/umount)")
+		return 1
 	}
 
-	// 优先级 2: fusermount (-u, force: -uz)
-	if path, err := lookPath("fusermount"); err == nil {
-		cmdArgs := []string{"-u", absMountpoint}
-		if force {
-			cmdArgs = []string{"-uz", absMountpoint}
+	var (
+		metaPath string
+		hasMeta  bool
+		metaPID  int
+	)
+	if !force {
+		metaPath, hasMeta = mountMetaFilePath(absMountpoint)
+		if hasMeta {
+			metaPID = readMountMetaPID(metaPath)
 		}
-		if out, err := runCommand(path, cmdArgs...); err != nil {
-			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
-			return 1
-		}
-		return 0
 	}
 
-	// 优先级 3: umount (常规 <mp>, force: -l <mp>)
-	if path, err := lookPath("umount"); err == nil {
-		var cmdArgs []string
-		if force {
-			cmdArgs = []string{"-l", absMountpoint}
-		} else {
-			cmdArgs = []string{absMountpoint}
-		}
-		if out, err := runCommand(path, cmdArgs...); err != nil {
-			fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
-			return 1
-		}
-		return 0
+	if out, err := runCommand(binPath, cmdArgs...); err != nil {
+		fmt.Fprintf(stderr, "错误: 卸载执行失败: %v\n%s", err, string(out))
+		return 1
 	}
 
-	fmt.Fprintln(stderr, "错误: 未找到系统卸载工具 (fusermount3/fusermount/umount)")
-	return 1
+	if !force && hasMeta {
+		if drainErr := waitMountMetaDrained(metaPath, metaPID); drainErr != nil {
+			fmt.Fprintf(stderr, "错误: %v\n", drainErr)
+			return 1
+		}
+	}
+	return 0
 }

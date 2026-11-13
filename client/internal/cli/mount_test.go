@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,11 +11,15 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"connectrpc.com/connect"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	"github.com/starsrc/bowl/client/internal/fusefs"
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 func withCleanOTelAndLogger(t *testing.T) {
@@ -283,4 +288,138 @@ func TestResolveLogFile_GivenExplicitAndPermissionFallback_CreatesExpectedFile(t
 	require.NoError(t, f2.Close())
 	wantFallback := filepath.Join(xdgDir, "bowl", "logs", "mount-"+testDiskID1+".log")
 	require.Equal(t, wantFallback, gotPath2)
+}
+
+func withMountRenewIntervalStub(t *testing.T, interval time.Duration) {
+	t.Helper()
+	prev := mountRenewIntervalFn
+	mountRenewIntervalFn = func(uint32) time.Duration { return interval }
+	t.Cleanup(func() { mountRenewIntervalFn = prev })
+}
+
+func TestRunMount_GivenServeLifecycleAndCanceledCtx_RenewsPeriodicallyAndUnmountsBeforeRemovingMeta(t *testing.T) {
+	// Given
+	withCleanOTelAndLogger(t)
+	mp := t.TempDir()
+	metaDir := t.TempDir()
+	withMissingMountInfo(t)
+	withTempMountMetaDirs(t, metaDir)
+	withMountRenewIntervalStub(t, 15*time.Millisecond)
+
+	storage := newFakeStorage()
+	storage.seedDisk(testDiskID1, "lease-disk", 1<<30, 0)
+	storage.mountLeaseTTL = 30
+	withMountStorageFake(t, storage)
+
+	var metaExistsAtUnmount bool
+	storage.onUnmountDisk = func(_ *storagev1.UnmountDiskRequest) {
+		_, metaExistsAtUnmount = findMountMeta(mp)
+	}
+
+	parentCtx, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+
+	withServeFUSEStub(t, func(ctx context.Context, _ *fusefs.RawFS, _ *fusefs.Config, _ string, ready func()) error {
+		ready()
+		require.Eventually(t, func() bool {
+			return len(storage.getRenewReqs()) >= 2
+		}, time.Second, 5*time.Millisecond, "serveFUSE 阻塞期间必须周期发送 RenewMount")
+		// 模拟收到信号导致外层挂载 ctx 被取消后 serveFUSE 退出
+		cancelParent()
+		<-ctx.Done()
+		return nil
+	})
+
+	opts := &mountOptions{
+		endpoint:         "http://127.0.0.1:9000",
+		adminAddr:        "off",
+		logLevel:         "info",
+		logFormat:        "json",
+		traceSampleRatio: 0,
+	}
+	baseCfg := &fusefs.Config{DiskID: testDiskID1, ReadOnly: false}
+
+	// When
+	var logBuf bytes.Buffer
+	err := runMount(parentCtx, opts, baseCfg, mp, &logBuf, nil)
+
+	// Then
+	require.NoError(t, err)
+	renews := storage.getRenewReqs()
+	require.GreaterOrEqual(t, len(renews), 2)
+	for _, req := range renews {
+		require.Equal(t, testDiskID1, req.GetDiskId())
+		require.Equal(t, "01950000-0000-7000-9000-000000000001", req.GetMountId())
+		require.False(t, req.GetReadOnly())
+		require.Equal(t, uint64(1), req.GetEpoch())
+	}
+
+	unmounts := storage.getUnmountReqs()
+	require.Len(t, unmounts, 1, "serveFUSE 返回后必须调用一次 UnmountDisk（即使外层 ctx 已取消）")
+	require.Equal(t, testDiskID1, unmounts[0].GetDiskId())
+	require.Equal(t, "01950000-0000-7000-9000-000000000001", unmounts[0].GetMountId())
+	require.True(t, metaExistsAtUnmount, "UnmountDisk 必须在清理 mountMeta 文件之前调用")
+	_, metaAfter := findMountMeta(mp)
+	require.False(t, metaAfter, "UnmountDisk 完成后必须移除 mountMeta 文件")
+}
+
+func TestRunMount_GivenRenewTerminalError_StopsSubsequentRenewRequests(t *testing.T) {
+	ebusyErr := connect.NewError(connect.CodeFailedPrecondition, errors.New("stale epoch"))
+	detail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Domain: "bowl.storage", Reason: "EBUSY"})
+	require.NoError(t, err)
+	ebusyErr.AddDetail(detail)
+
+	cases := []struct {
+		name     string
+		renewErr error
+	}{
+		{name: "CodeFailedPrecondition_EBUSY", renewErr: ebusyErr},
+		{name: "CodeNotFound", renewErr: connect.NewError(connect.CodeNotFound, errors.New("mount not found"))},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withCleanOTelAndLogger(t)
+			mp := t.TempDir()
+			withMissingMountInfo(t)
+			withTempMountMetaDirs(t, t.TempDir())
+			withMountRenewIntervalStub(t, 10*time.Millisecond)
+
+			storage := newFakeStorage()
+			storage.seedDisk(testDiskID1, "lease-disk", 1<<30, 0)
+			storage.renewErr = tc.renewErr
+			withMountStorageFake(t, storage)
+
+			withServeFUSEStub(t, func(_ context.Context, _ *fusefs.RawFS, _ *fusefs.Config, _ string, ready func()) error {
+				ready()
+				require.Eventually(t, func() bool {
+					return len(storage.getRenewReqs()) == 1
+				}, time.Second, 5*time.Millisecond)
+				time.Sleep(60 * time.Millisecond)
+				return nil
+			})
+
+			opts := &mountOptions{
+				endpoint:         "http://127.0.0.1:9000",
+				adminAddr:        "off",
+				logLevel:         "info",
+				logFormat:        "json",
+				traceSampleRatio: 0,
+			}
+			baseCfg := &fusefs.Config{DiskID: testDiskID1, ReadOnly: false}
+
+			var logBuf bytes.Buffer
+			runErr := runMount(context.Background(), opts, baseCfg, mp, &logBuf, nil)
+			require.NoError(t, runErr)
+			require.Len(t, storage.getRenewReqs(), 1, "收到 %s 后必须立即停止后续续期", tc.name)
+			require.Len(t, storage.getUnmountReqs(), 1)
+		})
+	}
+}
+
+func TestDefaultMountRenewInterval_ClampsMinimumOneSecond(t *testing.T) {
+	require.Equal(t, time.Second, defaultMountRenewInterval(0))
+	require.Equal(t, time.Second, defaultMountRenewInterval(1))
+	require.Equal(t, time.Second, defaultMountRenewInterval(3))
+	require.Equal(t, 10*time.Second, defaultMountRenewInterval(30))
 }

@@ -152,6 +152,38 @@ func listMountMetas() []mountMeta {
 	return out
 }
 
+// mountMetaFilePath 查找指定挂载点对应的本地元数据文件路径（不校验 PID 存活）。
+func mountMetaFilePath(mountpoint string) (string, bool) {
+	cleaned := filepath.Clean(mountpoint)
+	canon := canonicalMountpoint(cleaned)
+	names := []string{mountMetaFileName(cleaned)}
+	if canon != cleaned {
+		names = append(names, mountMetaFileName(canon))
+	}
+	for _, dir := range mountMetaDirs() {
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			if _, err := os.Stat(path); err == nil {
+				return path, true
+			}
+		}
+	}
+	return "", false
+}
+
+// readMountMetaPID 读取元数据文件记录的守护进程 PID。
+func readMountMetaPID(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var m mountMeta
+	if json.Unmarshal(data, &m) != nil {
+		return 0
+	}
+	return m.PID
+}
+
 // findMountMeta 按规范化挂载点查找存活进程的发现元数据（兼容符号链接路径）。
 func findMountMeta(mountpoint string) (mountMeta, bool) {
 	cleaned := filepath.Clean(mountpoint)

@@ -116,6 +116,13 @@ type fakeStorage struct {
 	returnNilDisk   map[string]bool
 	mountZeroRoot   bool
 	mountZeroEpoch  bool
+	mountIDSeq      int
+	mountLeaseTTL   uint32
+	renewReqs       []*storagev1.RenewMountRequest
+	unmountReqs     []*storagev1.UnmountDiskRequest
+	renewErr        error
+	unmountErr      error
+	onUnmountDisk   func(*storagev1.UnmountDiskRequest)
 }
 
 func newFakeStorage() *fakeStorage {
@@ -354,6 +361,12 @@ func (f *fakeStorage) MountDisk(_ context.Context, req *connect.Request[storagev
 		f.epochSeq++
 		epoch = f.epochSeq
 	}
+	f.mountIDSeq++
+	mountID := fmt.Sprintf("01950000-0000-7000-9000-%012d", f.mountIDSeq)
+	ttl := f.mountLeaseTTL
+	if ttl == 0 {
+		ttl = 30
+	}
 	return connect.NewResponse(&storagev1.MountDiskResponse{
 		Epoch: epoch,
 		RootInode: &storagev1.Inode{
@@ -362,7 +375,65 @@ func (f *fakeStorage) MountDisk(_ context.Context, req *connect.Request[storagev
 		},
 		EntryTimeoutSeconds: 1.0,
 		AttrTimeoutSeconds:  1.0,
+		MountId:             mountID,
+		LeaseTtlSeconds:     ttl,
 	}), nil
+}
+
+func (f *fakeStorage) RenewMount(_ context.Context, req *connect.Request[storagev1.RenewMountRequest]) (*connect.Response[storagev1.RenewMountResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recordHeaders(req.Header())
+	f.renewReqs = append(f.renewReqs, req.Msg)
+	if f.renewErr != nil {
+		return nil, f.renewErr
+	}
+	if err := f.forcedErr["RenewMount"]; err != nil {
+		return nil, err
+	}
+	ttl := f.mountLeaseTTL
+	if ttl == 0 {
+		ttl = 30
+	}
+	return connect.NewResponse(&storagev1.RenewMountResponse{
+		LeaseTtlSeconds: ttl,
+	}), nil
+}
+
+func (f *fakeStorage) UnmountDisk(_ context.Context, req *connect.Request[storagev1.UnmountDiskRequest]) (*connect.Response[storagev1.UnmountDiskResponse], error) {
+	f.mu.Lock()
+	f.recordHeaders(req.Header())
+	f.unmountReqs = append(f.unmountReqs, req.Msg)
+	hook := f.onUnmountDisk
+	unmountErr := f.unmountErr
+	if unmountErr == nil {
+		unmountErr = f.forcedErr["UnmountDisk"]
+	}
+	f.mu.Unlock()
+
+	if hook != nil {
+		hook(req.Msg)
+	}
+	if unmountErr != nil {
+		return nil, unmountErr
+	}
+	return connect.NewResponse(&storagev1.UnmountDiskResponse{}), nil
+}
+
+func (f *fakeStorage) getRenewReqs() []*storagev1.RenewMountRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*storagev1.RenewMountRequest, len(f.renewReqs))
+	copy(out, f.renewReqs)
+	return out
+}
+
+func (f *fakeStorage) getUnmountReqs() []*storagev1.UnmountDiskRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]*storagev1.UnmountDiskRequest, len(f.unmountReqs))
+	copy(out, f.unmountReqs)
+	return out
 }
 
 func fakeCommitNodeKey(diskID, commitID string, ino uint64) string {

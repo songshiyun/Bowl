@@ -73,7 +73,7 @@ func spawnDaemonProcess(args []string, stderr io.Writer) int {
 	return readDaemonHandshake(r, stderr)
 }
 
-// runDaemonWorker 是子进程内部的后台挂载执行器（单次 MountDisk 握手，无后台心跳续期协程）。
+// runDaemonWorker 是子进程内部的后台挂载执行器（挂载期间维护后台租约续期并在卸载刷盘后显式释放租约）。
 // 日志文件重定向标准输出/错误后，复用前台同一条挂载链路；挂载就绪时经 fd 3 管道回传 OK。
 func runDaemonWorker(ctx context.Context, opts *mountOptions, baseCfg *fusefs.Config, mountpoint string) int {
 	pipeWriter := os.NewFile(3, "readiness-pipe")

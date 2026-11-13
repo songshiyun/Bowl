@@ -34,6 +34,7 @@ const diskMergeUsageHelp = `用法:
   --strategy string       全局冲突解决策略: fail|ours|theirs (默认 fail)
   --resolve string        按路径覆写冲突解决策略 <path>=ours|theirs (可重复指定)
   --dry-run               仅执行冲突与容量预演检查，不实际修改目标盘
+  -f, --force             忽略在线挂载门禁强制执行合并
   --size string           合并后目标盘新容量配额上限 (支持 B/K/KB/KiB/M/MB/MiB/G/GB/GiB/T/TB/TiB/P/PB/PiB)
   -q, --quiet             静默模式，仅输出合并后的目标磁盘 ID
   --json                  以 JSON 格式输出合并结果或冲突报告
@@ -90,6 +91,7 @@ type diskMergeAdapter struct {
 	resolveRaw     []string
 	pathStrategies map[string]storagev1.MergeStrategy
 	dryRun         bool
+	force          bool
 	sizeRaw        *string
 	sizePtr        *uint64
 }
@@ -123,6 +125,13 @@ func (a *diskMergeAdapter) parseFlag(name, val string, hasVal bool, args []strin
 			return true, err
 		}
 		a.dryRun = b
+		return true, nil
+	case "f", "force":
+		b, err := parseBoolFlag(val, hasVal)
+		if err != nil {
+			return true, err
+		}
+		a.force = b
 		return true, nil
 	case "size":
 		v, err := takeFlagValue(args, idx, name, val, hasVal)
@@ -224,30 +233,37 @@ func (a *diskMergeAdapter) spanAttrs() []attribute.KeyValue {
 	}
 }
 
-func (a *diskMergeAdapter) preRPC(ports diskPorts, stderr io.Writer) *diskCLIError {
-	targetMnt, targetMounted, err := ports.findMountpoint(a.targetDiskID)
+func (a *diskMergeAdapter) preRPC(ports diskPorts, _ io.Writer) *diskCLIError {
+	if a.dryRun || a.force {
+		return nil
+	}
+
+	targetInfo, err := ports.findMountpoint(a.targetDiskID)
 	if err != nil {
 		return &diskCLIError{
 			exitCode: 1,
 			msg:      fmt.Sprintf("检查本机挂载表失败: %v", err),
 		}
 	}
-	if targetMounted {
+	if targetInfo.Mounted {
 		return &diskCLIError{
 			exitCode: 1,
-			msg:      fmt.Sprintf("目标磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl unmount %s 卸载后再合并", a.targetDiskID, targetMnt, targetMnt),
+			msg:      fmt.Sprintf("目标磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl umount %s 卸载后再合并", a.targetDiskID, targetInfo.Mountpoint, targetInfo.Mountpoint),
 		}
 	}
 
-	srcMnt, srcMounted, srcErr := ports.findMountpoint(a.sourceDiskID)
+	srcInfo, srcErr := ports.findMountpoint(a.sourceDiskID)
 	if srcErr != nil {
 		return &diskCLIError{
 			exitCode: 1,
 			msg:      fmt.Sprintf("检查本机挂载表失败: %v", srcErr),
 		}
 	}
-	if srcMounted {
-		fmt.Fprintf(stderr, "警告: 源磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，建议先执行 sync 确保脏页已刷回服务端\n", a.sourceDiskID, srcMnt)
+	if srcInfo.Mounted && !srcInfo.ReadOnly {
+		return &diskCLIError{
+			exitCode: 1,
+			msg:      fmt.Sprintf("源磁盘 %s 当前正在本机挂载点 %s 处于读写挂载状态，请先执行 bowl umount %s 卸载后再合并", a.sourceDiskID, srcInfo.Mountpoint, srcInfo.Mountpoint),
+		}
 	}
 	return nil
 }
@@ -260,6 +276,7 @@ func (a *diskMergeAdapter) invoke(ctx context.Context, client storagev1connect.S
 		PathStrategies: a.pathStrategies,
 		DryRun:         a.dryRun,
 		MaxBytes:       a.sizePtr,
+		Force:          a.force,
 	}))
 	if err != nil {
 		return diskOutcome{}, a.mapMergeRPCError(err)
@@ -338,9 +355,17 @@ func (a *diskMergeAdapter) mapMergeRPCError(err error) *diskCLIError {
 		}
 	}
 	if isConnect && connectErr.Code() == connect.CodeAborted && info.GetReason() == "EBUSY" {
+		lowerMsg := strings.ToLower(connectErr.Message())
+		if strings.Contains(lowerMsg, "source disk") || strings.Contains(lowerMsg, strings.ToLower(a.sourceDiskID)) {
+			return &diskCLIError{
+				exitCode: 1,
+				msg:      fmt.Sprintf("源磁盘 %s 当前处于读写挂载状态，请先执行 bowl umount 卸载后再合并（或使用 --force 强制合并）: %v", a.sourceDiskID, err),
+				cause:    err,
+			}
+		}
 		return &diskCLIError{
 			exitCode: 1,
-			msg:      fmt.Sprintf("目标磁盘 %s 在合并期间发生并发写入或仍处于挂载状态，请先卸载并重试: %v", a.targetDiskID, err),
+			msg:      fmt.Sprintf("目标磁盘 %s 在合并期间发生并发写入或仍处于挂载状态，请先执行 bowl umount 卸载并重试: %v", a.targetDiskID, err),
 			cause:    err,
 		}
 	}
@@ -461,7 +486,7 @@ func renderMergeConflictHuman(w io.Writer, sourceDiskID, targetDiskID string, re
 		"  2. 若需人工合并文本内容，建议先将目标盘变更合入分支盘并在本地挂载沙箱中编辑验证:\n"+
 		"     bowl disk merge %s --into %s --strategy ours\n"+
 		"     bowl mount %s <mountpoint>   # 编辑消解并验证\n"+
-		"     bowl unmount <mountpoint>\n"+
+		"     bowl umount <mountpoint>\n"+
 		"     bowl disk merge %s --into %s\n",
 		targetDiskID, sourceDiskID,
 		sourceDiskID,

@@ -8,15 +8,28 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
 
 var mountInfoPath = "/proc/self/mountinfo"
 
+// DiskMountInfo 描述本机 /proc/self/mountinfo 中某块虚拟磁盘的挂载状态与读写模式。
+type DiskMountInfo struct {
+	Mountpoint string
+	Mounted    bool
+	ReadOnly   bool
+}
+
 type mountPoint struct {
-	path   string
-	source string
+	path     string
+	source   string
+	readOnly bool
+}
+
+func hasReadOnlyMountOption(vfsOpts string) bool {
+	return slices.Contains(strings.Split(vfsOpts, ","), "ro")
 }
 
 // unescapeMountInfo 解析 /proc/self/mountinfo 中被八进制转义的字符（例如 \040 为空格）。
@@ -62,9 +75,14 @@ func parseMountPointsFromReader(r io.Reader) ([]mountPoint, error) {
 				break
 			}
 		}
+		var readOnly bool
+		if len(fields) > 5 {
+			readOnly = hasReadOnlyMountOption(fields[5])
+		}
 		points = append(points, mountPoint{
-			path:   filepath.Clean(unescapeMountInfo(fields[4])),
-			source: source,
+			path:     filepath.Clean(unescapeMountInfo(fields[4])),
+			source:   source,
+			readOnly: readOnly,
 		})
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
@@ -95,14 +113,25 @@ func containsMountPoint(points []mountPoint, target string) bool {
 	return false
 }
 
-func findDiskMountpoint(points []mountPoint, diskID string) (string, bool) {
+func findDiskMountpoint(points []mountPoint, diskID string) DiskMountInfo {
 	expectedSource := "bowl:" + strings.TrimSpace(diskID)
+	var found DiskMountInfo
 	for _, point := range points {
-		if strings.EqualFold(point.source, expectedSource) {
-			return point.path, true
+		if !strings.EqualFold(point.source, expectedSource) {
+			continue
+		}
+		if !found.Mounted || !point.readOnly {
+			found = DiskMountInfo{
+				Mountpoint: point.path,
+				Mounted:    true,
+				ReadOnly:   point.readOnly,
+			}
+			if !point.readOnly {
+				return found
+			}
 		}
 	}
-	return "", false
+	return found
 }
 
 // IsMountPoint 检查指定路径在当前系统 (/proc/self/mountinfo) 中是否为已生效的活跃挂载点。
@@ -119,14 +148,12 @@ func IsMountPoint(path string) (bool, error) {
 }
 
 // FindDiskMountpoint 扫描 /proc/self/mountinfo 检查指定 diskID 是否在当前机器处于活跃挂载状态。
-// 挂载时 FUSE fsname 固定为 "bowl:<disk-id>"（位于 mountinfo "-" 分隔符后的第 2 个字段）。
-// 若处于挂载状态，返回其挂载点路径（unescaped & cleaned）、true, nil。
-// 若 /proc/self/mountinfo 不存在（如非 Linux 环境），返回 "", false, nil。
-func FindDiskMountpoint(diskID string) (mountpoint string, mounted bool, err error) {
+// 挂载时 FUSE fsname 固定为 "bowl:<disk-id>"（位于 mountinfo "-" 分隔符后的第 2 个字段），并解析第 6 列 VFS 选项判定只读模式。
+// 若 /proc/self/mountinfo 不存在（如非 Linux 环境），返回零值 DiskMountInfo 与 nil。
+func FindDiskMountpoint(diskID string) (DiskMountInfo, error) {
 	points, err := readMountPoints()
 	if err != nil {
-		return "", false, err
+		return DiskMountInfo{}, err
 	}
-	mountpoint, mounted = findDiskMountpoint(points, diskID)
-	return mountpoint, mounted, nil
+	return findDiskMountpoint(points, diskID), nil
 }

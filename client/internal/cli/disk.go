@@ -45,7 +45,7 @@ const diskUsageHelp = `用法:
 // diskPorts 定义 disk 控制面深模块向远端存储进程与本机环境延伸的外部端口。
 type diskPorts struct {
 	newClient      func(endpoint, token string) (storagev1connect.StorageServiceClient, int, error)
-	findMountpoint func(diskID string) (mountpoint string, mounted bool, err error)
+	findMountpoint func(diskID string) (DiskMountInfo, error)
 	stdin          io.Reader
 }
 

@@ -50,6 +50,8 @@ func TestIsIdempotentProcedure_GivenWhitelistAndMutatingProcedures_ReturnsExpect
 	// 其余新增只读与幂等接口判定为 true
 	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceDiffDiskProcedure))
 	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceReadCommitNodeProcedure))
+	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceRenewMountProcedure))
+	require.True(t, IsIdempotentProcedure(storagev1connect.StorageServiceUnmountDiskProcedure))
 
 	// 非幂等写接口判定为 false
 	require.False(t, IsIdempotentProcedure(storagev1connect.StorageServiceCreateDiskProcedure))

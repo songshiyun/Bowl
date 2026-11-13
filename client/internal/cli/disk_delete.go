@@ -69,17 +69,17 @@ func (a *diskDeleteAdapter) spanAttrs() []attribute.KeyValue {
 
 func (a *diskDeleteAdapter) preRPC(ports diskPorts, stderr io.Writer) *diskCLIError {
 	// 步骤 1：本机挂载表快检
-	mountpoint, mounted, err := ports.findMountpoint(a.diskID)
+	info, err := ports.findMountpoint(a.diskID)
 	if err != nil {
 		return &diskCLIError{
 			exitCode: 1,
 			msg:      fmt.Sprintf("检查本机挂载表失败: %v", err),
 		}
 	}
-	if mounted {
+	if info.Mounted {
 		return &diskCLIError{
 			exitCode: 1,
-			msg:      fmt.Sprintf("磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl umount %s 卸载后再删除", a.diskID, mountpoint, mountpoint),
+			msg:      fmt.Sprintf("磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl umount %s 卸载后再删除", a.diskID, info.Mountpoint, info.Mountpoint),
 		}
 	}
 

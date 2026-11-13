@@ -268,8 +268,8 @@ func TestDiskMerge_GivenInvalidInputs_ReturnsExit2WithDiagnostics(t *testing.T) 
 	requireCLIError2(t, "不能同时使用", "disk", "merge", testDiskID1, "--into", testDiskID2, "-q", "--json")
 }
 
-func TestDiskMerge_GivenLocalMountGuards_BlocksMountedTargetAndWarnsMountedSource(t *testing.T) {
-	// Given: 目标盘本机已挂载 -> preRPC 强制拦截并提示先执行 bowl unmount
+func TestDiskMerge_GivenLocalMountGuards_EnforcesTargetSourceModesDryRunAndForce(t *testing.T) {
+	// Given: 目标盘本机已挂载 -> 非 dry-run 非 force 强制拦截并提示先执行 bowl umount
 	storage := newFakeStorage()
 	storage.seedDisk(testDiskID1, "src", 1<<30, 1024)
 	storage.seedDisk(testDiskID2, "tgt", 1<<30, 1024)
@@ -282,25 +282,56 @@ func TestDiskMerge_GivenLocalMountGuards_BlocksMountedTargetAndWarnsMountedSourc
 	// Then
 	require.Equal(t, 1, code)
 	require.Empty(t, out)
-	require.Contains(t, errOut, "bowl unmount /mnt/target")
+	require.Contains(t, errOut, "bowl umount /mnt/target")
+	require.NotContains(t, errOut, "bowl unmount")
 	require.Equal(t, 0, storage.mergeCalls)
 
-	// Given: mountinfo 不可读 -> 拦截
+	// Given: 目标盘本机已挂载，但使用 --dry-run -> 不被本地 preRPC 拦截，正常调用服务端返回预演结果
+	code, out, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2, "--dry-run")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Contains(t, out, "Dry Run")
+	require.Equal(t, 1, storage.mergeCalls)
+
+	// Given: 目标盘与源盘均在本机 rw 挂载，指定 --force / -f -> 跳过本地 preRPC 拦截并透传 Force: true
+	withMountInfoContent(t, "100 30 0:50 / /mnt/target rw - fuse.bowl bowl:"+testDiskID2+" rw\n101 30 0:51 / /mnt/source rw - fuse.bowl bowl:"+testDiskID1+" rw\n")
+	code, out, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2, "--force")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Equal(t, 2, storage.mergeCalls)
+	require.True(t, storage.lastMergeReq.GetForce())
+	require.Contains(t, out, testDiskID2)
+
+	code, _, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2, "-f")
+	require.Equal(t, 0, code)
+	require.Empty(t, errOut)
+	require.Equal(t, 3, storage.mergeCalls)
+	require.True(t, storage.lastMergeReq.GetForce())
+
+	// Given: mountinfo 不可读（非 dry-run 非 force）-> 拦截
 	withUnreadableMountInfo(t)
 	code, out, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2)
 	require.Equal(t, 1, code)
 	require.Empty(t, out)
 	require.Contains(t, errOut, "检查本机挂载表失败")
-	require.Equal(t, 0, storage.mergeCalls)
+	require.Equal(t, 3, storage.mergeCalls)
 
-	// Given: 仅源盘在本机已挂载 -> 放行 RPC，并在 stderr 提醒先 sync
-	withMountInfoContent(t, "101 30 0:51 / /mnt/source rw - fuse.bowl bowl:"+testDiskID1+" rw\n")
+	// Given: 仅源盘在本机处于 rw 挂载且未传 --force -> preRPC 直接拒绝并提示先执行 bowl umount
+	withMountInfoContent(t, "101 30 0:51 / /mnt/source rw,nosuid - fuse.bowl bowl:"+testDiskID1+" rw\n")
 	code, out, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2)
+	require.Equal(t, 1, code)
+	require.Empty(t, out)
+	require.Contains(t, errOut, "读写挂载")
+	require.Contains(t, errOut, "bowl umount /mnt/source")
+	require.Equal(t, 3, storage.mergeCalls)
 
-	// Then
+	// Given: 源盘在本机仅处于 ro 只读挂载 -> preRPC 放行
+	withMountInfoContent(t, "101 30 0:51 / /mnt/source-ro ro,nosuid - fuse.bowl bowl:"+testDiskID1+" ro\n")
+	code, out, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2)
 	require.Equal(t, 0, code)
-	require.Equal(t, 1, storage.mergeCalls)
-	require.Contains(t, errOut, "sync")
+	require.Empty(t, errOut)
+	require.Equal(t, 4, storage.mergeCalls)
+	require.False(t, storage.lastMergeReq.GetForce())
 	require.Contains(t, out, testDiskID2)
 }
 
@@ -420,6 +451,8 @@ func TestDiskMerge_GivenECONFLICTReport_RendersHumanGuidanceAndStructuredJSONWit
 	require.Contains(t, errOut, "ADD_ADD")
 	require.Contains(t, errOut, "--resolve")
 	require.Contains(t, errOut, "bowl mount")
+	require.Contains(t, errOut, "bowl umount")
+	require.NotContains(t, errOut, "bowl unmount")
 
 	// When: --json 结构化输出
 	code, jsonOut, errOut := runCLI("disk", "merge", testDiskID1, "--into", testDiskID2, "--json")
@@ -547,15 +580,28 @@ func TestDiskMerge_GivenServerErrors_MapsExpectedExitCodes(t *testing.T) {
 	withDiskStorageFake(t, storage)
 	withMissingMountInfo(t)
 
-	// EBUSY on CodeAborted
-	ebusyErr := connect.NewError(connect.CodeAborted, errors.New("concurrent write"))
+	// EBUSY on CodeAborted (目标盘挂载/并发写入)
+	ebusyErr := connect.NewError(connect.CodeAborted, errors.New("concurrent write on target disk"))
 	ebusyDetail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EBUSY"})
 	require.NoError(t, err)
 	ebusyErr.AddDetail(ebusyDetail)
 	storage.forcedErr["MergeDisk"] = ebusyErr
 	code, _, errOut := runCLI("disk", "merge", testDiskID1, "--into", testDiskID2)
 	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "目标磁盘")
 	require.Contains(t, errOut, "并发写入或仍处于挂载状态")
+
+	// EBUSY on CodeAborted (源盘读写挂载)
+	srcBusyErr := connect.NewError(connect.CodeAborted, errors.New("source disk "+testDiskID1+" is currently mounted read-write"))
+	srcBusyDetail, err := connect.NewErrorDetail(&errdetails.ErrorInfo{Reason: "EBUSY"})
+	require.NoError(t, err)
+	srcBusyErr.AddDetail(srcBusyDetail)
+	storage.forcedErr["MergeDisk"] = srcBusyErr
+	code, _, errOut = runCLI("disk", "merge", testDiskID1, "--into", testDiskID2)
+	require.Equal(t, 1, code)
+	require.Contains(t, errOut, "源磁盘")
+	require.Contains(t, errOut, "读写挂载状态")
+	require.Contains(t, errOut, "bowl umount")
 
 	// CodeResourceExhausted
 	storage.forcedErr["MergeDisk"] = connect.NewError(connect.CodeResourceExhausted, errors.New("quota exceeded"))
