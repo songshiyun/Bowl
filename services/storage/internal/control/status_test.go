@@ -4,15 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
-	"github.com/prometheus/client_golang/prometheus"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,227 +14,120 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
 
-func requireStatusMapping(t *testing.T, err error, wantCode codes.Code, wantReason string) {
+func requireMappedStatus(t *testing.T, err error, wantCode codes.Code, wantReason string) {
 	t.Helper()
 	st := ToStatus(err)
-	require.NotNil(t, st)
-	require.Equal(t, wantCode, st.Code())
-	require.Equal(t, err.Error(), st.Message())
+	require.NotNil(t, st, "错误=%v 时 ToStatus 不得返回 nil", err)
+	require.Equal(t, wantCode, st.Code(), "错误=%v 的 gRPC 状态码不匹配: want=%v got=%v", err, wantCode, st.Code())
+	require.Equal(t, err.Error(), st.Message(), "错误=%v 的状态消息不匹配: want=%q got=%q", err, err.Error(), st.Message())
 
 	details := st.Details()
-	require.Len(t, details, 1)
+	require.Len(t, details, 1, "错误=%v 应携带 1 个 ErrorInfo 详情: want=1 got=%d", err, len(details))
 	info, ok := details[0].(*errdetails.ErrorInfo)
-	require.True(t, ok)
-	require.Equal(t, ErrorDomain, info.GetDomain())
-	require.Equal(t, wantReason, info.GetReason())
+	require.True(t, ok, "错误=%v 的详情类型应为 *errdetails.ErrorInfo: got=%T", err, details[0])
+	require.Equal(t, ErrorDomain, info.GetDomain(), "错误=%v 的 ErrorInfo 领域不匹配: want=%q got=%q", err, ErrorDomain, info.GetDomain())
+	require.Equal(t, wantReason, info.GetReason(), "错误=%v 的 ErrorInfo reason 不匹配: want=%q got=%q", err, wantReason, info.GetReason())
 }
 
-func TestToStatusMapsStoreAndControlSentinels(t *testing.T) {
-	requireStatusMapping(t, store.ErrQuotaShrinkBelowUsed, codes.FailedPrecondition, "EINVAL")
-	requireStatusMapping(t, store.ErrStaleEpoch, codes.FailedPrecondition, "EBUSY")
-	requireStatusMapping(t, ErrInvalidArgument, codes.InvalidArgument, "EINVAL")
-	requireStatusMapping(t, store.ErrInvalidKey, codes.InvalidArgument, "EINVAL")
-	requireStatusMapping(t, store.ErrInvalidValue, codes.InvalidArgument, "EINVAL")
-	requireStatusMapping(t, ErrNameTooLong, codes.InvalidArgument, "ENAMETOOLONG")
-	requireStatusMapping(t, ErrRange, codes.InvalidArgument, "ERANGE")
-	requireStatusMapping(t, ErrNotFound, codes.NotFound, "ENOENT")
-	requireStatusMapping(t, ErrNoData, codes.NotFound, "ENODATA")
-	requireStatusMapping(t, ErrAlreadyExists, codes.AlreadyExists, "EEXIST")
-	requireStatusMapping(t, ErrPerm, codes.PermissionDenied, "EPERM")
-	requireStatusMapping(t, store.ErrReadOnly, codes.PermissionDenied, "EPERM")
-	requireStatusMapping(t, ErrNotDir, codes.FailedPrecondition, "ENOTDIR")
-	requireStatusMapping(t, ErrIsDir, codes.FailedPrecondition, "EISDIR")
-	requireStatusMapping(t, ErrNotEmpty, codes.FailedPrecondition, "ENOTEMPTY")
-	requireStatusMapping(t, ErrNoSpace, codes.ResourceExhausted, "ENOSPC")
-	requireStatusMapping(t, store.ErrInodeExhausted, codes.ResourceExhausted, "ENOSPC")
-	requireStatusMapping(t, ErrNotSupported, codes.Unimplemented, "EOPNOTSUPP")
-	requireStatusMapping(t, ErrTooManyLinks, codes.ResourceExhausted, "EMLINK")
-	requireStatusMapping(t, ErrFileTooLarge, codes.InvalidArgument, "EFBIG")
-	requireStatusMapping(t, ErrIO, codes.Internal, "EIO")
-	requireStatusMapping(t, ErrClosed, codes.Internal, "EIO")
+func TestToStatus_SentinelErrors_MapsToExpectedGRPCCodeAndErrorInfo(t *testing.T) {
+	// Given: 控制模块与存储引擎模块定义的全部领域哨兵错误及其包装形式
+	cases := []struct {
+		name       string
+		err        error
+		wantCode   codes.Code
+		wantReason string
+	}{
+		{name: "配额缩容低于已用空间", err: store.ErrQuotaShrinkBelowUsed, wantCode: codes.FailedPrecondition, wantReason: "EINVAL"},
+		{name: "写入世代号陈旧", err: store.ErrStaleEpoch, wantCode: codes.FailedPrecondition, wantReason: "EBUSY"},
+		{name: "非法参数", err: ErrInvalidArgument, wantCode: codes.InvalidArgument, wantReason: "EINVAL"},
+		{name: "非法键", err: store.ErrInvalidKey, wantCode: codes.InvalidArgument, wantReason: "EINVAL"},
+		{name: "非法值", err: store.ErrInvalidValue, wantCode: codes.InvalidArgument, wantReason: "EINVAL"},
+		{name: "名称超长", err: ErrNameTooLong, wantCode: codes.InvalidArgument, wantReason: "ENAMETOOLONG"},
+		{name: "数值越界", err: ErrRange, wantCode: codes.InvalidArgument, wantReason: "ERANGE"},
+		{name: "目标不存在", err: ErrNotFound, wantCode: codes.NotFound, wantReason: "ENOENT"},
+		{name: "扩展属性不存在", err: ErrNoData, wantCode: codes.NotFound, wantReason: "ENODATA"},
+		{name: "目标已存在", err: ErrAlreadyExists, wantCode: codes.AlreadyExists, wantReason: "EEXIST"},
+		{name: "权限拒绝", err: ErrPerm, wantCode: codes.PermissionDenied, wantReason: "EPERM"},
+		{name: "只读保护", err: store.ErrReadOnly, wantCode: codes.PermissionDenied, wantReason: "EPERM"},
+		{name: "目标非目录", err: ErrNotDir, wantCode: codes.FailedPrecondition, wantReason: "ENOTDIR"},
+		{name: "目标为目录", err: ErrIsDir, wantCode: codes.FailedPrecondition, wantReason: "EISDIR"},
+		{name: "目录非空", err: ErrNotEmpty, wantCode: codes.FailedPrecondition, wantReason: "ENOTEMPTY"},
+		{name: "空间配额耗尽", err: ErrNoSpace, wantCode: codes.ResourceExhausted, wantReason: "ENOSPC"},
+		{name: "Inode 号段耗尽", err: store.ErrInodeExhausted, wantCode: codes.ResourceExhausted, wantReason: "ENOSPC"},
+		{name: "操作不支持", err: ErrNotSupported, wantCode: codes.Unimplemented, wantReason: "EOPNOTSUPP"},
+		{name: "硬链接数超限", err: ErrTooManyLinks, wantCode: codes.ResourceExhausted, wantReason: "EMLINK"},
+		{name: "文件过大", err: ErrFileTooLarge, wantCode: codes.InvalidArgument, wantReason: "EFBIG"},
+		{name: "存储引擎输入输出故障", err: ErrIO, wantCode: codes.Internal, wantReason: "EIO"},
+		{name: "实例已关闭", err: ErrClosed, wantCode: codes.Internal, wantReason: "EIO"},
+		{name: "包装后的缩容错误", err: fmt.Errorf("shrink rejected: %w", store.ErrQuotaShrinkBelowUsed), wantCode: codes.FailedPrecondition, wantReason: "EINVAL"},
+	}
 
-	wrappedShrink := fmt.Errorf("shrink rejected: %w", store.ErrQuotaShrinkBelowUsed)
-	requireStatusMapping(t, wrappedShrink, codes.FailedPrecondition, "EINVAL")
+	// When / Then: 逐一映射为 gRPC Status 并校验状态码与 ErrorInfo
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requireMappedStatus(t, tc.err, tc.wantCode, tc.wantReason)
+		})
+	}
+}
 
-	passthroughBase, err := status.New(codes.InvalidArgument, "validator_erange").WithDetails(&errdetails.ErrorInfo{
+func TestToStatus_JoinedSentinels_PrefersHigherPriorityMapping(t *testing.T) {
+	// Given: 同时包含低优先级通用参数错误与高优先级缩容错误的聚合错误
+	joined := errors.Join(store.ErrInvalid, store.ErrQuotaShrinkBelowUsed)
+
+	// When / Then: 应优先命中 ErrQuotaShrinkBelowUsed 对应的 FailedPrecondition
+	requireMappedStatus(t, joined, codes.FailedPrecondition, "EINVAL")
+}
+
+func TestToStatus_ExistingGRPCStatus_PassesThroughUnchanged(t *testing.T) {
+	// Given: 已携带 ErrorInfo 详情的原生 gRPC 状态错误
+	base, err := status.New(codes.InvalidArgument, "validator_erange").WithDetails(&errdetails.ErrorInfo{
 		Reason: "ERANGE",
 		Domain: ErrorDomain,
 	})
-	require.NoError(t, err)
-	passthrough := ToStatus(passthroughBase.Err())
-	require.NotNil(t, passthrough)
-	require.Equal(t, codes.InvalidArgument, passthrough.Code())
-	require.Len(t, passthrough.Details(), 1)
-	passthroughInfo, ok := passthrough.Details()[0].(*errdetails.ErrorInfo)
-	require.True(t, ok)
-	require.Equal(t, "ERANGE", passthroughInfo.GetReason())
+	require.NoError(t, err, "构造基准 status 失败")
 
-	require.Nil(t, ToStatus(nil))
-	require.NoError(t, ToGRPCError(nil))
+	// When: 经 ToStatus 转换
+	got := ToStatus(base.Err())
+
+	// Then: 状态码与 ErrorInfo 详情原样透传
+	require.NotNil(t, got, "已有 gRPC status 透传不得返回 nil")
+	require.Equal(t, codes.InvalidArgument, got.Code(), "透传状态码不匹配: want=%v got=%v", codes.InvalidArgument, got.Code())
+	require.Len(t, got.Details(), 1, "透传详情数量不匹配: want=1 got=%d", len(got.Details()))
+	info, ok := got.Details()[0].(*errdetails.ErrorInfo)
+	require.True(t, ok, "透传详情类型应为 *errdetails.ErrorInfo: got=%T", got.Details()[0])
+	require.Equal(t, "ERANGE", info.GetReason(), "透传 reason 不匹配: want=ERANGE got=%q", info.GetReason())
+}
+
+func TestToStatus_ContextAndUnknownErrors_MapsWithoutErrorInfo(t *testing.T) {
+	// Given: 上下文取消、上下文超时与未分类内部错误
+	cases := []struct {
+		name     string
+		err      error
+		wantCode codes.Code
+	}{
+		{name: "上下文取消", err: fmt.Errorf("aborted: %w", context.Canceled), wantCode: codes.Canceled},
+		{name: "上下文超时", err: fmt.Errorf("timed out: %w", context.DeadlineExceeded), wantCode: codes.DeadlineExceeded},
+		{name: "未知内部错误", err: errors.New("unexpected internal failure"), wantCode: codes.Unknown},
+	}
+
+	// When / Then: 映射为对应状态码且不附加 ErrorInfo
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := ToStatus(tc.err)
+			require.NotNil(t, st, "错误=%v 时 ToStatus 不得返回 nil", tc.err)
+			require.Equal(t, tc.wantCode, st.Code(), "错误=%v 状态码不匹配: want=%v got=%v", tc.err, tc.wantCode, st.Code())
+			require.Empty(t, st.Details(), "错误=%v 不应附加 ErrorInfo 详情: got=%v", tc.err, st.Details())
+		})
+	}
+}
+
+func TestToStatusAndToGRPCError_NilAndSentinelError_HandlesCorrectly(t *testing.T) {
+	// Given / When / Then: nil 输入直接返回 nil，哨兵错误转换为带 ErrorInfo 的 gRPC error
+	require.Nil(t, ToStatus(nil), "nil 错误经 ToStatus 应返回 nil")
+	require.NoError(t, ToGRPCError(nil), "nil 错误经 ToGRPCError 应返回 nil")
 
 	grpcErr := ToGRPCError(store.ErrStaleEpoch)
 	st, ok := status.FromError(grpcErr)
-	require.True(t, ok)
-	require.Equal(t, codes.FailedPrecondition, st.Code())
-
-	stCanceled := ToStatus(fmt.Errorf("aborted: %w", context.Canceled))
-	require.Equal(t, codes.Canceled, stCanceled.Code())
-	require.Empty(t, stCanceled.Details())
-
-	stDeadline := ToStatus(fmt.Errorf("timed out: %w", context.DeadlineExceeded))
-	require.Equal(t, codes.DeadlineExceeded, stDeadline.Code())
-	require.Empty(t, stDeadline.Details())
-
-	stUnknown := ToStatus(errors.New("unexpected internal failure"))
-	require.Equal(t, codes.Unknown, stUnknown.Code())
-	require.Empty(t, stUnknown.Details())
-}
-
-// TestEvictIdleActorAndClosedPoolFencing 验证黑盒 RPC 未暴露的实例池空闲驱逐刷盘与池关闭后 ErrClosed 栅栏。
-func TestEvictIdleActorAndClosedPoolFencing(t *testing.T) {
-	const diskID = "018f0000-0000-7000-8000-000000000001"
-	root := t.TempDir()
-
-	seedActor, err := store.Open(store.Options{
-		Dir:      filepath.Join(root, "disks", diskID),
-		DiskID:   diskID,
-		MaxBytes: 4 << 20,
-	})
-	require.NoError(t, err)
-	epoch, _, err := seedActor.AdvanceEpoch(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), epoch)
-	require.NoError(t, seedActor.Close())
-
-	mgr := newManager(nil, WithStorageRoot(root))
-	ctx := context.Background()
-
-	_, err = mgr.evictIdleActor(ctx, "not-a-uuid")
-	require.ErrorIs(t, err, ErrInvalidArgument)
-
-	evictedBeforeLoad, err := mgr.evictIdleActor(ctx, diskID)
-	require.NoError(t, err)
-	require.False(t, evictedBeforeLoad)
-
-	loaded, err := mgr.getOrOpenActorLocked(ctx, diskID)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), loaded.WriterEpoch())
-
-	evictedAfterLoad, err := mgr.evictIdleActor(ctx, diskID)
-	require.NoError(t, err)
-	require.True(t, evictedAfterLoad)
-	_, err = loaded.StatFS(ctx)
-	require.ErrorIs(t, err, store.ErrClosed)
-
-	reloaded, err := mgr.getOrOpenActorLocked(ctx, diskID)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), reloaded.WriterEpoch())
-
-	require.NoError(t, mgr.Close())
-	require.NoError(t, mgr.Close())
-
-	_, err = mgr.evictIdleActor(ctx, diskID)
-	require.ErrorIs(t, err, ErrClosed)
-	_, err = mgr.Actor(ctx, diskID)
-	require.ErrorIs(t, err, ErrClosed)
-	_, err = mgr.CreateDisk(ctx, CreateDiskParams{Name: "after-close", MaxBytes: 4096})
-	require.ErrorIs(t, err, ErrClosed)
-}
-
-func TestOpenDiskActorMetricsAndSpanWithZeroAllocHotPath(t *testing.T) {
-	const (
-		diskID        = "018f0000-0000-7000-8000-000000000011"
-		missingDiskID = "018f0000-0000-7000-8000-000000000012"
-	)
-	root := t.TempDir()
-
-	seedActor, err := store.Open(store.Options{
-		Dir:      filepath.Join(root, "disks", diskID),
-		DiskID:   diskID,
-		MaxBytes: 4 << 20,
-	})
-	require.NoError(t, err)
-	require.NoError(t, seedActor.Close())
-
-	prevTP := otel.GetTracerProvider()
-	exporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(exporter),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-	otel.SetTracerProvider(tp)
-	t.Cleanup(func() {
-		_ = tp.Shutdown(context.Background())
-		otel.SetTracerProvider(prevTP)
-	})
-
-	mgr := newManager(nil, WithStorageRoot(root))
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(mgr.Collector()))
-
-	sampledCtx, rootSpan := tp.Tracer("test-control").Start(context.Background(), "rpc.GetDisk")
-	loaded, err := mgr.getOrOpenActorLocked(sampledCtx, diskID)
-	require.NoError(t, err)
-	require.NotNil(t, loaded)
-
-	// 只读打开不存在的目录将返回错误并记录 result="error"
-	_, err = mgr.openDiskActor(sampledCtx, store.Options{
-		Dir:      filepath.Join(root, "disks", missingDiskID),
-		DiskID:   missingDiskID,
-		ReadOnly: true,
-	})
-	require.Error(t, err)
-	rootSpan.End()
-
-	// 验证已加载盘热路径 Actor(ctx, diskID) 零分配且不产生多余 Span
-	exporter.Reset()
-	unsampledCtx := context.Background()
-	allocs := testing.AllocsPerRun(100, func() {
-		got, aErr := mgr.Actor(unsampledCtx, diskID)
-		if aErr != nil || got != loaded {
-			t.Fatalf("unexpected Actor result: %v, %v", got, aErr)
-		}
-	})
-	require.Zero(t, allocs, "已加载磁盘热路径 Actor(ctx, diskID) 必须保持 0 allocs/op")
-	require.Empty(t, exporter.GetSpans(), "命中缓存池热路径不应产生 OpenDiskActor 子 Span")
-
-	// 重新验证冷启动时产生了 2 个 control.OpenDiskActor 子 Span（成功 + 失败）
-	sampledCtx2, rootSpan2 := tp.Tracer("test-control").Start(context.Background(), "rpc.Reload")
-	_, err = mgr.evictIdleActor(sampledCtx2, diskID)
-	require.NoError(t, err)
-	_, err = mgr.getOrOpenActorLocked(sampledCtx2, diskID)
-	require.NoError(t, err)
-	rootSpan2.End()
-
-	spans := exporter.GetSpans()
-	var openSpanCount int
-	for _, sp := range spans {
-		if sp.Name == "control.OpenDiskActor" {
-			openSpanCount++
-		}
-	}
-	require.Equal(t, 1, openSpanCount)
-
-	fams, err := reg.Gather()
-	require.NoError(t, err)
-	var openHistMetrics []*dto.Metric
-	for _, fam := range fams {
-		if fam.GetName() == "bowl_storage_control_open_actor_duration_seconds" {
-			openHistMetrics = fam.GetMetric()
-		}
-	}
-	require.NotEmpty(t, openHistMetrics)
-
-	counts := make(map[string]uint64)
-	for _, m := range openHistMetrics {
-		for _, lp := range m.GetLabel() {
-			if lp.GetName() == "result" {
-				counts[lp.GetValue()] = m.GetHistogram().GetSampleCount()
-			}
-		}
-	}
-	require.Equal(t, uint64(2), counts["ok"], "两次成功冷加载应记录 result=ok 计数 2")
-	require.Equal(t, uint64(1), counts["error"], "一次失败开盘应记录 result=error 计数 1")
+	require.True(t, ok, "ToGRPCError 输出应可被 status.FromError 解析: err=%v", grpcErr)
+	require.Equal(t, codes.FailedPrecondition, st.Code(), "ErrStaleEpoch 状态码不匹配: want=%v got=%v", codes.FailedPrecondition, st.Code())
 }

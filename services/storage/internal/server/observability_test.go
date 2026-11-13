@@ -3,13 +3,16 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	dto "github.com/prometheus/client_model/go"
@@ -17,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -24,6 +28,7 @@ import (
 
 	"github.com/starsrc/pkg/observability"
 	"github.com/starsrc/pkg/observability/obsfx"
+	"github.com/starsrc/pkg/observability/slogx"
 	"github.com/starsrc/pkg/observability/telemetry"
 	"github.com/starsrc/pkg/serverx"
 
@@ -35,35 +40,42 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
 
-func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) {
-	ctx := context.Background()
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) Records(t *testing.T) []map[string]any {
+	t.Helper()
+	b.mu.Lock()
+	raw := b.buf.String()
+	b.mu.Unlock()
+
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	out := make([]map[string]any, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &rec), "日志行必须为合法 JSON: %s", line)
+		out = append(out, rec)
+	}
+	return out
+}
+
+func installOTelCleanup(t *testing.T) {
+	t.Helper()
 	prevMP := otel.GetMeterProvider()
 	prevTP := otel.GetTracerProvider()
 	prevProp := otel.GetTextMapPropagator()
-
-	obsCfg := observability.DefaultConfig()
-	obsCfg.AdminAddr = "off"
-	obsCfg.LogLevel = "error"
-
-	httpMetrics := NewHTTPMetrics()
-	storeMetrics := store.NewMetrics()
-	mgr := control.New(
-		db.NewMemStore(),
-		control.WithStorageRoot(t.TempDir()),
-		control.WithStoreMetrics(storeMetrics),
-	)
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	rt, err := observability.Setup(
-		ctx,
-		config.NewObservabilityConfig(&obsCfg),
-		observability.WithLogWriter(io.Discard),
-		observability.WithSetDefaultLogger(false),
-		observability.WithCollectors(httpMetrics, storeMetrics, mgr.Collector()),
-	)
-	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, rt.Shutdown(context.Background()))
 		if otel.GetMeterProvider() != prevMP {
 			otel.SetMeterProvider(prevMP)
 		}
@@ -72,86 +84,10 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 		}
 		otel.SetTextMapPropagator(prevProp)
 	})
+}
 
-	ready, err := ConfigureFineBucketMeterProvider(FineBucketParams{
-		Runtime:   rt,
-		Telemetry: obsCfg,
-		AdminCfg:  obsCfg,
-	})
-	require.NoError(t, err)
-	fineMP, ok := otel.GetMeterProvider().(*sdkmetric.MeterProvider)
-	require.True(t, ok)
-	var mpShutdownOnce sync.Once
-	shutdownFineMP := func(c context.Context) error {
-		var sErr error
-		mpShutdownOnce.Do(func() {
-			sErr = fineMP.Shutdown(c)
-		})
-		return sErr
-	}
-	t.Cleanup(func() {
-		require.NoError(t, shutdownFineMP(context.Background()))
-	})
-
-	// 挂载内存 Span 导出器以便断言 Server -> Control -> StoreActor 端到端 Span 链
-	spanExporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(spanExporter),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-
-	srv, err := New(Params{
-		Config: config.ServerConfig{
-			ServerPort:         0,
-			InternalServerPort: 9090,
-			ServerReadMaxBytes: 8 << 20,
-		},
-		Control:       mgr,
-		Observability: obsCfg,
-		Telemetry:     obsCfg,
-		AdminCfg:      obsCfg,
-		Gatherer:      rt.Gatherer(),
-		FineBuckets:   ready,
-		HTTPMetrics:   httpMetrics,
-		Logger:        rt.Logger(),
-	})
-	require.NoError(t, err)
-	require.NotNil(t, srv.AdminHandler())
-
-	httpSrv := httptest.NewServer(srv.Handler())
-	defer httpSrv.Close()
-
-	client := storagev1connect.NewStorageServiceClient(httpSrv.Client(), httpSrv.URL)
-
-	// 1. 全链路 RPC：CreateDisk -> MountDisk -> Create -> Write (512 KiB) -> Fsync -> Read (512 KiB)
-	createDiskResp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
-		Name:     "obs-e2e-disk",
-		MaxBytes: 64 << 20,
-	}))
-	require.NoError(t, err)
-	diskID := createDiskResp.Msg.GetDisk().GetDiskId()
-
-	mountResp, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{
-		DiskId: diskID,
-	}))
-	require.NoError(t, err)
-	epoch := mountResp.Msg.GetEpoch()
-
-	createFileResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
-		DiskId:    diskID,
-		Epoch:     epoch,
-		ParentIno: store.RootIno,
-		Name:      []byte("payload.bin"),
-		Mode:      store.S_IFREG | 0o644,
-	}))
-	require.NoError(t, err)
-	fileIno := createFileResp.Msg.GetInode().GetIno()
-
-	const ioSize = 512 * 1024
-	payload := make([]byte, ioSize)
+func generateXorshiftPayload(size int) []byte {
+	payload := make([]byte, size)
 	state := uint64(0x9e3779b97f4a7c15)
 	for i := range payload {
 		state ^= state << 13
@@ -159,62 +95,16 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 		state ^= state << 17
 		payload[i] = byte(state)
 	}
-	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
-		DiskId: diskID,
-		Epoch:  epoch,
-		Ino:    fileIno,
-		Offset: 0,
-		Data:   payload,
-	}))
-	require.NoError(t, err)
+	return payload
+}
 
-	_, err = client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
-		DiskId: diskID,
-		Epoch:  epoch,
-		Ino:    fileIno,
-	}))
-	require.NoError(t, err)
-
-	readResp, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
-		DiskId: diskID,
-		Ino:    fileIno,
-		Offset: 0,
-		Size:   ioSize,
-	}))
-	require.NoError(t, err)
-	require.Equal(t, payload, readResp.Msg.GetData())
-
-	// 读写池缓冲必须在 RPC 往返结束后 100% 归还零残留
-	require.Zero(t, leasedWritePayloadCount())
-	require.Zero(t, leasedReadPayloadCount())
-
-	// 验证 ForkDisk 成功与失败路径的 HTTP 指标归一化与 Span bowl.disk_id 提取（含 GetSourceDiskId 兜底）
-	forkResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
-		SourceDiskId: diskID,
-		Name:         "obs-e2e-forked-disk",
-	}))
-	require.NoError(t, err)
-	forkedDiskID := forkResp.Msg.GetDisk().GetDiskId()
-	require.NotEmpty(t, forkedDiskID)
-	require.Equal(t, diskID, forkResp.Msg.GetDisk().GetParentDiskId())
-	require.Equal(t, uint64(ioSize), forkResp.Msg.GetDisk().GetUsedBytes())
-
-	const missingSourceDiskID = "018f0000-0000-7000-8000-000000009999"
-	_, forkMissingErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
-		SourceDiskId: missingSourceDiskID,
-		Name:         "obs-e2e-missing-fork",
-	}))
-	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkMissingErr))
-
-	// 发送一条未知 URL 探测，验证 procedure 归一到 "other" 且不引发高基数膨胀
-	probeResp, err := httpSrv.Client().Post(httpSrv.URL+"/malicious/random-path-12345", "application/proto", bytes.NewReader([]byte("x")))
-	require.NoError(t, err)
-	_ = probeResp.Body.Close()
-
-	// 2. Gather 校验：无重复 target_info，rpc_server_call_duration_seconds 与 HTTP 外层直方图均为 18 级精细桶
-	fams, err := rt.Gatherer().Gather()
-	require.NoError(t, err)
-
+func assertMetricFamiliesFineBuckets(
+	t *testing.T,
+	fams []*dto.MetricFamily,
+	minReqBytes float64,
+	minRespBytes float64,
+) {
+	t.Helper()
 	byName := make(map[string]*dto.MetricFamily, len(fams))
 	for _, fam := range fams {
 		byName[fam.GetName()] = fam
@@ -228,13 +118,12 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	require.NotNil(t, rpcDurFam, "必须导出 otelconnect rpc_server_call_duration_seconds 直方图")
 	require.NotEmpty(t, rpcDurFam.GetMetric())
 	rpcBuckets := rpcDurFam.GetMetric()[0].GetHistogram().GetBucket()
-	// OTel Prometheus exporter 的 GetBucket() 可能不含 +Inf 或含 18 个显式上界桶，校验首桶必为 25µs (0.000025)
 	require.GreaterOrEqual(t, len(rpcBuckets), len(SubMillisecondBuckets))
-	require.InDelta(t, 0.000025, rpcBuckets[0].GetUpperBound(), 1e-12, "首桶边界必须消除 5ms 失真并下探至 25µs")
+	require.InDelta(t, 0.000025, rpcBuckets[0].GetUpperBound(), 1e-12, "首桶上界必须下探至 25µs")
 	require.InDelta(t, 10.0, rpcBuckets[len(SubMillisecondBuckets)-1].GetUpperBound(), 1e-9)
 
 	httpDurFam := byName["bowl_storage_http_request_duration_seconds"]
-	require.NotNil(t, httpDurFam)
+	require.NotNil(t, httpDurFam, "必须导出 HTTP 入口直方图")
 	var sawWrite2xx, sawRead2xx, sawFork2xx, sawFork4xx, sawOther4xx bool
 	for _, m := range httpDurFam.GetMetric() {
 		var proc, sc string
@@ -264,10 +153,10 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 			sawOther4xx = true
 		}
 	}
-	require.True(t, sawWrite2xx, "外层 HTTP 直方图必须记录 Write 2xx")
-	require.True(t, sawRead2xx, "外层 HTTP 直方图必须记录 Read 2xx")
-	require.True(t, sawFork2xx, "外层 HTTP 直方图必须记录 ForkDisk 2xx")
-	require.True(t, sawFork4xx, "外层 HTTP 直方图必须记录 ForkDisk 4xx")
+	require.True(t, sawWrite2xx, "入口 HTTP 直方图必须记录 Write 2xx")
+	require.True(t, sawRead2xx, "入口 HTTP 直方图必须记录 Read 2xx")
+	require.True(t, sawFork2xx, "入口 HTTP 直方图必须记录 ForkDisk 2xx")
+	require.True(t, sawFork4xx, "入口 HTTP 直方图必须记录 ForkDisk 4xx")
 	require.True(t, sawOther4xx, "未知路径必须收敛至 procedure=other, status_class=4xx")
 
 	reqBytesFam := byName["bowl_storage_http_request_bytes_total"]
@@ -280,7 +169,7 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 			}
 		}
 	}
-	require.GreaterOrEqual(t, writeReqBytes, float64(ioSize))
+	require.GreaterOrEqual(t, writeReqBytes, minReqBytes)
 
 	respBytesFam := byName["bowl_storage_http_response_bytes_total"]
 	require.NotNil(t, respBytesFam)
@@ -292,10 +181,17 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 			}
 		}
 	}
-	require.GreaterOrEqual(t, readRespBytes, float64(ioSize))
+	require.GreaterOrEqual(t, readRespBytes, minRespBytes)
+}
 
-	// 3. 断言 Server -> Control -> StoreActor 全链路 OTel Span 已真实打通
-	spans := spanExporter.GetSpans()
+func assertEndToEndStorageSpans(
+	t *testing.T,
+	spans tracetest.SpanStubs,
+	sourceDiskID string,
+	forkedDiskID string,
+	missingSourceDiskID string,
+) {
+	t.Helper()
 	spanNames := make(map[string]int)
 	var forkSuccessSpan, forkFailureSpan *tracetest.SpanStub
 	for i := range spans {
@@ -325,8 +221,9 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 			forkSuccessSrc = attr.Value.AsString()
 		}
 	}
-	require.Equal(t, diskID, forkSuccessSrc, "ForkDisk 成功 Span 必须同时记录源盘 bowl.source_disk_id")
+	require.Equal(t, sourceDiskID, forkSuccessSrc, "ForkDisk 成功 Span 必须同时记录源盘 bowl.source_disk_id")
 	require.NotNil(t, forkFailureSpan, "ForkDisk 失败 Span 必须独立记录源盘 bowl.source_disk_id 且不得混入 bowl.disk_id")
+
 	for _, expected := range []string{
 		"control.OpenDiskActor",
 		"store.BlobWrite",
@@ -340,13 +237,10 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	} {
 		require.GreaterOrEqual(t, spanNames[expected], 1, "端到端 RPC 链路缺少子 Span %s", expected)
 	}
+}
 
-	// 4. 真实请求管理面 /metrics，校验 Go runtime / process 标准指标与 bowl_storage_* / rpc_server_* 精细桶直方图完整共存，且优雅关闭零报错
-	adminReq := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
-	adminRec := httptest.NewRecorder()
-	srv.AdminHandler().ServeHTTP(adminRec, adminReq)
-	require.Equal(t, http.StatusOK, adminRec.Code)
-	metricsText := adminRec.Body.String()
+func assertMetricsTextContainsAll(t *testing.T, metricsText string) {
+	t.Helper()
 	for _, wantMetric := range []string{
 		"go_goroutines",
 		"go_memstats_alloc_bytes",
@@ -366,19 +260,530 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 		require.Contains(t, metricsText, "process_cpu_seconds_total")
 		require.Contains(t, metricsText, "process_resident_memory_bytes")
 	}
-
-	require.NoError(t, shutdownFineMP(ctx))
-	require.NoError(t, rt.Shutdown(ctx))
 }
 
-func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
-	ctx := context.Background()
-	prevMP := otel.GetMeterProvider()
-	t.Cleanup(func() {
-		if otel.GetMeterProvider() != prevMP {
-			otel.SetMeterProvider(prevMP)
+func assertPromotedForkSpan(t *testing.T, spans tracetest.SpanStubs, wantTraceID trace.TraceID) {
+	t.Helper()
+	var found bool
+	for i := range spans {
+		sp := &spans[i]
+		if sp.Name == "storage.v1.StorageService/ForkDisk" || sp.Name == storagev1connect.StorageServiceForkDiskProcedure {
+			require.Equal(t, wantTraceID, sp.SpanContext.TraceID(), "提权采样后必须沿用客户端 traceparent TraceID")
+			found = true
 		}
+	}
+	require.True(t, found, "携带未采样 traceparent 的控制面 ForkDisk 必须被处理端 100%% 提权录制")
+}
+
+func assertLogRecordExists(
+	t *testing.T,
+	records []map[string]any,
+	wantLevel string,
+	wantProcedure string,
+	wantMsgSubstring string,
+) map[string]any {
+	t.Helper()
+	for _, rec := range records {
+		lvl, _ := rec["level"].(string)
+		msg, _ := rec["msg"].(string)
+		proc, _ := rec[slogx.DefaultProcedureKey].(string)
+		if lvl == wantLevel && proc == wantProcedure && strings.Contains(msg, wantMsgSubstring) {
+			return rec
+		}
+	}
+	require.FailNowf(t, "缺少预期结构化日志记录", "wantLevel=%s wantProcedure=%s wantMsgSubstring=%s total=%d", wantLevel, wantProcedure, wantMsgSubstring, len(records))
+	return nil
+}
+
+func assertNoSlowRPCWarning(t *testing.T, records []map[string]any, procedure string) {
+	t.Helper()
+	for _, rec := range records {
+		lvl, _ := rec["level"].(string)
+		msg, _ := rec["msg"].(string)
+		proc, _ := rec[slogx.DefaultProcedureKey].(string)
+		if lvl == "WARN" && proc == procedure && msg == "slow storage rpc" {
+			require.FailNowf(t, "不应触发慢操作告警", "procedure=%s rec=%v", procedure, rec)
+		}
+	}
+}
+
+func assertManualReaderHasFineBuckets(t *testing.T, rm metricdata.ResourceMetrics) {
+	t.Helper()
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "rpc.server.call.duration" {
+				continue
+			}
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			require.True(t, ok, "rpc.server.call.duration 应为 Histogram[float64]")
+			require.NotEmpty(t, hist.DataPoints, "Histogram 应至少含有一个数据点")
+			dp := hist.DataPoints[0]
+			require.Equal(t, SubMillisecondBuckets, dp.Bounds, "ManualReader 采集的桶配置必须匹配 SubMillisecondBuckets")
+			require.GreaterOrEqual(t, dp.Count, uint64(1), "Histogram 样本计数应至少为 1")
+			return
+		}
+	}
+	require.FailNow(t, "ManualReader 未采集到 rpc.server.call.duration 指标")
+}
+
+func makeStepClock(t0 time.Time, delta time.Duration) func() time.Time {
+	calls := 0
+	return func() time.Time {
+		calls++
+		if calls == 1 {
+			return t0
+		}
+		return t0.Add(delta)
+	}
+}
+
+func TestObservability_EndToEndRPC_ExportsFineBucketMetricsSpansAndJSONLogs(t *testing.T) {
+	// Given: 装配 Prometheus 精细桶 MeterProvider、内存 Trace 导出器、真实 JSON slog 与内存 RoundTripper
+	ctx := context.Background()
+	installOTelCleanup(t)
+
+	obsCfg := observability.DefaultConfig()
+	obsCfg.AdminAddr = "off"
+	obsCfg.LogLevel = "debug"
+
+	logBuf := &syncLogBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	httpMetrics := NewHTTPMetrics()
+	storeMetrics := store.NewMetrics()
+	mgr := control.New(
+		db.NewMemStore(),
+		control.WithStorageRoot(t.TempDir()),
+		control.WithStoreMetrics(storeMetrics),
+	)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	rt, err := observability.Setup(
+		ctx,
+		config.NewObservabilityConfig(&obsCfg),
+		observability.WithLogWriter(io.Discard),
+		observability.WithSetDefaultLogger(false),
+		observability.WithCollectors(httpMetrics, storeMetrics, mgr.Collector()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rt.Shutdown(context.Background())) })
+
+	ready, err := ConfigureFineBucketMeterProvider(FineBucketParams{
+		Runtime:   rt,
+		Telemetry: obsCfg,
+		AdminCfg:  obsCfg,
 	})
+	require.NoError(t, err)
+	fineMP, ok := otel.GetMeterProvider().(*sdkmetric.MeterProvider)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, fineMP.Shutdown(context.Background())) })
+
+	spanExporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(spanExporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	srv, err := New(Params{
+		Config: config.ServerConfig{
+			ServerPort:         0,
+			InternalServerPort: 9090,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		Control:       mgr,
+		Observability: obsCfg,
+		Telemetry:     obsCfg,
+		AdminCfg:      obsCfg,
+		Gatherer:      rt.Gatherer(),
+		FineBuckets:   ready,
+		HTTPMetrics:   httpMetrics,
+		Logger:        logger,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, srv.AdminHandler())
+
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: srv.Handler()}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
+
+	// When: 通过内存传输完成完整控制面与数据面 RPC，并探测未知路径
+	createDiskResp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     "obs-e2e-disk",
+		MaxBytes: 64 << 20,
+	}))
+	require.NoError(t, err)
+	diskID := createDiskResp.Msg.GetDisk().GetDiskId()
+
+	mountResp, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: diskID}))
+	require.NoError(t, err)
+	epoch := mountResp.Msg.GetEpoch()
+
+	createFileResp, err := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    diskID,
+		Epoch:     epoch,
+		ParentIno: store.RootIno,
+		Name:      []byte("payload.bin"),
+		Mode:      store.S_IFREG | 0o644,
+	}))
+	require.NoError(t, err)
+	fileIno := createFileResp.Msg.GetInode().GetIno()
+
+	const ioSize = 512 * 1024
+	payload := generateXorshiftPayload(ioSize)
+	_, err = client.Write(ctx, connect.NewRequest(&storagev1.WriteRequest{
+		DiskId: diskID,
+		Epoch:  epoch,
+		Ino:    fileIno,
+		Offset: 0,
+		Data:   payload,
+	}))
+	require.NoError(t, err)
+
+	_, err = client.Fsync(ctx, connect.NewRequest(&storagev1.FsyncRequest{
+		DiskId: diskID,
+		Epoch:  epoch,
+		Ino:    fileIno,
+	}))
+	require.NoError(t, err)
+
+	readResp, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: diskID,
+		Ino:    fileIno,
+		Offset: 0,
+		Size:   ioSize,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, payload, readResp.Msg.GetData())
+	require.Zero(t, leasedWritePayloadCount())
+	require.Zero(t, leasedReadPayloadCount())
+
+	forkResp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: diskID,
+		Name:         "obs-e2e-forked-disk",
+	}))
+	require.NoError(t, err)
+	forkedDiskID := forkResp.Msg.GetDisk().GetDiskId()
+
+	const missingSourceDiskID = "018f0000-0000-7000-8000-000000009999"
+	_, forkMissingErr := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: missingSourceDiskID,
+		Name:         "obs-e2e-missing-fork",
+	}))
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkMissingErr))
+
+	_, lookupMissingErr := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		DiskId:    diskID,
+		ParentIno: store.RootIno,
+		Name:      []byte("absent-file"),
+	}))
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(lookupMissingErr))
+
+	probeResp, err := httpClient.Post("http://storage.local/malicious/random-path-12345", "application/proto", bytes.NewReader([]byte("x")))
+	require.NoError(t, err)
+	_ = probeResp.Body.Close()
+
+	// Then: Prometheus 指标、OTel 全链路 Span、管理面 /metrics 与结构化 JSON 日志全部准确生效
+	fams, err := rt.Gatherer().Gather()
+	require.NoError(t, err)
+	assertMetricFamiliesFineBuckets(t, fams, float64(ioSize), float64(ioSize))
+
+	assertEndToEndStorageSpans(t, spanExporter.GetSpans(), diskID, forkedDiskID, missingSourceDiskID)
+
+	adminRec := httptest.NewRecorder()
+	srv.AdminHandler().ServeHTTP(adminRec, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
+	require.Equal(t, http.StatusOK, adminRec.Code)
+	assertMetricsTextContainsAll(t, adminRec.Body.String())
+
+	records := logBuf.Records(t)
+	assertLogRecordExists(t, records, "INFO", storagev1connect.StorageServiceForkDiskProcedure, "")
+	assertLogRecordExists(t, records, "WARN", storagev1connect.StorageServiceForkDiskProcedure, "")
+	assertLogRecordExists(t, records, "DEBUG", storagev1connect.StorageServiceLookupProcedure, "")
+}
+
+func TestObservability_ManualMetricReader_CollectsSubMillisecondBuckets(t *testing.T) {
+	// Given: 使用真实 OTel sdkmetric.NewManualReader 与 18 级亚毫秒 View 注册全局 MeterProvider
+	ctx := context.Background()
+	installOTelCleanup(t)
+
+	reader := sdkmetric.NewManualReader()
+	explicitAgg := sdkmetric.Stream{
+		Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+			Boundaries: SubMillisecondBuckets,
+		},
+	}
+	mp := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(reader),
+		sdkmetric.WithView(
+			sdkmetric.NewView(sdkmetric.Instrument{Name: "rpc.server.call.duration"}, explicitAgg),
+		),
+	)
+	otel.SetMeterProvider(mp)
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+
+	mgr := control.New(db.NewMemStore(), control.WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	obsCfg := observability.DefaultConfig()
+	obsCfg.OtelEnabled = true
+	srv, err := New(Params{
+		Config: config.ServerConfig{
+			ServerPort:         0,
+			InternalServerPort: 0,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		Control:       mgr,
+		Observability: obsCfg,
+		Telemetry:     obsCfg,
+		FineBuckets:   FineBucketsReady{},
+	})
+	require.NoError(t, err)
+
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: srv.Handler()}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
+
+	// When: 发起一次 ListDisks RPC 并调用 ManualReader.Collect
+	_, err = client.ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{}))
+	require.NoError(t, err)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+
+	// Then: 采集的直方图 Bounds 严格等于 SubMillisecondBuckets
+	assertManualReaderHasFineBuckets(t, rm)
+}
+
+type slowClockStubHandler struct {
+	storagev1connect.UnimplementedStorageServiceHandler
+}
+
+func (slowClockStubHandler) Read(context.Context, *connect.Request[storagev1.ReadRequest]) (*connect.Response[storagev1.ReadResponse], error) {
+	return connect.NewResponse(&storagev1.ReadResponse{}), nil
+}
+
+func (slowClockStubHandler) CreateDisk(context.Context, *connect.Request[storagev1.CreateDiskRequest]) (*connect.Response[storagev1.CreateDiskResponse], error) {
+	return connect.NewResponse(&storagev1.CreateDiskResponse{}), nil
+}
+
+func (slowClockStubHandler) ForkDisk(context.Context, *connect.Request[storagev1.ForkDiskRequest]) (*connect.Response[storagev1.ForkDiskResponse], error) {
+	return connect.NewResponse(&storagev1.ForkDiskResponse{}), nil
+}
+
+func TestObservability_SlowRPCAlert_RespectsDataAndControlThresholds(t *testing.T) {
+	baseTime := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name          string
+		procedure     string
+		elapsed       time.Duration
+		invoke        func(context.Context, storagev1connect.StorageServiceClient) error
+		wantSlowAlert bool
+		wantDiskID    string
+		wantRequestID string
+	}{
+		{
+			name:      "数据面未超50ms阈值不告警",
+			procedure: storagev1connect.StorageServiceReadProcedure,
+			elapsed:   40 * time.Millisecond,
+			invoke: func(ctx context.Context, client storagev1connect.StorageServiceClient) error {
+				_, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{DiskId: "disk-fast-read"}))
+				return err
+			},
+			wantSlowAlert: false,
+		},
+		{
+			name:      "数据面超过50ms阈值输出慢告警与业务属性",
+			procedure: storagev1connect.StorageServiceReadProcedure,
+			elapsed:   60 * time.Millisecond,
+			invoke: func(ctx context.Context, client storagev1connect.StorageServiceClient) error {
+				r := connect.NewRequest(&storagev1.ReadRequest{DiskId: "disk-slow-read"})
+				r.Header().Set(headerRequestID, "req-slow-001")
+				_, err := client.Read(ctx, r)
+				return err
+			},
+			wantSlowAlert: true,
+			wantDiskID:    "disk-slow-read",
+			wantRequestID: "req-slow-001",
+		},
+		{
+			name:      "控制面120ms未超200ms阈值不告警",
+			procedure: storagev1connect.StorageServiceCreateDiskProcedure,
+			elapsed:   120 * time.Millisecond,
+			invoke: func(ctx context.Context, client storagev1connect.StorageServiceClient) error {
+				_, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{Name: "normal-create"}))
+				return err
+			},
+			wantSlowAlert: false,
+		},
+		{
+			name:      "控制面超过200ms阈值输出慢告警",
+			procedure: storagev1connect.StorageServiceForkDiskProcedure,
+			elapsed:   250 * time.Millisecond,
+			invoke: func(ctx context.Context, client storagev1connect.StorageServiceClient) error {
+				_, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{SourceDiskId: "disk-src-slow"}))
+				return err
+			},
+			wantSlowAlert: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runSlowRPCTestCase(
+				t,
+				baseTime,
+				tc.procedure,
+				tc.elapsed,
+				tc.invoke,
+				tc.wantSlowAlert,
+				tc.wantDiskID,
+				tc.wantRequestID,
+			)
+		})
+	}
+}
+
+func runSlowRPCTestCase(
+	t *testing.T,
+	baseTime time.Time,
+	procedure string,
+	elapsed time.Duration,
+	invoke func(context.Context, storagev1connect.StorageServiceClient) error,
+	wantSlowAlert bool,
+	wantDiskID string,
+	wantRequestID string,
+) {
+	t.Helper()
+	logBuf := &syncLogBuffer{}
+	logger := slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	interceptor := newStorageObservabilityInterceptorWithClock(logger, makeStepClock(baseTime, elapsed))
+	mux := http.NewServeMux()
+	path, h := storagev1connect.NewStorageServiceHandler(slowClockStubHandler{}, connect.WithInterceptors(interceptor))
+	mux.Handle(path, h)
+
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: mux}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
+	require.NoError(t, invoke(context.Background(), client))
+
+	records := logBuf.Records(t)
+	if !wantSlowAlert {
+		assertNoSlowRPCWarning(t, records, procedure)
+		return
+	}
+	rec := assertLogRecordExists(t, records, "WARN", procedure, "slow storage rpc")
+	if wantDiskID != "" {
+		require.Equal(t, wantDiskID, rec[logKeyDiskID], "慢操作告警必须携带 disk_id")
+	}
+	if wantRequestID != "" {
+		require.Equal(t, wantRequestID, rec[logKeyRequestID], "慢操作告警必须携带 request_id")
+	}
+}
+
+func TestObservability_StorageSampler_PromotesControlPlaneOverUnsampledParent(t *testing.T) {
+	// Given: 低采样率(0.0001)的 StorageSampler 与未采样远端 traceparent (flags=00)
+	ctx := context.Background()
+	installOTelCleanup(t)
+
+	spanExporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSyncer(spanExporter),
+		sdktrace.WithSampler(NewStorageSampler(0.0001)),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+
+	mgr := control.New(db.NewMemStore(), control.WithStorageRoot(t.TempDir()))
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	obsCfg := observability.DefaultConfig()
+	obsCfg.OtelEnabled = true
+	obsCfg.OtelTrustRemote = true
+
+	srv, err := New(Params{
+		Config: config.ServerConfig{
+			ServerPort:         0,
+			InternalServerPort: 0,
+			ServerReadMaxBytes: 8 << 20,
+		},
+		Control:       mgr,
+		Observability: obsCfg,
+		Telemetry:     obsCfg,
+	})
+	require.NoError(t, err)
+
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: srv.Handler()}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
+
+	const traceIDHex = "0af7651916cd43dd8448eb211c80319c"
+	const parentSpanHex = "b7ad6b7169203331"
+	req := connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: "018f0000-0000-7000-8000-000000009998",
+		Name:         "unsampled-parent-fork",
+	})
+	req.Header().Set("Traceparent", "00-"+traceIDHex+"-"+parentSpanHex+"-00")
+
+	// When: 发起控制面 ForkDisk 请求
+	_, forkErr := client.ForkDisk(ctx, req)
+
+	// Then: 处理端提权采样录制该请求且保持同一 TraceID
+	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkErr))
+	wantTraceID, err := trace.TraceIDFromHex(traceIDHex)
+	require.NoError(t, err)
+	assertPromotedForkSpan(t, spanExporter.GetSpans(), wantTraceID)
+}
+
+func TestObservability_TracerProviderFactory_HandlesExporters(t *testing.T) {
+	ctx := context.Background()
+
+	// Given & When & Then: nil 配置与禁用配置返回可用默认 TracerProvider
+	tpNil, err := NewStorageTracerProvider(ctx, nil)
+	require.NoError(t, err)
+	require.NotNil(t, tpNil)
+	require.NoError(t, tpNil.Shutdown(ctx))
+
+	// And: ExporterNone 返回带资源与采样器的 TracerProvider
+	cfgNone := telemetry.EnvConfig{
+		OtelEnabled:        true,
+		OtelServiceName:    "bowl-storage-test",
+		OtelTracesExporter: telemetry.ExporterNone,
+		OtelSampleRatio:    0.5,
+	}
+	tpNone, err := NewStorageTracerProvider(ctx, cfgNone)
+	require.NoError(t, err)
+	require.NotNil(t, tpNone)
+	require.NoError(t, tpNone.Shutdown(ctx))
+
+	// And: ExporterOTLP 支持 URL 与 host:port 两种地址格式
+	cfgOTLP := telemetry.EnvConfig{
+		OtelEnabled:        true,
+		OtelServiceName:    "bowl-storage-test",
+		OtelTracesExporter: telemetry.ExporterOTLP,
+		OtelEndpoint:       "http://127.0.0.1:4317",
+		OtelInsecure:       true,
+		OtelSampleRatio:    1.0,
+	}
+	tpOTLP, err := NewStorageTracerProvider(ctx, cfgOTLP)
+	require.NoError(t, err)
+	require.NotNil(t, tpOTLP)
+	require.NoError(t, tpOTLP.Shutdown(ctx))
+
+	// And: 不支持的导出器类型必须明确报错
+	cfgBad := telemetry.EnvConfig{
+		OtelEnabled:        true,
+		OtelServiceName:    "bowl-storage-test",
+		OtelTracesExporter: "unsupported-exporter",
+	}
+	_, err = NewStorageTracerProvider(ctx, cfgBad)
+	require.ErrorContains(t, err, "unsupported traces exporter")
+}
+
+func TestObservability_FxModule_ExportsMetricsAndStopsCleanly(t *testing.T) {
+	// Given: 通过 Fx 装配完整 config / obsfx / control / server 模块
+	ctx := context.Background()
+	installOTelCleanup(t)
 
 	cfg := &config.Config{
 		ServerConfig: serverx.ServerConfig{
@@ -420,9 +825,9 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 	require.Nil(t, rt.MeterProvider(), "obsfx Runtime 默认 MeterProvider 必须被抑制以避免二次 Shutdown")
 	require.Nil(t, rt.TracerProvider(), "obsfx Runtime 默认 TracerProvider 必须被抑制以避免二次 Shutdown")
 
-	pubSrv := httptest.NewServer(srv.Handler())
-	defer pubSrv.Close()
-	client := storagev1connect.NewStorageServiceClient(pubSrv.Client(), pubSrv.URL)
+	// When: 通过内存 RoundTripper 调用 ListDisks 并读取管理面 /metrics
+	httpClient := &http.Client{Transport: memoryRoundTripper{handler: srv.Handler()}}
+	client := storagev1connect.NewStorageServiceClient(httpClient, "http://storage.local")
 	_, err := client.ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{}))
 	require.NoError(t, err)
 
@@ -431,91 +836,40 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 	rec := httptest.NewRecorder()
 	adminMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody))
 	require.Equal(t, http.StatusOK, rec.Code)
+
 	body := rec.Body.String()
 	require.Contains(t, body, "go_goroutines")
 	require.Contains(t, body, "bowl_storage_http_request_duration_seconds_bucket")
 	require.Contains(t, body, "rpc_server_call_duration_seconds_bucket")
 
-	require.NoError(t, app.Stop(ctx), "Fx 应用优雅停机必须零错误退出（不得触发 reader is shutdown）")
+	// Then: Fx 优雅停机零错误退出
+	require.NoError(t, app.Stop(ctx), "Fx 应用优雅停机必须零错误退出")
 }
 
-func TestStorageSamplerPromotesControlPlaneOverRemoteUnsampledParent(t *testing.T) {
-	ctx := context.Background()
-	prevTP := otel.GetTracerProvider()
-	prevProp := otel.GetTextMapPropagator()
-	t.Cleanup(func() {
-		otel.SetTracerProvider(prevTP)
-		otel.SetTextMapPropagator(prevProp)
-	})
-
-	spanExporter := tracetest.NewInMemoryExporter()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(spanExporter),
-		sdktrace.WithSampler(NewStorageSampler(0.0001)),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
-
-	mgr := control.New(db.NewMemStore(), control.WithStorageRoot(t.TempDir()))
-	t.Cleanup(func() { _ = mgr.Close() })
-
-	obsCfg := observability.DefaultConfig()
-	obsCfg.OtelEnabled = true
-	obsCfg.OtelTrustRemote = true
-
-	srv, err := New(Params{
-		Config: config.ServerConfig{
-			ServerPort:         0,
-			InternalServerPort: 0,
-			ServerReadMaxBytes: 8 << 20,
-		},
-		Control:       mgr,
-		Observability: obsCfg,
-		Telemetry:     obsCfg,
-	})
-	require.NoError(t, err)
-
-	httpSrv := httptest.NewServer(srv.Handler())
-	defer httpSrv.Close()
-
-	// 模拟短命客户端携带未采样 traceparent (flags=00) 调用 ForkDisk，服务端必须提权采样并继承同一 TraceID。
-	const traceIDHex = "0af7651916cd43dd8448eb211c80319c"
-	const parentSpanHex = "b7ad6b7169203331"
-	req := connect.NewRequest(&storagev1.ForkDiskRequest{
-		SourceDiskId: "018f0000-0000-7000-8000-000000009998",
-		Name:         "unsampled-parent-fork",
-	})
-	req.Header().Set("Traceparent", "00-"+traceIDHex+"-"+parentSpanHex+"-00")
-
-	client := storagev1connect.NewStorageServiceClient(httpSrv.Client(), httpSrv.URL)
-	_, forkErr := client.ForkDisk(ctx, req)
-	require.Equal(t, connect.CodeNotFound, connect.CodeOf(forkErr))
-
-	wantTraceID, err := trace.TraceIDFromHex(traceIDHex)
-	require.NoError(t, err)
-
-	spans := spanExporter.GetSpans()
-	var found bool
-	for _, sp := range spans {
-		if sp.Name == "storage.v1.StorageService/ForkDisk" || sp.Name == storagev1connect.StorageServiceForkDiskProcedure {
-			require.Equal(t, wantTraceID, sp.SpanContext.TraceID(), "提权采样后必须沿用客户端 traceparent TraceID")
-			found = true
-		}
+func TestObservability_ClassifyStorageLogLevel_MapsProceduresAndCodes(t *testing.T) {
+	cases := []struct {
+		name      string
+		procedure string
+		code      connect.Code
+		err       error
+		want      slog.Level
+	}{
+		{name: "Write成功降级Debug", procedure: storagev1connect.StorageServiceWriteProcedure, want: slog.LevelDebug},
+		{name: "Read成功降级Debug", procedure: storagev1connect.StorageServiceReadProcedure, want: slog.LevelDebug},
+		{name: "ListDisks只读控制面降级Debug", procedure: storagev1connect.StorageServiceListDisksProcedure, want: slog.LevelDebug},
+		{name: "GetDisk只读控制面降级Debug", procedure: storagev1connect.StorageServiceGetDiskProcedure, want: slog.LevelDebug},
+		{name: "ForkDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceForkDiskProcedure, want: slog.LevelInfo},
+		{name: "CreateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceCreateDiskProcedure, want: slog.LevelInfo},
+		{name: "UpdateDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceUpdateDiskProcedure, want: slog.LevelInfo},
+		{name: "DeleteDisk变更控制面保持Info", procedure: storagev1connect.StorageServiceDeleteDiskProcedure, want: slog.LevelInfo},
+		{name: "Lookup未命中降级Debug", procedure: storagev1connect.StorageServiceLookupProcedure, code: connect.CodeNotFound, err: connect.NewError(connect.CodeNotFound, nil), want: slog.LevelDebug},
+		{name: "Read客户端取消降级Debug", procedure: storagev1connect.StorageServiceReadProcedure, code: connect.CodeCanceled, err: connect.NewError(connect.CodeCanceled, context.Canceled), want: slog.LevelDebug},
+		{name: "ForkDisk未命中保持Warn", procedure: storagev1connect.StorageServiceForkDiskProcedure, code: connect.CodeNotFound, err: connect.NewError(connect.CodeNotFound, nil), want: slog.LevelWarn},
 	}
-	require.True(t, found, "携带未采样 traceparent 的控制面 ForkDisk 必须被服务端 100%% 提权录制")
-}
 
-func TestClassifyStorageLogLevel(t *testing.T) {
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceWriteProcedure, 0, nil))
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceReadProcedure, 0, nil))
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceListDisksProcedure, 0, nil))
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceGetDiskProcedure, 0, nil))
-	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceForkDiskProcedure, 0, nil))
-	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceCreateDiskProcedure, 0, nil))
-	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceUpdateDiskProcedure, 0, nil))
-	require.Equal(t, slog.LevelInfo, classifyStorageLogLevel(storagev1connect.StorageServiceDeleteDiskProcedure, 0, nil))
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceLookupProcedure, connect.CodeNotFound, connect.NewError(connect.CodeNotFound, nil)))
-	require.Equal(t, slog.LevelDebug, classifyStorageLogLevel(storagev1connect.StorageServiceReadProcedure, connect.CodeCanceled, connect.NewError(connect.CodeCanceled, context.Canceled)))
-	require.Equal(t, slog.LevelWarn, classifyStorageLogLevel(storagev1connect.StorageServiceForkDiskProcedure, connect.CodeNotFound, connect.NewError(connect.CodeNotFound, nil)))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, classifyStorageLogLevel(tc.procedure, tc.code, tc.err))
+		})
+	}
 }

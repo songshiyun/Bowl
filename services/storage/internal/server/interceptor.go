@@ -203,6 +203,13 @@ func extractStorageAttrs(_ context.Context, req connect.AnyRequest, res connect.
 // 2. 仅当 Span 处于录制态时注入 bowl.disk_id / bowl.source_disk_id / bowl.epoch / bowl.ino / bowl.request_id 属性（未采样时 0 alloc）；
 // 3. 数据面耗时超 50ms 或控制面耗时超 200ms 时输出慢操作告警日志。
 func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterceptorFunc {
+	return newStorageObservabilityInterceptorWithClock(logger, time.Now)
+}
+
+func newStorageObservabilityInterceptorWithClock(
+	logger *slog.Logger,
+	now func() time.Time,
+) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
 			var procedure string
@@ -210,7 +217,7 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 				procedure = req.Spec().Procedure
 			}
 
-			start := time.Now()
+			start := now()
 			var (
 				res connect.AnyResponse
 				err error
@@ -218,7 +225,7 @@ func NewStorageObservabilityInterceptor(logger *slog.Logger) connect.UnaryInterc
 			pprof.Do(ctx, pprof.Labels("rpc", procedure), func(pprofCtx context.Context) {
 				res, err = next(pprofCtx, req)
 			})
-			duration := time.Since(start)
+			duration := now().Sub(start)
 
 			if span := trace.SpanFromContext(ctx); span.IsRecording() {
 				diskID, sourceDiskID, epoch, ino := extractStorageFields(req, res, err)
