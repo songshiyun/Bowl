@@ -245,6 +245,13 @@ func (rt *shardedRoundTripper) CloseIdleConnections() {
 // 支持 h2c (明文 HTTP/2) 与 HTTPS TLS 传输，并在 token 非空时注入 Bearer 鉴权头。
 // 底层 http.Client 不设置固定 Timeout，连接生命周期完全由 context.Context 控制。
 func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storagev1connect.StorageServiceClient, error) {
+	return newClientWithClock(cfg, realClock{}, opts...)
+}
+
+func newClientWithClock(cfg ClientConfig, clk rpcClock, opts ...connect.ClientOption) (storagev1connect.StorageServiceClient, error) {
+	if clk == nil {
+		clk = realClock{}
+	}
 	endpoint, err := ResolveEndpoint(cfg.Endpoint)
 	if err != nil {
 		return nil, err
@@ -272,8 +279,8 @@ func NewClientFromConfig(cfg ClientConfig, opts ...connect.ClientOption) (storag
 		retryCfg = *cfg.RetryConfig
 	}
 	interceptors = append(interceptors,
-		newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics),
-		newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold),
+		newRetryInterceptor(retryCfg, cfg.Logger, cfg.Metrics, clk),
+		newRequestObservabilityInterceptor(cfg.Logger, cfg.Metrics, DefaultSlowRPCThreshold, clk),
 	)
 
 	// 3. OTel ConnectRPC 客户端拦截器（自动基于全局 TracerProvider / MeterProvider 注入 W3C traceparent 并以亚毫秒桶采集客户端 RPC 指标）

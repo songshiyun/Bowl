@@ -10,6 +10,8 @@ import (
 
 const defaultSystemLogDir = "/var/log/bowl"
 
+var openSystemLogFn = openSystemLog
+
 func openSystemLog(diskID string) (*os.File, string, error) {
 	systemPath := filepath.Join(defaultSystemLogDir, fmt.Sprintf("mount-%s.log", diskID))
 	mkdirErr := os.MkdirAll(defaultSystemLogDir, 0o755)
@@ -60,7 +62,7 @@ func ResolveLogFile(explicitPath, diskID string) (*os.File, string, error) {
 	}
 
 	// 1. 尝试系统默认路径 /var/log/bowl/mount-<disk-id>.log
-	f, systemPath, err := openSystemLog(diskID)
+	f, systemPath, err := openSystemLogFn(diskID)
 	if err == nil {
 		return f, systemPath, nil
 	}

@@ -25,6 +25,10 @@ var ErrKernelInterrupted = errors.New("operation interrupted by kernel signal")
 // 快速路径不分配 stop 通道与 sync.Once：cancelCause(nil) 本身幂等，且会关闭 ctx.Done()，
 // 监听协程的两个 select 都以 ctx.Done() 作为退出信号，因此无需额外的停止通道。
 func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (context.Context, context.CancelFunc) {
+	return contextWithCancelChanClock(parent, cancel, realClock{})
+}
+
+func contextWithCancelChanClock(parent context.Context, cancel <-chan struct{}, clk rpcClock) (context.Context, context.CancelFunc) {
 	ctx, cancelCause := context.WithCancelCause(parent)
 	if cancel == nil {
 		return ctx, func() { cancelCause(nil) }
@@ -41,10 +45,10 @@ func ContextWithCancelChan(parent context.Context, cancel <-chan struct{}) (cont
 	go func() {
 		select {
 		case <-cancel:
-			timer := time.NewTimer(inFlightCancelGracePeriod)
+			timer := clk.NewTimer(inFlightCancelGracePeriod)
 			defer timer.Stop()
 			select {
-			case <-timer.C:
+			case <-timer.Chan():
 				cancelCause(ErrKernelInterrupted)
 			case <-ctx.Done():
 			}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -46,11 +47,16 @@ type diskPorts struct {
 	stdin          io.Reader
 }
 
+var (
+	diskHTTPClient *http.Client
+	diskStdin      io.Reader = os.Stdin
+)
+
 func defaultDiskPorts() diskPorts {
 	return diskPorts{
 		newClient:      newDiskStorageClient,
 		findMountpoint: FindDiskMountpoint,
-		stdin:          os.Stdin,
+		stdin:          diskStdin,
 	}
 }
 
@@ -248,8 +254,9 @@ func newDiskStorageClient(endpoint, token string) (storagev1connect.StorageServi
 	resolvedToken := rpc.ResolveToken(token)
 
 	client, err := rpc.NewClientFromConfig(rpc.ClientConfig{
-		Endpoint: resolvedEndpoint,
-		Token:    resolvedToken,
+		Endpoint:   resolvedEndpoint,
+		Token:      resolvedToken,
+		HTTPClient: diskHTTPClient,
 	})
 	if err != nil {
 		return nil, 1, fmt.Errorf("创建 RPC 客户端失败: %w", err)

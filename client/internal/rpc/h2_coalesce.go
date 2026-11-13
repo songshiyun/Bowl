@@ -57,6 +57,11 @@ func isHoldableH2HeadersFrame(p []byte) bool {
 // 第 1 帧 HEADERS 触发远端服务端进入 HTTP Handler 等待 Body 并开启 TCP Delayed ACK (~4-10ms)，
 // 而第 2 帧小 DATA (< size_goal) 被客户端 tcp_should_autocork 挂起在 TSQ_THROTTLED 状态等待前序包释放，
 // 形成跨机 ~9-10ms 伪延迟死锁。合并为单次 Write 后，HEADERS+DATA(END_STREAM) 同包到达服务端，彻底消除死锁并减半系统调用。
+type coalesceTimer interface {
+	Stop() bool
+	Reset(d time.Duration) bool
+}
+
 type h2CoalesceConn struct {
 	net.Conn
 
@@ -64,16 +69,31 @@ type h2CoalesceConn struct {
 	pendingBuf [h2MaxHoldHeadersBytes]byte
 	pendingLen int
 	scratchBuf [h2ScratchBufferBytes]byte
-	timer      *time.Timer
+	afterFunc  func(d time.Duration, f func()) coalesceTimer
+	timer      coalesceTimer
 	asyncErr   error
 	closed     bool
 }
 
+func defaultCoalesceAfterFunc(d time.Duration, f func()) coalesceTimer {
+	return time.AfterFunc(d, f)
+}
+
 func newH2CoalesceConn(conn net.Conn) net.Conn {
+	return newH2CoalesceConnWithAfterFunc(conn, defaultCoalesceAfterFunc)
+}
+
+func newH2CoalesceConnWithAfterFunc(conn net.Conn, afterFn func(d time.Duration, f func()) coalesceTimer) net.Conn {
 	if conn == nil {
 		return nil
 	}
-	return &h2CoalesceConn{Conn: conn}
+	if afterFn == nil {
+		afterFn = defaultCoalesceAfterFunc
+	}
+	return &h2CoalesceConn{
+		Conn:      conn,
+		afterFunc: afterFn,
+	}
 }
 
 func writeFull(w io.Writer, buf []byte) (int, error) {
@@ -120,7 +140,7 @@ func (c *h2CoalesceConn) Write(p []byte) (int, error) {
 			copy(c.pendingBuf[:len(p)], p)
 			c.pendingLen = len(p)
 			if c.timer == nil {
-				c.timer = time.AfterFunc(h2CoalesceFlushDelay, c.flushOnTimer)
+				c.timer = c.afterFunc(h2CoalesceFlushDelay, c.flushOnTimer)
 			} else {
 				c.timer.Reset(h2CoalesceFlushDelay)
 			}

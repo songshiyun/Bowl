@@ -229,26 +229,67 @@ func wrapBudgetExceededError(err error) error {
 	return connect.NewError(connect.CodeDeadlineExceeded, err)
 }
 
-// NewRetryInterceptor 创建遵循有界指数退避策略的 ConnectRPC 客户端一元拦截器。
-func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
-	return newRetryInterceptor(cfg, nil, nil)
+type rpcTimer interface {
+	Chan() <-chan time.Time
+	Stop() bool
 }
 
-func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics) connect.UnaryInterceptorFunc {
+type rpcClock interface {
+	Now() time.Time
+	Since(t time.Time) time.Duration
+	NewTimer(d time.Duration) rpcTimer
+	WithDeadline(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc)
+}
+
+type stdTimer struct {
+	*time.Timer
+}
+
+func (t stdTimer) Chan() <-chan time.Time {
+	return t.C
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time {
+	return time.Now()
+}
+
+func (realClock) Since(t time.Time) time.Duration {
+	return time.Since(t)
+}
+
+func (realClock) NewTimer(d time.Duration) rpcTimer {
+	return stdTimer{Timer: time.NewTimer(d)}
+}
+
+func (realClock) WithDeadline(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+	return context.WithDeadline(parent, deadline)
+}
+
+// NewRetryInterceptor 创建遵循有界指数退避策略的 ConnectRPC 客户端一元拦截器。
+func NewRetryInterceptor(cfg RetryConfig) connect.UnaryInterceptorFunc {
+	return newRetryInterceptor(cfg, nil, nil, realClock{})
+}
+
+func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics, clk rpcClock) connect.UnaryInterceptorFunc {
+	if clk == nil {
+		clk = realClock{}
+	}
 	config := cfg.withDefaults()
 	retryWarnLimiter := newLogRateLimiter(defaultLogRateLimitInterval)
 
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (resp connect.AnyResponse, retErr error) {
 			procedure := req.Spec().Procedure
-			startTime := time.Now()
+			startTime := clk.Now()
 			if metrics != nil {
 				defer func() {
 					code := "ok"
 					if retErr != nil {
 						code = connect.CodeOf(retErr).String()
 					}
-					metrics.observeLogicalDuration(procedure, code, time.Since(startTime))
+					metrics.observeLogicalDuration(procedure, code, clk.Since(startTime))
 				}()
 			}
 
@@ -281,7 +322,7 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 							"rpc_retry_exhausted_eio",
 							slog.String("procedure", procedure),
 							slog.Int("attempts", attempts),
-							slog.Int64("elapsed_ms", time.Since(startTime).Milliseconds()),
+							slog.Int64("elapsed_ms", clk.Since(startTime).Milliseconds()),
 							slog.Uint64("req_id", reqID),
 							slog.String("trace_id", traceID),
 							slog.String("err", errMsg),
@@ -294,7 +335,7 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 			attemptCtx := ctx
 			if config.MaxElapsedTime > 0 {
 				var cancel context.CancelFunc
-				attemptCtx, cancel = context.WithDeadline(ctx, startTime.Add(config.MaxElapsedTime))
+				attemptCtx, cancel = clk.WithDeadline(ctx, startTime.Add(config.MaxElapsedTime))
 				defer cancel()
 			}
 
@@ -341,7 +382,7 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 				lastRetryableErr = err
 
 				// 计算已过去的总耗时，若超出总预算则终止重试
-				elapsed := time.Since(startTime)
+				elapsed := clk.Since(startTime)
 				if elapsed >= config.MaxElapsedTime {
 					return nil, exhaustBudget(lastErr)
 				}
@@ -354,7 +395,7 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 
 				retryCount++
 				metrics.incRetry(procedure)
-				if retryCount == 1 && logger != nil && retryWarnLimiter.allow(time.Now()) {
+				if retryCount == 1 && logger != nil && retryWarnLimiter.allow(clk.Now()) {
 					traceID := extractTraceID(ctx, req, err)
 					logger.LogAttrs(
 						context.Background(),
@@ -369,12 +410,12 @@ func newRetryInterceptor(cfg RetryConfig, logger *slog.Logger, metrics *Metrics)
 					)
 				}
 
-				timer := time.NewTimer(sleepDuration)
+				timer := clk.NewTimer(sleepDuration)
 				select {
 				case <-ctx.Done():
 					timer.Stop()
 					return nil, ctx.Err()
-				case <-timer.C:
+				case <-timer.Chan():
 				}
 
 				// 指数退避增长并钳位在 MaxInterval

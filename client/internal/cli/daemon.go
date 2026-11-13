@@ -32,6 +32,8 @@ func readDaemonHandshake(r io.Reader, stderr io.Writer) int {
 	return 1
 }
 
+var spawnDaemon = spawnDaemonProcess
+
 // spawnDaemonProcess 由前台父进程派生后台守护进程并阻塞等待就绪握手。
 func spawnDaemonProcess(args []string, stderr io.Writer) int {
 	r, w, err := os.Pipe()
