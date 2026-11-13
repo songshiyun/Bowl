@@ -2,7 +2,7 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const diskCreateUsageHelp = `用法:
@@ -27,174 +28,71 @@ const diskCreateUsageHelp = `用法:
   -h, --help           查看帮助信息
 `
 
-// executeDiskCreate 解析并执行 bowl disk create 命令。
-func executeDiskCreate(args []string, stdout, stderr io.Writer) int {
-	var (
-		sizeRaw  string
-		name     string
-		quiet    bool
-		jsonOut  bool
-		endpoint string
-		token    string
-		help     bool
-	)
+var diskCreateSpec = diskSubcommandSpec{
+	name:       "create",
+	usageHelp:  diskCreateUsageHelp,
+	allowQuiet: true,
+	spanName:   "cli.disk.create",
+	timeout:    10 * time.Second,
+	newAdapter: func() diskRequestAdapter { return &diskCreateAdapter{} },
+}
 
-	var posArgs []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			posArgs = append(posArgs, args[i+1:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "-") {
-			flagName := strings.TrimLeft(arg, "-")
-			hasVal := strings.Contains(flagName, "=")
-			var val string
-			if hasVal {
-				parts := strings.SplitN(flagName, "=", 2)
-				flagName = parts[0]
-				val = parts[1]
-			}
-			switch flagName {
-			case "h", "help":
-				help = true
-			case "q", "quiet":
-				quiet = true
-			case "json":
-				jsonOut = true
-			case "size":
-				switch {
-				case hasVal:
-					sizeRaw = val
-				case i+1 < len(args):
-					i++
-					sizeRaw = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --size 需要指定参数值")
-					return 2
-				}
-			case "name":
-				switch {
-				case hasVal:
-					name = val
-				case i+1 < len(args):
-					i++
-					name = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --name 需要指定参数值")
-					return 2
-				}
-			case "endpoint":
-				switch {
-				case hasVal:
-					endpoint = val
-				case i+1 < len(args):
-					i++
-					endpoint = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
-					return 2
-				}
-			case "token":
-				switch {
-				case hasVal:
-					token = val
-				case i+1 < len(args):
-					i++
-					token = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
-					return 2
-				}
-			default:
-				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, diskCreateUsageHelp)
-				return 2
-			}
-		} else {
-			posArgs = append(posArgs, arg)
-		}
+type diskCreateAdapter struct {
+	sizeRaw  string
+	name     string
+	maxBytes uint64
+}
+
+func (a *diskCreateAdapter) parseFlag(name, val string, hasVal bool, args []string, idx *int) (bool, error) {
+	var err error
+	switch name {
+	case "size":
+		a.sizeRaw, err = takeFlagValue(args, idx, name, val, hasVal)
+		return true, err
+	case "name":
+		a.name, err = takeFlagValue(args, idx, name, val, hasVal)
+		return true, err
+	default:
+		return false, nil
 	}
+}
 
-	if help {
-		fmt.Fprint(stdout, diskCreateUsageHelp)
-		return 0
+func (a *diskCreateAdapter) finalize(_ []string) (bool, error) {
+	if strings.TrimSpace(a.sizeRaw) == "" {
+		return true, errors.New("必须指定 --size 参数")
 	}
-
-	if len(posArgs) > 0 {
-		fmt.Fprintf(stderr, "错误: create 命令不接受位置参数 (%v)\n\n%s", posArgs, diskCreateUsageHelp)
-		return 2
-	}
-
-	if quiet && jsonOut {
-		fmt.Fprintln(stderr, "错误: -q/--quiet 与 --json 不能同时使用")
-		return 2
-	}
-
-	if strings.TrimSpace(sizeRaw) == "" {
-		fmt.Fprintf(stderr, "错误: 必须指定 --size 参数\n\n%s", diskCreateUsageHelp)
-		return 2
-	}
-
-	maxBytes, err := ParseSize(sizeRaw)
+	maxBytes, err := ParseSize(a.sizeRaw)
 	if err != nil {
-		fmt.Fprintf(stderr, "错误: 无效的 --size 参数: %v\n", err)
-		return 2
+		return false, fmt.Errorf("无效的 --size 参数: %w", err)
 	}
-
-	if len(name) > 255 {
-		fmt.Fprintf(stderr, "错误: 磁盘名称不能超过 255 字节 (当前 %d 字节)\n", len(name))
-		return 2
+	if err := validateDiskName(a.name); err != nil {
+		return false, err
 	}
-	if strings.Contains(name, "\x00") {
-		fmt.Fprintln(stderr, "错误: 磁盘名称不能包含空字节 (NUL)")
-		return 2
-	}
+	a.maxBytes = maxBytes
+	return false, nil
+}
 
-	spanCtx, span, finishSpan := startDiskCLISpan(context.Background(), "cli.disk.create")
-	defer finishSpan()
+func (a *diskCreateAdapter) spanAttrs() []attribute.KeyValue {
+	return nil
+}
 
-	client, exitCode, err := newDiskStorageClient(endpoint, token)
-	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return exitCode
-	}
+func (a *diskCreateAdapter) preRPC(_ diskPorts, _ io.Writer) *diskCLIError {
+	return nil
+}
 
-	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
-	defer rpcCancel()
-
-	resp, err := client.CreateDisk(rpcCtx, connect.NewRequest(&storagev1.CreateDiskRequest{
-		Name:     name,
-		MaxBytes: maxBytes,
+func (a *diskCreateAdapter) invoke(ctx context.Context, client storagev1connect.StorageServiceClient) (diskOutcome, *diskCLIError) {
+	resp, err := client.CreateDisk(ctx, connect.NewRequest(&storagev1.CreateDiskRequest{
+		Name:     a.name,
+		MaxBytes: a.maxBytes,
 	}))
 	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: 创建虚拟磁盘失败: %v\n", err)
-		return 1
+		return diskOutcome{}, mapDiskRPCError(err, diskRPCErrorPolicy{
+			defaultOp: "创建虚拟磁盘失败",
+		})
 	}
-
-	disk := resp.Msg.GetDisk()
-	if disk == nil {
-		fmt.Fprintln(stderr, "错误: 服务端返回空的虚拟磁盘元数据")
-		return 1
+	disk, cliErr := requireNonNilDisk(resp.Msg.GetDisk())
+	if cliErr != nil {
+		return diskOutcome{}, cliErr
 	}
-	span.SetAttributes(attribute.String("bowl.disk_id", disk.GetDiskId()))
-
-	if quiet {
-		fmt.Fprintln(stdout, disk.GetDiskId())
-		return 0
-	}
-
-	if jsonOut {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(toDiskJSON(disk)); err != nil {
-			fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	printDiskDetail(stdout, disk)
-	return 0
+	return diskOutcome{disk: disk, setSpanDiskID: true}, nil
 }

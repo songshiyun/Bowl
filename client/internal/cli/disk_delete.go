@@ -3,20 +3,17 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const diskDeleteUsageHelp = `用法:
@@ -38,187 +35,97 @@ type diskDeleteJSON struct {
 	Deleted bool   `json:"deleted"`
 }
 
-func extractErrorReason(err error) string {
-	var connectErr *connect.Error
-	if !errors.As(err, &connectErr) {
-		return ""
-	}
-	for _, detail := range connectErr.Details() {
-		msg, detailErr := detail.Value()
-		if detailErr != nil {
-			continue
-		}
-		if info, ok := msg.(*errdetails.ErrorInfo); ok && info.GetReason() != "" {
-			return info.GetReason()
-		}
-	}
-	return ""
+var diskDeleteSpec = diskSubcommandSpec{
+	name:        "delete",
+	usageHelp:   diskDeleteUsageHelp,
+	posArgLabel: "<disk-id>",
+	uuidLabel:   "disk-id",
+	spanName:    "cli.disk.delete",
+	timeout:     15 * time.Second,
+	newAdapter:  func() diskRequestAdapter { return &diskDeleteAdapter{} },
 }
 
-// executeDiskDelete 解析并执行 bowl disk delete 命令。
-func executeDiskDelete(args []string, stdout, stderr io.Writer) int {
-	var (
-		yes      bool
-		jsonOut  bool
-		endpoint string
-		token    string
-		help     bool
-	)
+type diskDeleteAdapter struct {
+	diskID string
+	yes    bool
+}
 
-	var posArgs []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			posArgs = append(posArgs, args[i+1:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "-") {
-			flagName := strings.TrimLeft(arg, "-")
-			hasVal := strings.Contains(flagName, "=")
-			var val string
-			if hasVal {
-				parts := strings.SplitN(flagName, "=", 2)
-				flagName = parts[0]
-				val = parts[1]
-			}
-			switch flagName {
-			case "h", "help":
-				help = true
-			case "y", "yes":
-				yes = true
-			case "json":
-				jsonOut = true
-			case "endpoint":
-				switch {
-				case hasVal:
-					endpoint = val
-				case i+1 < len(args):
-					i++
-					endpoint = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
-					return 2
-				}
-			case "token":
-				switch {
-				case hasVal:
-					token = val
-				case i+1 < len(args):
-					i++
-					token = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
-					return 2
-				}
-			default:
-				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, diskDeleteUsageHelp)
-				return 2
-			}
-		} else {
-			posArgs = append(posArgs, arg)
-		}
+func (a *diskDeleteAdapter) parseFlag(name, _ string, _ bool, _ []string, _ *int) (bool, error) {
+	if name == "y" || name == "yes" {
+		a.yes = true
+		return true, nil
 	}
+	return false, nil
+}
 
-	if help {
-		fmt.Fprint(stdout, diskDeleteUsageHelp)
-		return 0
-	}
+func (a *diskDeleteAdapter) finalize(posArgs []string) (bool, error) {
+	a.diskID = posArgs[0]
+	return false, nil
+}
 
-	if len(posArgs) != 1 {
-		fmt.Fprintf(stderr, "错误: delete 命令需要且仅需要 1 个位置参数 (<disk-id>)\n\n%s", diskDeleteUsageHelp)
-		return 2
-	}
+func (a *diskDeleteAdapter) spanAttrs() []attribute.KeyValue {
+	return []attribute.KeyValue{attribute.String("bowl.disk_id", a.diskID)}
+}
 
-	diskIDStr := posArgs[0]
-	parsedUUID, err := uuid.Parse(diskIDStr)
-	if err != nil || parsedUUID == uuid.Nil {
-		fmt.Fprintf(stderr, "错误: 无效的 disk-id \"%s\"，必须为合法的非 Nil UUID\n", diskIDStr)
-		return 2
-	}
-
+func (a *diskDeleteAdapter) preRPC(ports diskPorts, stderr io.Writer) *diskCLIError {
 	// 步骤 1：本机挂载表快检
-	mountpoint, mounted, err := FindDiskMountpoint(diskIDStr)
+	mountpoint, mounted, err := ports.findMountpoint(a.diskID)
 	if err != nil {
-		fmt.Fprintf(stderr, "错误: 检查本机挂载表失败: %v\n", err)
-		return 1
+		return &diskCLIError{
+			exitCode: 1,
+			msg:      fmt.Sprintf("检查本机挂载表失败: %v", err),
+		}
 	}
 	if mounted {
-		fmt.Fprintf(stderr, "错误: 磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl umount %s 卸载后再删除\n", diskIDStr, mountpoint, mountpoint)
-		return 1
+		return &diskCLIError{
+			exitCode: 1,
+			msg:      fmt.Sprintf("磁盘 %s 当前正在本机挂载点 %s 处于挂载状态，请先执行 bowl umount %s 卸载后再删除", a.diskID, mountpoint, mountpoint),
+		}
 	}
 
 	// 步骤 2：交互式二次确认
-	if !yes {
-		fmt.Fprintf(stderr, "确认删除虚拟磁盘 %s？此操作不可逆 [y/N]: ", diskIDStr)
-		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+	if !a.yes {
+		fmt.Fprintf(stderr, "确认删除虚拟磁盘 %s？此操作不可逆 [y/N]: ", a.diskID)
+		line, readErr := bufio.NewReader(ports.stdin).ReadString('\n')
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
-			fmt.Fprintf(stderr, "错误: 读取终端确认输入失败: %v\n", readErr)
-			return 1
+			return &diskCLIError{
+				exitCode: 1,
+				msg:      fmt.Sprintf("读取终端确认输入失败: %v", readErr),
+			}
 		}
 		answer := strings.ToLower(strings.TrimSpace(line))
 		if answer != "y" && answer != "yes" {
 			fmt.Fprintln(stderr, "操作已取消")
-			return 1
+			return &diskCLIError{exitCode: 1}
 		}
 	}
 
-	// 步骤 3：建立 CLI 根 Span 并发起 DeleteDisk RPC（预留服务端 1.5s 探活窗口余量）
-	spanCtx, span, finishSpan := startDiskCLISpan(
-		context.Background(),
-		"cli.disk.delete",
-		attribute.String("bowl.disk_id", diskIDStr),
-	)
-	defer finishSpan()
+	return nil
+}
 
-	client, exitCode, err := newDiskStorageClient(endpoint, token)
-	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return exitCode
-	}
-
-	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 15*time.Second)
-	defer rpcCancel()
-
-	_, err = client.DeleteDisk(rpcCtx, connect.NewRequest(&storagev1.DeleteDiskRequest{
-		DiskId: diskIDStr,
+func (a *diskDeleteAdapter) invoke(ctx context.Context, client storagev1connect.StorageServiceClient) (diskOutcome, *diskCLIError) {
+	_, err := client.DeleteDisk(ctx, connect.NewRequest(&storagev1.DeleteDiskRequest{
+		DiskId: a.diskID,
 	}))
 	if err != nil {
-		finishDiskCLISpanError(span, err)
-		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
-			switch connectErr.Code() {
-			case connect.CodeNotFound:
-				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", diskIDStr)
-				return 1
-			case connect.CodeFailedPrecondition:
-				fmt.Fprintf(stderr, "错误: 磁盘 %s 当前仍处于挂载状态（存在活跃客户端会话），请先卸载后再删除\n", diskIDStr)
-				return 1
-			case connect.CodeInvalidArgument:
-				fmt.Fprintf(stderr, "错误: 无效的请求参数: %v\n", err)
-				return 2
-			}
-		}
-		if extractErrorReason(err) == "EBUSY" {
-			fmt.Fprintf(stderr, "错误: 磁盘 %s 当前仍处于挂载状态（存在活跃客户端会话），请先卸载后再删除\n", diskIDStr)
-			return 1
-		}
-		fmt.Fprintf(stderr, "错误: 删除虚拟磁盘失败: %v\n", err)
-		return 1
+		return diskOutcome{}, mapDiskRPCError(err, diskRPCErrorPolicy{
+			diskID:           a.diskID,
+			defaultOp:        "删除虚拟磁盘失败",
+			checkInvalidArg:  true,
+			checkEBUSYReason: true,
+			preconditionMsg: func(id string, _ error) string {
+				return fmt.Sprintf("磁盘 %s 当前仍处于挂载状态（存在活跃客户端会话），请先卸载后再删除", id)
+			},
+		})
 	}
 
-	if jsonOut {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(diskDeleteJSON{
-			DiskID:  diskIDStr,
+	return diskOutcome{
+		jsonPayload: diskDeleteJSON{
+			DiskID:  a.diskID,
 			Deleted: true,
-		}); err != nil {
-			fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", err)
-			return 1
-		}
-		return 0
-	}
-
-	fmt.Fprintf(stdout, "已删除虚拟磁盘 %s\n", diskIDStr)
-	return 0
+		},
+		renderHuman: func(w io.Writer) {
+			fmt.Fprintf(w, "已删除虚拟磁盘 %s\n", a.diskID)
+		},
+	}, nil
 }

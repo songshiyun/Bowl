@@ -1,14 +1,27 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
+
+	"connectrpc.com/connect"
+	"github.com/google/uuid"
+	"github.com/starsrc/pkg/serverx"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/starsrc/bowl/client/internal/rpc"
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
+
+// MaxDiskNameBytes 定义虚拟磁盘名称的最大字节数上限。
+const MaxDiskNameBytes = 255
 
 const diskUsageHelp = `用法:
   bowl disk <subcommand> [flags] [arguments]
@@ -25,6 +38,66 @@ const diskUsageHelp = `用法:
 标志:
   -h, --help  查看帮助信息
 `
+
+// diskPorts 定义 disk 控制面深模块向远端存储进程与本机环境延伸的外部端口。
+type diskPorts struct {
+	newClient      func(endpoint, token string) (storagev1connect.StorageServiceClient, int, error)
+	findMountpoint func(diskID string) (mountpoint string, mounted bool, err error)
+	stdin          io.Reader
+}
+
+func defaultDiskPorts() diskPorts {
+	return diskPorts{
+		newClient:      newDiskStorageClient,
+		findMountpoint: FindDiskMountpoint,
+		stdin:          os.Stdin,
+	}
+}
+
+// diskSubcommandSpec 描述单个 disk 子命令的解析约束、超时与适配器工厂。
+type diskSubcommandSpec struct {
+	name        string
+	usageHelp   string
+	posArgLabel string
+	uuidLabel   string
+	allowQuiet  bool
+	spanName    string
+	timeout     time.Duration
+	newAdapter  func() diskRequestAdapter
+}
+
+// diskRequestAdapter 为各子命令提供专属标志解析、前置守卫与 RPC 调用实现。
+type diskRequestAdapter interface {
+	parseFlag(name, val string, hasVal bool, args []string, idx *int) (handled bool, err error)
+	finalize(posArgs []string) (missUsage bool, err error)
+	spanAttrs() []attribute.KeyValue
+	preRPC(ports diskPorts, stderr io.Writer) *diskCLIError
+	invoke(ctx context.Context, client storagev1connect.StorageServiceClient) (diskOutcome, *diskCLIError)
+}
+
+// diskOutcome 统一承接单盘或非单盘 RPC 执行结果以供渲染与 Span 属性回填。
+type diskOutcome struct {
+	disk          *storagev1.Disk
+	jsonPayload   any
+	renderHuman   func(w io.Writer)
+	setSpanDiskID bool
+}
+
+// diskCLIError 表示携带退出码与可选根因（用于 Span 标错）的 CLI 错误。
+type diskCLIError struct {
+	exitCode int
+	msg      string
+	cause    error
+}
+
+// diskRPCErrorPolicy 控制不同子命令对 Connect 错误码与业务 Reason 的映射策略。
+type diskRPCErrorPolicy struct {
+	diskID           string
+	defaultOp        string
+	preconditionMsg  func(diskID string, err error) string
+	checkInvalidArg  bool
+	checkEBUSYReason bool
+}
 
 // diskJSON 定义磁盘实体在 --json 模式下的结构化输出格式。
 type diskJSON struct {
@@ -60,13 +133,16 @@ func toDiskJSON(d *storagev1.Disk) diskJSON {
 	}
 }
 
+func diskUsagePct(usedBytes, maxBytes uint64) float64 {
+	if maxBytes == 0 {
+		return 0
+	}
+	return float64(usedBytes) * 100.0 / float64(maxBytes)
+}
+
 // printDiskDetail 向指定 Writer 打印人类可读的虚拟磁盘详情视图。
 func printDiskDetail(w io.Writer, d *storagev1.Disk) {
 	dj := toDiskJSON(d)
-	var usagePct float64
-	if dj.MaxBytes > 0 {
-		usagePct = float64(dj.UsedBytes) * 100.0 / float64(dj.MaxBytes)
-	}
 	fmt.Fprintf(w, "Disk ID:      %s\n", dj.DiskID)
 	if dj.ParentDiskID != "" {
 		fmt.Fprintf(w, "Parent Disk:  %s\n", dj.ParentDiskID)
@@ -75,10 +151,91 @@ func printDiskDetail(w io.Writer, d *storagev1.Disk) {
 	fmt.Fprintf(w, "Root Ino:     %d\n", dj.RootIno)
 	fmt.Fprintf(w, "Max Bytes:    %d (%s)\n", dj.MaxBytes, FormatSize(dj.MaxBytes))
 	fmt.Fprintf(w, "Used Bytes:   %d (%s)\n", dj.UsedBytes, FormatSize(dj.UsedBytes))
-	fmt.Fprintf(w, "Usage:        %.2f%%\n", usagePct)
+	fmt.Fprintf(w, "Usage:        %.2f%%\n", diskUsagePct(dj.UsedBytes, dj.MaxBytes))
 	fmt.Fprintf(w, "Used Inodes:  %d\n", dj.UsedInodes)
 	fmt.Fprintf(w, "Created At:   %s\n", dj.CreatedAt)
 	fmt.Fprintf(w, "Updated At:   %s\n", dj.UpdatedAt)
+}
+
+func writeDiskJSON(stdout, stderr io.Writer, payload any) int {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(payload); err != nil {
+		fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func parseNonNilUUID(raw, label string) (string, error) {
+	parsed, err := uuid.Parse(raw)
+	if err != nil || parsed == uuid.Nil {
+		return "", fmt.Errorf("无效的 %s \"%s\"，必须为合法的非 Nil UUID", label, raw)
+	}
+	return raw, nil
+}
+
+func validateDiskName(name string) error {
+	if len(name) > MaxDiskNameBytes {
+		return fmt.Errorf("磁盘名称不能超过 %d 字节 (当前 %d 字节)", MaxDiskNameBytes, len(name))
+	}
+	if strings.Contains(name, "\x00") {
+		return errors.New("磁盘名称不能包含空字节 (NUL)")
+	}
+	return nil
+}
+
+func requireNonNilDisk(d *storagev1.Disk) (*storagev1.Disk, *diskCLIError) {
+	if d == nil {
+		return nil, &diskCLIError{
+			exitCode: 1,
+			msg:      "服务端返回空的虚拟磁盘元数据",
+		}
+	}
+	return d, nil
+}
+
+func mapDiskRPCError(err error, policy diskRPCErrorPolicy) *diskCLIError {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
+		switch connectErr.Code() {
+		case connect.CodeNotFound:
+			if policy.diskID != "" {
+				return &diskCLIError{
+					exitCode: 1,
+					msg:      "磁盘不存在: " + policy.diskID,
+					cause:    err,
+				}
+			}
+		case connect.CodeFailedPrecondition:
+			if policy.preconditionMsg != nil {
+				return &diskCLIError{
+					exitCode: 1,
+					msg:      policy.preconditionMsg(policy.diskID, err),
+					cause:    err,
+				}
+			}
+		case connect.CodeInvalidArgument:
+			if policy.checkInvalidArg {
+				return &diskCLIError{
+					exitCode: 2,
+					msg:      fmt.Sprintf("无效的请求参数: %v", err),
+					cause:    err,
+				}
+			}
+		}
+	}
+	if policy.checkEBUSYReason && serverx.ExtractErrorInfo(err).GetReason() == "EBUSY" {
+		return &diskCLIError{
+			exitCode: 1,
+			msg:      fmt.Sprintf("磁盘 %s 当前仍处于挂载状态（存在活跃客户端会话），请先卸载后再删除", policy.diskID),
+			cause:    err,
+		}
+	}
+	return &diskCLIError{
+		exitCode: 1,
+		msg:      fmt.Sprintf("%s: %v", policy.defaultOp, err),
+		cause:    err,
+	}
 }
 
 // newDiskStorageClient 解析 endpoint 与 token 并创建 StorageServiceClient。
@@ -100,32 +257,222 @@ func newDiskStorageClient(endpoint, token string) (storagev1connect.StorageServi
 	return client, 0, nil
 }
 
-// executeDisk 路由 bowl disk 控制面子命令族。
+// executeDisk 供 cli.Execute 调用的零配置默认入口（注入生产适配器）。
 func executeDisk(args []string, stdout, stderr io.Writer) int {
+	return executeDiskWithPorts(args, stdout, stderr, defaultDiskPorts())
+}
+
+// executeDiskWithPorts 为携带显式外部端口的统一入口；nil 端口自动回退生产默认适配器。
+func executeDiskWithPorts(args []string, stdout, stderr io.Writer, ports diskPorts) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, diskUsageHelp)
 		return 2
 	}
 
+	var spec *diskSubcommandSpec
 	subcmd := args[0]
 	switch subcmd {
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, diskUsageHelp)
 		return 0
 	case "create":
-		return executeDiskCreate(args[1:], stdout, stderr)
+		spec = &diskCreateSpec
 	case "fork":
-		return executeDiskFork(args[1:], stdout, stderr)
+		spec = &diskForkSpec
 	case "list":
-		return executeDiskList(args[1:], stdout, stderr)
+		spec = &diskListSpec
 	case "get":
-		return executeDiskGet(args[1:], stdout, stderr)
+		spec = &diskGetSpec
 	case "update", "resize":
-		return executeDiskUpdate(args[1:], stdout, stderr)
+		spec = &diskUpdateSpec
 	case "delete":
-		return executeDiskDelete(args[1:], stdout, stderr)
+		spec = &diskDeleteSpec
 	default:
 		fmt.Fprintf(stderr, "错误: 未知 disk 子命令 \"%s\"\n\n%s", subcmd, diskUsageHelp)
 		return 2
 	}
+
+	if ports.newClient == nil {
+		ports.newClient = newDiskStorageClient
+	}
+	if ports.findMountpoint == nil {
+		ports.findMountpoint = FindDiskMountpoint
+	}
+	if ports.stdin == nil {
+		ports.stdin = os.Stdin
+	}
+
+	adapter := spec.newAdapter()
+	return runDiskSubcommand(spec, adapter, args[1:], stdout, stderr, ports)
+}
+
+func runDiskSubcommand(
+	spec *diskSubcommandSpec,
+	adapter diskRequestAdapter,
+	args []string,
+	stdout, stderr io.Writer,
+	ports diskPorts,
+) int {
+	var (
+		quiet    bool
+		jsonOut  bool
+		endpoint string
+		token    string
+		help     bool
+		posArgs  []string
+	)
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			posArgs = append(posArgs, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			posArgs = append(posArgs, arg)
+			continue
+		}
+
+		flagName := strings.TrimLeft(arg, "-")
+		hasVal := strings.Contains(flagName, "=")
+		var val string
+		if hasVal {
+			parts := strings.SplitN(flagName, "=", 2)
+			flagName = parts[0]
+			val = parts[1]
+		}
+
+		var flagErr error
+		switch flagName {
+		case "h", "help":
+			help = true
+		case "q", "quiet":
+			if !spec.allowQuiet {
+				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, spec.usageHelp)
+				return 2
+			}
+			quiet = true
+		case "json":
+			jsonOut = true
+		case "endpoint":
+			endpoint, flagErr = takeFlagValue(args, &i, flagName, val, hasVal)
+			if flagErr != nil {
+				fmt.Fprintf(stderr, "错误: %v\n", flagErr)
+				return 2
+			}
+		case "token":
+			token, flagErr = takeFlagValue(args, &i, flagName, val, hasVal)
+			if flagErr != nil {
+				fmt.Fprintf(stderr, "错误: %v\n", flagErr)
+				return 2
+			}
+		default:
+			handled, adapterErr := adapter.parseFlag(flagName, val, hasVal, args, &i)
+			if adapterErr != nil {
+				fmt.Fprintf(stderr, "错误: %v\n", adapterErr)
+				return 2
+			}
+			if !handled {
+				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, spec.usageHelp)
+				return 2
+			}
+		}
+	}
+
+	if help {
+		fmt.Fprint(stdout, spec.usageHelp)
+		return 0
+	}
+
+	if spec.posArgLabel == "" {
+		if len(posArgs) > 0 {
+			fmt.Fprintf(stderr, "错误: %s 命令不接受位置参数 (%v)\n\n%s", spec.name, posArgs, spec.usageHelp)
+			return 2
+		}
+	} else if len(posArgs) != 1 {
+		fmt.Fprintf(stderr, "错误: %s 命令需要且仅需要 1 个位置参数 (%s)\n\n%s", spec.name, spec.posArgLabel, spec.usageHelp)
+		return 2
+	}
+
+	if quiet && jsonOut {
+		fmt.Fprintln(stderr, "错误: -q/--quiet 与 --json 不能同时使用")
+		return 2
+	}
+
+	if spec.uuidLabel != "" {
+		if _, err := parseNonNilUUID(posArgs[0], spec.uuidLabel); err != nil {
+			fmt.Fprintf(stderr, "错误: %v\n", err)
+			return 2
+		}
+	}
+
+	if missUsage, err := adapter.finalize(posArgs); err != nil {
+		if missUsage {
+			fmt.Fprintf(stderr, "错误: %v\n\n%s", err, spec.usageHelp)
+			return 2
+		}
+		fmt.Fprintf(stderr, "错误: %v\n", err)
+		return 2
+	}
+
+	if cliErr := adapter.preRPC(ports, stderr); cliErr != nil {
+		if cliErr.msg != "" {
+			fmt.Fprintf(stderr, "错误: %s\n", cliErr.msg)
+		}
+		return cliErr.exitCode
+	}
+
+	spanCtx, span, finishSpan := startDiskCLISpan(
+		context.Background(),
+		spec.spanName,
+		adapter.spanAttrs()...,
+	)
+	defer finishSpan()
+
+	client, exitCode, clientErr := ports.newClient(endpoint, token)
+	if clientErr != nil {
+		finishDiskCLISpanError(span, clientErr)
+		fmt.Fprintf(stderr, "错误: %v\n", clientErr)
+		return exitCode
+	}
+
+	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, spec.timeout)
+	defer rpcCancel()
+
+	outcome, cliErr := adapter.invoke(rpcCtx, client)
+	if cliErr != nil {
+		if cliErr.cause != nil {
+			finishDiskCLISpanError(span, cliErr.cause)
+		}
+		if cliErr.msg != "" {
+			fmt.Fprintf(stderr, "错误: %s\n", cliErr.msg)
+		}
+		return cliErr.exitCode
+	}
+
+	if outcome.setSpanDiskID && outcome.disk != nil {
+		span.SetAttributes(attribute.String("bowl.disk_id", outcome.disk.GetDiskId()))
+	}
+
+	if quiet && outcome.disk != nil {
+		fmt.Fprintln(stdout, outcome.disk.GetDiskId())
+		return 0
+	}
+
+	if jsonOut {
+		payload := outcome.jsonPayload
+		if payload == nil && outcome.disk != nil {
+			payload = toDiskJSON(outcome.disk)
+		}
+		return writeDiskJSON(stdout, stderr, payload)
+	}
+
+	if outcome.renderHuman != nil {
+		outcome.renderHuman(stdout)
+		return 0
+	}
+	if outcome.disk != nil {
+		printDiskDetail(stdout, outcome.disk)
+	}
+	return 0
 }

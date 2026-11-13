@@ -2,17 +2,17 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 	"text/tabwriter"
 	"time"
 
 	"connectrpc.com/connect"
+	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const diskListUsageHelp = `用法:
@@ -32,171 +32,95 @@ type diskListJSON struct {
 	NextPageToken string     `json:"next_page_token"`
 }
 
-// executeDiskList 解析并执行 bowl disk list 命令。
-func executeDiskList(args []string, stdout, stderr io.Writer) int {
-	var (
-		limitRaw  string
-		limitSet  bool
-		pageToken string
-		jsonOut   bool
-		endpoint  string
-		token     string
-		help      bool
-	)
+var diskListSpec = diskSubcommandSpec{
+	name:       "list",
+	usageHelp:  diskListUsageHelp,
+	spanName:   "cli.disk.list",
+	timeout:    10 * time.Second,
+	newAdapter: func() diskRequestAdapter { return &diskListAdapter{} },
+}
 
-	var posArgs []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			posArgs = append(posArgs, args[i+1:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "-") {
-			flagName := strings.TrimLeft(arg, "-")
-			hasVal := strings.Contains(flagName, "=")
-			var val string
-			if hasVal {
-				parts := strings.SplitN(flagName, "=", 2)
-				flagName = parts[0]
-				val = parts[1]
-			}
-			switch flagName {
-			case "h", "help":
-				help = true
-			case "json":
-				jsonOut = true
-			case "limit":
-				limitSet = true
-				switch {
-				case hasVal:
-					limitRaw = val
-				case i+1 < len(args):
-					i++
-					limitRaw = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --limit 需要指定参数值")
-					return 2
-				}
-			case "page-token":
-				switch {
-				case hasVal:
-					pageToken = val
-				case i+1 < len(args):
-					i++
-					pageToken = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --page-token 需要指定参数值")
-					return 2
-				}
-			case "endpoint":
-				switch {
-				case hasVal:
-					endpoint = val
-				case i+1 < len(args):
-					i++
-					endpoint = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
-					return 2
-				}
-			case "token":
-				switch {
-				case hasVal:
-					token = val
-				case i+1 < len(args):
-					i++
-					token = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
-					return 2
-				}
-			default:
-				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, diskListUsageHelp)
-				return 2
-			}
-		} else {
-			posArgs = append(posArgs, arg)
-		}
+type diskListAdapter struct {
+	limitRaw  string
+	limitSet  bool
+	pageToken string
+	pageSize  uint32
+}
+
+func (a *diskListAdapter) parseFlag(name, val string, hasVal bool, args []string, idx *int) (bool, error) {
+	var err error
+	switch name {
+	case "limit":
+		a.limitSet = true
+		a.limitRaw, err = takeFlagValue(args, idx, name, val, hasVal)
+		return true, err
+	case "page-token":
+		a.pageToken, err = takeFlagValue(args, idx, name, val, hasVal)
+		return true, err
+	default:
+		return false, nil
 	}
+}
 
-	if help {
-		fmt.Fprint(stdout, diskListUsageHelp)
-		return 0
-	}
-
-	if len(posArgs) > 0 {
-		fmt.Fprintf(stderr, "错误: list 命令不接受位置参数 (%v)\n\n%s", posArgs, diskListUsageHelp)
-		return 2
-	}
-
-	var pageSize uint32
-	if limitSet {
-		parsedLimit, err := strconv.Atoi(limitRaw)
+func (a *diskListAdapter) finalize(_ []string) (bool, error) {
+	if a.limitSet {
+		parsedLimit, err := strconv.Atoi(a.limitRaw)
 		if err != nil || parsedLimit < 1 || parsedLimit > 1000 {
-			fmt.Fprintf(stderr, "错误: 无效的 --limit 参数 \"%s\"，必须为 [1, 1000] 范围内的整数\n", limitRaw)
-			return 2
+			return false, fmt.Errorf("无效的 --limit 参数 \"%s\"，必须为 [1, 1000] 范围内的整数", a.limitRaw)
 		}
-		pageSize = uint32(parsedLimit)
+		a.pageSize = uint32(parsedLimit)
 	}
+	return false, nil
+}
 
-	spanCtx, span, finishSpan := startDiskCLISpan(context.Background(), "cli.disk.list")
-	defer finishSpan()
+func (a *diskListAdapter) spanAttrs() []attribute.KeyValue {
+	return nil
+}
 
-	client, exitCode, err := newDiskStorageClient(endpoint, token)
-	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return exitCode
-	}
+func (a *diskListAdapter) preRPC(_ diskPorts, _ io.Writer) *diskCLIError {
+	return nil
+}
 
-	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 10*time.Second)
-	defer rpcCancel()
-
-	resp, err := client.ListDisks(rpcCtx, connect.NewRequest(&storagev1.ListDisksRequest{
-		PageSize:  pageSize,
-		PageToken: pageToken,
+func (a *diskListAdapter) invoke(ctx context.Context, client storagev1connect.StorageServiceClient) (diskOutcome, *diskCLIError) {
+	resp, err := client.ListDisks(ctx, connect.NewRequest(&storagev1.ListDisksRequest{
+		PageSize:  a.pageSize,
+		PageToken: a.pageToken,
 	}))
 	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: 列出虚拟磁盘失败: %v\n", err)
-		return 1
+		return diskOutcome{}, mapDiskRPCError(err, diskRPCErrorPolicy{
+			defaultOp: "列出虚拟磁盘失败",
+		})
 	}
 
 	disks := resp.Msg.GetDisks()
 	nextPageToken := resp.Msg.GetNextPageToken()
 
-	if jsonOut {
-		items := make([]diskJSON, 0, len(disks))
-		for _, d := range disks {
-			items = append(items, toDiskJSON(d))
-		}
-		out := diskListJSON{
-			Disks:         items,
-			NextPageToken: nextPageToken,
-		}
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(out); err != nil {
-			fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", err)
-			return 1
-		}
-		return 0
+	items := make([]diskJSON, 0, len(disks))
+	for _, d := range disks {
+		items = append(items, toDiskJSON(d))
 	}
 
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	return diskOutcome{
+		jsonPayload: diskListJSON{
+			Disks:         items,
+			NextPageToken: nextPageToken,
+		},
+		renderHuman: func(w io.Writer) {
+			renderDiskListTable(w, items, nextPageToken)
+		},
+	}, nil
+}
+
+func renderDiskListTable(w io.Writer, items []diskJSON, nextPageToken string) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "DISK ID\tNAME\tUSED\tMAX\tUSAGE%\tINODES\tCREATED AT")
-	for _, d := range disks {
-		dj := toDiskJSON(d)
-		var usagePct float64
-		if dj.MaxBytes > 0 {
-			usagePct = float64(dj.UsedBytes) * 100.0 / float64(dj.MaxBytes)
-		}
+	for _, dj := range items {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%.2f%%\t%d\t%s\n",
 			dj.DiskID,
 			dj.Name,
 			FormatSize(dj.UsedBytes),
 			FormatSize(dj.MaxBytes),
-			usagePct,
+			diskUsagePct(dj.UsedBytes, dj.MaxBytes),
 			dj.UsedInodes,
 			dj.CreatedAt,
 		)
@@ -204,8 +128,6 @@ func executeDiskList(args []string, stdout, stderr io.Writer) int {
 	_ = tw.Flush()
 
 	if nextPageToken != "" {
-		fmt.Fprintf(stdout, "\nNext Page Token: %s\n", nextPageToken)
+		fmt.Fprintf(w, "\nNext Page Token: %s\n", nextPageToken)
 	}
-
-	return 0
 }

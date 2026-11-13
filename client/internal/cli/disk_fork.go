@@ -2,18 +2,15 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
+	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
 )
 
 const diskForkUsageHelp = `用法:
@@ -32,194 +29,86 @@ const diskForkUsageHelp = `用法:
   -h, --help           查看帮助信息
 `
 
-// executeDiskFork 解析并执行 bowl disk fork 命令。
-func executeDiskFork(args []string, stdout, stderr io.Writer) int {
-	var (
-		sizeRaw  *string
-		name     string
-		quiet    bool
-		jsonOut  bool
-		endpoint string
-		token    string
-		help     bool
-	)
+var diskForkSpec = diskSubcommandSpec{
+	name:        "fork",
+	usageHelp:   diskForkUsageHelp,
+	posArgLabel: "<source-disk-id>",
+	uuidLabel:   "source-disk-id",
+	allowQuiet:  true,
+	spanName:    "cli.disk.fork",
+	timeout:     30 * time.Second,
+	newAdapter:  func() diskRequestAdapter { return &diskForkAdapter{} },
+}
 
-	var posArgs []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			posArgs = append(posArgs, args[i+1:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "-") {
-			flagName := strings.TrimLeft(arg, "-")
-			hasVal := strings.Contains(flagName, "=")
-			var val string
-			if hasVal {
-				parts := strings.SplitN(flagName, "=", 2)
-				flagName = parts[0]
-				val = parts[1]
-			}
-			switch flagName {
-			case "h", "help":
-				help = true
-			case "q", "quiet":
-				quiet = true
-			case "json":
-				jsonOut = true
-			case "size":
-				switch {
-				case hasVal:
-					v := val
-					sizeRaw = &v
-				case i+1 < len(args):
-					i++
-					v := args[i]
-					sizeRaw = &v
-				default:
-					fmt.Fprintln(stderr, "错误: --size 需要指定参数值")
-					return 2
-				}
-			case "name":
-				switch {
-				case hasVal:
-					name = val
-				case i+1 < len(args):
-					i++
-					name = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --name 需要指定参数值")
-					return 2
-				}
-			case "endpoint":
-				switch {
-				case hasVal:
-					endpoint = val
-				case i+1 < len(args):
-					i++
-					endpoint = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --endpoint 需要指定参数值")
-					return 2
-				}
-			case "token":
-				switch {
-				case hasVal:
-					token = val
-				case i+1 < len(args):
-					i++
-					token = args[i]
-				default:
-					fmt.Fprintln(stderr, "错误: --token 需要指定参数值")
-					return 2
-				}
-			default:
-				fmt.Fprintf(stderr, "错误: 未知标志 \"%s\"\n\n%s", arg, diskForkUsageHelp)
-				return 2
-			}
-		} else {
-			posArgs = append(posArgs, arg)
-		}
-	}
+type diskForkAdapter struct {
+	sourceDiskID string
+	sizeRaw      *string
+	name         string
+	sizePtr      *uint64
+}
 
-	if help {
-		fmt.Fprint(stdout, diskForkUsageHelp)
-		return 0
-	}
-
-	if len(posArgs) != 1 {
-		fmt.Fprintf(stderr, "错误: fork 命令需要且仅需要 1 个位置参数 (<source-disk-id>)\n\n%s", diskForkUsageHelp)
-		return 2
-	}
-
-	if quiet && jsonOut {
-		fmt.Fprintln(stderr, "错误: -q/--quiet 与 --json 不能同时使用")
-		return 2
-	}
-
-	sourceDiskIDStr := posArgs[0]
-	parsedUUID, err := uuid.Parse(sourceDiskIDStr)
-	if err != nil || parsedUUID == uuid.Nil {
-		fmt.Fprintf(stderr, "错误: 无效的 source-disk-id \"%s\"，必须为合法的非 Nil UUID\n", sourceDiskIDStr)
-		return 2
-	}
-
-	var sizePtr *uint64
-	if sizeRaw != nil {
-		var maxBytes uint64
-		maxBytes, err = ParseSize(*sizeRaw)
+func (a *diskForkAdapter) parseFlag(name, val string, hasVal bool, args []string, idx *int) (bool, error) {
+	switch name {
+	case "size":
+		v, err := takeFlagValue(args, idx, name, val, hasVal)
 		if err != nil {
-			fmt.Fprintf(stderr, "错误: 无效的 --size 参数: %v\n", err)
-			return 2
+			return true, err
 		}
-		sizePtr = &maxBytes
+		a.sizeRaw = &v
+		return true, nil
+	case "name":
+		v, err := takeFlagValue(args, idx, name, val, hasVal)
+		if err != nil {
+			return true, err
+		}
+		a.name = v
+		return true, nil
+	default:
+		return false, nil
 	}
+}
 
-	if err = validateDiskName(name); err != nil {
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return 2
+func (a *diskForkAdapter) finalize(posArgs []string) (bool, error) {
+	a.sourceDiskID = posArgs[0]
+	if a.sizeRaw != nil {
+		maxBytes, err := ParseSize(*a.sizeRaw)
+		if err != nil {
+			return false, fmt.Errorf("无效的 --size 参数: %w", err)
+		}
+		a.sizePtr = &maxBytes
 	}
-
-	spanCtx, span, finishSpan := startDiskCLISpan(
-		context.Background(),
-		"cli.disk.fork",
-		attribute.String("bowl.source_disk_id", sourceDiskIDStr),
-	)
-	defer finishSpan()
-
-	client, exitCode, err := newDiskStorageClient(endpoint, token)
-	if err != nil {
-		finishDiskCLISpanError(span, err)
-		fmt.Fprintf(stderr, "错误: %v\n", err)
-		return exitCode
+	if err := validateDiskName(a.name); err != nil {
+		return false, err
 	}
+	return false, nil
+}
 
-	rpcCtx, rpcCancel := context.WithTimeout(spanCtx, 30*time.Second)
-	defer rpcCancel()
+func (a *diskForkAdapter) spanAttrs() []attribute.KeyValue {
+	return []attribute.KeyValue{attribute.String("bowl.source_disk_id", a.sourceDiskID)}
+}
 
-	resp, err := client.ForkDisk(rpcCtx, connect.NewRequest(&storagev1.ForkDiskRequest{
-		SourceDiskId: sourceDiskIDStr,
-		Name:         name,
-		MaxBytes:     sizePtr,
+func (a *diskForkAdapter) preRPC(_ diskPorts, _ io.Writer) *diskCLIError {
+	return nil
+}
+
+func (a *diskForkAdapter) invoke(ctx context.Context, client storagev1connect.StorageServiceClient) (diskOutcome, *diskCLIError) {
+	resp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: a.sourceDiskID,
+		Name:         a.name,
+		MaxBytes:     a.sizePtr,
 	}))
 	if err != nil {
-		finishDiskCLISpanError(span, err)
-		if connectErr, ok := errors.AsType[*connect.Error](err); ok {
-			switch connectErr.Code() {
-			case connect.CodeNotFound:
-				fmt.Fprintf(stderr, "错误: 磁盘不存在: %s\n", sourceDiskIDStr)
-				return 1
-			case connect.CodeFailedPrecondition:
-				fmt.Fprintf(stderr, "错误: 目标容量小于源磁盘已用容量: %v\n", err)
-				return 1
-			}
-		}
-		fmt.Fprintf(stderr, "错误: 派生虚拟磁盘失败: %v\n", err)
-		return 1
+		return diskOutcome{}, mapDiskRPCError(err, diskRPCErrorPolicy{
+			diskID:    a.sourceDiskID,
+			defaultOp: "派生虚拟磁盘失败",
+			preconditionMsg: func(_ string, rpcErr error) string {
+				return fmt.Sprintf("目标容量小于源磁盘已用容量: %v", rpcErr)
+			},
+		})
 	}
-
-	disk := resp.Msg.GetDisk()
-	if disk == nil {
-		fmt.Fprintln(stderr, "错误: 服务端返回空的虚拟磁盘元数据")
-		return 1
+	disk, cliErr := requireNonNilDisk(resp.Msg.GetDisk())
+	if cliErr != nil {
+		return diskOutcome{}, cliErr
 	}
-	span.SetAttributes(attribute.String("bowl.disk_id", disk.GetDiskId()))
-
-	if quiet {
-		fmt.Fprintln(stdout, disk.GetDiskId())
-		return 0
-	}
-
-	if jsonOut {
-		enc := json.NewEncoder(stdout)
-		enc.SetIndent("", "  ")
-		if encErr := enc.Encode(toDiskJSON(disk)); encErr != nil {
-			fmt.Fprintf(stderr, "错误: 序列化 JSON 输出失败: %v\n", encErr)
-			return 1
-		}
-		return 0
-	}
-
-	printDiskDetail(stdout, disk)
-	return 0
+	return diskOutcome{disk: disk, setSpanDiskID: true}, nil
 }
