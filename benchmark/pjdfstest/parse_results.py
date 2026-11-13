@@ -162,10 +162,26 @@ def parse_tap_log(log_text: str, dir_timings: list[dict[str, Any]]) -> dict[str,
             "status": "PASS" if failed == 0 and total > 0 else "FAIL",
         })
 
-    # Map dir_timings by directory name
-    timing_by_dir: dict[str, dict[str, Any]] = {
-        item["directory"]: item for item in dir_timings if "directory" in item
-    }
+    # 按目录聚合目录级计时与非零退出码（同目录多条目时保留首个非零退出码并累加耗时）
+    timing_by_dir: dict[str, dict[str, Any]] = {}
+    for item in dir_timings:
+        if not isinstance(item, dict) or "directory" not in item:
+            continue
+        d_name = item["directory"]
+        try:
+            dur = float(item.get("duration_sec") or 0.0)
+        except (ValueError, TypeError):
+            dur = 0.0
+        try:
+            rc_val = int(item.get("rc") or 0)
+        except (ValueError, TypeError):
+            rc_val = 0
+        if d_name not in timing_by_dir:
+            timing_by_dir[d_name] = {"duration_sec": dur, "rc": rc_val}
+        else:
+            timing_by_dir[d_name]["duration_sec"] += dur
+            if timing_by_dir[d_name]["rc"] == 0 and rc_val != 0:
+                timing_by_dir[d_name]["rc"] = rc_val
 
     # Aggregate by directory
     dirs_map: dict[str, dict[str, Any]] = {}
@@ -255,7 +271,9 @@ def render_report_md(summary: dict[str, Any], env_meta: dict[str, Any]) -> str:
     bowl_cfg = env_meta.get("bowl_config", {})
     audit = env_meta.get("cleanup_audit", {})
 
-    directories_ok = all(d["rc"] == 0 and d["files"] > 0 for d in summary["directories"])
+    directories_ok = bool(summary["directories"]) and all(
+        d["rc"] == 0 and d["files"] > 0 for d in summary["directories"]
+    )
     status_badge = "100% PASS (全量通过)" if failed_tests == 0 and total_tests > 0 and directories_ok else f"PASS {passed_tests}/{total_tests} ({pass_rate_pct:.2f}%)；目录退出码见明细"
 
     bowl_cp_label = "PostgreSQL 18（deploy/prod 容器栈）" if bowl_cfg.get("deploy_profile") else "PostgreSQL 16"
@@ -494,12 +512,23 @@ def main() -> None:
     if timings_path.exists():
         for line in timings_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line:
-                stage_timings.append(json.loads(line))
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(row, dict):
+                stage_timings.append(row)
 
     env_meta: dict[str, Any] = {}
-    if env_meta_path.exists():
-        env_meta = json.loads(env_meta_path.read_text(encoding="utf-8"))
+    if env_meta_path.exists() and env_meta_path.stat().st_size > 0:
+        try:
+            loaded_meta = json.loads(env_meta_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_meta, dict):
+                env_meta = loaded_meta
+        except Exception:
+            env_meta = {}
 
     summary = parse_tap_log(log_text, stage_timings)
     summary["environment"] = env_meta

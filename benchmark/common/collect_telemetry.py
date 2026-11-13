@@ -155,21 +155,29 @@ def diff_client_snapshots(
     pre_epoch: float | None = None,
     post_epoch: float | None = None,
 ) -> dict[str, Any]:
-    pre_ops = {o["op"]: o for o in pre.get("fuse", {}).get("ops", []) if "op" in o}
-    post_ops = {o["op"]: o for o in post.get("fuse", {}).get("ops", []) if "op" in o}
+    pre_ops = {
+        o["op"]: o
+        for o in ((pre.get("fuse") or {}).get("ops") or [])
+        if isinstance(o, dict) and "op" in o
+    }
+    post_ops = {
+        o["op"]: o
+        for o in ((post.get("fuse") or {}).get("ops") or [])
+        if isinstance(o, dict) and "op" in o
+    }
 
     delta_ops_raw: list[dict[str, Any]] = []
     total_delta_ns = 0
     for op_name, post_o in post_ops.items():
         pre_o = pre_ops.get(op_name, {})
-        d_calls = max(0, int(post_o.get("calls", 0)) - int(pre_o.get("calls", 0)))
+        d_calls = max(0, int(post_o.get("calls") or 0) - int(pre_o.get("calls") or 0))
         if d_calls == 0:
             continue
-        d_errs = max(0, int(post_o.get("errors", 0)) - int(pre_o.get("errors", 0)))
-        d_bytes = max(0, int(post_o.get("bytes", 0)) - int(pre_o.get("bytes", 0)))
-        d_ns = max(0, int(post_o.get("duration_nanos", 0)) - int(pre_o.get("duration_nanos", 0)))
-        post_b = [int(x) for x in post_o.get("buckets", [])]
-        pre_b = [int(x) for x in pre_o.get("buckets", [0] * len(post_b))]
+        d_errs = max(0, int(post_o.get("errors") or 0) - int(pre_o.get("errors") or 0))
+        d_bytes = max(0, int(post_o.get("bytes") or 0) - int(pre_o.get("bytes") or 0))
+        d_ns = max(0, int(post_o.get("duration_nanos") or 0) - int(pre_o.get("duration_nanos") or 0))
+        post_b = [int(x) for x in (post_o.get("buckets") or [])]
+        pre_b = [int(x) for x in (pre_o.get("buckets") or [])]
         d_buckets = [max(0, post_b[i] - (pre_b[i] if i < len(pre_b) else 0)) for i in range(len(post_b))]
 
         post_errnos = post_o.get("errnos") or {}
@@ -204,20 +212,22 @@ def diff_client_snapshots(
         return max(0.0, b - a)
 
     eff_pre_epoch = pre_epoch
-    if eff_pre_epoch is None and int(pre.get("timestamp_unix_nano", 0)) > 0:
-        eff_pre_epoch = int(pre.get("timestamp_unix_nano", 0)) / 1e9
+    pre_ts_ns = int(pre.get("timestamp_unix_nano") or 0)
+    post_ts_ns = int(post.get("timestamp_unix_nano") or 0)
+    if eff_pre_epoch is None and pre_ts_ns > 0:
+        eff_pre_epoch = pre_ts_ns / 1e9
     eff_post_epoch = post_epoch
-    if eff_post_epoch is None and int(post.get("timestamp_unix_nano", 0)) > 0:
-        eff_post_epoch = int(post.get("timestamp_unix_nano", 0)) / 1e9
+    if eff_post_epoch is None and post_ts_ns > 0:
+        eff_post_epoch = post_ts_ns / 1e9
 
     if pre_epoch is not None and post_epoch is not None and post_epoch >= pre_epoch:
         window_sec = round(post_epoch - pre_epoch, 3)
     else:
-        ts_delta_ns = int(post.get("timestamp_unix_nano", 0)) - int(pre.get("timestamp_unix_nano", 0))
+        ts_delta_ns = post_ts_ns - pre_ts_ns
         if ts_delta_ns > 0:
             window_sec = round(ts_delta_ns / 1e9, 3)
         else:
-            window_sec = round(max(0.0, float(post.get("uptime_seconds", 0)) - float(pre.get("uptime_seconds", 0))), 3)
+            window_sec = round(max(0.0, float(post.get("uptime_seconds") or 0) - float(pre.get("uptime_seconds") or 0)), 3)
 
     attr_h, attr_m = delta_field("namespace_cache", "attr_hits"), delta_field("namespace_cache", "attr_misses")
     ent_h, ent_m = delta_field("namespace_cache", "entry_hits"), delta_field("namespace_cache", "entry_misses")
@@ -259,9 +269,9 @@ def diff_client_snapshots(
         "fuse_active_ms": fuse_active_ms,
         "fuse_active_concurrency": round((fuse_active_ms / 1000.0) / window_sec, 3) if window_sec > 0 else None,
         "fuse_aggregate": agg_fuse,
-        "cpu_delta_sec": round(max(0.0, float(post.get("cpu_usage_seconds", 0)) - float(pre.get("cpu_usage_seconds", 0))), 3),
-        "read_bytes": int(max(0, int(post.get("fuse", {}).get("read_bytes", 0)) - int(pre.get("fuse", {}).get("read_bytes", 0)))),
-        "write_bytes": int(max(0, int(post.get("fuse", {}).get("write_bytes", 0)) - int(pre.get("fuse", {}).get("write_bytes", 0)))),
+        "cpu_delta_sec": round(max(0.0, float(post.get("cpu_usage_seconds") or 0) - float(pre.get("cpu_usage_seconds") or 0)), 3),
+        "read_bytes": int(max(0, int((post.get("fuse") or {}).get("read_bytes") or 0) - int((pre.get("fuse") or {}).get("read_bytes") or 0))),
+        "write_bytes": int(max(0, int((post.get("fuse") or {}).get("write_bytes") or 0) - int((pre.get("fuse") or {}).get("write_bytes") or 0))),
         "nscache_attr_hit_rate_pct": round(attr_h / (attr_h + attr_m) * 100.0, 2) if (attr_h + attr_m) > 0 else None,
         "nscache_entry_hit_rate_pct": round(ent_h / (ent_h + ent_m) * 100.0, 2) if (ent_h + ent_m) > 0 else None,
         "nscache_readlink_hit_rate_pct": round(rl_h / (rl_h + rl_m) * 100.0, 2) if (rl_h + rl_m) > 0 else None,
@@ -312,10 +322,10 @@ def process_client_stats(stage_dir: Path, out_dir: Path) -> dict[str, Any]:
 
     terminal_name = next(
         (cand for cand in ("before_umount", "suite_post", "final") if cand in snapshots),
-        max(snapshots.keys(), key=lambda k: int(snapshots[k].get("timestamp_unix_nano", 0))),
+        max(snapshots.keys(), key=lambda k: int(snapshots[k].get("timestamp_unix_nano") or 0)),
     )
     term = snapshots[terminal_name]
-    raw_ops = [o for o in term.get("fuse", {}).get("ops", []) if int(o.get("calls", 0)) > 0]
+    raw_ops = [o for o in ((term.get("fuse") or {}).get("ops") or []) if int(o.get("calls") or 0) > 0]
     total_ns = sum(int(o.get("duration_nanos", 0)) for o in raw_ops)
     summarized_ops = []
     for o in raw_ops:
@@ -536,13 +546,17 @@ def distill_jaeger_trace(trace_obj: dict[str, Any]) -> dict[str, Any] | None:
         item["start_offset_ms"] = round((item["start_offset_ms"] - base_start) / 1000.0, 3)
 
     enriched_spans.sort(key=lambda s: s["duration_ms"], reverse=True)
-    wall_us = max(int(root_span.get("duration", 0)), (max_end - min_start) if (max_end and min_start) else 0)
+    wall_us = max(
+        int(root_span.get("duration", 0)),
+        (max_end - min_start) if (max_end is not None and min_start is not None) else 0,
+    )
     root_svc = proc_service.get(root_span.get("processID", ""), "unknown")
 
     # 精确匹配同跳 Client ConnectRPC Span -> Server ConnectRPC Span，严禁拿客户端总 fuse.* Span 误减服务端单次 RPC
     hop_pairs_us: list[tuple[int, int, str]] = []
     client_rpc_spans_us: list[int] = []
     client_rpc_candidates: list[tuple[dict[str, Any], str]] = []
+    server_rpc_spans: list[tuple[dict[str, Any], str | None]] = []
     server_rpc_candidates: list[tuple[dict[str, Any], str]] = []
 
     for sp in spans:
@@ -553,33 +567,36 @@ def distill_jaeger_trace(trace_obj: dict[str, Any]) -> dict[str, Any] | None:
             client_rpc_spans_us.append(int(sp.get("duration", 0)))
             client_rpc_candidates.append((sp, mname))
         elif svc == "bowl-storage":
-            # 1) 优先通过显式父子引用匹配跨机同跳客户端 RPC Span
-            matched_parent = None
-            for r in sp.get("references") or []:
-                pid = r.get("spanID")
-                if pid in span_by_id and span_svc.get(pid) == "bowl-client":
-                    cand_parent = span_by_id[pid]
-                    # 若父 Span 是 fuse.* 根 Span（未包裹独立客户端 RPC 子 Span），仅当该根 Span 只发起了单次同方法调用时配对
-                    p_op = str(cand_parent.get("operationName") or "")
-                    if not p_op.startswith("fuse."):
-                        matched_parent = cand_parent
-                        break
+            server_rpc_spans.append((sp, mname))
+
+    has_dedicated_cli_rpc = any(
+        not str(cs.get("operationName") or "").startswith("fuse.") for cs, _ in client_rpc_candidates
+    )
+
+    for sp, mname in server_rpc_spans:
+        # 1) 优先通过显式父子引用匹配跨机同跳客户端 RPC Span
+        matched_parent = None
+        for r in sp.get("references") or []:
+            pid = r.get("spanID")
+            if pid in span_by_id and span_svc.get(pid) == "bowl-client":
+                cand_parent = span_by_id[pid]
+                p_op = str(cand_parent.get("operationName") or "")
+                if not p_op.startswith("fuse."):
                     matched_parent = cand_parent
-            if matched_parent is not None:
-                p_op = str(matched_parent.get("operationName") or "")
-                # 仅当客户端 Span 本身是 ConnectRPC Span（而非 fuse.<Op> 聚合根）时作为精确同跳对；
-                # 若测试桩未单独拆出客户端 RPC Span（仅有 2 个 Span：fuse.<Op> -> StorageService/<Method>），回退使用该直接父子对
-                has_dedicated_cli_rpc = any(
-                    not str(cs.get("operationName") or "").startswith("fuse.") for cs, _ in client_rpc_candidates
-                )
-                if not p_op.startswith("fuse.") or not has_dedicated_cli_rpc:
-                    hop_pairs_us.append((
-                        int(matched_parent.get("duration", 0)),
-                        int(sp.get("duration", 0)),
-                        mname or short_rpc_method(str(sp.get("operationName") or "")),
-                    ))
-            elif mname:
-                server_rpc_candidates.append((sp, mname))
+                    break
+                matched_parent = cand_parent
+        if matched_parent is not None:
+            p_op = str(matched_parent.get("operationName") or "")
+            # 仅当客户端 Span 本身是 ConnectRPC Span（而非 fuse.<Op> 聚合根）时作为精确同跳对；
+            # 若测试桩未单独拆出客户端 RPC Span（仅有 2 个 Span：fuse.<Op> -> StorageService/<Method>），回退使用该直接父子对
+            if not p_op.startswith("fuse.") or not has_dedicated_cli_rpc:
+                hop_pairs_us.append((
+                    int(matched_parent.get("duration", 0)),
+                    int(sp.get("duration", 0)),
+                    mname or short_rpc_method(str(sp.get("operationName") or "")),
+                ))
+        elif mname:
+            server_rpc_candidates.append((sp, mname))
 
     # 2) 若无直接跨机引用（如异步链接或采样裁剪），按同名 RPC 方法与时间窗包含关系配对
     if not hop_pairs_us and client_rpc_candidates and server_rpc_candidates:
@@ -716,7 +733,12 @@ def parse_prom_text(path: Path) -> dict[str, list[tuple[dict[str, str], float]]]
         val_str = m.group("val")
         if val_str == "NaN":
             continue
-        val = math.inf if val_str == "+Inf" else (-math.inf if val_str == "-Inf" else float(val_str))
+        try:
+            val = math.inf if val_str == "+Inf" else (-math.inf if val_str == "-Inf" else float(val_str))
+        except ValueError:
+            continue
+        if math.isnan(val):
+            continue
         labels: dict[str, str] = {}
         raw_labels = m.group("labels")
         if raw_labels:
@@ -796,7 +818,15 @@ def summarize_prom_histogram(
         for (bg, le_str), b_val in post_bkt.items():
             if bg != g or not le_str:
                 continue
-            bound = math.inf if le_str == "+Inf" else float(le_str)
+            if le_str == "+Inf":
+                bound = math.inf
+            else:
+                try:
+                    bound = float(le_str)
+                except ValueError:
+                    continue
+                if math.isnan(bound):
+                    continue
             d_b = max(0.0, b_val - pre_bkt.get((bg, le_str), 0.0))
             buckets_for_g.append((bound, d_b))
 
@@ -1746,7 +1776,10 @@ def build_phase_hop_breakdowns(
 
     stage_sec_lookup: dict[str, float] = {}
     for r in stage_rows:
-        dur = float(r.get("duration_sec", 0.0) or 0.0)
+        try:
+            dur = float(r.get("duration_sec", 0.0) or 0.0)
+        except (ValueError, TypeError):
+            continue
         for k in (r.get("stage"), r.get("directory"), r.get("suite")):
             if k and dur > 0:
                 raw_k = str(k)
@@ -1955,11 +1988,15 @@ def _parse_pprof_top_lines(out_text: str, limit: int = 5) -> list[str]:
 
 
 def process_pprof_profiles(
-    stage_dir: Path, out_dir: Path, server_bin: Path | None, client_bin: Path | None
+    stage_dir: Path,
+    out_dir: Path,
+    server_bin: Path | None,
+    client_bin: Path | None,
+    go_bin: Path | str | None = None,
 ) -> list[dict[str, Any]]:
     pprof_dst = out_dir / "pprof_top"
-    go_bin = shutil.which("go")
-    if not go_bin:
+    resolved_go_bin = str(go_bin) if go_bin is not None else shutil.which("go")
+    if not resolved_go_bin:
         return []
 
     extracted: list[dict[str, Any]] = []
@@ -1972,7 +2009,7 @@ def process_pprof_profiles(
                 continue
 
             def run_pprof(sort_flag: str) -> str:
-                cmd = [go_bin, "tool", "pprof", "-top", sort_flag, "-nodecount=25"]
+                cmd = [resolved_go_bin, "tool", "pprof", "-top", sort_flag, "-nodecount=25"]
                 if bin_path is not None and bin_path.exists():
                     cmd.append(str(bin_path))
                 cmd.append(str(pb))
@@ -2042,7 +2079,10 @@ def load_stage_timings(results_dir: Path) -> list[dict[str, Any]]:
         norm_row = dict(row)
         if "stage" in norm_row and norm_row["stage"]:
             norm_row["stage"] = canon_stage
-        dur = float(norm_row.get("duration_sec", 0.0) or 0.0)
+        try:
+            dur = float(norm_row.get("duration_sec", 0.0) or 0.0)
+        except (ValueError, TypeError):
+            continue
         prev = dedup_by_label.get(canon_stage)
         if prev is None or dur > float(prev.get("duration_sec", 0.0) or 0.0):
             dedup_by_label[canon_stage] = norm_row
@@ -2252,14 +2292,19 @@ def render_overview_markdown(overview: dict[str, Any]) -> str:
             "| :--- | ---: | :--- | ---: | ---: | ---: | :--- |",
         ])
         for tr in jg["slow_traces_top15"]:
-            top_sub = tr["top_spans"][1] if len(tr["top_spans"]) > 1 else tr["top_spans"][0]
+            top_spans = tr.get("top_spans") or []
+            if top_spans:
+                top_sub = top_spans[1] if len(top_spans) > 1 else top_spans[0]
+                top_sub_str = f"`{top_sub['service']}:{top_sub['operation']}` ({top_sub['duration_ms']:.2f} ms)"
+            else:
+                top_sub_str = "—"
             c_rpc = fmt_opt_ms(tr.get("client_rpc_span_ms"), 2) if tr.get("client_rpc_span_ms") is not None else fmt_opt_ms(tr.get("client_max_span_ms"), 2)
             s_rpc = fmt_opt_ms(tr.get("server_rpc_span_ms"), 2) if tr.get("server_rpc_span_ms") is not None else fmt_opt_ms(tr.get("server_max_span_ms"), 2)
             ovh = fmt_opt_ms(tr.get("rpc_network_codec_ms"), 2)
             lines.append(
                 f"| `{tr['trace_id'][:16]}` | {tr['total_duration_ms']:.2f} | `{tr['root_service']}:{tr['root_operation']}` | "
                 f"{c_rpc} | {s_rpc} | {ovh} | "
-                f"`{top_sub['service']}:{top_sub['operation']}` ({top_sub['duration_ms']:.2f} ms) |"
+                f"{top_sub_str} |"
             )
         lines.append("")
 
@@ -2417,13 +2462,18 @@ def render_report_telemetry_section(overview: dict[str, Any], heading: str) -> l
             "| :--- | ---: | :--- | ---: | ---: | ---: | :--- |",
         ])
         for tr in jg["slow_traces_top15"][:5]:
-            top_sub = tr["top_spans"][1] if len(tr["top_spans"]) > 1 else tr["top_spans"][0]
+            top_spans = tr.get("top_spans") or []
+            if top_spans:
+                top_sub = top_spans[1] if len(top_spans) > 1 else top_spans[0]
+                top_sub_str = f"`{top_sub['service']}:{top_sub['operation']}` ({top_sub['duration_ms']:.2f} ms)"
+            else:
+                top_sub_str = "—"
             c_rpc = fmt_opt_ms(tr.get("client_rpc_span_ms"), 2) if tr.get("client_rpc_span_ms") is not None else fmt_opt_ms(tr.get("client_max_span_ms"), 2)
             s_rpc = fmt_opt_ms(tr.get("server_rpc_span_ms"), 2) if tr.get("server_rpc_span_ms") is not None else fmt_opt_ms(tr.get("server_max_span_ms"), 2)
             ovh = fmt_opt_ms(tr.get("rpc_network_codec_ms"), 2)
             lines.append(
                 f"| `{tr['trace_id'][:16]}` | {tr['total_duration_ms']:.2f} | `{tr['root_service']}:{tr['root_operation']}` | "
-                f"{c_rpc} | {s_rpc} | {ovh} | `{top_sub['service']}:{top_sub['operation']}` ({top_sub['duration_ms']:.2f} ms) |"
+                f"{c_rpc} | {s_rpc} | {ovh} | {top_sub_str} |"
             )
         lines.append("")
 
@@ -2452,6 +2502,7 @@ def build_telemetry_bundle(
     results_dir: Path,
     server_bin: Path | None = None,
     client_bin: Path | None = None,
+    go_bin: Path | str | None = None,
 ) -> dict[str, Any]:
     telem_out = results_dir / "telemetry"
     if telem_out.exists():
@@ -2463,7 +2514,7 @@ def build_telemetry_bundle(
     prom_summary = process_prometheus_data(stage_dir, telem_out)
     logs_summary = process_logs(stage_dir, telem_out)
     pebble_summary = process_pebble_logs(stage_dir, telem_out)
-    pprof_summary = process_pprof_profiles(stage_dir, telem_out, server_bin, client_bin)
+    pprof_summary = process_pprof_profiles(stage_dir, telem_out, server_bin, client_bin, go_bin=go_bin)
     slowest_stages = load_stage_timings(results_dir)
     phase_breakdowns = build_phase_hop_breakdowns(client_summary, prom_summary, slowest_stages, telem_out)
 
