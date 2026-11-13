@@ -1,4 +1,4 @@
-// Package testutil 提供跨服务 E2E 测试的客户端构建与错误断言辅助函数。
+// Package testutil 提供存储模块端到端测试的客户端构造与错误断言辅助实现。
 package testutil
 
 import (
@@ -23,9 +23,14 @@ const (
 	expectedErrorDomain       = "bowl.storage"
 )
 
-// GetStorageServiceAddr 返回 storage-service 服务地址，默认值为 http://localhost:9000。
+// GetStorageServiceAddr 返回 `storage-service` 接入地址，默认值为 http://localhost:9000。
 func GetStorageServiceAddr() string {
 	return cmp.Or(os.Getenv("STORAGE_SERVICE_ADDR"), defaultStorageServiceAddr)
+}
+
+// GetStorageAdminAddr 返回 `storage-service` 内网管理接入地址，默认值为 http://127.0.0.1:9090。
+func GetStorageAdminAddr() string {
+	return cmp.Or(os.Getenv("STORAGE_ADMIN_ADDR"), "http://127.0.0.1:9090")
 }
 
 // NewStorageClient 创建指向默认 storage-service 地址的 ConnectRPC StorageService 客户端。
