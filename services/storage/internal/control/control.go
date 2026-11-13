@@ -38,6 +38,7 @@ const (
 	DefaultAttrTimeoutSeconds     float64 = 1.0
 	DefaultDirEntryTimeoutSeconds float64 = 1.0
 	DefaultSharedCacheSize                = store.DefaultCacheSize // 64 MiB
+	DefaultMountLeaseTTL                  = 30 * time.Second
 
 	segmentReserveTimeout = 5 * time.Second
 )
@@ -67,6 +68,7 @@ var (
 	ErrAmbiguousLCA    = errors.New("ambiguous lowest common ancestor (criss-cross merge)")
 	ErrNoBaseCommit    = errors.New("disk has no base commit in lineage")
 	ErrConcurrentMerge = errors.New("concurrent write or epoch change on target disk during merge")
+	ErrDiskMounted     = errors.New("disk is currently mounted")
 )
 
 // AtimeMode 复用 store.AtimeMode。
@@ -136,6 +138,27 @@ type MountDiskResult struct {
 	RootAttr            store.Attribute
 	EntryTimeoutSeconds float64
 	AttrTimeoutSeconds  float64
+	MountID             string
+	LeaseTTLSeconds     uint32
+}
+
+// RenewMountParams 描述在线挂载软租约续期入参。
+type RenewMountParams struct {
+	DiskID   string
+	MountID  string
+	ReadOnly bool
+	Epoch    uint64
+}
+
+// RenewMountResult 描述在线挂载软租约续期返回结果。
+type RenewMountResult struct {
+	LeaseTTLSeconds uint32
+}
+
+// UnmountDiskParams 描述释放挂载软租约入参。
+type UnmountDiskParams struct {
+	DiskID  string
+	MountID string
 }
 
 // Manager 定义单盘控制面与 StoreActor 实例池管理接口。
@@ -147,6 +170,8 @@ type Manager interface {
 	UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error)
 	DeleteDisk(ctx context.Context, diskID string) error
 	MountDisk(ctx context.Context, params MountDiskParams) (*MountDiskResult, error)
+	RenewMount(ctx context.Context, params RenewMountParams) (*RenewMountResult, error)
+	UnmountDisk(ctx context.Context, params UnmountDiskParams) error
 	DiffDisk(ctx context.Context, params *DiffDiskParams) (*DiffDiskResult, error)
 	ReadCommitNode(ctx context.Context, params *ReadCommitNodeParams) (*store.ReadNodeResult, error)
 	MergeDisk(ctx context.Context, params *MergeDiskParams) (*MergeDiskResult, error)
@@ -195,6 +220,11 @@ type manager struct {
 	poolMu sync.RWMutex
 	closed bool
 	actors map[string]*store.StoreActor
+
+	now           func() time.Time
+	mountLeaseTTL time.Duration
+	mountsMu      sync.Mutex
+	activeMounts  map[string]map[string]mountLease
 }
 
 // Option 配置单盘控制面管理器。
@@ -282,6 +312,24 @@ func withMaxPackSize(size uint32) Option {
 	return func(m *manager) { m.maxPackSize = size }
 }
 
+// WithClock 配置控制面租约时效判定的时钟源（nil 时回退为 time.Now）。
+func WithClock(now func() time.Time) Option {
+	return func(m *manager) {
+		if now != nil {
+			m.now = now
+		}
+	}
+}
+
+// WithMountLeaseTTL 配置在线挂载软租约有效时长（ttl <= 0 时保持默认值）。
+func WithMountLeaseTTL(ttl time.Duration) Option {
+	return func(m *manager) {
+		if ttl > 0 {
+			m.mountLeaseTTL = ttl
+		}
+	}
+}
+
 // New 创建单盘控制面管理器。
 func New(dbStore db.Store, opts ...Option) Manager {
 	return newManager(dbStore, opts...)
@@ -301,6 +349,9 @@ func newManager(dbStore db.Store, opts ...Option) *manager {
 		cache:           pebble.NewCache(DefaultSharedCacheSize),
 		diskLocks:       make(map[string]*diskLockEntry),
 		actors:          make(map[string]*store.StoreActor),
+		now:             time.Now,
+		mountLeaseTTL:   DefaultMountLeaseTTL,
+		activeMounts:    make(map[string]map[string]mountLease),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -1228,6 +1279,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 	if len(cleanupErrs) > 0 {
 		return errors.Join(cleanupErrs...)
 	}
+	m.clearDiskMounts(diskID)
 
 	m.logger.InfoContext(ctx, "disk deleted",
 		"disk_id", diskID,
@@ -1254,8 +1306,13 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 		if attrErr != nil {
 			return nil, attrErr
 		}
+		mountID, ttlSeconds, leaseErr := m.issueMountLease(diskID, true, 0)
+		if leaseErr != nil {
+			return nil, leaseErr
+		}
 		m.logger.InfoContext(ctx, "disk mounted",
 			"disk_id", diskID,
+			"mount_id", mountID,
 			"epoch", uint64(0),
 			"mode", actorModeRO,
 		)
@@ -1264,6 +1321,8 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 			RootAttr:            rootAttr,
 			EntryTimeoutSeconds: m.entryTimeout,
 			AttrTimeoutSeconds:  m.attrTimeout,
+			MountID:             mountID,
+			LeaseTTLSeconds:     ttlSeconds,
 		}, nil
 	}
 
@@ -1272,8 +1331,13 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 	if err != nil {
 		return nil, err
 	}
+	mountID, ttlSeconds, leaseErr := m.issueMountLease(diskID, false, epoch)
+	if leaseErr != nil {
+		return nil, leaseErr
+	}
 	m.logger.InfoContext(ctx, "disk epoch fenced",
 		"disk_id", diskID,
+		"mount_id", mountID,
 		"prev_epoch", prevEpoch,
 		"epoch", epoch,
 		"mode", actorModeRW,
@@ -1283,6 +1347,8 @@ func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*Mount
 		RootAttr:            rootAttr,
 		EntryTimeoutSeconds: m.entryTimeout,
 		AttrTimeoutSeconds:  m.attrTimeout,
+		MountID:             mountID,
+		LeaseTTLSeconds:     ttlSeconds,
 	}, nil
 }
 

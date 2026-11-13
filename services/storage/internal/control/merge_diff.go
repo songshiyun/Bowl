@@ -51,6 +51,7 @@ type MergeDiskParams struct {
 	Strategy       store.MergeStrategy
 	PathStrategies map[string]store.MergeStrategy
 	DryRun         bool
+	Force          bool
 	MaxBytes       *uint64
 }
 
@@ -517,6 +518,12 @@ func (m *manager) MergeDisk(ctx context.Context, params *MergeDiskParams) (*Merg
 		return nil, err
 	}
 
+	if !params.DryRun && !params.Force {
+		if gateErr := m.checkMergeMountGate(sourceKey, targetKey); gateErr != nil {
+			return nil, gateErr
+		}
+	}
+
 	// Phase 1：目标盘保持在线，利用只读 Checkpoint 快照运行三路合并演算。
 	sourceSnapDir, srcHasOrphans, cleanupSrc, err := m.snapshotDiskForInspect(ctx, sourceKey, sourceRow.LineageID, "merge-src")
 	if err != nil {
@@ -765,6 +772,7 @@ func (m *manager) MergeDisk(ctx context.Context, params *MergeDiskParams) (*Merg
 	}
 	m.actors[targetKey] = newTargetActor
 	m.poolMu.Unlock()
+	m.clearDiskMounts(targetKey)
 
 	stat, statErr := newTargetActor.StatFS(ctx)
 	if statErr != nil {

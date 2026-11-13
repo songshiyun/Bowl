@@ -227,11 +227,20 @@ func TestMergeDisk_DryRunConflictResolutionEpochFenceAndSkipSourceCommit(t *test
 	// target 在 epoch0 下也修改 cfg.txt，制造冲突
 	overwriteRegularFile(t, ctx, tActor, epoch0, "cfg.txt", []byte("from-target"))
 
-	// When 1: Strategy=Fail 合并应返回 *MergeConflictError 且不推进 epoch 或修改 target
+	// 未传入 Force 且未 UnmountDisk 时，正式合并必须被在线租约门禁拦截为 ErrDiskMounted
 	_, err = mgr.MergeDisk(ctx, &MergeDiskParams{
 		SourceDiskID: source.DiskID,
 		TargetDiskID: target.DiskID,
 		Strategy:     store.MergeStrategyFail,
+	})
+	require.ErrorIs(t, err, ErrDiskMounted)
+
+	// When 1: Strategy=Fail + Force=true 合并应返回 *MergeConflictError 且不推进 epoch 或修改 target
+	_, err = mgr.MergeDisk(ctx, &MergeDiskParams{
+		SourceDiskID: source.DiskID,
+		TargetDiskID: target.DiskID,
+		Strategy:     store.MergeStrategyFail,
+		Force:        true,
 	})
 	var conflictErr *MergeConflictError
 	require.ErrorAs(t, err, &conflictErr)
@@ -262,12 +271,13 @@ func TestMergeDisk_DryRunConflictResolutionEpochFenceAndSkipSourceCommit(t *test
 	require.NoError(t, err)
 	require.Len(t, commitsAfterDry, len(commitsBefore))
 
-	// When 3: 正式合并，cfg.txt 用 theirs，并扩容至 64 MiB
+	// When 3: 正式合并（Force=true 抢占在线租约），cfg.txt 用 theirs，并扩容至 64 MiB
 	res, err := mgr.MergeDisk(ctx, &MergeDiskParams{
 		SourceDiskID:   source.DiskID,
 		TargetDiskID:   target.DiskID,
 		Strategy:       store.MergeStrategyOurs,
 		PathStrategies: map[string]store.MergeStrategy{"/cfg.txt": store.MergeStrategyTheirs},
+		Force:          true,
 		MaxBytes:       &newMaxBytes,
 	})
 	require.NoError(t, err)
