@@ -115,6 +115,7 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 	mainMnt, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: mainID}))
 	require.NoError(t, err)
 	mainEpoch := mainMnt.Msg.GetEpoch()
+	mainMountID := mainMnt.Msg.GetMountId()
 
 	sharedIno := e2eWriteNewFile(t, ctx, client, mainID, mainEpoch, "shared.txt", []byte("base-shared\n"))
 	e2eWriteNewFile(t, ctx, client, mainID, mainEpoch, "base.txt", []byte("base-only\n"))
@@ -130,6 +131,7 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 	featMnt, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: featID}))
 	require.NoError(t, err)
 	featEpoch := featMnt.Msg.GetEpoch()
+	featMountID := featMnt.Msg.GetMountId()
 
 	// 在双边同时修改 shared.txt 并各自新增独占文件
 	e2eOverwriteFile(t, ctx, client, mainID, mainEpoch, "shared.txt", []byte("main-edited\n"))
@@ -168,7 +170,47 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 	require.Equal(t, []byte("base-shared\n"), commitSlice.Msg.GetData())
 	require.True(t, commitSlice.Msg.GetEof())
 
-	// When 2: Strategy=FAIL 命中冲突，校验 CodeAborted + ECONFLICT + MergeConflictReport
+	// When 2: 验证双盘在线挂载租约门禁契约
+	// 2.1 DryRun=true 允许在挂载态下直接预演成功且不修改数据或触发 epoch 围栏
+	dryResp, err := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+		SourceDiskId: featID,
+		TargetDiskId: mainID,
+		Strategy:     storagev1.MergeStrategy_MERGE_STRATEGY_OURS,
+		DryRun:       true,
+	}))
+	require.NoError(t, err)
+	require.Empty(t, dryResp.Msg.GetMergeCommitId())
+
+	// 2.2 未卸载且 Force=false 时，MergeDisk 被服务端挂载门禁拦截为 CodeAborted + Reason=EBUSY
+	_, busyBothErr := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+		SourceDiskId: featID,
+		TargetDiskId: mainID,
+		Strategy:     storagev1.MergeStrategy_MERGE_STRATEGY_OURS,
+	}))
+	testutil.RequireConnectError(t, busyBothErr, connect.CodeAborted, "EBUSY")
+
+	// 2.3 仅 UnmountDisk 释放源盘 featID、保留目标盘 mainID 挂载时，MergeDisk(Force:false) 仍被 EBUSY 拦截
+	_, err = client.UnmountDisk(ctx, connect.NewRequest(&storagev1.UnmountDiskRequest{
+		DiskId:  featID,
+		MountId: featMountID,
+	}))
+	require.NoError(t, err)
+
+	_, busyTargetErr := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+		SourceDiskId: featID,
+		TargetDiskId: mainID,
+		Strategy:     storagev1.MergeStrategy_MERGE_STRATEGY_OURS,
+	}))
+	testutil.RequireConnectError(t, busyTargetErr, connect.CodeAborted, "EBUSY")
+
+	// When 3 (方式一): UnmountDisk 释放目标盘 mainID 后，校验冲突检测与无 Force 正式合并成功
+	_, err = client.UnmountDisk(ctx, connect.NewRequest(&storagev1.UnmountDiskRequest{
+		DiskId:  mainID,
+		MountId: mainMountID,
+	}))
+	require.NoError(t, err)
+
+	// Strategy=FAIL 命中冲突，校验 CodeAborted + ECONFLICT + MergeConflictReport
 	_, conflictErr := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
 		SourceDiskId: featID,
 		TargetDiskId: mainID,
@@ -192,17 +234,7 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 	require.Equal(t, lcaCommitID, report.GetLcaCommitId())
 	require.Equal(t, uint64(1), report.GetTotalConflicts())
 
-	// When 3: DryRun 预演成功且不修改数据或触发 epoch 围栏
-	dryResp, err := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
-		SourceDiskId: featID,
-		TargetDiskId: mainID,
-		Strategy:     storagev1.MergeStrategy_MERGE_STRATEGY_OURS,
-		DryRun:       true,
-	}))
-	require.NoError(t, err)
-	require.Empty(t, dryResp.Msg.GetMergeCommitId())
-
-	// When 4: PathStrategies 定向裁决后正式提交合并
+	// PathStrategies 定向裁决后在已卸载态正式提交合并 (Force=false)
 	mergeResp, err := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
 		SourceDiskId: featID,
 		TargetDiskId: mainID,
@@ -226,7 +258,8 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 
 	reMnt, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: mainID}))
 	require.NoError(t, err)
-	require.Greater(t, reMnt.Msg.GetEpoch(), mainEpoch)
+	reMntEpoch := reMnt.Msg.GetEpoch()
+	require.Greater(t, reMntEpoch, mainEpoch)
 
 	lookupFeat, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
 		DiskId:    mainID,
@@ -257,4 +290,55 @@ func TestE2E_DiffReadCommitNodeAndMergeDisk_WithPostgreSQLAndWriterFence(t *test
 	}))
 	require.NoError(t, err)
 	require.Equal(t, []byte("feat-edited\n"), readShared.Msg.GetData())
+
+	// When 4 (方式二): 验证 Force=true 抢占围栏契约
+	// 保持 mainID 在 reMntEpoch 在线挂载不卸载，并从 mainID Fork 新分支盘 feat2ID 写入后亦不卸载
+	fork2Resp, err := client.ForkDisk(ctx, connect.NewRequest(&storagev1.ForkDiskRequest{
+		SourceDiskId: mainID,
+		Name:         fmt.Sprintf("e2e-merge-feat2-%d", suffix),
+	}))
+	require.NoError(t, err)
+	feat2ID := fork2Resp.Msg.GetDisk().GetDiskId()
+	e2eRegisterDiskCleanup(t, client, feat2ID)
+
+	feat2Mnt, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: feat2ID}))
+	require.NoError(t, err)
+	e2eWriteNewFile(t, ctx, client, feat2ID, feat2Mnt.Msg.GetEpoch(), "feat2.txt", []byte("feat2-forced\n"))
+
+	forceMergeResp, err := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+		SourceDiskId: feat2ID,
+		TargetDiskId: mainID,
+		Force:        true,
+	}))
+	require.NoError(t, err)
+	require.NotEmpty(t, forceMergeResp.Msg.GetMergeCommitId())
+
+	// Then: 原客户端持旧 reMntEpoch 写入被 CodeFailedPrecondition (EBUSY) 栅栏拦截
+	_, fencedErr := client.Create(ctx, connect.NewRequest(&storagev1.CreateRequest{
+		DiskId:    mainID,
+		ParentIno: 1,
+		Name:      []byte("fenced-after-force.txt"),
+		Mode:      0o100644,
+		Epoch:     reMntEpoch,
+	}))
+	testutil.RequireConnectError(t, fencedErr, connect.CodeFailedPrecondition, "EBUSY")
+
+	reMntAfterForce, err := client.MountDisk(ctx, connect.NewRequest(&storagev1.MountDiskRequest{DiskId: mainID}))
+	require.NoError(t, err)
+	require.Greater(t, reMntAfterForce.Msg.GetEpoch(), reMntEpoch)
+
+	lookupFeat2, err := client.Lookup(ctx, connect.NewRequest(&storagev1.LookupRequest{
+		DiskId:    mainID,
+		ParentIno: 1,
+		Name:      []byte("feat2.txt"),
+	}))
+	require.NoError(t, err)
+	readFeat2, err := client.Read(ctx, connect.NewRequest(&storagev1.ReadRequest{
+		DiskId: mainID,
+		Ino:    lookupFeat2.Msg.GetInode().GetIno(),
+		Offset: 0,
+		Size:   100,
+	}))
+	require.NoError(t, err)
+	require.Equal(t, []byte("feat2-forced\n"), readFeat2.Msg.GetData())
 }

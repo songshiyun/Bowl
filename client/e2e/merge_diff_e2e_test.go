@@ -3,11 +3,20 @@
 package e2e_test
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"connectrpc.com/connect"
+	"github.com/starsrc/pkg/serverx"
 	"github.com/stretchr/testify/require"
+
+	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 )
 
 func TestClientE2E_ForkDiffPatchMergeAndFUSEMountVerification(t *testing.T) {
@@ -71,4 +80,136 @@ func TestClientE2E_ForkDiffPatchMergeAndFUSEMountVerification(t *testing.T) {
 	gotMainOnly, err := os.ReadFile(filepath.Join(mpMain3, "main-only.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "m\n", string(gotMainOnly))
+}
+
+func forceLazyUnmountMountpoint(t *testing.T, mountpoint string) {
+	t.Helper()
+	if _, err := exec.LookPath("fusermount3"); err == nil {
+		out, umountErr := exec.Command("fusermount3", "-uz", mountpoint).CombinedOutput()
+		require.NoError(t, umountErr, "fusermount3 -uz 清理挂载点失败: %s", string(out))
+	} else {
+		out, umountErr := exec.Command("umount", "-l", mountpoint).CombinedOutput()
+		require.NoError(t, umountErr, "umount -l 清理挂载点失败: %s", string(out))
+	}
+	waitForUnmount(t, mountpoint, "懒卸载后 mountinfo 必须移除挂载点")
+}
+
+func TestClientE2E_MergeMountGateAndForceFencing(t *testing.T) {
+	client := newTestStorageClient(t)
+	endpoint := getStorageEndpoint()
+
+	t.Run("ParentReadOnlyFUSEMounted_BlocksDirectRPCWithEBUSY_AllowsDryRun", func(t *testing.T) {
+		mainID := createTestDisk(t, client).GetDiskId()
+		mpMain, stopMain := mountWithCleanup(t, endpoint, mainID)
+		require.NoError(t, os.WriteFile(filepath.Join(mpMain, "base.txt"), []byte("v1\n"), 0o644))
+		stopMain()
+
+		featOut := runBowlSuccess(t, "disk", "fork", mainID, "--endpoint", endpoint, "--name", "e2e-ro-gate-feat", "-q")
+		featID := strings.TrimSpace(featOut)
+		registerDiskCleanup(t, client, featID)
+
+		mpFeat, stopFeat := mountWithCleanup(t, endpoint, featID)
+		require.NoError(t, os.WriteFile(filepath.Join(mpFeat, "feat-ro.txt"), []byte("from-feat\n"), 0o644))
+		stopFeat()
+
+		// 父盘以只读方式在线 FUSE 挂载
+		_, stopMainRO := mountWithCleanup(t, endpoint, mainID, "--ro")
+		defer stopMainRO()
+
+		// 绕过本机 CLI 直调 StorageServiceClient.MergeDisk，服务端必须拦截为 CodeAborted + EBUSY
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, rpcErr := client.MergeDisk(ctx, connect.NewRequest(&storagev1.MergeDiskRequest{
+			SourceDiskId: featID,
+			TargetDiskId: mainID,
+			Strategy:     storagev1.MergeStrategy_MERGE_STRATEGY_THEIRS,
+		}))
+		require.Error(t, rpcErr)
+		require.Equal(t, connect.CodeAborted, connect.CodeOf(rpcErr))
+		info := serverx.ExtractErrorInfo(rpcErr)
+		require.NotNil(t, info)
+		require.Equal(t, "EBUSY", info.GetReason())
+
+		// 本机 `bowl disk merge --dry-run` 在父盘 --ro 挂载态下必须正常成功
+		dryOut := runBowlSuccess(t, "disk", "merge", featID, "--endpoint", endpoint, "--into", mainID, "--dry-run")
+		require.Contains(t, dryOut, "Dry Run")
+	})
+
+	t.Run("ChildRWMountedBlocksMerge_UmountThenImmediateMergeSucceeds", func(t *testing.T) {
+		mainID := createTestDisk(t, client).GetDiskId()
+		mpMain, stopMain := mountWithCleanup(t, endpoint, mainID)
+		require.NoError(t, os.WriteFile(filepath.Join(mpMain, "base.txt"), []byte("base-v1\n"), 0o644))
+		stopMain()
+
+		featOut := runBowlSuccess(t, "disk", "fork", mainID, "--endpoint", endpoint, "--name", "e2e-rw-feat", "-q")
+		featID := strings.TrimSpace(featOut)
+		registerDiskCleanup(t, client, featID)
+
+		featMP := t.TempDir()
+		runBowlSuccess(t, "mount", "--endpoint", endpoint, featID, featMP)
+		t.Cleanup(func() { _ = exec.Command(getBowlBin(), "umount", "-f", featMP).Run() })
+		require.True(t, isMounted(featMP))
+
+		const wantContent = "live-fuse-payload\n"
+		require.NoError(t, os.WriteFile(filepath.Join(featMP, "feat-live.txt"), []byte(wantContent), 0o644))
+
+		// 子盘未卸载时执行合并必须被拒绝（退出码 1）
+		blockedOut := runBowlExpectExit(t, 1, "disk", "merge", featID, "--endpoint", endpoint, "--into", mainID)
+		require.Contains(t, blockedOut, "bowl umount")
+
+		// 卸载子盘后零等待立即执行 bowl disk merge
+		runBowlSuccess(t, "umount", featMP)
+		mergeOut := runBowlSuccess(t, "disk", "merge", featID, "--endpoint", endpoint, "--into", mainID)
+		require.Contains(t, mergeOut, mainID)
+
+		// 重新挂载父盘可完整读取子盘写入的文件内容
+		mpVerify, stopVerify := mountWithCleanup(t, endpoint, mainID)
+		defer stopVerify()
+		got, err := os.ReadFile(filepath.Join(mpVerify, "feat-live.txt"))
+		require.NoError(t, err)
+		require.Equal(t, wantContent, string(got))
+	})
+
+	t.Run("SIGKILLClientWithActiveLease_BlocksWithoutForce_ForceMergeSucceeds", func(t *testing.T) {
+		mainID := createTestDisk(t, client).GetDiskId()
+		mpMainInit, stopMainInit := mountWithCleanup(t, endpoint, mainID)
+		require.NoError(t, os.WriteFile(filepath.Join(mpMainInit, "base.txt"), []byte("base\n"), 0o644))
+		stopMainInit()
+
+		featOut := runBowlSuccess(t, "disk", "fork", mainID, "--endpoint", endpoint, "--name", "e2e-kill9-feat", "-q")
+		featID := strings.TrimSpace(featOut)
+		registerDiskCleanup(t, client, featID)
+
+		mpFeat, stopFeat := mountWithCleanup(t, endpoint, featID)
+		const wantContent = "after-kill9-force-merge\n"
+		require.NoError(t, os.WriteFile(filepath.Join(mpFeat, "feat-kill9.txt"), []byte(wantContent), 0o644))
+		stopFeat()
+
+		// 启动父盘挂载守护进程后使用 SIGKILL 强杀并懒卸载清理本机挂载点（服务端 30s 租约仍活跃）
+		mainMP := t.TempDir()
+		runBowlSuccess(t, "mount", "--endpoint", endpoint, mainID, mainMP)
+		t.Cleanup(func() {
+			_ = exec.Command("fusermount3", "-uz", mainMP).Run()
+			_ = os.Remove(mountMetaPath(t, mainMP))
+		})
+		daemonPID := findBowlDaemonPID(t, mainMP)
+		require.NoError(t, syscall.Kill(daemonPID, syscall.SIGKILL))
+		waitForProcessExit(t, daemonPID)
+		forceLazyUnmountMountpoint(t, mainMP)
+		require.False(t, isMounted(mainMP))
+
+		// 无 --force 时被服务端活跃租约拦截（退出码 1）
+		blockedOut := runBowlExpectExit(t, 1, "disk", "merge", featID, "--endpoint", endpoint, "--into", mainID)
+		require.Contains(t, blockedOut, "仍处于挂载状态")
+
+		// 加 --force 立即成功合并
+		forcedOut := runBowlSuccess(t, "disk", "merge", featID, "--endpoint", endpoint, "--into", mainID, "--force")
+		require.Contains(t, forcedOut, mainID)
+
+		mpVerify, stopVerify := mountWithCleanup(t, endpoint, mainID)
+		defer stopVerify()
+		got, err := os.ReadFile(filepath.Join(mpVerify, "feat-kill9.txt"))
+		require.NoError(t, err)
+		require.Equal(t, wantContent, string(got))
+	})
 }
