@@ -2,10 +2,7 @@
 package control
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,15 +15,11 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/starsrc/pkg/tx"
 
 	"github.com/starsrc/bowl/services/storage/internal/config"
 	"github.com/starsrc/bowl/services/storage/internal/db"
@@ -175,6 +168,7 @@ type manager struct {
 	openKeepCache                              bool
 	openDirCache                               bool
 	atimeMode                                  AtimeMode
+	maxPackSize                                uint32
 
 	baseLogger   *slog.Logger
 	logger       *slog.Logger
@@ -273,6 +267,10 @@ func withEngineCollector(collector *storageEngineCollector) Option {
 	}
 }
 
+func withMaxPackSize(size uint32) Option {
+	return func(m *manager) { m.maxPackSize = size }
+}
+
 // New 创建单盘控制面管理器。
 func New(dbStore db.Store, opts ...Option) Manager {
 	return newManager(dbStore, opts...)
@@ -339,167 +337,91 @@ func (m *manager) commitDir(commitID string) string {
 	return filepath.Join(m.storageRoot, "commits", commitID)
 }
 
-func (m *manager) newSegmentAllocators(lineageID pgtype.UUID) (store.InodeSegmentAllocator, store.PackSegmentAllocator) {
-	if m.store == nil || !lineageID.Valid {
+func (m *manager) newSegmentAllocators(lineageID uuid.UUID) (store.InodeSegmentAllocator, store.PackSegmentAllocator) {
+	if m.store == nil || lineageID == uuid.Nil {
 		return nil, nil
 	}
-	lineageStr := lineageID.String()
-	inoAlloc := func(reqCtx context.Context, minNext uint64) (uint64, uint64, error) {
-		if minNext < 2 {
-			minNext = 2
-		}
-		if minNext > uint64(math.MaxInt64) {
-			return 0, 0, store.ErrInodeExhausted
-		}
-		count := store.InodeSegment
-		if rem := uint64(math.MaxInt64) - minNext; rem < count {
-			if rem == 0 {
-				return 0, 0, store.ErrInodeExhausted
-			}
-			count = rem
-		}
-
-		baseCtx := context.Background()
-		if reqCtx != nil {
-			baseCtx = context.WithoutCancel(reqCtx)
-		}
-		allocCtx, cancel := context.WithTimeout(baseCtx, segmentReserveTimeout)
-		defer cancel()
-
-		var span trace.Span
-		if trace.SpanFromContext(allocCtx).IsRecording() {
-			allocCtx, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(allocCtx, "control.ReserveSegment",
-				trace.WithAttributes(
-					attribute.String("segment.kind", "inode"),
-					attribute.String("lineage.id", lineageStr),
-					attribute.Int64("segment.min_next", int64(minNext)),
-				),
-			)
-		}
-
-		start := time.Now()
-		var row db.ReserveInodeSegmentRow
-		err := tx.Retry(allocCtx, func(attemptCtx context.Context) error {
-			var rErr error
-			row, rErr = m.store.ReserveInodeSegment(attemptCtx, db.ReserveInodeSegmentParams{
-				MinNext:   int64(minNext),
-				Count:     int64(count),
-				LineageID: lineageID,
-			})
-			return rErr
-		}, tx.WithDefaultRetry())
-		if err != nil {
-			m.collector.observeSegmentReserve(allocCtx, "inode", false, time.Since(start))
-			if errors.Is(err, pgx.ErrNoRows) {
-				err = ErrNotFound
-			} else {
-				err = fmt.Errorf("预留 Inode 号段: %w", err)
-			}
-			if span != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-				span.End()
-			}
-			return 0, 0, err
-		}
-		if row.FirstIno < 2 || row.LastIno < row.FirstIno {
-			m.collector.observeSegmentReserve(allocCtx, "inode", false, time.Since(start))
-			if span != nil {
-				span.RecordError(store.ErrInodeExhausted)
-				span.SetStatus(codes.Error, store.ErrInodeExhausted.Error())
-				span.End()
-			}
-			return 0, 0, store.ErrInodeExhausted
-		}
-		m.collector.observeSegmentReserve(allocCtx, "inode", true, time.Since(start))
-		if span != nil {
-			span.SetAttributes(
-				attribute.Int64("segment.first", row.FirstIno),
-				attribute.Int64("segment.last", row.LastIno),
-			)
-			span.End()
-		}
-		return uint64(row.FirstIno), uint64(row.LastIno), nil
-	}
-
-	packAlloc := func(reqCtx context.Context, minNext uint64) (uint64, uint64, error) {
-		if minNext < 1 {
-			minNext = 1
-		}
-		if minNext > uint64(math.MaxInt64) {
-			return 0, 0, store.ErrNoSpace
-		}
-		count := store.PackSegment
-		if rem := uint64(math.MaxInt64) - minNext; rem < count {
-			if rem == 0 {
-				return 0, 0, store.ErrNoSpace
-			}
-			count = rem
-		}
-
-		baseCtx := context.Background()
-		if reqCtx != nil {
-			baseCtx = context.WithoutCancel(reqCtx)
-		}
-		allocCtx, cancel := context.WithTimeout(baseCtx, segmentReserveTimeout)
-		defer cancel()
-
-		var span trace.Span
-		if trace.SpanFromContext(allocCtx).IsRecording() {
-			allocCtx, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(allocCtx, "control.ReserveSegment",
-				trace.WithAttributes(
-					attribute.String("segment.kind", "pack"),
-					attribute.String("lineage.id", lineageStr),
-					attribute.Int64("segment.min_next", int64(minNext)),
-				),
-			)
-		}
-
-		start := time.Now()
-		var row db.ReservePackSegmentRow
-		err := tx.Retry(allocCtx, func(attemptCtx context.Context) error {
-			var rErr error
-			row, rErr = m.store.ReservePackSegment(attemptCtx, db.ReservePackSegmentParams{
-				MinNext:   int64(minNext),
-				Count:     int64(count),
-				LineageID: lineageID,
-			})
-			return rErr
-		}, tx.WithDefaultRetry())
-		if err != nil {
-			m.collector.observeSegmentReserve(allocCtx, "pack", false, time.Since(start))
-			if errors.Is(err, pgx.ErrNoRows) {
-				err = ErrNotFound
-			} else {
-				err = fmt.Errorf("预留 Pack 号段: %w", err)
-			}
-			if span != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-				span.End()
-			}
-			return 0, 0, err
-		}
-		if row.FirstPackID < 1 || row.LastPackID < row.FirstPackID {
-			m.collector.observeSegmentReserve(allocCtx, "pack", false, time.Since(start))
-			if span != nil {
-				span.RecordError(store.ErrNoSpace)
-				span.SetStatus(codes.Error, store.ErrNoSpace.Error())
-				span.End()
-			}
-			return 0, 0, store.ErrNoSpace
-		}
-		m.collector.observeSegmentReserve(allocCtx, "pack", true, time.Since(start))
-		if span != nil {
-			span.SetAttributes(
-				attribute.Int64("segment.first", row.FirstPackID),
-				attribute.Int64("segment.last", row.LastPackID),
-			)
-			span.End()
-		}
-		return uint64(row.FirstPackID), uint64(row.LastPackID), nil
-	}
+	inoAlloc := m.newSegmentAllocator(db.SegmentKindInode, lineageID, 2, store.InodeSegment, store.ErrInodeExhausted, "inode", "预留 Inode 号段")
+	packAlloc := m.newSegmentAllocator(db.SegmentKindPack, lineageID, 1, store.PackSegment, store.ErrNoSpace, "pack", "预留 Pack 号段")
 	return inoAlloc, packAlloc
+}
+
+func (m *manager) newSegmentAllocator(
+	kind db.SegmentKind,
+	lineageID uuid.UUID,
+	minFloor, segmentSize uint64,
+	exhaustedErr error,
+	kindLabel, errPrefix string,
+) func(context.Context, uint64) (uint64, uint64, error) {
+	lineageStr := lineageID.String()
+	return func(reqCtx context.Context, minNext uint64) (uint64, uint64, error) {
+		if minNext < minFloor {
+			minNext = minFloor
+		}
+		if minNext > uint64(math.MaxInt64) {
+			return 0, 0, exhaustedErr
+		}
+		count := segmentSize
+		if rem := uint64(math.MaxInt64) - minNext; rem < count {
+			if rem == 0 {
+				return 0, 0, exhaustedErr
+			}
+			count = rem
+		}
+
+		baseCtx := context.Background()
+		if reqCtx != nil {
+			baseCtx = context.WithoutCancel(reqCtx)
+		}
+		allocCtx, cancel := context.WithTimeout(baseCtx, segmentReserveTimeout)
+		defer cancel()
+
+		var span trace.Span
+		if trace.SpanFromContext(allocCtx).IsRecording() {
+			allocCtx, span = otel.GetTracerProvider().Tracer(controlInstrumentationName).Start(allocCtx, "control.ReserveSegment",
+				trace.WithAttributes(
+					attribute.String("segment.kind", kindLabel),
+					attribute.String("lineage.id", lineageStr),
+					attribute.Int64("segment.min_next", int64(minNext)),
+				),
+			)
+		}
+
+		start := time.Now()
+		seg, err := m.store.ReserveSegment(allocCtx, kind, lineageID, int64(minNext), int64(count))
+		if err != nil {
+			m.collector.observeSegmentReserve(allocCtx, kindLabel, false, time.Since(start))
+			if errors.Is(err, db.ErrNotFound) {
+				err = ErrNotFound
+			} else {
+				err = fmt.Errorf("%s: %w", errPrefix, mapDBErr(err))
+			}
+			if span != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				span.End()
+			}
+			return 0, 0, err
+		}
+		if seg.First < int64(minFloor) || seg.Last < seg.First {
+			m.collector.observeSegmentReserve(allocCtx, kindLabel, false, time.Since(start))
+			if span != nil {
+				span.RecordError(exhaustedErr)
+				span.SetStatus(codes.Error, exhaustedErr.Error())
+				span.End()
+			}
+			return 0, 0, exhaustedErr
+		}
+		m.collector.observeSegmentReserve(allocCtx, kindLabel, true, time.Since(start))
+		if span != nil {
+			span.SetAttributes(
+				attribute.Int64("segment.first", seg.First),
+				attribute.Int64("segment.last", seg.Last),
+			)
+			span.End()
+		}
+		return uint64(seg.First), uint64(seg.Last), nil
+	}
 }
 
 func (m *manager) lockDisk(ctx context.Context, diskID string) func() {
@@ -535,12 +457,18 @@ func (m *manager) lockDisk(ctx context.Context, diskID string) func() {
 	}
 }
 
-func (m *manager) execSyncWriteTxWithRetry(ctx context.Context, fn func(context.Context, db.Querier) error) error {
-	return tx.Retry(ctx, func(attemptCtx context.Context) error {
-		return m.store.ExecTx(attemptCtx, func(q db.Querier) error {
-			return fn(attemptCtx, q)
-		})
-	}, tx.WithDefaultRetry())
+func mapDBErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, db.ErrNotFound):
+		return ErrNotFound
+	case errors.Is(err, db.ErrInvalidArgument):
+		return ErrInvalidArgument
+	default:
+		return err
+	}
 }
 
 // validateDiskName 校验磁盘名称合法性（优先校验超长 > 255B，后校验空字节 '\x00'）。
@@ -554,36 +482,33 @@ func validateDiskName(name string) error {
 	return nil
 }
 
-// parseDiskID 解析字符串形式的 UUID 为 pgtype.UUID，并拦截非法格式或全零 Nil UUID。
-func parseDiskID(diskID string) (pgtype.UUID, error) {
-	var id pgtype.UUID
-	if err := id.Scan(diskID); err != nil || !id.Valid {
-		return pgtype.UUID{}, fmt.Errorf("%w: invalid disk id %q", ErrInvalidArgument, diskID)
+// parseDiskID 解析字符串形式的 UUID，并拦截非法格式或全零 Nil UUID。
+func parseDiskID(diskID string) (uuid.UUID, error) {
+	id, err := uuid.Parse(diskID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("%w: invalid disk id %q", ErrInvalidArgument, diskID)
 	}
-	if id.Bytes == [16]byte{} {
-		return pgtype.UUID{}, fmt.Errorf("%w: disk id cannot be nil uuid", ErrInvalidArgument)
+	if id == uuid.Nil {
+		return uuid.Nil, fmt.Errorf("%w: disk id cannot be nil uuid", ErrInvalidArgument)
 	}
 	return id, nil
 }
 
-func assembleDisk(row *db.Disk, stat *store.StatFSResult) *Disk {
-	var diskID, parentDiskID string
-	if row.DiskID.Valid {
-		diskID = row.DiskID.String()
-	}
-	if row.ParentDiskID.Valid {
+func assembleDisk(row *db.DiskRecord, stat *store.StatFSResult) *Disk {
+	var parentDiskID string
+	if row.ParentDiskID != uuid.Nil {
 		parentDiskID = row.ParentDiskID.String()
 	}
 	return &Disk{
-		DiskID:       diskID,
+		DiskID:       row.DiskID.String(),
 		ParentDiskID: parentDiskID,
 		Name:         row.Name,
 		RootIno:      RootIno,
 		MaxBytes:     stat.TotalBytes,
 		UsedBytes:    stat.UsedBytes,
 		UsedInodes:   stat.Files,
-		CreatedAt:    row.CreatedAt.Time,
-		UpdatedAt:    row.UpdatedAt.Time,
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
 	}
 }
 
@@ -623,25 +548,22 @@ func (m *manager) getOrOpenActorLocked(ctx context.Context, diskID string) (*sto
 	}
 	m.poolMu.RUnlock()
 
-	var lineageID pgtype.UUID
+	var lineageID uuid.UUID
 	if m.store != nil {
-		pgID, err := parseDiskID(diskID)
+		id, err := parseDiskID(diskID)
 		if err != nil {
 			return nil, err
 		}
-		row, err := m.store.GetDisk(ctx, pgID)
+		row, err := m.store.GetDisk(ctx, id)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, ErrNotFound
-			}
-			return nil, err
+			return nil, mapDBErr(err)
 		}
 		lineageID = row.LineageID
 	}
 	return m.getOrOpenActorWithLineageLocked(ctx, diskID, lineageID)
 }
 
-func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID string, lineageID pgtype.UUID) (*store.StoreActor, error) {
+func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID string, lineageID uuid.UUID) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
 		m.poolMu.RUnlock()
@@ -659,6 +581,7 @@ func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID st
 		Dir:           m.diskDir(diskID),
 		DiskID:        diskID,
 		AtimeMode:     m.atimeMode,
+		MaxPackSize:   m.maxPackSize,
 		Cache:         cache,
 		Logger:        m.baseLogger,
 		Metrics:       m.storeMetrics,
@@ -708,11 +631,11 @@ func (m *manager) getOrOpenActorWithLineageLocked(ctx context.Context, diskID st
 }
 
 func (m *manager) evictIdleActor(ctx context.Context, diskID string) (bool, error) {
-	pgID, err := parseDiskID(diskID)
+	id, err := parseDiskID(diskID)
 	if err != nil {
 		return false, err
 	}
-	diskID = pgID.String()
+	diskID = id.String()
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
@@ -765,7 +688,6 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		return nil, err
 	}
 	diskID := id.String()
-	pgID := pgtype.UUID{Bytes: id, Valid: true}
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
@@ -779,12 +701,13 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 	m.poolMu.RUnlock()
 
 	dir := m.diskDir(diskID)
-	inoAlloc, packAlloc := m.newSegmentAllocators(pgID)
+	inoAlloc, packAlloc := m.newSegmentAllocators(id)
 	actor, err := m.openDiskActor(ctx, store.Options{
 		Dir:           dir,
 		DiskID:        diskID,
 		MaxBytes:      params.MaxBytes,
 		AtimeMode:     m.atimeMode,
+		MaxPackSize:   m.maxPackSize,
 		Cache:         cache,
 		Logger:        m.baseLogger,
 		Metrics:       m.storeMetrics,
@@ -795,20 +718,8 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 		return nil, fmt.Errorf("初始化磁盘存储: %w", err)
 	}
 
-	var row db.Disk
-	err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
-		if _, linErr := q.CreateDiskLineage(txCtx, pgID); linErr != nil {
-			return linErr
-		}
-		var createErr error
-		row, createErr = q.CreateDisk(txCtx, db.CreateDiskParams{
-			DiskID:    pgID,
-			Name:      params.Name,
-			LineageID: pgID,
-		})
-		return createErr
-	})
-	if err != nil {
+	row, createErr := m.store.CreateDisk(ctx, id, params.Name)
+	if createErr != nil {
 		if closeErr := actor.CloseDiscard(); closeErr != nil {
 			m.collector.incCleanupError()
 			m.logger.WarnContext(ctx, "create disk rollback close failed",
@@ -824,7 +735,7 @@ func (m *manager) CreateDisk(ctx context.Context, params CreateDiskParams) (*Dis
 				"err", removeErr,
 			)
 		}
-		return nil, fmt.Errorf("创建磁盘: %w", err)
+		return nil, fmt.Errorf("创建磁盘: %w", mapDBErr(createErr))
 	}
 
 	m.poolMu.Lock()
@@ -864,11 +775,11 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 		m.collector.incForkResult(retErr == nil)
 	}()
 
-	sourcePGID, err := parseDiskID(params.SourceDiskID)
+	sourceUUID, err := parseDiskID(params.SourceDiskID)
 	if err != nil {
 		return nil, err
 	}
-	sourceDiskID := sourcePGID.String()
+	sourceDiskID := sourceUUID.String()
 
 	err = validateDiskName(params.Name)
 	if err != nil {
@@ -889,12 +800,9 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 	cache := m.cache
 	m.poolMu.RUnlock()
 
-	sourceRow, err := m.store.GetDisk(ctx, sourcePGID)
+	sourceRow, err := m.store.GetDisk(ctx, sourceUUID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
+		return nil, mapDBErr(err)
 	}
 
 	sourceActor, err := m.getOrOpenActorWithLineageLocked(ctx, sourceDiskID, sourceRow.LineageID)
@@ -931,8 +839,6 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 	if childDiskID == sourceDiskID {
 		return nil, ErrIO
 	}
-	pgCommitID := pgtype.UUID{Bytes: commitUUID, Valid: true}
-	pgChildID := pgtype.UUID{Bytes: childUUID, Valid: true}
 
 	unlockChild := m.lockDisk(ctx, childDiskID)
 	defer unlockChild()
@@ -1014,6 +920,7 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 		DiskID:        childDiskID,
 		MaxBytes:      targetMaxBytes,
 		AtimeMode:     m.atimeMode,
+		MaxPackSize:   m.maxPackSize,
 		Cache:         cache,
 		Logger:        m.baseLogger,
 		Metrics:       m.storeMetrics,
@@ -1029,7 +936,6 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 	}
 
 	var (
-		childRow  db.Disk
 		txSpan    trace.Span
 		txCtxWrap = ctx
 	)
@@ -1043,45 +949,16 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 		)
 	}
 	commitTxStart := time.Now()
-	err = m.execSyncWriteTxWithRetry(txCtxWrap, func(txCtx context.Context, q db.Querier) error {
-		if _, lockErr := q.LockDiskLineage(txCtx, sourceRow.LineageID); lockErr != nil {
-			if errors.Is(lockErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return lockErr
-		}
-		lockedSource, getErr := q.GetDiskForUpdate(txCtx, sourcePGID)
-		if getErr != nil {
-			if errors.Is(getErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return getErr
-		}
-		if _, commitErr := q.CreateDiskCommit(txCtx, db.CreateDiskCommitParams{
-			CommitID:       pgCommitID,
-			LineageID:      lockedSource.LineageID,
-			SourceDiskID:   sourcePGID,
-			ParentCommitID: lockedSource.BaseCommitID,
-		}); commitErr != nil {
-			return commitErr
-		}
-		if setErr := q.SetDiskBaseCommit(txCtx, db.SetDiskBaseCommitParams{
-			DiskID:       sourcePGID,
-			BaseCommitID: pgCommitID,
-		}); setErr != nil {
-			return setErr
-		}
-		var createErr error
-		childRow, createErr = q.CreateDisk(txCtx, db.CreateDiskParams{
-			DiskID:       pgChildID,
-			Name:         params.Name,
-			LineageID:    lockedSource.LineageID,
-			ParentDiskID: sourcePGID,
-			BaseCommitID: pgCommitID,
-		})
-		return createErr
+	childRow, err := m.store.ForkDisk(txCtxWrap, db.ForkDiskInput{
+		SourceDiskID: sourceUUID,
+		ChildDiskID:  childUUID,
+		CommitID:     commitUUID,
+		Name:         params.Name,
 	})
 	m.collector.observeForkStage(ctx, "commit_tx", time.Since(commitTxStart))
+	if err != nil {
+		err = mapDBErr(err)
+	}
 	if txSpan != nil {
 		if err != nil {
 			txSpan.RecordError(err)
@@ -1137,21 +1014,18 @@ func (m *manager) ForkDisk(ctx context.Context, params ForkDiskParams) (_ *Disk,
 }
 
 func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
-	pgID, err := parseDiskID(diskID)
+	id, err := parseDiskID(diskID)
 	if err != nil {
 		return nil, err
 	}
-	diskID = pgID.String()
+	diskID = id.String()
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
-	row, err := m.store.GetDisk(ctx, pgID)
+	row, err := m.store.GetDisk(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
+		return nil, mapDBErr(err)
 	}
 
 	actor, err := m.getOrOpenActorWithLineageLocked(ctx, diskID, row.LineageID)
@@ -1165,47 +1039,6 @@ func (m *manager) GetDisk(ctx context.Context, diskID string) (*Disk, error) {
 	return assembleDisk(&row, &stat), nil
 }
 
-// diskPageCursor 定义 ListDisks 游标令牌的序列化载荷。
-// PostgreSQL TIMESTAMPTZ 精度为微秒，使用 UnixMicro() 编码与还原以消除纳秒截断带来的翻页漂移。
-type diskPageCursor struct {
-	CreatedAtMicro *int64 `json:"t"`
-	DiskID         string `json:"id"`
-}
-
-func encodeDiskPageCursor(createdAt time.Time, diskID string) string {
-	us := createdAt.UTC().UnixMicro()
-	raw, err := json.Marshal(diskPageCursor{
-		CreatedAtMicro: &us,
-		DiskID:         diskID,
-	})
-	if err != nil {
-		return ""
-	}
-	return base64.RawURLEncoding.EncodeToString(raw)
-}
-
-func decodeDiskPageCursor(token string) (pgtype.Timestamptz, pgtype.UUID, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(token)
-	if err != nil {
-		return pgtype.Timestamptz{}, pgtype.UUID{}, fmt.Errorf("%w: invalid page_token base64 encoding", ErrInvalidArgument)
-	}
-	var cursor diskPageCursor
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err = dec.Decode(&cursor); err != nil || dec.More() || cursor.CreatedAtMicro == nil || cursor.DiskID == "" {
-		return pgtype.Timestamptz{}, pgtype.UUID{}, fmt.Errorf("%w: malformed page_token payload", ErrInvalidArgument)
-	}
-	pgID, err := parseDiskID(cursor.DiskID)
-	if err != nil {
-		return pgtype.Timestamptz{}, pgtype.UUID{}, fmt.Errorf("%w: invalid page_token disk_id", ErrInvalidArgument)
-	}
-	ts := pgtype.Timestamptz{
-		Time:  time.UnixMicro(*cursor.CreatedAtMicro).UTC(),
-		Valid: true,
-	}
-	return ts, pgID, nil
-}
-
 func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListDisksResult, error) {
 	if params.PageSize > MaxListDisksPageSize {
 		return nil, fmt.Errorf("%w: page_size %d exceeds max %d", ErrInvalidArgument, params.PageSize, MaxListDisksPageSize)
@@ -1215,44 +1048,17 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 		pageSize = DefaultListDisksPageSize
 	}
 
-	var (
-		hasCursor       bool
-		cursorCreatedAt pgtype.Timestamptz
-		cursorDiskID    pgtype.UUID
-	)
-	if params.PageToken != "" {
-		var err error
-		cursorCreatedAt, cursorDiskID, err = decodeDiskPageCursor(params.PageToken)
-		if err != nil {
-			return nil, err
-		}
-		hasCursor = true
-	}
-
-	rows, err := m.store.ListDisks(ctx, db.ListDisksParams{
-		HasCursor:       hasCursor,
-		CursorCreatedAt: cursorCreatedAt,
-		CursorDiskID:    cursorDiskID,
-		PageLimit:       int32(pageSize + 1),
+	page, err := m.store.ListDisks(ctx, db.ListDisksQuery{
+		PageSize:  pageSize,
+		PageToken: params.PageToken,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list disks: %w", err)
+		return nil, fmt.Errorf("list disks: %w", mapDBErr(err))
 	}
 
-	var nextPageToken string
-	if len(rows) > int(pageSize) {
-		rows = rows[:pageSize]
-		lastRow := rows[pageSize-1]
-		var lastID string
-		if lastRow.DiskID.Valid {
-			lastID = lastRow.DiskID.String()
-		}
-		nextPageToken = encodeDiskPageCursor(lastRow.CreatedAt.Time, lastID)
-	}
-
-	disks := make([]*Disk, 0, len(rows))
-	for i := range rows {
-		row := rows[i]
+	disks := make([]*Disk, 0, len(page.Disks))
+	for i := range page.Disks {
+		row := page.Disks[i]
 		diskID := row.DiskID.String()
 		actor, actorErr := m.actorForDisk(ctx, diskID, row.LineageID)
 		if actorErr != nil {
@@ -1267,11 +1073,11 @@ func (m *manager) ListDisks(ctx context.Context, params ListDisksParams) (*ListD
 
 	return &ListDisksResult{
 		Disks:         disks,
-		NextPageToken: nextPageToken,
+		NextPageToken: page.NextPageToken,
 	}, nil
 }
 
-func (m *manager) actorForDisk(ctx context.Context, diskID string, lineageID pgtype.UUID) (*store.StoreActor, error) {
+func (m *manager) actorForDisk(ctx context.Context, diskID string, lineageID uuid.UUID) (*store.StoreActor, error) {
 	m.poolMu.RLock()
 	if m.closed {
 		m.poolMu.RUnlock()
@@ -1289,11 +1095,11 @@ func (m *manager) actorForDisk(ctx context.Context, diskID string, lineageID pgt
 }
 
 func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Disk, error) {
-	pgID, err := parseDiskID(params.DiskID)
+	id, err := parseDiskID(params.DiskID)
 	if err != nil {
 		return nil, err
 	}
-	diskID := pgID.String()
+	diskID := id.String()
 
 	if params.Name == nil && params.MaxBytes == nil {
 		return nil, ErrInvalidArgument
@@ -1310,12 +1116,9 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
-	row, err := m.store.GetDisk(ctx, pgID)
+	row, err := m.store.GetDisk(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
+		return nil, mapDBErr(err)
 	}
 
 	actor, err := m.getOrOpenActorWithLineageLocked(ctx, diskID, row.LineageID)
@@ -1330,19 +1133,9 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 	}
 
 	if params.Name != nil {
-		err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
-			var updateErr error
-			row, updateErr = q.UpdateDisk(txCtx, db.UpdateDiskParams{
-				DiskID: pgID,
-				Name:   *params.Name,
-			})
-			if errors.Is(updateErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return updateErr
-		})
+		row, err = m.store.UpdateDiskName(ctx, id, *params.Name)
 		if err != nil {
-			return nil, err
+			return nil, mapDBErr(err)
 		}
 	}
 
@@ -1359,79 +1152,18 @@ func (m *manager) UpdateDisk(ctx context.Context, params UpdateDiskParams) (*Dis
 }
 
 func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
-	pgID, err := parseDiskID(diskID)
+	id, err := parseDiskID(diskID)
 	if err != nil {
 		return err
 	}
-	diskID = pgID.String()
+	diskID = id.String()
 
 	unlockDisk := m.lockDisk(ctx, diskID)
 	defer unlockDisk()
 
-	var commitsToClean []pgtype.UUID
-	err = m.execSyncWriteTxWithRetry(ctx, func(txCtx context.Context, q db.Querier) error {
-		commitsToClean = nil
-
-		diskRow, getErr := q.GetDisk(txCtx, pgID)
-		if getErr != nil {
-			if errors.Is(getErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return getErr
-		}
-		lineageID := diskRow.LineageID
-
-		// 统一遵守 disk_lineages -> disks 的全局加锁顺序，消除并发 ForkDisk 与 DeleteDisk 死锁风险。
-		if _, lockErr := q.LockDiskLineage(txCtx, lineageID); lockErr != nil {
-			if errors.Is(lockErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return lockErr
-		}
-
-		if _, lockDiskErr := q.GetDiskForUpdate(txCtx, pgID); lockDiskErr != nil {
-			if errors.Is(lockDiskErr, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return lockDiskErr
-		}
-
-		count, delErr := q.DeleteDisk(txCtx, pgID)
-		if delErr != nil {
-			return delErr
-		}
-		if count == 0 {
-			return ErrNotFound
-		}
-
-		remaining, cntErr := q.CountDisksByLineage(txCtx, lineageID)
-		if cntErr != nil {
-			return cntErr
-		}
-		switch remaining {
-		case 1:
-			if clearErr := q.ClearLineageBaseCommits(txCtx, lineageID); clearErr != nil {
-				return clearErr
-			}
-			deletedCommits, cleanErr := q.DeleteLineageCommits(txCtx, lineageID)
-			if cleanErr != nil {
-				return cleanErr
-			}
-			commitsToClean = deletedCommits
-		case 0:
-			deletedCommits, cleanErr := q.DeleteLineageCommits(txCtx, lineageID)
-			if cleanErr != nil {
-				return cleanErr
-			}
-			commitsToClean = deletedCommits
-			if delLinErr := q.DeleteDiskLineage(txCtx, lineageID); delLinErr != nil {
-				return delLinErr
-			}
-		}
-		return nil
-	})
+	commitsToClean, err := m.store.DeleteDisk(ctx, id)
 	if err != nil {
-		return err
+		return mapDBErr(err)
 	}
 
 	m.poolMu.Lock()
@@ -1484,7 +1216,7 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 		}
 		var reclaimErrs []error
 		for _, cID := range commitsToClean {
-			if !cID.Valid {
+			if cID == uuid.Nil {
 				continue
 			}
 			cidStr := cID.String()
@@ -1527,11 +1259,11 @@ func (m *manager) DeleteDisk(ctx context.Context, diskID string) error {
 }
 
 func (m *manager) MountDisk(ctx context.Context, params MountDiskParams) (*MountDiskResult, error) {
-	pgID, err := parseDiskID(params.DiskID)
+	id, err := parseDiskID(params.DiskID)
 	if err != nil {
 		return nil, err
 	}
-	diskID := pgID.String()
+	diskID := id.String()
 
 	actor, err := m.Actor(ctx, diskID)
 	if err != nil {
@@ -1585,11 +1317,11 @@ func (m *manager) Actor(ctx context.Context, diskID string) (*store.StoreActor, 
 	}
 	m.poolMu.RUnlock()
 
-	pgID, err := parseDiskID(diskID)
+	id, err := parseDiskID(diskID)
 	if err != nil {
 		return nil, err
 	}
-	diskID = pgID.String()
+	diskID = id.String()
 
 	m.poolMu.RLock()
 	if m.closed {
@@ -1616,12 +1348,9 @@ func (m *manager) Actor(ctx context.Context, diskID string) (*store.StoreActor, 
 	}
 	m.poolMu.RUnlock()
 
-	row, err := m.store.GetDisk(ctx, pgID)
+	row, err := m.store.GetDisk(ctx, id)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
+		return nil, mapDBErr(err)
 	}
 	return m.getOrOpenActorWithLineageLocked(ctx, diskID, row.LineageID)
 }

@@ -5,19 +5,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"maps"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
@@ -25,268 +22,9 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/starsrc/pkg/tx"
-
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
-
-type memControlDB struct {
-	mu          sync.Mutex
-	disks       map[[16]byte]db.Disk
-	lineages    map[[16]byte]db.DiskLineage
-	commits     map[[16]byte]db.DiskCommit
-	failNextTx  error
-	inoReserves int
-	pckReserves int
-}
-
-func newMemControlDB() *memControlDB {
-	return &memControlDB{
-		disks:    make(map[[16]byte]db.Disk),
-		lineages: make(map[[16]byte]db.DiskLineage),
-		commits:  make(map[[16]byte]db.DiskCommit),
-	}
-}
-
-func (m *memControlDB) setFailNextTx(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failNextTx = err
-}
-
-func (m *memControlDB) ExecTx(_ context.Context, fn func(db.Querier) error) error {
-	m.mu.Lock()
-	if m.failNextTx != nil {
-		err := m.failNextTx
-		m.failNextTx = nil
-		m.mu.Unlock()
-		return err
-	}
-	// 事务快照拷贝，确保 fn 返回错误时内存状态原子回滚。
-	snapDisks := maps.Clone(m.disks)
-	snapLineages := maps.Clone(m.lineages)
-	snapCommits := maps.Clone(m.commits)
-	m.mu.Unlock()
-
-	if err := fn(m); err != nil {
-		m.mu.Lock()
-		m.disks = snapDisks
-		m.lineages = snapLineages
-		m.commits = snapCommits
-		m.mu.Unlock()
-		return err
-	}
-	return nil
-}
-
-func (m *memControlDB) ExecTxWithOptions(ctx context.Context, fn func(db.Querier) error, _ ...tx.Option) error {
-	return m.ExecTx(ctx, fn)
-}
-
-func (m *memControlDB) CreateDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row := db.DiskLineage{
-		LineageID:  lineageID,
-		NextIno:    2,
-		NextPackID: 1,
-		CreatedAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	}
-	m.lineages[lineageID.Bytes] = row
-	return row, nil
-}
-
-func (m *memControlDB) LockDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[lineageID.Bytes]
-	if !ok {
-		return db.DiskLineage{}, pgx.ErrNoRows
-	}
-	return row, nil
-}
-
-func (m *memControlDB) ReserveInodeSegment(_ context.Context, arg db.ReserveInodeSegmentParams) (db.ReserveInodeSegmentRow, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[arg.LineageID.Bytes]
-	if !ok || arg.Count <= 0 {
-		return db.ReserveInodeSegmentRow{}, pgx.ErrNoRows
-	}
-	m.inoReserves++
-	start := max(row.NextIno, arg.MinNext)
-	row.NextIno = start + arg.Count
-	m.lineages[arg.LineageID.Bytes] = row
-	return db.ReserveInodeSegmentRow{
-		FirstIno: start,
-		LastIno:  row.NextIno - 1,
-	}, nil
-}
-
-func (m *memControlDB) ReservePackSegment(_ context.Context, arg db.ReservePackSegmentParams) (db.ReservePackSegmentRow, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[arg.LineageID.Bytes]
-	if !ok || arg.Count <= 0 {
-		return db.ReservePackSegmentRow{}, pgx.ErrNoRows
-	}
-	m.pckReserves++
-	start := max(row.NextPackID, arg.MinNext)
-	row.NextPackID = start + arg.Count
-	m.lineages[arg.LineageID.Bytes] = row
-	return db.ReservePackSegmentRow{
-		FirstPackID: start,
-		LastPackID:  row.NextPackID - 1,
-	}, nil
-}
-
-//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
-func (m *memControlDB) CreateDiskCommit(_ context.Context, arg db.CreateDiskCommitParams) (db.DiskCommit, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row := db.DiskCommit{
-		CommitID:            arg.CommitID,
-		LineageID:           arg.LineageID,
-		SourceDiskID:        arg.SourceDiskID,
-		ParentCommitID:      arg.ParentCommitID,
-		MergeParentCommitID: arg.MergeParentCommitID,
-		CreatedAt:           pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	}
-	m.commits[arg.CommitID.Bytes] = row
-	return row, nil
-}
-
-//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
-func (m *memControlDB) CreateDisk(_ context.Context, arg db.CreateDiskParams) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	row := db.Disk{
-		DiskID:       arg.DiskID,
-		Name:         arg.Name,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		LineageID:    arg.LineageID,
-		ParentDiskID: arg.ParentDiskID,
-		BaseCommitID: arg.BaseCommitID,
-	}
-	m.disks[arg.DiskID.Bytes] = row
-	return row, nil
-}
-
-func (m *memControlDB) SetDiskBaseCommit(_ context.Context, arg db.SetDiskBaseCommitParams) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[arg.DiskID.Bytes]
-	if !ok {
-		return pgx.ErrNoRows
-	}
-	row.BaseCommitID = arg.BaseCommitID
-	m.disks[arg.DiskID.Bytes] = row
-	return nil
-}
-
-func (m *memControlDB) ClearLineageBaseCommits(_ context.Context, lineageID pgtype.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id := range m.disks {
-		row := m.disks[id]
-		if row.LineageID == lineageID && row.BaseCommitID.Valid {
-			row.BaseCommitID = pgtype.UUID{}
-			m.disks[id] = row
-		}
-	}
-	return nil
-}
-
-func (m *memControlDB) DeleteLineageCommits(_ context.Context, lineageID pgtype.UUID) ([]pgtype.UUID, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var deleted []pgtype.UUID
-	for id, c := range m.commits {
-		if c.LineageID == lineageID {
-			deleted = append(deleted, c.CommitID)
-			delete(m.commits, id)
-		}
-	}
-	return deleted, nil
-}
-
-func (m *memControlDB) CountDisksByLineage(_ context.Context, lineageID pgtype.UUID) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var cnt int64
-	for id := range m.disks {
-		if m.disks[id].LineageID == lineageID {
-			cnt++
-		}
-	}
-	return cnt, nil
-}
-
-func (m *memControlDB) DeleteDiskLineage(_ context.Context, lineageID pgtype.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.lineages, lineageID.Bytes)
-	return nil
-}
-
-func (m *memControlDB) DeleteDisk(_ context.Context, diskID pgtype.UUID) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.disks[diskID.Bytes]; !ok {
-		return 0, nil
-	}
-	delete(m.disks, diskID.Bytes)
-	return 1, nil
-}
-
-func (m *memControlDB) GetDisk(_ context.Context, diskID pgtype.UUID) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[diskID.Bytes]
-	if !ok {
-		return db.Disk{}, pgx.ErrNoRows
-	}
-	return row, nil
-}
-
-func (m *memControlDB) GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (db.Disk, error) {
-	return m.GetDisk(ctx, diskID)
-}
-
-func (m *memControlDB) ListDisks(_ context.Context, arg db.ListDisksParams) ([]db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]db.Disk, 0, len(m.disks))
-	for id := range m.disks {
-		out = append(out, m.disks[id])
-	}
-	slices.SortFunc(out, func(a, b db.Disk) int {
-		if cmp := b.CreatedAt.Time.Compare(a.CreatedAt.Time); cmp != 0 {
-			return cmp
-		}
-		return bytes.Compare(b.DiskID.Bytes[:], a.DiskID.Bytes[:])
-	})
-	if int(arg.PageLimit) > 0 && len(out) > int(arg.PageLimit) {
-		out = out[:arg.PageLimit]
-	}
-	return out, nil
-}
-
-func (m *memControlDB) UpdateDisk(_ context.Context, arg db.UpdateDiskParams) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[arg.DiskID.Bytes]
-	if !ok {
-		return db.Disk{}, pgx.ErrNoRows
-	}
-	row.Name = arg.Name
-	row.UpdatedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	m.disks[arg.DiskID.Bytes] = row
-	return row, nil
-}
 
 func fileHardLinkCount(t *testing.T, path string) uint64 {
 	t.Helper()
@@ -331,7 +69,7 @@ func readRegularFile(t *testing.T, ctx context.Context, actor *store.StoreActor,
 func TestForkDiskReadWriteIsolationAndCascadingDAG(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
+	memDB := db.NewMemStore()
 	mgr := newManager(memDB, WithStorageRoot(rootDir))
 	t.Cleanup(func() { _ = mgr.Close() })
 
@@ -430,32 +168,31 @@ func TestForkDiskReadWriteIsolationAndCascadingDAG(t *testing.T) {
 	require.Equal(t, []byte("parent-only"), readRegularFile(t, ctx, child2Actor, "only-in-parent.txt", 32))
 
 	// 校验数据库血缘与 DAG 拓扑：4 块盘同属一个 lineage，共 3 个切面（C1 <- C2, C1 <- C3）。
-	pgRoot, err := parseDiskID(parentDisk.DiskID)
+	idRoot, err := parseDiskID(parentDisk.DiskID)
 	require.NoError(t, err)
-	pgChild1, err := parseDiskID(child1.DiskID)
+	idChild1, err := parseDiskID(child1.DiskID)
 	require.NoError(t, err)
-	pgChild2, err := parseDiskID(child2.DiskID)
+	idChild2, err := parseDiskID(child2.DiskID)
 	require.NoError(t, err)
-	pgGrand, err := parseDiskID(grandChild.DiskID)
+	idGrand, err := parseDiskID(grandChild.DiskID)
 	require.NoError(t, err)
 
-	memDB.mu.Lock()
-	require.Len(t, memDB.lineages, 1)
-	require.Len(t, memDB.commits, 3)
-	dbRoot := memDB.disks[pgRoot.Bytes]
-	dbChild1 := memDB.disks[pgChild1.Bytes]
-	dbChild2 := memDB.disks[pgChild2.Bytes]
-	dbGrand := memDB.disks[pgGrand.Bytes]
-	c2 := memDB.commits[dbRoot.BaseCommitID.Bytes]
-	c3 := memDB.commits[dbChild1.BaseCommitID.Bytes]
-	c1 := memDB.commits[c2.ParentCommitID.Bytes]
-	memDB.mu.Unlock()
+	snap := memDB.Inspect()
+	require.Len(t, snap.Lineages, 1)
+	require.Len(t, snap.Commits, 3)
+	dbRoot := snap.Disks[idRoot]
+	dbChild1 := snap.Disks[idChild1]
+	dbChild2 := snap.Disks[idChild2]
+	dbGrand := snap.Disks[idGrand]
+	c2 := snap.Commits[dbRoot.BaseCommitID]
+	c3 := snap.Commits[dbChild1.BaseCommitID]
+	c1 := snap.Commits[c2.ParentCommitID]
 
-	require.Equal(t, pgRoot, dbRoot.LineageID)
-	require.Equal(t, pgRoot, dbChild1.LineageID)
-	require.Equal(t, pgRoot, dbChild2.LineageID)
-	require.Equal(t, pgRoot, dbGrand.LineageID)
-	require.False(t, c1.ParentCommitID.Valid, "首次 Fork 切面的父切面应为空")
+	require.Equal(t, idRoot, dbRoot.LineageID)
+	require.Equal(t, idRoot, dbChild1.LineageID)
+	require.Equal(t, idRoot, dbChild2.LineageID)
+	require.Equal(t, idRoot, dbGrand.LineageID)
+	require.Equal(t, uuid.Nil, c1.ParentCommitID, "首次 Fork 切面的父切面应为空")
 	require.Equal(t, c1.CommitID, c2.ParentCommitID, "Root 二次 Fork 切面应指向首次切面 C1")
 	require.Equal(t, c1.CommitID, c3.ParentCommitID, "Child1 级联 Fork 切面应指向首次切面 C1")
 	require.Equal(t, c2.CommitID, dbChild2.BaseCommitID)
@@ -475,7 +212,7 @@ func TestForkDiskReadWriteIsolationAndCascadingDAG(t *testing.T) {
 func TestForkDiskQuotaValidationAndOrphanSanitization(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
+	memDB := db.NewMemStore()
 	mgr := newManager(memDB, WithStorageRoot(rootDir))
 	t.Cleanup(func() { _ = mgr.Close() })
 
@@ -546,7 +283,7 @@ func TestForkDiskQuotaValidationAndOrphanSanitization(t *testing.T) {
 func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
+	memDB := db.NewMemStore()
 	mgr := newManager(memDB, WithStorageRoot(rootDir))
 	t.Cleanup(func() { _ = mgr.Close() })
 
@@ -591,12 +328,9 @@ func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
 	_, err = os.Stat(filepath.Join(rootDir, "disks", rootDisk.DiskID))
 	require.ErrorIs(t, err, os.ErrNotExist)
 
-	memDB.mu.Lock()
-	commitsAfterRootDel := len(memDB.commits)
-	lineagesAfterRootDel := len(memDB.lineages)
-	memDB.mu.Unlock()
-	require.Equal(t, 2, commitsAfterRootDel, "|D|==2 时必须保留全部历史切面 DAG")
-	require.Equal(t, 1, lineagesAfterRootDel)
+	snapAfterRootDel := memDB.Inspect()
+	require.Len(t, snapAfterRootDel.Commits, 2, "|D|==2 时必须保留全部历史切面 DAG")
+	require.Len(t, snapAfterRootDel.Lineages, 1)
 
 	commitDirEntries, err := os.ReadDir(filepath.Join(rootDir, "commits"))
 	require.NoError(t, err)
@@ -608,17 +342,14 @@ func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
 	// 必须自动清空 Child1.base_commit_id 并清理全部历史切面记录及 /commits/<id> 目录，使 Child1 .pack st_nlink 立即回落至 1！
 	require.NoError(t, mgr.DeleteDisk(ctx, child2.DiskID))
 
-	pgChild1, err := parseDiskID(child1.DiskID)
+	idChild1, err := parseDiskID(child1.DiskID)
 	require.NoError(t, err)
-	memDB.mu.Lock()
-	commitsAfterSiblingDel := len(memDB.commits)
-	lineagesAfterSiblingDel := len(memDB.lineages)
-	survivorRow := memDB.disks[pgChild1.Bytes]
-	memDB.mu.Unlock()
+	snapAfterSiblingDel := memDB.Inspect()
+	survivorRow := snapAfterSiblingDel.Disks[idChild1]
 
-	require.Zero(t, commitsAfterSiblingDel, "|D|==1 时必须自动清空同血缘全部历史 disk_commits")
-	require.Equal(t, 1, lineagesAfterSiblingDel, "唯一幸存盘仍在，disk_lineages 必须保留")
-	require.False(t, survivorRow.BaseCommitID.Valid, "唯一幸存盘 base_commit_id 必须置空")
+	require.Empty(t, snapAfterSiblingDel.Commits, "|D|==1 时必须自动清空同血缘全部历史 disk_commits")
+	require.Len(t, snapAfterSiblingDel.Lineages, 1, "唯一幸存盘仍在，disk_lineages 必须保留")
+	require.Equal(t, uuid.Nil, survivorRow.BaseCommitID, "唯一幸存盘 base_commit_id 必须置空")
 
 	commitDirEntries, err = os.ReadDir(filepath.Join(rootDir, "commits"))
 	require.NoError(t, err)
@@ -632,11 +363,10 @@ func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
 
 	// 阶段 3：删除最后一块幸存盘 Child1（|D| == 0），血缘记录彻底清除。
 	require.NoError(t, mgr.DeleteDisk(ctx, child1.DiskID))
-	memDB.mu.Lock()
-	require.Empty(t, memDB.disks)
-	require.Empty(t, memDB.commits)
-	require.Empty(t, memDB.lineages, "|D|==0 时必须清理 disk_lineages 行")
-	memDB.mu.Unlock()
+	snapAfterLastDel := memDB.Inspect()
+	require.Empty(t, snapAfterLastDel.Disks)
+	require.Empty(t, snapAfterLastDel.Commits)
+	require.Empty(t, snapAfterLastDel.Lineages, "|D|==0 时必须清理 disk_lineages 行")
 }
 
 // TestCrossBranchSegmentCollisionFreeAndRestartRecovery 验证父子分支并发分配跨越 PackSegment 号段边界时
@@ -644,8 +374,9 @@ func TestDeleteDiskLineageCommitGCAndHardLinkRefcount(t *testing.T) {
 func TestCrossBranchSegmentCollisionFreeAndRestartRecovery(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
-	mgr1 := newManager(memDB, WithStorageRoot(rootDir))
+	memDB := db.NewMemStore()
+	// 将每包上限设为 1 个 Blob（256 KiB），各写 70 个文件跨越 PackSegment=64 触发二次号段申请。
+	mgr1 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
 
 	parentDisk, err := mgr1.CreateDisk(ctx, CreateDiskParams{
 		Name:     "seg-parent",
@@ -667,10 +398,6 @@ func TestCrossBranchSegmentCollisionFreeAndRestartRecovery(t *testing.T) {
 	require.NoError(t, err)
 	cActor, err := mgr1.Actor(ctx, childDisk.DiskID)
 	require.NoError(t, err)
-
-	// 将每包上限调为 1 个 Blob（256 KiB），各写 70 个文件跨越 PackSegment=64 触发二次号段申请。
-	pActor.Blobs().SetMaxPackSize(store.BlobSize)
-	cActor.Blobs().SetMaxPackSize(store.BlobSize)
 
 	const filesPerBranch = 70
 	blk := bytes.Repeat([]byte{0x33}, store.BlobSize)
@@ -740,7 +467,7 @@ func TestCrossBranchSegmentCollisionFreeAndRestartRecovery(t *testing.T) {
 	// 模拟进程重启：关闭 mgr1，基于同一 memDB 与 rootDir 启动 mgr2，懒加载后继续分配节点与 Pack。
 	require.NoError(t, mgr1.Close())
 
-	mgr2 := newManager(memDB, WithStorageRoot(rootDir))
+	mgr2 := newManager(memDB, WithStorageRoot(rootDir), withMaxPackSize(store.BlobSize))
 	t.Cleanup(func() { _ = mgr2.Close() })
 
 	pActor2, err := mgr2.Actor(ctx, parentDisk.DiskID)
@@ -770,17 +497,16 @@ func TestCrossBranchSegmentCollisionFreeAndRestartRecovery(t *testing.T) {
 		require.False(t, exists, "同源父子分支新生成的 .pack 编号发生碰撞: %s", e.Name())
 	}
 
-	memDB.mu.Lock()
-	require.GreaterOrEqual(t, memDB.inoReserves, 4, "初始 + 重启懒加载均应通过外部 InoAllocator 预留号段")
-	require.GreaterOrEqual(t, memDB.pckReserves, 6, "跨越 PackSegment=64 加上重启后应多次调用 PackAllocator")
-	memDB.mu.Unlock()
+	snap := memDB.Inspect()
+	require.GreaterOrEqual(t, snap.InodeReserveCalls, 4, "初始 + 重启懒加载均应通过外部 InoAllocator 预留号段")
+	require.GreaterOrEqual(t, snap.PackReserveCalls, 6, "跨越 PackSegment=64 加上重启后应多次调用 PackAllocator")
 }
 
 // TestForkDiskValidationAndTxFailureRollback 验证入参边界拦截、事务失败时子盘实例与切面目录的全量回滚无残留。
 func TestForkDiskValidationAndTxFailureRollback(t *testing.T) {
 	ctx := context.Background()
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
+	memDB := db.NewMemStore()
 	mgr := newManager(memDB, WithStorageRoot(rootDir))
 
 	src, err := mgr.CreateDisk(ctx, CreateDiskParams{Name: "rollback-src", MaxBytes: 8 << 20})
@@ -810,7 +536,7 @@ func TestForkDiskValidationAndTxFailureRollback(t *testing.T) {
 
 	// 2. 注入不可重试的数据库事务错误，验证 childActor 关闭及 childDir / commitDir 彻底清理。
 	injectedErr := errors.New("simulated database failure")
-	memDB.setFailNextTx(injectedErr)
+	memDB.SetFailNextWrite(injectedErr)
 
 	_, err = mgr.ForkDisk(ctx, ForkDiskParams{
 		SourceDiskID: src.DiskID,
@@ -871,7 +597,7 @@ func TestForkPhysicalDeduplicationCommitsMetricsAndTracing(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	rootDir := t.TempDir()
-	memDB := newMemControlDB()
+	memDB := db.NewMemStore()
 	mgr := newManager(memDB, WithStorageRoot(rootDir), WithLogger(logger))
 	t.Cleanup(func() { _ = mgr.Close() })
 

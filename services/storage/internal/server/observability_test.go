@@ -10,11 +10,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -29,7 +26,6 @@ import (
 	"github.com/starsrc/pkg/observability/obsfx"
 	"github.com/starsrc/pkg/observability/telemetry"
 	"github.com/starsrc/pkg/serverx"
-	"github.com/starsrc/pkg/tx"
 
 	storagev1 "github.com/starsrc/bowl/gen/go/storage/v1"
 	"github.com/starsrc/bowl/gen/go/storage/v1/storagev1connect"
@@ -38,222 +34,6 @@ import (
 	"github.com/starsrc/bowl/services/storage/internal/db"
 	"github.com/starsrc/bowl/services/storage/internal/store"
 )
-
-type memDiskDB struct {
-	mu       sync.Mutex
-	disks    map[[16]byte]db.Disk
-	lineages map[[16]byte]db.DiskLineage
-	commits  map[[16]byte]db.DiskCommit
-}
-
-func newMemDiskDB() *memDiskDB {
-	return &memDiskDB{
-		disks:    make(map[[16]byte]db.Disk),
-		lineages: make(map[[16]byte]db.DiskLineage),
-		commits:  make(map[[16]byte]db.DiskCommit),
-	}
-}
-
-func (m *memDiskDB) ExecTx(_ context.Context, fn func(db.Querier) error) error {
-	return fn(m)
-}
-
-func (m *memDiskDB) ExecTxWithOptions(_ context.Context, fn func(db.Querier) error, _ ...tx.Option) error {
-	return fn(m)
-}
-
-func (m *memDiskDB) CreateDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row := db.DiskLineage{
-		LineageID:  lineageID,
-		NextIno:    2,
-		NextPackID: 1,
-		CreatedAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	}
-	m.lineages[lineageID.Bytes] = row
-	return row, nil
-}
-
-func (m *memDiskDB) LockDiskLineage(_ context.Context, lineageID pgtype.UUID) (db.DiskLineage, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[lineageID.Bytes]
-	if !ok {
-		return db.DiskLineage{}, pgx.ErrNoRows
-	}
-	return row, nil
-}
-
-func (m *memDiskDB) ReserveInodeSegment(_ context.Context, arg db.ReserveInodeSegmentParams) (db.ReserveInodeSegmentRow, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[arg.LineageID.Bytes]
-	if !ok || arg.Count <= 0 {
-		return db.ReserveInodeSegmentRow{}, pgx.ErrNoRows
-	}
-	start := max(row.NextIno, arg.MinNext)
-	row.NextIno = start + arg.Count
-	m.lineages[arg.LineageID.Bytes] = row
-	return db.ReserveInodeSegmentRow{
-		FirstIno: start,
-		LastIno:  row.NextIno - 1,
-	}, nil
-}
-
-func (m *memDiskDB) ReservePackSegment(_ context.Context, arg db.ReservePackSegmentParams) (db.ReservePackSegmentRow, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.lineages[arg.LineageID.Bytes]
-	if !ok || arg.Count <= 0 {
-		return db.ReservePackSegmentRow{}, pgx.ErrNoRows
-	}
-	start := max(row.NextPackID, arg.MinNext)
-	row.NextPackID = start + arg.Count
-	m.lineages[arg.LineageID.Bytes] = row
-	return db.ReservePackSegmentRow{
-		FirstPackID: start,
-		LastPackID:  row.NextPackID - 1,
-	}, nil
-}
-
-//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
-func (m *memDiskDB) CreateDiskCommit(_ context.Context, arg db.CreateDiskCommitParams) (db.DiskCommit, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row := db.DiskCommit{
-		CommitID:            arg.CommitID,
-		LineageID:           arg.LineageID,
-		SourceDiskID:        arg.SourceDiskID,
-		ParentCommitID:      arg.ParentCommitID,
-		MergeParentCommitID: arg.MergeParentCommitID,
-		CreatedAt:           pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	}
-	m.commits[arg.CommitID.Bytes] = row
-	return row, nil
-}
-
-//nolint:gocritic // 实现 sqlc 生成的 db.Querier 接口值签名
-func (m *memDiskDB) CreateDisk(_ context.Context, arg db.CreateDiskParams) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	now := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	row := db.Disk{
-		DiskID:       arg.DiskID,
-		Name:         arg.Name,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		LineageID:    arg.LineageID,
-		ParentDiskID: arg.ParentDiskID,
-		BaseCommitID: arg.BaseCommitID,
-	}
-	m.disks[arg.DiskID.Bytes] = row
-	return row, nil
-}
-
-func (m *memDiskDB) SetDiskBaseCommit(_ context.Context, arg db.SetDiskBaseCommitParams) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[arg.DiskID.Bytes]
-	if !ok {
-		return pgx.ErrNoRows
-	}
-	row.BaseCommitID = arg.BaseCommitID
-	m.disks[arg.DiskID.Bytes] = row
-	return nil
-}
-
-func (m *memDiskDB) ClearLineageBaseCommits(_ context.Context, lineageID pgtype.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for id := range m.disks {
-		row := m.disks[id]
-		if row.LineageID == lineageID && row.BaseCommitID.Valid {
-			row.BaseCommitID = pgtype.UUID{}
-			m.disks[id] = row
-		}
-	}
-	return nil
-}
-
-func (m *memDiskDB) DeleteLineageCommits(_ context.Context, lineageID pgtype.UUID) ([]pgtype.UUID, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var deleted []pgtype.UUID
-	for id, c := range m.commits {
-		if c.LineageID == lineageID {
-			deleted = append(deleted, c.CommitID)
-			delete(m.commits, id)
-		}
-	}
-	return deleted, nil
-}
-
-func (m *memDiskDB) CountDisksByLineage(_ context.Context, lineageID pgtype.UUID) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var cnt int64
-	for id := range m.disks {
-		if m.disks[id].LineageID == lineageID {
-			cnt++
-		}
-	}
-	return cnt, nil
-}
-
-func (m *memDiskDB) DeleteDiskLineage(_ context.Context, lineageID pgtype.UUID) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.lineages, lineageID.Bytes)
-	return nil
-}
-
-func (m *memDiskDB) DeleteDisk(_ context.Context, diskID pgtype.UUID) (int64, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.disks[diskID.Bytes]; !ok {
-		return 0, nil
-	}
-	delete(m.disks, diskID.Bytes)
-	return 1, nil
-}
-
-func (m *memDiskDB) GetDisk(_ context.Context, diskID pgtype.UUID) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[diskID.Bytes]
-	if !ok {
-		return db.Disk{}, pgx.ErrNoRows
-	}
-	return row, nil
-}
-
-func (m *memDiskDB) GetDiskForUpdate(ctx context.Context, diskID pgtype.UUID) (db.Disk, error) {
-	return m.GetDisk(ctx, diskID)
-}
-
-func (m *memDiskDB) ListDisks(_ context.Context, _ db.ListDisksParams) ([]db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]db.Disk, 0, len(m.disks))
-	for id := range m.disks {
-		out = append(out, m.disks[id])
-	}
-	return out, nil
-}
-
-func (m *memDiskDB) UpdateDisk(_ context.Context, arg db.UpdateDiskParams) (db.Disk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	row, ok := m.disks[arg.DiskID.Bytes]
-	if !ok {
-		return db.Disk{}, pgx.ErrNoRows
-	}
-	row.Name = arg.Name
-	row.UpdatedAt = pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
-	m.disks[arg.DiskID.Bytes] = row
-	return row, nil
-}
 
 func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) {
 	ctx := context.Background()
@@ -268,7 +48,7 @@ func TestEndToEndFineBucketMetricsHTTPMiddlewareAndFullChainSpans(t *testing.T) 
 	httpMetrics := NewHTTPMetrics()
 	storeMetrics := store.NewMetrics()
 	mgr := control.New(
-		newMemDiskDB(),
+		db.NewMemStore(),
 		control.WithStorageRoot(t.TempDir()),
 		control.WithStoreMetrics(storeMetrics),
 	)
@@ -628,7 +408,7 @@ func TestFxModuleMetricsEndpointAndGracefulShutdown(t *testing.T) {
 		fx.Provide(
 			obsfx.AsOption(func() observability.Option { return observability.WithLogWriter(io.Discard) }),
 			obsfx.AsOption(func() observability.Option { return observability.WithSetDefaultLogger(false) }),
-			func() db.Store { return newMemDiskDB() },
+			func() db.Store { return db.NewMemStore() },
 		),
 		control.Module,
 		Module,
@@ -677,7 +457,7 @@ func TestStorageSamplerPromotesControlPlaneOverRemoteUnsampledParent(t *testing.
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
 
-	mgr := control.New(newMemDiskDB(), control.WithStorageRoot(t.TempDir()))
+	mgr := control.New(db.NewMemStore(), control.WithStorageRoot(t.TempDir()))
 	t.Cleanup(func() { _ = mgr.Close() })
 
 	obsCfg := observability.DefaultConfig()
