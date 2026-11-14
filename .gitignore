@@ -44,3 +44,8 @@ __pycache__/
 
 artifacts/
 .agents/
+
+# VitePress docs
+docs/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
